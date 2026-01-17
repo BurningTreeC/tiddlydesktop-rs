@@ -45,7 +45,7 @@ jobs:
           node-version: '20'
 
       - name: Install Rust
-        uses: dtolnay/rust-action@stable
+        uses: dtolnay/rust-toolchain@stable
 
       - name: Install npm dependencies
         working-directory: tiddlydesktop-rs
@@ -95,7 +95,7 @@ jobs:
           node-version: '20'
 
       - name: Install Rust
-        uses: dtolnay/rust-action@stable
+        uses: dtolnay/rust-toolchain@stable
 
       - name: Install npm dependencies
         working-directory: tiddlydesktop-rs
@@ -144,7 +144,7 @@ jobs:
           node-version: '20'
 
       - name: Install Rust
-        uses: dtolnay/rust-action@stable
+        uses: dtolnay/rust-toolchain@stable
 
       - name: Install npm dependencies
         working-directory: tiddlydesktop-rs

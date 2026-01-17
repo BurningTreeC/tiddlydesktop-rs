@@ -1080,6 +1080,131 @@ async fn init_wiki_folder(app: tauri::AppHandle, path: String, edition: String, 
     Ok(())
 }
 
+/// Create a single-file wiki with the specified edition and plugins
+#[tauri::command]
+async fn create_wiki_file(app: tauri::AppHandle, path: String, edition: String, plugins: Vec<String>) -> Result<(), String> {
+    let output_path = PathBuf::from(&path);
+
+    // Ensure it has .html extension
+    let output_path = if output_path.extension().map(|e| e == "html" || e == "htm").unwrap_or(false) {
+        output_path
+    } else {
+        output_path.with_extension("html")
+    };
+
+    // Get paths to Node.js and TiddlyWiki
+    let node_path = get_node_path(&app)?;
+    let tw_path = get_tiddlywiki_path(&app)?;
+    let tw_dir = tw_path.parent().ok_or("Failed to get TiddlyWiki directory")?;
+
+    // Create a temporary directory for the build
+    let temp_dir = std::env::temp_dir().join(format!("tiddlydesktop-build-{}", std::process::id()));
+    std::fs::create_dir_all(&temp_dir)
+        .map_err(|e| format!("Failed to create temp directory: {}", e))?;
+
+    println!("Creating single-file wiki:");
+    println!("  Output: {:?}", output_path);
+    println!("  Edition: {}", edition);
+    println!("  Plugins: {:?}", plugins);
+    println!("  Temp dir: {:?}", temp_dir);
+
+    // Initialize the temp directory with the selected edition
+    let init_output = Command::new(&node_path)
+        .arg(&tw_path)
+        .arg(&temp_dir)
+        .arg("--init")
+        .arg(&edition)
+        .output()
+        .map_err(|e| format!("Failed to run TiddlyWiki init: {}", e))?;
+
+    if !init_output.status.success() {
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        let stderr = String::from_utf8_lossy(&init_output.stderr);
+        return Err(format!("TiddlyWiki init failed: {}", stderr));
+    }
+
+    // Add plugins to tiddlywiki.info if any selected
+    if !plugins.is_empty() {
+        let info_path = temp_dir.join("tiddlywiki.info");
+        if info_path.exists() {
+            let content = std::fs::read_to_string(&info_path)
+                .map_err(|e| format!("Failed to read tiddlywiki.info: {}", e))?;
+            let mut info: serde_json::Value = serde_json::from_str(&content)
+                .map_err(|e| format!("Failed to parse tiddlywiki.info: {}", e))?;
+
+            let plugins_array = info.get_mut("plugins")
+                .and_then(|v| v.as_array_mut());
+
+            if let Some(arr) = plugins_array {
+                for plugin in &plugins {
+                    let plugin_path = format!("tiddlywiki/{}", plugin);
+                    if !arr.iter().any(|p| p.as_str() == Some(&plugin_path)) {
+                        arr.push(serde_json::Value::String(plugin_path));
+                    }
+                }
+            } else {
+                let plugin_values: Vec<serde_json::Value> = plugins.iter()
+                    .map(|p| serde_json::Value::String(format!("tiddlywiki/{}", p)))
+                    .collect();
+                info["plugins"] = serde_json::Value::Array(plugin_values);
+            }
+
+            let updated_content = serde_json::to_string_pretty(&info)
+                .map_err(|e| format!("Failed to serialize tiddlywiki.info: {}", e))?;
+            std::fs::write(&info_path, updated_content)
+                .map_err(|e| format!("Failed to write tiddlywiki.info: {}", e))?;
+        }
+    }
+
+    // Get the output filename
+    let output_filename = output_path.file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("wiki.html");
+
+    // Build the single-file wiki
+    let build_output = Command::new(&node_path)
+        .arg(&tw_path)
+        .arg(&temp_dir)
+        .arg("--output")
+        .arg(temp_dir.join("output"))
+        .arg("--render")
+        .arg("$:/core/save/all")
+        .arg(output_filename)
+        .arg("text/plain")
+        .current_dir(tw_dir)
+        .output()
+        .map_err(|e| format!("Failed to build wiki: {}", e))?;
+
+    if !build_output.status.success() {
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        let stderr = String::from_utf8_lossy(&build_output.stderr);
+        let stdout = String::from_utf8_lossy(&build_output.stdout);
+        return Err(format!("Wiki build failed:\n{}\n{}", stdout, stderr));
+    }
+
+    // Move the output file to the target location
+    let built_file = temp_dir.join("output").join(output_filename);
+    if !built_file.exists() {
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        return Err("Build succeeded but output file not found".to_string());
+    }
+
+    // Ensure parent directory exists
+    if let Some(parent) = output_path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("Failed to create output directory: {}", e))?;
+    }
+
+    std::fs::copy(&built_file, &output_path)
+        .map_err(|e| format!("Failed to copy wiki to destination: {}", e))?;
+
+    // Clean up temp directory
+    let _ = std::fs::remove_dir_all(&temp_dir);
+
+    println!("Single-file wiki created successfully: {:?}", output_path);
+    Ok(())
+}
+
 /// Check folder status - returns info about whether it's a wiki, empty, or has files
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct FolderStatus {
@@ -1131,11 +1256,10 @@ fn check_folder_status(path: String) -> Result<FolderStatus, String> {
 /// Reveal file in system file manager
 #[tauri::command]
 async fn reveal_in_folder(path: String) -> Result<(), String> {
-    let path_buf = std::path::PathBuf::from(&path);
-    let folder = path_buf.parent().unwrap_or(&path_buf);
-
     #[cfg(target_os = "linux")]
     {
+        let path_buf = std::path::PathBuf::from(&path);
+        let folder = path_buf.parent().unwrap_or(&path_buf);
         std::process::Command::new("xdg-open")
             .arg(folder)
             .spawn()
@@ -1413,71 +1537,111 @@ window.__WIKI_PATH__ = "{}";
 window.__WINDOW_LABEL__ = "{}";
 window.__SAVE_URL__ = "{}";
 
-// TiddlyDesktop custom saver - waits for TiddlyWiki to load then registers
+// TiddlyDesktop custom saver - registers as a proper TiddlyWiki module before boot
 (function() {{
-    function registerSaver() {{
-        if(typeof $tw === 'undefined' || !$tw.saverHandler) {{
-            setTimeout(registerSaver, 100);
-            return;
-        }}
+    var SAVE_URL = "{}";
 
-        // Create our custom saver class
-        var TiddlyDesktopSaver = function(wiki) {{
-            this.wiki = wiki;
-        }};
-
-        // Static method - can this saver handle saving?
-        TiddlyDesktopSaver.canSave = function(wiki) {{
-            return true; // We can always save
-        }};
-
-        // Static method - create an instance
-        TiddlyDesktopSaver.create = function(wiki) {{
-            return new TiddlyDesktopSaver(wiki);
-        }};
-
-        TiddlyDesktopSaver.prototype.save = function(text, method, callback) {{
-            fetch(window.__SAVE_URL__, {{
-                method: 'PUT',
-                body: text
-            }}).then(function(response) {{
-                if(response.ok) {{
-                    callback(null);
-                }} else {{
-                    response.text().then(function(errText) {{
-                        callback('Save failed: ' + errText);
-                    }});
-                }}
-            }}).catch(function(err) {{
-                callback('Save failed: ' + err.message);
-            }});
-            return true;
-        }};
-
-        TiddlyDesktopSaver.prototype.info = {{
+    // Define the saver module globally so TiddlyWiki can find it during boot
+    window.$TiddlyDesktopSaver = {{
+        info: {{
             name: 'tiddlydesktop',
             priority: 5000,
             capabilities: ['save', 'autosave']
-        }};
+        }},
+        canSave: function(wiki) {{
+            return true;
+        }},
+        create: function(wiki) {{
+            return {{
+                wiki: wiki,
+                info: {{
+                    name: 'tiddlydesktop',
+                    priority: 5000,
+                    capabilities: ['save', 'autosave']
+                }},
+                canSave: function(wiki) {{
+                    return true;
+                }},
+                save: function(text, method, callback) {{
+                    console.log('TiddlyDesktop saver: save() called, method:', method);
+                    var xhr = new XMLHttpRequest();
+                    xhr.open('PUT', SAVE_URL, true);
+                    xhr.onreadystatechange = function() {{
+                        if(xhr.readyState === 4) {{
+                            if(xhr.status === 200) {{
+                                console.log('TiddlyDesktop saver: save successful');
+                                callback(null);
+                            }} else {{
+                                console.error('TiddlyDesktop saver: save failed', xhr.status, xhr.statusText);
+                                callback('Save failed: ' + xhr.statusText);
+                            }}
+                        }}
+                    }};
+                    xhr.onerror = function() {{
+                        console.error('TiddlyDesktop saver: network error');
+                        callback('Save failed: network error');
+                    }};
+                    xhr.send(text);
+                    return true;
+                }}
+            }};
+        }}
+    }};
 
-        // Register the saver module with TiddlyWiki
-        $tw.modules.types['saver'] = $tw.modules.types['saver'] || {{}};
-        $tw.modules.types['saver']['tiddlydesktop-saver'] = {{
-            canSave: TiddlyDesktopSaver.canSave,
-            create: TiddlyDesktopSaver.create
-        }};
+    // Hook into TiddlyWiki's module registration
+    function registerWithTiddlyWiki() {{
+        if(typeof $tw === 'undefined') {{
+            setTimeout(registerWithTiddlyWiki, 50);
+            return;
+        }}
 
-        // Also directly add to savers array for immediate use
-        var saverInstance = new TiddlyDesktopSaver($tw.wiki);
-        saverInstance.info = TiddlyDesktopSaver.prototype.info;
-        $tw.saverHandler.savers.unshift(saverInstance);
+        // Register as a module if modules system exists
+        if($tw.modules && $tw.modules.types) {{
+            $tw.modules.types['saver'] = $tw.modules.types['saver'] || {{}};
+            $tw.modules.types['saver']['$:/plugins/tiddlydesktop/saver'] = window.$TiddlyDesktopSaver;
+            console.log('TiddlyDesktop saver: registered as module');
+        }}
+
+        // Wait for saverHandler and add directly
+        function addToSaverHandler() {{
+            if(!$tw.saverHandler) {{
+                setTimeout(addToSaverHandler, 50);
+                return;
+            }}
+
+            // Check if already added
+            var alreadyAdded = $tw.saverHandler.savers.some(function(s) {{
+                return s.info && s.info.name === 'tiddlydesktop';
+            }});
+
+            if(!alreadyAdded) {{
+                var saver = window.$TiddlyDesktopSaver.create($tw.wiki);
+                // Add to array and re-sort (TiddlyWiki iterates backwards, so highest priority must be at the END)
+                $tw.saverHandler.savers.push(saver);
+                $tw.saverHandler.savers.sort(function(a, b) {{
+                    if(a.info.priority < b.info.priority) {{
+                        return -1;
+                    }} else if(a.info.priority > b.info.priority) {{
+                        return 1;
+                    }}
+                    return 0;
+                }});
+                console.log('TiddlyDesktop saver: added to saverHandler, total savers:', $tw.saverHandler.savers.length);
+                console.log('TiddlyDesktop saver: savers are (saveWiki checks from end):', $tw.saverHandler.savers.map(function(s) {{
+                    return s.info ? s.info.name + ' (pri:' + s.info.priority + ')' : 'unknown';
+                }}).join(', '));
+            }}
+        }}
+
+        addToSaverHandler();
     }}
 
-    registerSaver();
+    registerWithTiddlyWiki();
 }})();
 </script>"##,
                 file_path.display().to_string().replace('\\', "\\\\").replace('"', "\\\""),
                 window_label.replace('\\', "\\\\").replace('"', "\\\""),
+                save_url,
                 save_url
             );
 
@@ -1599,6 +1763,7 @@ pub fn run() {
             get_available_editions,
             get_available_plugins,
             init_wiki_folder,
+            create_wiki_file,
             set_window_title,
             get_window_label,
             get_recent_files,

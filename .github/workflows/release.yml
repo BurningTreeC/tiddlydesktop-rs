@@ -114,6 +114,9 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Install WiX Toolset
+        run: choco install wixtoolset -y
+
       - name: Install npm dependencies
         working-directory: tiddlydesktop-rs
         run: npm install
@@ -207,6 +210,9 @@ jobs:
           mv node-v20.11.0-darwin-arm64/bin/node node-aarch64-apple-darwin
           rm -rf node-arm64.tar.gz node-v20.11.0-darwin-arm64
           chmod +x node-aarch64-apple-darwin
+          # Create universal binary using lipo
+          lipo -create -output node-universal-apple-darwin node-x86_64-apple-darwin node-aarch64-apple-darwin
+          chmod +x node-universal-apple-darwin
 
       - name: Bundle TiddlyWiki
         working-directory: tiddlydesktop-rs

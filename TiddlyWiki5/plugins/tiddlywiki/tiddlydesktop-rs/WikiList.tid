@@ -1,0 +1,76 @@
+title: $:/plugins/tiddlywiki/tiddlydesktop-rs/WikiList
+
+\define wiki-item(path, filename)
+<div class="td-wikilist-item">
+<div class="td-wikilist-thumbnail">
+<$button message="tm-tiddlydesktop-open-path" param="$path$" class="tc-btn-invisible">
+{{$:/plugins/tiddlywiki/tiddlydesktop-rs/images/file-icon}}
+</$button>
+</div>
+<div class="td-wikilist-info">
+<div class="td-wiki-title">
+{{$:/core/images/file}} $filename$
+</div>
+<div class="td-wiki-url">$path$</div>
+<div class="td-wiki-toolbar">
+<$button message="tm-tiddlydesktop-open-path" param="$path$" class="tc-btn-invisible td-button td-button-open">open</$button>
+<$button message="tm-tiddlydesktop-reveal" param="$path$" class="tc-btn-invisible td-button td-button-reveal">reveal</$button>
+<$button message="tm-tiddlydesktop-remove" param="$path$" class="tc-btn-invisible td-button td-button-remove">remove</$button>
+</div>
+</div>
+</div>
+\end
+
+<div class="td-toolbar">
+<div class="td-toolbar-item">
+{{$:/plugins/tiddlywiki/tiddlydesktop-rs/images/logo}}
+</div>
+<div class="td-toolbar-item">
+<$button message="tm-tiddlydesktop-open-wiki" class="td-button">
+{{$:/core/images/file}} Add wiki file
+</$button>
+</div>
+</div>
+
+<div class="td-drop-zone">
+<$reveal state="$:/temp/tiddlydesktop/drag-over" type="match" text="yes">
+<div class="td-drop-active">
+Drop wiki file here
+</div>
+</$reveal>
+<$reveal state="$:/temp/tiddlydesktop/drag-over" type="nomatch" text="yes">
+<div class="td-drop-hint">
+{{$:/core/images/file}} Drop TiddlyWiki files here
+</div>
+</$reveal>
+</div>
+
+<div class="td-wikilist">
+<$list filter="[prefix[$:/temp/tiddlydesktop/wikis/]sort[title]]" emptyMessage={{$:/plugins/tiddlywiki/tiddlydesktop-rs/EmptyMessage}}>
+<$let path={{!!path}} filename={{!!filename}} favicon={{!!favicon}}>
+<div class="td-wikilist-item">
+<div class="td-wikilist-thumbnail">
+<$button message="tm-tiddlydesktop-open-path" param=<<path>> class="tc-btn-invisible">
+<$list filter="[<favicon>!is[blank]]" variable="ignore" emptyMessage="{{$:/plugins/tiddlywiki/tiddlydesktop-rs/images/file-icon}}">
+<img src=<<favicon>> class="td-favicon"/>
+</$list>
+</$button>
+</div>
+<div class="td-wikilist-info">
+<div class="td-wiki-title">
+<$list filter="[<favicon>!is[blank]]" variable="ignore" emptyMessage="{{$:/core/images/file}}">
+<img src=<<favicon>> class="td-favicon-small"/>
+</$list>
+<$text text=<<filename>>/>
+</div>
+<div class="td-wiki-url"><$text text=<<path>>/></div>
+<div class="td-wiki-toolbar">
+<$button message="tm-tiddlydesktop-open-path" param=<<path>> class="tc-btn-invisible td-button td-button-open">open</$button>
+<$button message="tm-tiddlydesktop-reveal" param=<<path>> class="tc-btn-invisible td-button td-button-reveal">reveal</$button>
+<$button message="tm-tiddlydesktop-remove" param=<<path>> class="tc-btn-invisible td-button td-button-remove">remove</$button>
+</div>
+</div>
+</div>
+</$let>
+</$list>
+</div>

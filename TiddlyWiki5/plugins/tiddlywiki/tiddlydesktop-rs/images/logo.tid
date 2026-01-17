@@ -1,0 +1,8 @@
+title: $:/plugins/tiddlywiki/tiddlydesktop-rs/images/logo
+tags: $:/tags/Image
+type: text/vnd.tiddlywiki
+
+<svg class="td-logo" viewBox="0 0 128 128" width="32" height="32">
+<circle cx="64" cy="64" r="60" fill="#4a90d9"/>
+<text x="64" y="82" text-anchor="middle" fill="white" font-size="64" font-family="Georgia, serif" font-weight="bold">T</text>
+</svg>

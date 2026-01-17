@@ -1,0 +1,9 @@
+[Desktop Entry]
+Name=TiddlyDesktopRS
+Comment=Desktop app for TiddlyWiki
+Exec=/home/simon/Code/TiddlyDesktopRust/tiddlydesktop-rs/src-tauri/target/release/tiddlydesktop-rs
+Icon=tiddlydesktop-rs
+Terminal=false
+Type=Application
+Categories=Office;Utility;
+StartupWMClass=tiddlydesktop-rs

@@ -8,15 +8,7 @@
   },
   "app": {
     "withGlobalTauri": true,
-    "windows": [
-      {
-        "title": "TiddlyDesktopRS",
-        "width": 800,
-        "height": 600,
-        "dragDropEnabled": true,
-        "windowClassname": "tiddlydesktop-rs"
-      }
-    ],
+    "windows": [],
     "security": {
       "csp": null
     }
@@ -30,6 +22,12 @@
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
+    ],
+    "externalBin": [
+      "binaries/node"
+    ],
+    "resources": [
+      "resources/tiddlywiki/**/*"
     ]
   }
 }

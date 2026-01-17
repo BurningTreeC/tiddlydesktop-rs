@@ -1,4 +1,4 @@
-use std::{collections::HashMap, path::PathBuf, sync::Mutex};
+use std::{collections::HashMap, path::PathBuf, sync::Mutex, process::{Child, Command}};
 use chrono::Local;
 use serde::{Deserialize, Serialize};
 use tauri::{
@@ -16,6 +16,22 @@ pub struct WikiEntry {
     pub filename: String,
     #[serde(default)]
     pub favicon: Option<String>, // Data URI for favicon
+    #[serde(default)]
+    pub is_folder: bool, // true if this is a wiki folder
+    #[serde(default = "default_backups_enabled")]
+    pub backups_enabled: bool, // whether to create backups on save (single-file only)
+}
+
+fn default_backups_enabled() -> bool {
+    true
+}
+
+/// A running wiki folder server
+#[allow(dead_code)] // Fields may be used for status display in future
+struct WikiFolderServer {
+    process: Child,
+    port: u16,
+    path: String,
 }
 
 /// App state
@@ -28,6 +44,10 @@ struct AppState {
     recent_files: Mutex<Vec<WikiEntry>>,
     /// Path to the data file for persistence
     data_file: PathBuf,
+    /// Running wiki folder servers (keyed by window label)
+    wiki_servers: Mutex<HashMap<String, WikiFolderServer>>,
+    /// Next available port for wiki folder servers
+    next_port: Mutex<u16>,
 }
 
 const MAX_RECENT_FILES: usize = 50;
@@ -68,7 +88,13 @@ fn save_wiki_list(data_file: &PathBuf, entries: &[WikiEntry]) {
 }
 
 /// Extract favicon from wiki HTML content
+/// Only searches the first 64KB since favicon is always in <head>
 fn extract_favicon(content: &str) -> Option<String> {
+    // Only search the head section - favicon is always there
+    // Limit search to first 64KB to avoid scanning large files
+    let search_limit = content.len().min(65536);
+    let search_content = &content[..search_limit];
+
     // Look for favicon link with data URI
     // Common patterns:
     // <link id="faviconLink" rel="shortcut icon" href="data:image/...">
@@ -77,10 +103,10 @@ fn extract_favicon(content: &str) -> Option<String> {
     // Find favicon link elements
     for pattern in &["<link", "<LINK"] {
         let mut search_pos = 0;
-        while let Some(link_start) = content[search_pos..].find(pattern) {
+        while let Some(link_start) = search_content[search_pos..].find(pattern) {
             let abs_start = search_pos + link_start;
-            if let Some(link_end) = content[abs_start..].find('>') {
-                let link_tag = &content[abs_start..abs_start + link_end + 1];
+            if let Some(link_end) = search_content[abs_start..].find('>') {
+                let link_tag = &search_content[abs_start..abs_start + link_end + 1];
                 let link_tag_lower = link_tag.to_lowercase();
 
                 // Check if this is a favicon link
@@ -215,10 +241,10 @@ fn get_window_label(window: tauri::Window) -> String {
 fn add_to_recent(state: &AppState, path: &str, favicon: Option<String>) {
     let mut recent = state.recent_files.lock().unwrap();
 
-    // Check if already exists and preserve/update favicon
-    let existing_favicon = recent.iter()
+    // Check if already exists and preserve favicon and backup settings
+    let existing_entry = recent.iter()
         .find(|e| e.path == path)
-        .and_then(|e| e.favicon.clone());
+        .cloned();
 
     // Remove if already exists
     recent.retain(|e| e.path != path);
@@ -231,13 +257,18 @@ fn add_to_recent(state: &AppState, path: &str, favicon: Option<String>) {
         .to_string();
 
     // Use provided favicon, or keep existing one
-    let final_favicon = favicon.or(existing_favicon);
+    let final_favicon = favicon.or(existing_entry.as_ref().and_then(|e| e.favicon.clone()));
+
+    // Preserve backup setting from existing entry, default to true
+    let backups_enabled = existing_entry.map(|e| e.backups_enabled).unwrap_or(true);
 
     // Add to front
     recent.insert(0, WikiEntry {
         path: path.to_string(),
         filename,
         favicon: final_favicon,
+        is_folder: false, // Single file wikis are not folders
+        backups_enabled,
     });
 
     // Trim to max size
@@ -262,6 +293,26 @@ fn remove_recent_file(state: tauri::State<AppState>, path: String) {
     save_wiki_list(&state.data_file, &recent);
 }
 
+/// Toggle backups for a wiki
+#[tauri::command]
+fn set_wiki_backups(state: tauri::State<AppState>, path: String, enabled: bool) {
+    let mut recent = state.recent_files.lock().unwrap();
+    if let Some(entry) = recent.iter_mut().find(|e| e.path == path) {
+        entry.backups_enabled = enabled;
+        // Save to disk
+        save_wiki_list(&state.data_file, &recent);
+    }
+}
+
+/// Check if backups are enabled for a wiki path
+fn are_backups_enabled(state: &AppState, path: &str) -> bool {
+    let recent = state.recent_files.lock().unwrap();
+    recent.iter()
+        .find(|e| e.path == path)
+        .map(|e| e.backups_enabled)
+        .unwrap_or(true) // Default to enabled if not found
+}
+
 /// Update favicon for a wiki
 #[tauri::command]
 fn update_wiki_favicon(state: tauri::State<AppState>, path: String, favicon: String) {
@@ -271,6 +322,810 @@ fn update_wiki_favicon(state: tauri::State<AppState>, path: String, favicon: Str
         // Save to disk
         save_wiki_list(&state.data_file, &recent);
     }
+}
+
+/// Show an alert dialog
+#[tauri::command]
+async fn show_alert(app: tauri::AppHandle, message: String) -> Result<(), String> {
+    use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
+    app.dialog()
+        .message(message)
+        .kind(MessageDialogKind::Info)
+        .title("TiddlyWiki")
+        .buttons(MessageDialogButtons::Ok)
+        .blocking_show();
+    Ok(())
+}
+
+/// Show a confirm dialog
+#[tauri::command]
+async fn show_confirm(app: tauri::AppHandle, message: String) -> Result<bool, String> {
+    use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
+    let result = app.dialog()
+        .message(message)
+        .kind(MessageDialogKind::Warning)
+        .title("TiddlyWiki")
+        .buttons(MessageDialogButtons::OkCancel)
+        .blocking_show();
+    Ok(result)
+}
+
+/// Close the current window (used after confirming unsaved changes)
+#[tauri::command]
+fn close_window(window: tauri::Window) {
+    let _ = window.destroy();
+}
+
+// Note: show_prompt is not implemented as a Tauri command because Tauri's dialog plugin
+// doesn't have a native text input prompt. The browser's native window.prompt() is used
+// instead, which works in the webview. For a better UX, consider implementing a custom
+// TiddlyWiki-based modal dialog for text input.
+
+/// JavaScript initialization script - provides confirm modal and close handling for wiki windows
+fn get_dialog_init_script() -> &'static str {
+    r#"
+    (function() {
+        var promptWrapper = null;
+        var confirmationBypassed = false;
+
+        function ensureWrapper() {
+            if(!promptWrapper && document.body) {
+                promptWrapper = document.createElement('div');
+                promptWrapper.className = 'td-confirm-wrapper';
+                promptWrapper.style.cssText = 'display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.5);z-index:10000;align-items:center;justify-content:center;';
+                document.body.appendChild(promptWrapper);
+            }
+            return promptWrapper;
+        }
+
+        function showConfirmModal(message, callback) {
+            var wrapper = ensureWrapper();
+            if(!wrapper) {
+                if(callback) callback(true);
+                return;
+            }
+
+            var modal = document.createElement('div');
+            modal.style.cssText = 'background:white;padding:20px;border-radius:8px;box-shadow:0 4px 20px rgba(0,0,0,0.3);max-width:400px;text-align:center;';
+
+            var msgP = document.createElement('p');
+            msgP.textContent = message;
+            msgP.style.cssText = 'margin:0 0 20px 0;font-size:16px;';
+
+            var btnContainer = document.createElement('div');
+            btnContainer.style.cssText = 'display:flex;gap:10px;justify-content:center;';
+
+            var cancelBtn = document.createElement('button');
+            cancelBtn.textContent = 'Cancel';
+            cancelBtn.style.cssText = 'padding:8px 20px;background:#e0e0e0;border:none;border-radius:4px;cursor:pointer;font-size:14px;';
+            cancelBtn.onclick = function() {
+                wrapper.style.display = 'none';
+                wrapper.innerHTML = '';
+                if(callback) callback(false);
+            };
+
+            var okBtn = document.createElement('button');
+            okBtn.textContent = 'OK';
+            okBtn.style.cssText = 'padding:8px 20px;background:#4a90d9;color:white;border:none;border-radius:4px;cursor:pointer;font-size:14px;';
+            okBtn.onclick = function() {
+                wrapper.style.display = 'none';
+                wrapper.innerHTML = '';
+                if(callback) callback(true);
+            };
+
+            btnContainer.appendChild(cancelBtn);
+            btnContainer.appendChild(okBtn);
+            modal.appendChild(msgP);
+            modal.appendChild(btnContainer);
+            wrapper.innerHTML = '';
+            wrapper.appendChild(modal);
+            wrapper.style.display = 'flex';
+            okBtn.focus();
+        }
+
+        // Our custom confirm function
+        var customConfirm = function(message) {
+            if(confirmationBypassed) {
+                return true;
+            }
+
+            var currentEvent = window.event;
+
+            showConfirmModal(message, function(confirmed) {
+                if(confirmed && currentEvent && currentEvent.target) {
+                    confirmationBypassed = true;
+                    try {
+                        var target = currentEvent.target;
+                        if(typeof target.click === 'function') {
+                            target.click();
+                        } else {
+                            var newEvent = new MouseEvent('click', {
+                                bubbles: true,
+                                cancelable: true,
+                                view: window
+                            });
+                            target.dispatchEvent(newEvent);
+                        }
+                    } finally {
+                        confirmationBypassed = false;
+                    }
+                }
+            });
+
+            return false;
+        };
+
+        // Install the override using Object.defineProperty to prevent it being replaced
+        function installConfirmOverride() {
+            try {
+                Object.defineProperty(window, 'confirm', {
+                    value: customConfirm,
+                    writable: false,
+                    configurable: true
+                });
+            } catch(e) {
+                window.confirm = customConfirm;
+            }
+        }
+
+        // Install immediately and reinstall after DOM events in case something overwrites it
+        installConfirmOverride();
+        if(document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', installConfirmOverride);
+        }
+        window.addEventListener('load', installConfirmOverride);
+
+        // Handle window close with unsaved changes check
+        function setupCloseHandler() {
+            if(typeof window.__TAURI__ === 'undefined' || !window.__TAURI__.event) {
+                setTimeout(setupCloseHandler, 100);
+                return;
+            }
+
+            var getCurrentWindow = window.__TAURI__.window.getCurrentWindow;
+            var invoke = window.__TAURI__.core.invoke;
+            var appWindow = getCurrentWindow();
+
+            appWindow.onCloseRequested(function(event) {
+                // Always prevent close first, then decide what to do
+                event.preventDefault();
+
+                // Check if TiddlyWiki has unsaved changes
+                var isDirty = false;
+                if(typeof $tw !== 'undefined' && $tw.wiki) {
+                    if(typeof $tw.wiki.isDirty === 'function') {
+                        isDirty = $tw.wiki.isDirty();
+                    } else if($tw.saverHandler && typeof $tw.saverHandler.isDirty === 'function') {
+                        isDirty = $tw.saverHandler.isDirty();
+                    } else if($tw.saverHandler && typeof $tw.saverHandler.numChanges === 'function') {
+                        isDirty = $tw.saverHandler.numChanges() > 0;
+                    } else if(document.title && document.title.startsWith('*')) {
+                        isDirty = true;
+                    } else if($tw.syncer && typeof $tw.syncer.isDirty === 'function') {
+                        isDirty = $tw.syncer.isDirty();
+                    }
+                }
+
+                if(isDirty) {
+                    showConfirmModal('You have unsaved changes. Are you sure you want to close?', function(confirmed) {
+                        if(confirmed) {
+                            invoke('close_window');
+                        }
+                    });
+                } else {
+                    invoke('close_window');
+                }
+            });
+        }
+
+        setupCloseHandler();
+    })();
+    "#
+}
+
+/// Check if a path is a wiki folder (contains tiddlywiki.info)
+fn is_wiki_folder(path: &std::path::Path) -> bool {
+    path.is_dir() && path.join("tiddlywiki.info").exists()
+}
+
+/// Get the next available port for a wiki folder server
+fn allocate_port(state: &AppState) -> u16 {
+    let mut port = state.next_port.lock().unwrap();
+    let allocated = *port;
+    *port += 1;
+    allocated
+}
+
+/// Get path to bundled Node.js binary
+fn get_node_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    let resource_path = app.path().resource_dir()
+        .map_err(|e| format!("Failed to get resource dir: {}", e))?;
+
+    #[cfg(target_os = "windows")]
+    let node_name = "node.exe";
+    #[cfg(not(target_os = "windows"))]
+    let node_name = "node";
+
+    // Tauri sidecars are placed in the same directory as the main executable
+    let exe_dir = std::env::current_exe()
+        .map_err(|e| format!("Failed to get exe path: {}", e))?
+        .parent()
+        .ok_or("Failed to get exe directory")?
+        .to_path_buf();
+
+    // Try different possible locations
+    let possible_paths = [
+        exe_dir.join(node_name),
+        resource_path.join("binaries").join(node_name),
+    ];
+
+    for path in &possible_paths {
+        if path.exists() {
+            return Ok(path.clone());
+        }
+    }
+
+    Err(format!("Node.js binary not found. Tried: {:?}", possible_paths))
+}
+
+/// Get path to bundled TiddlyWiki
+fn get_tiddlywiki_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    let resource_path = app.path().resource_dir()
+        .map_err(|e| format!("Failed to get resource dir: {}", e))?;
+
+    let tw_path = resource_path.join("resources").join("tiddlywiki").join("tiddlywiki.js");
+
+    // Also check in the development path
+    let dev_path = PathBuf::from("src-tauri/resources/tiddlywiki/tiddlywiki.js");
+
+    if tw_path.exists() {
+        Ok(tw_path)
+    } else if dev_path.exists() {
+        Ok(dev_path.canonicalize().map_err(|e| e.to_string())?)
+    } else {
+        Err(format!("TiddlyWiki not found at {:?} or {:?}", tw_path, dev_path))
+    }
+}
+
+/// Ensure required plugins and autosave are enabled for a wiki folder
+fn ensure_wiki_folder_config(wiki_path: &PathBuf) {
+    // Ensure required plugins are in tiddlywiki.info
+    let info_path = wiki_path.join("tiddlywiki.info");
+    if info_path.exists() {
+        if let Ok(content) = std::fs::read_to_string(&info_path) {
+            if let Ok(mut info) = serde_json::from_str::<serde_json::Value>(&content) {
+                let required_plugins = vec!["tiddlywiki/tiddlyweb", "tiddlywiki/filesystem"];
+                let mut modified = false;
+
+                let plugins_array = info.get_mut("plugins")
+                    .and_then(|v| v.as_array_mut());
+
+                if let Some(arr) = plugins_array {
+                    for plugin_path in &required_plugins {
+                        if !arr.iter().any(|p| p.as_str() == Some(*plugin_path)) {
+                            arr.push(serde_json::Value::String(plugin_path.to_string()));
+                            modified = true;
+                        }
+                    }
+                } else {
+                    // Create plugins array with required plugins
+                    let plugins: Vec<serde_json::Value> = required_plugins.iter()
+                        .map(|p| serde_json::Value::String(p.to_string()))
+                        .collect();
+                    info["plugins"] = serde_json::Value::Array(plugins);
+                    modified = true;
+                }
+
+                if modified {
+                    if let Ok(updated_content) = serde_json::to_string_pretty(&info) {
+                        if let Err(e) = std::fs::write(&info_path, updated_content) {
+                            eprintln!("Warning: Failed to update tiddlywiki.info: {}", e);
+                        } else {
+                            println!("Added required plugins to tiddlywiki.info");
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Ensure autosave is enabled
+    let tiddlers_dir = wiki_path.join("tiddlers");
+    let autosave_tiddler = tiddlers_dir.join("$__config_AutoSave.tid");
+
+    // Only create if the tiddlers folder exists and autosave tiddler doesn't
+    if tiddlers_dir.exists() && !autosave_tiddler.exists() {
+        let autosave_content = "title: $:/config/AutoSave\n\nyes";
+        if let Err(e) = std::fs::write(&autosave_tiddler, autosave_content) {
+            eprintln!("Warning: Failed to enable autosave: {}", e);
+        } else {
+            println!("Enabled autosave for wiki folder");
+        }
+    }
+}
+
+/// Open a wiki folder in a new window with its own server
+#[tauri::command]
+async fn open_wiki_folder(app: tauri::AppHandle, path: String) -> Result<(), String> {
+    let path_buf = PathBuf::from(&path);
+    let state = app.state::<AppState>();
+
+    // Verify it's a wiki folder
+    if !is_wiki_folder(&path_buf) {
+        return Err("Not a valid wiki folder (missing tiddlywiki.info)".to_string());
+    }
+
+    // Check if this wiki folder is already open
+    {
+        let open_wikis = state.open_wikis.lock().unwrap();
+        for (label, wiki_path) in open_wikis.iter() {
+            if wiki_path == &path {
+                // Focus existing window
+                if let Some(window) = app.get_webview_window(label) {
+                    let _ = window.set_focus();
+                    return Ok(());
+                }
+            }
+        }
+    }
+
+    // Ensure required plugins and autosave are enabled
+    ensure_wiki_folder_config(&path_buf);
+
+    // Allocate a port for this server
+    let port = allocate_port(&state);
+
+    // Get paths to Node.js and TiddlyWiki
+    let node_path = get_node_path(&app)?;
+    let tw_path = get_tiddlywiki_path(&app)?;
+
+    println!("Starting wiki folder server:");
+    println!("  Node.js: {:?}", node_path);
+    println!("  TiddlyWiki: {:?}", tw_path);
+    println!("  Wiki folder: {:?}", path_buf);
+    println!("  Port: {}", port);
+
+    // Start the TiddlyWiki server
+    let child = Command::new(&node_path)
+        .arg(&tw_path)
+        .arg(&path_buf)
+        .arg("--listen")
+        .arg(format!("port={}", port))
+        .arg("host=127.0.0.1")
+        .spawn()
+        .map_err(|e| format!("Failed to start TiddlyWiki server: {}", e))?;
+
+    // Give the server a moment to start
+    std::thread::sleep(std::time::Duration::from_millis(500));
+
+    // Add to recent files
+    let folder_name = path_buf
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("Unknown")
+        .to_string();
+
+    {
+        let mut recent = state.recent_files.lock().unwrap();
+        // Remove if already exists
+        recent.retain(|e| e.path != path);
+        // Add to front with is_folder flag
+        recent.insert(0, WikiEntry {
+            path: path.clone(),
+            filename: folder_name.clone(),
+            favicon: None, // Folders don't have embedded favicons
+            is_folder: true,
+            backups_enabled: false, // Not applicable for folder wikis (they use autosave)
+        });
+        recent.truncate(MAX_RECENT_FILES);
+        save_wiki_list(&state.data_file, &recent);
+    }
+
+    // Generate unique window label
+    let base_label = folder_name.replace(|c: char| !c.is_alphanumeric(), "-");
+    let label = {
+        let open_wikis = state.open_wikis.lock().unwrap();
+        let mut label = format!("folder-{}", base_label);
+        let mut counter = 1;
+        while open_wikis.contains_key(&label) {
+            label = format!("folder-{}-{}", base_label, counter);
+            counter += 1;
+        }
+        label
+    };
+
+    // Track this wiki as open
+    state.open_wikis.lock().unwrap().insert(label.clone(), path.clone());
+
+    // Store the server info
+    state.wiki_servers.lock().unwrap().insert(label.clone(), WikiFolderServer {
+        process: child,
+        port,
+        path: path.clone(),
+    });
+
+    let server_url = format!("http://127.0.0.1:{}", port);
+
+    let icon = Image::from_bytes(include_bytes!("../icons/icon.png"))
+        .map_err(|e| format!("Failed to load icon: {}", e))?;
+
+    let window = WebviewWindowBuilder::new(&app, &label, WebviewUrl::External(server_url.parse().unwrap()))
+        .title(&folder_name)
+        .inner_size(1200.0, 800.0)
+        .icon(icon)
+        .map_err(|e| format!("Failed to set icon: {}", e))?
+        .window_classname("tiddlydesktop-rs")
+        .initialization_script(get_dialog_init_script())
+        .build()
+        .map_err(|e| format!("Failed to create window: {}", e))?;
+
+    // Handle window close - JS onCloseRequested handles unsaved changes confirmation
+    let app_handle = app.clone();
+    let label_clone = label.clone();
+    window.on_window_event(move |event| {
+        if let tauri::WindowEvent::Destroyed = event {
+            let state = app_handle.state::<AppState>();
+            // Stop the server process
+            if let Some(mut server) = state.wiki_servers.lock().unwrap().remove(&label_clone) {
+                let _ = server.process.kill();
+            }
+            // Remove from open wikis
+            state.open_wikis.lock().unwrap().remove(&label_clone);
+        }
+    });
+
+    Ok(())
+}
+
+/// Check if a path is a wiki folder
+#[tauri::command]
+fn check_is_wiki_folder(path: String) -> bool {
+    is_wiki_folder(&PathBuf::from(&path))
+}
+
+/// Edition info for UI display
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct EditionInfo {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+}
+
+/// Get list of available TiddlyWiki editions
+#[tauri::command]
+async fn get_available_editions(app: tauri::AppHandle) -> Result<Vec<EditionInfo>, String> {
+    let tw_path = get_tiddlywiki_path(&app)?;
+    let editions_dir = tw_path.parent()
+        .ok_or("Failed to get TiddlyWiki directory")?
+        .join("editions");
+
+    if !editions_dir.exists() {
+        return Err("Editions directory not found".to_string());
+    }
+
+    // Common editions with friendly names and descriptions
+    let edition_metadata: std::collections::HashMap<&str, (&str, &str)> = [
+        ("server", ("Server", "Basic Node.js server wiki - recommended for most users")),
+        ("empty", ("Empty", "Minimal empty wiki with no content")),
+        ("full", ("Full", "Full-featured wiki with many plugins")),
+        ("dev", ("Developer", "Development edition with extra tools")),
+        ("tw5.com", ("TW5 Documentation", "Full TiddlyWiki documentation")),
+        ("introduction", ("Introduction", "Introduction and tutorial content")),
+        ("prerelease", ("Prerelease", "Latest prerelease features")),
+    ].iter().cloned().collect();
+
+    let mut editions = Vec::new();
+
+    // First add the common/recommended editions in order
+    let priority_editions = ["server", "empty", "full", "dev"];
+    for edition_id in &priority_editions {
+        let edition_path = editions_dir.join(edition_id);
+        if edition_path.exists() && edition_path.join("tiddlywiki.info").exists() {
+            if let Some((name, desc)) = edition_metadata.get(*edition_id) {
+                editions.push(EditionInfo {
+                    id: edition_id.to_string(),
+                    name: name.to_string(),
+                    description: desc.to_string(),
+                });
+            }
+        }
+    }
+
+    // Then add other editions
+    if let Ok(entries) = std::fs::read_dir(&editions_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                    // Skip if already added or if it doesn't have tiddlywiki.info
+                    if priority_editions.contains(&name) {
+                        continue;
+                    }
+                    if !path.join("tiddlywiki.info").exists() {
+                        continue;
+                    }
+                    // Skip test/internal editions
+                    if name.starts_with("test") || name == "pluginlibrary" {
+                        continue;
+                    }
+
+                    let (display_name, description) = edition_metadata
+                        .get(name)
+                        .map(|(n, d)| (n.to_string(), d.to_string()))
+                        .unwrap_or_else(|| {
+                            (name.replace('-', " ").replace('_', " "), format!("{} edition", name))
+                        });
+
+                    editions.push(EditionInfo {
+                        id: name.to_string(),
+                        name: display_name,
+                        description,
+                    });
+                }
+            }
+        }
+    }
+
+    Ok(editions)
+}
+
+/// Plugin info for UI display
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct PluginInfo {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+    pub category: String,
+}
+
+/// Get list of available TiddlyWiki plugins
+#[tauri::command]
+async fn get_available_plugins(app: tauri::AppHandle) -> Result<Vec<PluginInfo>, String> {
+    let tw_path = get_tiddlywiki_path(&app)?;
+    let plugins_dir = tw_path.parent()
+        .ok_or("Failed to get TiddlyWiki directory")?
+        .join("plugins")
+        .join("tiddlywiki");
+
+    if !plugins_dir.exists() {
+        return Err("Plugins directory not found".to_string());
+    }
+
+    let mut plugins = Vec::new();
+
+    // Categories for organizing plugins
+    let editor_plugins = ["codemirror", "codemirror-autocomplete", "codemirror-closebrackets",
+        "codemirror-closetag", "codemirror-mode-css", "codemirror-mode-javascript",
+        "codemirror-mode-markdown", "codemirror-mode-xml", "codemirror-search-replace"];
+    let utility_plugins = ["markdown", "highlight", "katex", "jszip", "xlsx-utils", "qrcode", "innerwiki"];
+    let storage_plugins = ["browser-storage", "filesystem", "tiddlyweb"];
+
+    if let Ok(entries) = std::fs::read_dir(&plugins_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                let plugin_info_path = path.join("plugin.info");
+                if plugin_info_path.exists() {
+                    if let Ok(content) = std::fs::read_to_string(&plugin_info_path) {
+                        if let Ok(info) = serde_json::from_str::<serde_json::Value>(&content) {
+                            let id = path.file_name()
+                                .and_then(|n| n.to_str())
+                                .unwrap_or("")
+                                .to_string();
+
+                            // Skip internal/core plugins
+                            if id == "tiddlyweb" || id == "filesystem" || id.starts_with("test") {
+                                continue;
+                            }
+
+                            let name = info.get("name")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or(&id)
+                                .to_string();
+
+                            let description = info.get("description")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("")
+                                .to_string();
+
+                            // Determine category
+                            let category = if editor_plugins.iter().any(|p| id.starts_with(p)) {
+                                "Editor"
+                            } else if utility_plugins.contains(&id.as_str()) {
+                                "Utility"
+                            } else if storage_plugins.contains(&id.as_str()) {
+                                "Storage"
+                            } else {
+                                "Other"
+                            }.to_string();
+
+                            plugins.push(PluginInfo {
+                                id,
+                                name,
+                                description,
+                                category,
+                            });
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Sort by category, then by name
+    plugins.sort_by(|a, b| {
+        let cat_order = |c: &str| match c {
+            "Editor" => 0,
+            "Utility" => 1,
+            "Storage" => 2,
+            _ => 3,
+        };
+        cat_order(&a.category).cmp(&cat_order(&b.category))
+            .then_with(|| a.name.cmp(&b.name))
+    });
+
+    Ok(plugins)
+}
+
+/// Initialize a new wiki folder with the specified edition and plugins
+#[tauri::command]
+async fn init_wiki_folder(app: tauri::AppHandle, path: String, edition: String, plugins: Vec<String>) -> Result<(), String> {
+    let path_buf = PathBuf::from(&path);
+
+    // Verify the folder exists
+    if !path_buf.exists() {
+        std::fs::create_dir_all(&path_buf)
+            .map_err(|e| format!("Failed to create directory: {}", e))?;
+    }
+
+    // Check if already initialized
+    if path_buf.join("tiddlywiki.info").exists() {
+        return Err("Folder already contains a TiddlyWiki".to_string());
+    }
+
+    // Get paths to Node.js and TiddlyWiki
+    let node_path = get_node_path(&app)?;
+    let tw_path = get_tiddlywiki_path(&app)?;
+
+    println!("Initializing wiki folder:");
+    println!("  Node.js: {:?}", node_path);
+    println!("  TiddlyWiki: {:?}", tw_path);
+    println!("  Target folder: {:?}", path_buf);
+    println!("  Edition: {}", edition);
+    println!("  Additional plugins: {:?}", plugins);
+
+    // Run tiddlywiki --init <edition>
+    let output = Command::new(&node_path)
+        .arg(&tw_path)
+        .arg(&path_buf)
+        .arg("--init")
+        .arg(&edition)
+        .output()
+        .map_err(|e| format!("Failed to run TiddlyWiki init: {}", e))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        return Err(format!("TiddlyWiki init failed:\n{}\n{}", stdout, stderr));
+    }
+
+    // Verify initialization succeeded
+    let info_path = path_buf.join("tiddlywiki.info");
+    if !info_path.exists() {
+        return Err("Initialization failed - tiddlywiki.info not created".to_string());
+    }
+
+    // Always ensure required plugins for Node.js server are present
+    // Plus any additional user-selected plugins
+    let required_plugins = vec!["tiddlywiki/tiddlyweb", "tiddlywiki/filesystem"];
+
+    let content = std::fs::read_to_string(&info_path)
+        .map_err(|e| format!("Failed to read tiddlywiki.info: {}", e))?;
+
+    let mut info: serde_json::Value = serde_json::from_str(&content)
+        .map_err(|e| format!("Failed to parse tiddlywiki.info: {}", e))?;
+
+    // Get or create plugins array
+    let plugins_array = info.get_mut("plugins")
+        .and_then(|v| v.as_array_mut());
+
+    if let Some(arr) = plugins_array {
+        // Add required plugins first
+        for plugin_path in &required_plugins {
+            if !arr.iter().any(|p| p.as_str() == Some(*plugin_path)) {
+                arr.push(serde_json::Value::String(plugin_path.to_string()));
+            }
+        }
+        // Add user-selected plugins
+        for plugin in &plugins {
+            let plugin_path = format!("tiddlywiki/{}", plugin);
+            if !arr.iter().any(|p| p.as_str() == Some(&plugin_path)) {
+                arr.push(serde_json::Value::String(plugin_path));
+            }
+        }
+    } else {
+        // Create new plugins array with required + user plugins
+        let mut all_plugins: Vec<serde_json::Value> = required_plugins.iter()
+            .map(|p| serde_json::Value::String(p.to_string()))
+            .collect();
+        for plugin in &plugins {
+            all_plugins.push(serde_json::Value::String(format!("tiddlywiki/{}", plugin)));
+        }
+        info["plugins"] = serde_json::Value::Array(all_plugins);
+    }
+
+    // Write back
+    let updated_content = serde_json::to_string_pretty(&info)
+        .map_err(|e| format!("Failed to serialize tiddlywiki.info: {}", e))?;
+    std::fs::write(&info_path, updated_content)
+        .map_err(|e| format!("Failed to write tiddlywiki.info: {}", e))?;
+
+    println!("Ensured tiddlyweb and filesystem plugins are present");
+
+    // Create tiddlers folder if it doesn't exist
+    let tiddlers_dir = path_buf.join("tiddlers");
+    if !tiddlers_dir.exists() {
+        std::fs::create_dir_all(&tiddlers_dir)
+            .map_err(|e| format!("Failed to create tiddlers directory: {}", e))?;
+    }
+
+    // Enable autosave by creating the config tiddler
+    let autosave_tiddler = tiddlers_dir.join("$__config_AutoSave.tid");
+    let autosave_content = "title: $:/config/AutoSave\n\nyes";
+    std::fs::write(&autosave_tiddler, autosave_content)
+        .map_err(|e| format!("Failed to create autosave config: {}", e))?;
+
+    println!("Enabled autosave for wiki folder");
+    println!("Wiki folder initialized successfully");
+    Ok(())
+}
+
+/// Check folder status - returns info about whether it's a wiki, empty, or has files
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct FolderStatus {
+    pub is_wiki: bool,
+    pub is_empty: bool,
+    pub has_files: bool,
+    pub path: String,
+    pub name: String,
+}
+
+#[tauri::command]
+fn check_folder_status(path: String) -> Result<FolderStatus, String> {
+    let path_buf = PathBuf::from(&path);
+
+    if !path_buf.exists() {
+        return Ok(FolderStatus {
+            is_wiki: false,
+            is_empty: true,
+            has_files: false,
+            path: path.clone(),
+            name: path_buf.file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("Unknown")
+                .to_string(),
+        });
+    }
+
+    if !path_buf.is_dir() {
+        return Err("Path is not a directory".to_string());
+    }
+
+    let is_wiki = path_buf.join("tiddlywiki.info").exists();
+    let has_files = std::fs::read_dir(&path_buf)
+        .map(|entries| entries.count() > 0)
+        .unwrap_or(false);
+
+    Ok(FolderStatus {
+        is_wiki,
+        is_empty: !has_files,
+        has_files,
+        path: path.clone(),
+        name: path_buf.file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("Unknown")
+            .to_string(),
+    })
 }
 
 /// Reveal file in system file manager
@@ -328,11 +1183,21 @@ async fn open_wiki_window(app: tauri::AppHandle, path: String) -> Result<(), Str
         }
     }
 
-    // Read wiki content and extract favicon
-    let favicon = tokio::fs::read_to_string(&path_buf)
-        .await
-        .ok()
-        .and_then(|content| extract_favicon(&content));
+    // Read only the first 64KB to extract favicon (it's always in <head>)
+    let favicon = {
+        use tokio::io::AsyncReadExt;
+        let mut buffer = vec![0u8; 65536];
+        if let Ok(mut file) = tokio::fs::File::open(&path_buf).await {
+            if let Ok(bytes_read) = file.read(&mut buffer).await {
+                buffer.truncate(bytes_read);
+                String::from_utf8(buffer).ok().and_then(|s| extract_favicon(&s))
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    };
 
     // Add to recent files with favicon
     add_to_recent(&state, &path, favicon);
@@ -386,10 +1251,11 @@ async fn open_wiki_window(app: tauri::AppHandle, path: String) -> Result<(), Str
         .icon(icon)
         .map_err(|e| format!("Failed to set icon: {}", e))?
         .window_classname("tiddlydesktop-rs")
+        .initialization_script(get_dialog_init_script())
         .build()
         .map_err(|e| format!("Failed to create window: {}", e))?;
 
-    // Handle window close - remove from open_wikis
+    // Handle window close - JS onCloseRequested handles unsaved changes confirmation
     let app_handle = app.clone();
     let label_clone = label.clone();
     window.on_window_event(move |event| {
@@ -461,8 +1327,12 @@ fn wiki_protocol_handler(app: &tauri::AppHandle, request: Request<Vec<u8>>) -> R
 
         let content = String::from_utf8_lossy(request.body()).to_string();
 
-        // Create backup and save synchronously (protocol handlers can't be async)
-        if wiki_path.exists() {
+        // Check if backups are enabled for this wiki
+        let state = app.state::<AppState>();
+        let backups_enabled = are_backups_enabled(&state, wiki_path.to_string_lossy().as_ref());
+
+        // Create backup if enabled (synchronous since protocol handlers can't be async)
+        if backups_enabled && wiki_path.exists() {
             if let Some(parent) = wiki_path.parent() {
                 let filename = wiki_path.file_stem().and_then(|s| s.to_str()).unwrap_or("wiki");
                 let backup_dir = parent.join(format!("{}.backups", filename));
@@ -531,32 +1401,115 @@ fn wiki_protocol_handler(app: &tauri::AppHandle, request: Request<Vec<u8>>) -> R
 
     drop(paths); // Release the lock before file I/O
 
+    // Generate the save URL for this wiki
+    let save_url = format!("wikifile://localhost/save/{}", path);
+
     match std::fs::read_to_string(&file_path) {
         Ok(content) => {
-            // Inject __WIKI_PATH__ and __WINDOW_LABEL__ for the saver and title sync
+            // Inject variables and a custom saver for TiddlyWiki
             let script_injection = format!(
-                r#"<script>window.__WIKI_PATH__ = "{}"; window.__WINDOW_LABEL__ = "{}";</script>"#,
+                r##"<script>
+window.__WIKI_PATH__ = "{}";
+window.__WINDOW_LABEL__ = "{}";
+window.__SAVE_URL__ = "{}";
+
+// TiddlyDesktop custom saver - waits for TiddlyWiki to load then registers
+(function() {{
+    function registerSaver() {{
+        if(typeof $tw === 'undefined' || !$tw.saverHandler) {{
+            setTimeout(registerSaver, 100);
+            return;
+        }}
+
+        // Create our custom saver class
+        var TiddlyDesktopSaver = function(wiki) {{
+            this.wiki = wiki;
+        }};
+
+        // Static method - can this saver handle saving?
+        TiddlyDesktopSaver.canSave = function(wiki) {{
+            return true; // We can always save
+        }};
+
+        // Static method - create an instance
+        TiddlyDesktopSaver.create = function(wiki) {{
+            return new TiddlyDesktopSaver(wiki);
+        }};
+
+        TiddlyDesktopSaver.prototype.save = function(text, method, callback) {{
+            fetch(window.__SAVE_URL__, {{
+                method: 'PUT',
+                body: text
+            }}).then(function(response) {{
+                if(response.ok) {{
+                    callback(null);
+                }} else {{
+                    response.text().then(function(errText) {{
+                        callback('Save failed: ' + errText);
+                    }});
+                }}
+            }}).catch(function(err) {{
+                callback('Save failed: ' + err.message);
+            }});
+            return true;
+        }};
+
+        TiddlyDesktopSaver.prototype.info = {{
+            name: 'tiddlydesktop',
+            priority: 5000,
+            capabilities: ['save', 'autosave']
+        }};
+
+        // Register the saver module with TiddlyWiki
+        $tw.modules.types['saver'] = $tw.modules.types['saver'] || {{}};
+        $tw.modules.types['saver']['tiddlydesktop-saver'] = {{
+            canSave: TiddlyDesktopSaver.canSave,
+            create: TiddlyDesktopSaver.create
+        }};
+
+        // Also directly add to savers array for immediate use
+        var saverInstance = new TiddlyDesktopSaver($tw.wiki);
+        saverInstance.info = TiddlyDesktopSaver.prototype.info;
+        $tw.saverHandler.savers.unshift(saverInstance);
+    }}
+
+    registerSaver();
+}})();
+</script>"##,
                 file_path.display().to_string().replace('\\', "\\\\").replace('"', "\\\""),
-                window_label.replace('\\', "\\\\").replace('"', "\\\"")
+                window_label.replace('\\', "\\\\").replace('"', "\\\""),
+                save_url
             );
 
-            // Insert script after <head...>
-            let modified_content = if let Some(head_pos) = content.to_lowercase().find("<head") {
-                if let Some(close_pos) = content[head_pos..].find('>') {
-                    let insert_pos = head_pos + close_pos + 1;
-                    format!("{}{}{}", &content[..insert_pos], script_injection, &content[insert_pos..])
+            // Find <head> tag position - only search first 4KB, don't lowercase the whole file
+            let search_area = &content[..content.len().min(4096)];
+            let head_pos = search_area.find("<head")
+                .or_else(|| search_area.find("<HEAD"))
+                .or_else(|| search_area.find("<Head"));
+
+            // Build response efficiently without extra allocations
+            let mut response_bytes = Vec::with_capacity(content.len() + script_injection.len() + 100);
+
+            if let Some(head_start) = head_pos {
+                if let Some(close_offset) = content[head_start..].find('>') {
+                    let insert_pos = head_start + close_offset + 1;
+                    response_bytes.extend_from_slice(content[..insert_pos].as_bytes());
+                    response_bytes.extend_from_slice(script_injection.as_bytes());
+                    response_bytes.extend_from_slice(content[insert_pos..].as_bytes());
                 } else {
-                    format!("{}{}", script_injection, content)
+                    response_bytes.extend_from_slice(script_injection.as_bytes());
+                    response_bytes.extend_from_slice(content.as_bytes());
                 }
             } else {
-                format!("{}{}", script_injection, content)
-            };
+                response_bytes.extend_from_slice(script_injection.as_bytes());
+                response_bytes.extend_from_slice(content.as_bytes());
+            }
 
             Response::builder()
                 .status(200)
                 .header("Content-Type", "text/html; charset=utf-8")
                 .header("Access-Control-Allow-Origin", "*")
-                .body(modified_content.into_bytes())
+                .body(response_bytes)
                 .unwrap()
         }
         Err(e) => Response::builder()
@@ -613,13 +1566,19 @@ pub fn run() {
                 open_wikis: Mutex::new(HashMap::new()),
                 recent_files: Mutex::new(wiki_list),
                 data_file,
+                wiki_servers: Mutex::new(HashMap::new()),
+                next_port: Mutex::new(8080),
             });
 
-            // Set icon for the main window
-            if let Some(window) = app.get_webview_window("main") {
-                let icon = Image::from_bytes(include_bytes!("../icons/icon.png"))?;
-                window.set_icon(icon)?;
-            }
+            // Create the main window programmatically with initialization script
+            let icon = Image::from_bytes(include_bytes!("../icons/icon.png"))?;
+            WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
+                .title("TiddlyDesktopRS")
+                .inner_size(800.0, 600.0)
+                .icon(icon)?
+                .window_classname("tiddlydesktop-rs")
+                .initialization_script(get_dialog_init_script())
+                .build()?;
 
             setup_system_tray(app)?;
             Ok(())
@@ -634,12 +1593,22 @@ pub fn run() {
             load_wiki,
             save_wiki,
             open_wiki_window,
+            open_wiki_folder,
+            check_is_wiki_folder,
+            check_folder_status,
+            get_available_editions,
+            get_available_plugins,
+            init_wiki_folder,
             set_window_title,
             get_window_label,
             get_recent_files,
             remove_recent_file,
+            set_wiki_backups,
             reveal_in_folder,
-            update_wiki_favicon
+            update_wiki_favicon,
+            show_alert,
+            show_confirm,
+            close_window
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

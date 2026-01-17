@@ -56,6 +56,23 @@ jobs:
         run: |
           node tiddlywiki.js editions/tiddlydesktop --output ../tiddlydesktop-rs/src --render '$:/core/save/all' 'index.html' 'text/plain'
 
+      - name: Download Node.js for bundling
+        working-directory: tiddlydesktop-rs
+        run: |
+          mkdir -p src-tauri/binaries
+          cd src-tauri/binaries
+          curl -L -o node.tar.xz "https://nodejs.org/dist/v20.11.0/node-v20.11.0-linux-x64.tar.xz"
+          tar -xf node.tar.xz
+          mv node-v20.11.0-linux-x64/bin/node node-x86_64-unknown-linux-gnu
+          rm -rf node.tar.xz node-v20.11.0-linux-x64
+          chmod +x node-x86_64-unknown-linux-gnu
+
+      - name: Bundle TiddlyWiki
+        working-directory: tiddlydesktop-rs
+        run: |
+          mkdir -p src-tauri/resources
+          cp -r ../TiddlyWiki5 src-tauri/resources/tiddlywiki
+
       - name: Build Tauri (Linux)
         working-directory: tiddlydesktop-rs
         run: npm run tauri build
@@ -107,6 +124,24 @@ jobs:
         run: |
           node tiddlywiki.js editions/tiddlydesktop --output ../tiddlydesktop-rs/src --render '$:/core/save/all' 'index.html' 'text/plain'
 
+      - name: Download Node.js for bundling
+        working-directory: tiddlydesktop-rs
+        shell: bash
+        run: |
+          mkdir -p src-tauri/binaries
+          cd src-tauri/binaries
+          curl -L -o node.zip "https://nodejs.org/dist/v20.11.0/node-v20.11.0-win-x64.zip"
+          unzip -q node.zip
+          mv node-v20.11.0-win-x64/node.exe node-x86_64-pc-windows-msvc.exe
+          rm -rf node.zip node-v20.11.0-win-x64
+
+      - name: Bundle TiddlyWiki
+        working-directory: tiddlydesktop-rs
+        shell: bash
+        run: |
+          mkdir -p src-tauri/resources
+          cp -r ../TiddlyWiki5 src-tauri/resources/tiddlywiki
+
       - name: Build Tauri (Windows)
         working-directory: tiddlydesktop-rs
         run: npm run tauri build
@@ -155,17 +190,54 @@ jobs:
         run: |
           node tiddlywiki.js editions/tiddlydesktop --output ../tiddlydesktop-rs/src --render '$:/core/save/all' 'index.html' 'text/plain'
 
-      - name: Build Tauri (macOS)
+      - name: Download Node.js for bundling (both architectures)
         working-directory: tiddlydesktop-rs
-        run: npm run tauri build
+        run: |
+          mkdir -p src-tauri/binaries
+          cd src-tauri/binaries
+          # Download for x64
+          curl -L -o node-x64.tar.gz "https://nodejs.org/dist/v20.11.0/node-v20.11.0-darwin-x64.tar.gz"
+          tar -xf node-x64.tar.gz
+          mv node-v20.11.0-darwin-x64/bin/node node-x86_64-apple-darwin
+          rm -rf node-x64.tar.gz node-v20.11.0-darwin-x64
+          chmod +x node-x86_64-apple-darwin
+          # Download for arm64
+          curl -L -o node-arm64.tar.gz "https://nodejs.org/dist/v20.11.0/node-v20.11.0-darwin-arm64.tar.gz"
+          tar -xf node-arm64.tar.gz
+          mv node-v20.11.0-darwin-arm64/bin/node node-aarch64-apple-darwin
+          rm -rf node-arm64.tar.gz node-v20.11.0-darwin-arm64
+          chmod +x node-aarch64-apple-darwin
+
+      - name: Bundle TiddlyWiki
+        working-directory: tiddlydesktop-rs
+        run: |
+          mkdir -p src-tauri/resources
+          cp -r ../TiddlyWiki5 src-tauri/resources/tiddlywiki
+
+      - name: Add Rust targets for universal binary
+        run: |
+          rustup target add x86_64-apple-darwin
+          rustup target add aarch64-apple-darwin
+
+      - name: Build Tauri (macOS universal)
+        working-directory: tiddlydesktop-rs
+        run: npm run tauri build -- --target universal-apple-darwin
+
+      - name: Zip the .app bundle
+        working-directory: tiddlydesktop-rs
+        run: |
+          cd src-tauri/target/universal-apple-darwin/release/bundle/macos
+          for app in *.app; do
+            zip -r "${app%.app}.app.zip" "$app"
+          done
 
       - name: Upload macOS artifacts
         uses: actions/upload-artifact@v4
         with:
           name: macos-artifacts
           path: |
-            tiddlydesktop-rs/src-tauri/target/release/bundle/dmg/*.dmg
-            tiddlydesktop-rs/src-tauri/target/release/bundle/macos/*.app
+            tiddlydesktop-rs/src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg
+            tiddlydesktop-rs/src-tauri/target/universal-apple-darwin/release/bundle/macos/*.zip
 
   create-release:
     needs: [build-linux, build-windows, build-macos]

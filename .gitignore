@@ -63,3 +63,7 @@ coverage/
 *.temp
 .tmp/
 .temp/
+
+# Bundled binaries and resources (downloaded at build time)
+src-tauri/binaries/
+src-tauri/resources/

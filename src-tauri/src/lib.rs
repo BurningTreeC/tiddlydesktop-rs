@@ -585,6 +585,29 @@ fn get_dialog_init_script() -> &'static str {
     "#
 }
 
+/// Normalize a path for cross-platform compatibility
+/// On Windows: removes \\?\ prefixes and ensures proper separators
+fn normalize_path(path: PathBuf) -> PathBuf {
+    // Use dunce to simplify Windows paths (removes \\?\ UNC prefixes)
+    let normalized = dunce::simplified(&path).to_path_buf();
+
+    #[cfg(target_os = "windows")]
+    {
+        let path_str = normalized.to_string_lossy();
+        // Fix malformed paths like "C:resources" -> "C:\resources"
+        if path_str.len() >= 2 {
+            let chars: Vec<char> = path_str.chars().collect();
+            if chars[1] == ':' && path_str.len() > 2 && chars[2] != '\\' && chars[2] != '/' {
+                let fixed = format!("{}:\\{}", chars[0], &path_str[2..]);
+                println!("Fixed malformed path: {} -> {}", path_str, fixed);
+                return PathBuf::from(fixed);
+            }
+        }
+    }
+
+    normalized
+}
+
 /// Check if a path is a wiki folder (contains tiddlywiki.info)
 fn is_wiki_folder(path: &std::path::Path) -> bool {
     path.is_dir() && path.join("tiddlywiki.info").exists()
@@ -644,6 +667,7 @@ fn get_node_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     // Fall back to bundled Node.js
     let resource_path = app.path().resource_dir()
         .map_err(|e| format!("Failed to get resource dir: {}", e))?;
+    let resource_path = normalize_path(resource_path);
 
     #[cfg(target_os = "windows")]
     let node_name = "node.exe";
@@ -678,6 +702,7 @@ fn get_node_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
 fn get_tiddlywiki_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     let resource_path = app.path().resource_dir()
         .map_err(|e| format!("Failed to get resource dir: {}", e))?;
+    let resource_path = normalize_path(resource_path);
 
     let tw_path = resource_path.join("resources").join("tiddlywiki").join("tiddlywiki.js");
 
@@ -687,7 +712,8 @@ fn get_tiddlywiki_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     if tw_path.exists() {
         Ok(tw_path)
     } else if dev_path.exists() {
-        Ok(dev_path.canonicalize().map_err(|e| e.to_string())?)
+        let canonical = dev_path.canonicalize().map_err(|e| e.to_string())?;
+        Ok(normalize_path(canonical))
     } else {
         Err(format!("TiddlyWiki not found at {:?} or {:?}", tw_path, dev_path))
     }
@@ -747,6 +773,38 @@ fn ensure_wiki_folder_config(wiki_path: &PathBuf) {
         } else {
             println!("Enabled autosave for wiki folder");
         }
+    }
+}
+
+/// Wait for TCP server with exponential backoff
+#[cfg(desktop)]
+fn wait_for_server_ready(port: u16, process: &mut Child, timeout: std::time::Duration) -> Result<(), String> {
+    use std::net::TcpStream;
+    use std::time::Instant;
+
+    let start = Instant::now();
+    let addr: std::net::SocketAddr = format!("127.0.0.1:{}", port).parse().unwrap();
+    let mut delay = std::time::Duration::from_millis(50);
+
+    loop {
+        // Check if process died
+        if let Ok(Some(status)) = process.try_wait() {
+            return Err(format!("Server exited with status: {}", status));
+        }
+
+        // Try to connect
+        if TcpStream::connect_timeout(&addr, std::time::Duration::from_millis(100)).is_ok() {
+            println!("Server ready on port {} ({:.1}s)", port, start.elapsed().as_secs_f64());
+            return Ok(());
+        }
+
+        // Check timeout
+        if start.elapsed() >= timeout {
+            return Err(format!("Server failed to start within {:?}", timeout));
+        }
+
+        std::thread::sleep(delay);
+        delay = (delay * 2).min(std::time::Duration::from_secs(1)); // Cap at 1s
     }
 }
 
@@ -844,11 +902,15 @@ async fn open_wiki_folder(app: tauri::AppHandle, path: String) -> Result<(), Str
             .arg("host=127.0.0.1");
         #[cfg(target_os = "windows")]
         cmd.creation_flags(CREATE_NO_WINDOW);
-        let child = cmd.spawn()
+        let mut child = cmd.spawn()
             .map_err(|e| format!("Failed to start TiddlyWiki server: {}", e))?;
 
-        // Give the server a moment to start
-        std::thread::sleep(std::time::Duration::from_millis(500));
+        // Wait for server to be ready (10s timeout)
+        if let Err(e) = wait_for_server_ready(port, &mut child, std::time::Duration::from_secs(10)) {
+            let _ = child.kill();
+            state.open_wikis.lock().unwrap().remove(&label);
+            return Err(format!("Failed to start wiki server: {}", e));
+        }
 
         // Store the server info
         state.wiki_servers.lock().unwrap().insert(label.clone(), WikiFolderServer {

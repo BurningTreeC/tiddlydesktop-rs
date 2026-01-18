@@ -1909,25 +1909,43 @@ window.__SAVE_URL__ = "{}";
                     return true;
                 }},
                 save: function(text, method, callback) {{
-                    console.log('TiddlyDesktop saver: save() called, method:', method);
-                    var xhr = new XMLHttpRequest();
-                    xhr.open('PUT', SAVE_URL, true);
-                    xhr.onreadystatechange = function() {{
-                        if(xhr.readyState === 4) {{
-                            if(xhr.status === 200) {{
-                                console.log('TiddlyDesktop saver: save successful');
-                                callback(null);
+                    var wikiPath = window.__WIKI_PATH__;
+
+                    // Try Tauri IPC first (works reliably on all platforms)
+                    if(window.__TAURI__ && window.__TAURI__.core && window.__TAURI__.core.invoke) {{
+                        window.__TAURI__.core.invoke('save_wiki', {{
+                            path: wikiPath,
+                            content: text
+                        }}).then(function() {{
+                            callback(null);
+                        }}).catch(function(err) {{
+                            // IPC failed, try fetch as fallback
+                            saveViaFetch(text, callback);
+                        }});
+                    }} else {{
+                        // No Tauri IPC, use fetch
+                        saveViaFetch(text, callback);
+                    }}
+
+                    function saveViaFetch(content, cb) {{
+                        fetch(SAVE_URL, {{
+                            method: 'PUT',
+                            body: content
+                        }}).then(function(response) {{
+                            if(response.ok) {{
+                                cb(null);
                             }} else {{
-                                console.error('TiddlyDesktop saver: save failed', xhr.status, xhr.statusText);
-                                callback('Save failed: ' + xhr.statusText);
+                                response.text().then(function(errText) {{
+                                    cb('Save failed (HTTP ' + response.status + '): ' + (errText || response.statusText));
+                                }}).catch(function() {{
+                                    cb('Save failed: HTTP ' + response.status);
+                                }});
                             }}
-                        }}
-                    }};
-                    xhr.onerror = function() {{
-                        console.error('TiddlyDesktop saver: network error');
-                        callback('Save failed: network error');
-                    }};
-                    xhr.send(text);
+                        }}).catch(function(err) {{
+                            cb('Save failed (fetch): ' + err.toString());
+                        }});
+                    }}
+
                     return true;
                 }}
             }};

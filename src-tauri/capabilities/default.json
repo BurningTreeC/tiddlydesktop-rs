@@ -4,7 +4,7 @@
   "description": "Capability for the main window",
   "windows": ["main", "wiki-*", "folder-*"],
   "remote": {
-    "urls": ["http://127.0.0.1:*", "http://localhost:*"]
+    "urls": ["http://127.0.0.1:*", "http://localhost:*", "wikifile://localhost/*"]
   },
   "permissions": [
     "core:default",

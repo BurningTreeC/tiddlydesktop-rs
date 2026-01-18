@@ -1,4 +1,6 @@
-use std::{collections::HashMap, path::PathBuf, sync::Mutex, process::{Child, Command}};
+use std::{collections::HashMap, path::PathBuf, sync::Mutex};
+#[cfg(desktop)]
+use std::process::{Child, Command};
 use chrono::Local;
 use serde::{Deserialize, Serialize};
 use tauri::{

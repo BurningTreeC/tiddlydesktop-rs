@@ -4,7 +4,7 @@
 //! Implements the TiddlyWeb API that TiddlyWiki's tiddlyweb plugin expects.
 
 use std::collections::HashMap;
-// std::io::Read is imported locally where needed
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -365,8 +365,6 @@ fn handle_put_tiddler(
     wiki_path: &Path,
     tiddlers: &Arc<Mutex<HashMap<String, Tiddler>>>
 ) {
-    use std::io::Read;
-
     // Read request body
     let mut body = String::new();
     if let Err(e) = request.as_reader().read_to_string(&mut body) {

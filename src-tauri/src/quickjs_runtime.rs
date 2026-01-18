@@ -95,7 +95,7 @@ impl TiddlyWikiRuntime {
     }
 
     /// Set up Node.js-compatible globals (fs, path, process, etc.)
-    fn setup_globals(&self, ctx: &Ctx<'_>, working_dir: &Path) -> Result<(), String> {
+    fn setup_globals<'js>(&self, ctx: &Ctx<'js>, working_dir: &Path) -> Result<(), String> {
         let globals = ctx.globals();
 
         // Set up console
@@ -110,7 +110,7 @@ impl TiddlyWikiRuntime {
         Ok(())
     }
 
-    fn setup_console(&self, ctx: &Ctx<'_>, globals: &Object<'_>) -> Result<(), String> {
+    fn setup_console<'js>(&self, ctx: &Ctx<'js>, globals: &Object<'js>) -> Result<(), String> {
         let console = Object::new(ctx.clone())
             .map_err(|e| format!("Failed to create console object: {}", e))?;
 
@@ -136,7 +136,7 @@ impl TiddlyWikiRuntime {
         Ok(())
     }
 
-    fn setup_process(&self, ctx: &Ctx<'_>, globals: &Object<'_>, working_dir: &Path) -> Result<(), String> {
+    fn setup_process<'js>(&self, ctx: &Ctx<'js>, globals: &Object<'js>, working_dir: &Path) -> Result<(), String> {
         let process = Object::new(ctx.clone())
             .map_err(|e| format!("Failed to create process object: {}", e))?;
 
@@ -182,7 +182,7 @@ impl TiddlyWikiRuntime {
         Ok(())
     }
 
-    fn setup_require(&self, ctx: &Ctx<'_>, globals: &Object<'_>) -> Result<(), String> {
+    fn setup_require<'js>(&self, ctx: &Ctx<'js>, globals: &Object<'js>) -> Result<(), String> {
         let tw_path = self.tiddlywiki_path.clone();
 
         // Create the require function
@@ -218,7 +218,7 @@ impl TiddlyWikiRuntime {
         Ok(())
     }
 
-    fn load_tiddlywiki(&self, ctx: &Ctx<'_>) -> Result<(), String> {
+    fn load_tiddlywiki<'js>(&self, ctx: &Ctx<'js>) -> Result<(), String> {
         // Load the TiddlyWiki boot code
         let boot_path = self.tiddlywiki_path.join("boot").join("boot.js");
         let bootprefix_path = self.tiddlywiki_path.join("boot").join("bootprefix.js");
@@ -249,7 +249,7 @@ impl TiddlyWikiRuntime {
 // Node.js Module Polyfills
 // ============================================================================
 
-fn create_fs_module(ctx: &Ctx<'_>) -> JsResult<Value<'_>> {
+fn create_fs_module<'js>(ctx: &Ctx<'js>) -> JsResult<Value<'js>> {
     let fs = Object::new(ctx.clone())?;
 
     // fs.readFileSync
@@ -338,7 +338,7 @@ fn create_fs_module(ctx: &Ctx<'_>) -> JsResult<Value<'_>> {
     fs.into_js(ctx)
 }
 
-fn create_path_module(ctx: &Ctx<'_>) -> JsResult<Value<'_>> {
+fn create_path_module<'js>(ctx: &Ctx<'js>) -> JsResult<Value<'js>> {
     let path = Object::new(ctx.clone())?;
 
     // path.join
@@ -418,7 +418,7 @@ fn create_path_module(ctx: &Ctx<'_>) -> JsResult<Value<'_>> {
     path.into_js(ctx)
 }
 
-fn create_os_module(ctx: &Ctx<'_>) -> JsResult<Value<'_>> {
+fn create_os_module<'js>(ctx: &Ctx<'js>) -> JsResult<Value<'js>> {
     let os = Object::new(ctx.clone())?;
 
     // os.platform()
@@ -445,13 +445,13 @@ fn create_os_module(ctx: &Ctx<'_>) -> JsResult<Value<'_>> {
     os.into_js(ctx)
 }
 
-fn create_stub_module(ctx: &Ctx<'_>) -> JsResult<Value<'_>> {
+fn create_stub_module<'js>(ctx: &Ctx<'js>) -> JsResult<Value<'js>> {
     // Return an empty object for modules we don't need to fully implement
     let stub = Object::new(ctx.clone())?;
     stub.into_js(ctx)
 }
 
-fn load_file_module(ctx: &Ctx<'_>, path: &Path) -> JsResult<Value<'_>> {
+fn load_file_module<'js>(ctx: &Ctx<'js>, path: &Path) -> JsResult<Value<'js>> {
     // Try to load a JS file as a module
     let mut module_path = path.to_path_buf();
 

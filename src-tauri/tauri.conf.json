@@ -27,8 +27,7 @@
       "binaries/node"
     ],
     "resources": [
-      "resources/tiddlywiki/**/*",
-      "!resources/tiddlywiki/editions/tiddlywiki-surveys/**/*"
+      "resources/tiddlywiki/**/*"
     ],
     "windows": {}
   }

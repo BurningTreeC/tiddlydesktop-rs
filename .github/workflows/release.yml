@@ -72,6 +72,7 @@ jobs:
         run: |
           mkdir -p src-tauri/resources
           cp -r ../TiddlyWiki5 src-tauri/resources/tiddlywiki
+          rm -rf src-tauri/resources/tiddlywiki/editions/tiddlywiki-surveys
 
       - name: Build Tauri (Linux)
         working-directory: tiddlydesktop-rs
@@ -149,6 +150,7 @@ jobs:
         run: |
           mkdir -p src-tauri/resources
           cp -r ../TiddlyWiki5 src-tauri/resources/tiddlywiki
+          rm -rf src-tauri/resources/tiddlywiki/editions/tiddlywiki-surveys
 
       - name: Build Tauri (Windows)
         working-directory: tiddlydesktop-rs
@@ -224,6 +226,7 @@ jobs:
         run: |
           mkdir -p src-tauri/resources
           cp -r ../TiddlyWiki5 src-tauri/resources/tiddlywiki
+          rm -rf src-tauri/resources/tiddlywiki/editions/tiddlywiki-surveys
 
       - name: Add Rust targets for universal binary
         run: |

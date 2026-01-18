@@ -296,6 +296,14 @@ jobs:
           rustup target add x86_64-linux-android
           rustup target add i686-linux-android
 
+      - name: Install LLVM/Clang for bindgen
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y llvm-dev libclang-dev clang
+          # Find and export LIBCLANG_PATH
+          LLVM_VERSION=$(llvm-config --version | cut -d. -f1)
+          echo "LIBCLANG_PATH=/usr/lib/llvm-${LLVM_VERSION}/lib" >> $GITHUB_ENV
+
       - name: Install npm dependencies
         working-directory: tiddlydesktop-rs
         run: npm install

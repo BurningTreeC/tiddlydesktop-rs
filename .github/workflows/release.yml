@@ -253,8 +253,100 @@ jobs:
             tiddlydesktop-rs/src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg
             tiddlydesktop-rs/src-tauri/target/universal-apple-darwin/release/bundle/macos/*.zip
 
+  build-android:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout tiddlydesktop-rs
+        uses: actions/checkout@v4
+        with:
+          path: tiddlydesktop-rs
+
+      - name: Checkout TiddlyWiki5
+        uses: actions/checkout@v4
+        with:
+          repository: TiddlyWiki/TiddlyWiki5
+          path: TiddlyWiki5
+
+      - name: Copy plugin to TiddlyWiki5
+        run: |
+          cp -r tiddlydesktop-rs/TiddlyWiki5/plugins/tiddlywiki/tiddlydesktop-rs TiddlyWiki5/plugins/tiddlywiki/
+          cp -r tiddlydesktop-rs/TiddlyWiki5/editions/tiddlydesktop TiddlyWiki5/editions/
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Add Android targets
+        run: |
+          rustup target add aarch64-linux-android
+          rustup target add armv7-linux-androideabi
+          rustup target add x86_64-linux-android
+          rustup target add i686-linux-android
+
+      - name: Install npm dependencies
+        working-directory: tiddlydesktop-rs
+        run: npm install
+
+      - name: Build TiddlyWiki
+        working-directory: TiddlyWiki5
+        run: |
+          node tiddlywiki.js editions/tiddlydesktop --output ../tiddlydesktop-rs/src --render '$:/core/save/all' 'index.html' 'text/plain'
+
+      - name: Bundle TiddlyWiki
+        working-directory: tiddlydesktop-rs
+        run: |
+          mkdir -p src-tauri/resources
+          cp -r ../TiddlyWiki5 src-tauri/resources/tiddlywiki
+          rm -rf src-tauri/resources/tiddlywiki/editions/tiddlywiki-surveys
+
+      - name: Decode keystore
+        working-directory: tiddlydesktop-rs
+        run: |
+          echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 -d > src-tauri/release.keystore
+
+      - name: Initialize Android project
+        working-directory: tiddlydesktop-rs
+        run: npm run tauri android init
+
+      - name: Build Android APK
+        working-directory: tiddlydesktop-rs
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+        run: |
+          npm run tauri android build -- --apk
+
+      - name: Build Android AAB
+        working-directory: tiddlydesktop-rs
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+        run: |
+          npm run tauri android build -- --aab
+
+      - name: Upload Android artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-artifacts
+          path: |
+            tiddlydesktop-rs/src-tauri/gen/android/app/build/outputs/apk/**/*.apk
+            tiddlydesktop-rs/src-tauri/gen/android/app/build/outputs/bundle/**/*.aab
+
   create-release:
-    needs: [build-linux, build-windows, build-macos]
+    needs: [build-linux, build-windows, build-macos, build-android]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -281,5 +373,7 @@ jobs:
             artifacts/**/*.msi
             artifacts/**/*.exe
             artifacts/**/*.dmg
+            artifacts/**/*.apk
+            artifacts/**/*.aab
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

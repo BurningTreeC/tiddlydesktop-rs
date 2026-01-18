@@ -598,9 +598,50 @@ fn allocate_port(state: &AppState) -> u16 {
     allocated
 }
 
-/// Get path to bundled Node.js binary
+/// Check if system Node.js is available and compatible (v18+)
+#[cfg(desktop)]
+fn find_system_node() -> Option<PathBuf> {
+    #[cfg(target_os = "windows")]
+    let node_name = "node.exe";
+    #[cfg(not(target_os = "windows"))]
+    let node_name = "node";
+
+    // Check if node is in PATH
+    let mut cmd = Command::new(node_name);
+    cmd.arg("--version");
+    #[cfg(target_os = "windows")]
+    cmd.creation_flags(CREATE_NO_WINDOW);
+
+    if let Ok(output) = cmd.output() {
+        if output.status.success() {
+            let version = String::from_utf8_lossy(&output.stdout);
+            // Parse version (e.g., "v20.11.0" -> 20)
+            if let Some(major) = version.trim().strip_prefix('v')
+                .and_then(|v| v.split('.').next())
+                .and_then(|m| m.parse::<u32>().ok())
+            {
+                // Require Node.js v18 or higher
+                if major >= 18 {
+                    println!("Found system Node.js {} in PATH", version.trim());
+                    return Some(PathBuf::from(node_name));
+                } else {
+                    println!("System Node.js {} is too old (need v18+), using bundled", version.trim());
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Get path to Node.js binary (prefer system, fall back to bundled)
 #[cfg(desktop)]
 fn get_node_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    // First, try to use system Node.js if available and compatible
+    if let Some(system_node) = find_system_node() {
+        return Ok(system_node);
+    }
+
+    // Fall back to bundled Node.js
     let resource_path = app.path().resource_dir()
         .map_err(|e| format!("Failed to get resource dir: {}", e))?;
 
@@ -616,19 +657,21 @@ fn get_node_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
         .ok_or("Failed to get exe directory")?
         .to_path_buf();
 
-    // Try different possible locations
+    // Try different possible locations for bundled Node.js
     let possible_paths = [
         exe_dir.join(node_name),
+        resource_path.join("resources").join("binaries").join(node_name),
         resource_path.join("binaries").join(node_name),
     ];
 
     for path in &possible_paths {
         if path.exists() {
+            println!("Using bundled Node.js at {:?}", path);
             return Ok(path.clone());
         }
     }
 
-    Err(format!("Node.js binary not found. Tried: {:?}", possible_paths))
+    Err(format!("Node.js not found. Install Node.js v18+ or ensure bundled binary exists. Tried: {:?}", possible_paths))
 }
 
 /// Get path to bundled TiddlyWiki

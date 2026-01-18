@@ -4,9 +4,12 @@ use serde::{Deserialize, Serialize};
 use tauri::{
     http::{Request, Response},
     image::Image,
+    Manager, WebviewUrl, WebviewWindowBuilder,
+};
+#[cfg(desktop)]
+use tauri::{
     menu::{MenuBuilder, MenuItemBuilder},
     tray::TrayIconBuilder,
-    Manager, WebviewUrl, WebviewWindowBuilder,
 };
 
 /// A wiki entry in the recent files list
@@ -225,8 +228,13 @@ async fn save_wiki(path: String, content: String) -> Result<(), String> {
 /// Set window title
 #[tauri::command]
 async fn set_window_title(app: tauri::AppHandle, label: String, title: String) -> Result<(), String> {
+    #[cfg(desktop)]
     if let Some(window) = app.get_webview_window(&label) {
         window.set_title(&title).map_err(|e| e.to_string())?;
+    }
+    #[cfg(not(desktop))]
+    {
+        let _ = (app, label, title); // Suppress unused warnings
     }
     Ok(())
 }
@@ -353,7 +361,14 @@ async fn show_confirm(app: tauri::AppHandle, message: String) -> Result<bool, St
 /// Close the current window (used after confirming unsaved changes)
 #[tauri::command]
 fn close_window(window: tauri::Window) {
-    let _ = window.destroy();
+    #[cfg(desktop)]
+    {
+        let _ = window.destroy();
+    }
+    #[cfg(not(desktop))]
+    {
+        let _ = window.close();
+    }
 }
 
 // Note: show_prompt is not implemented as a Tauri command because Tauri's dialog plugin
@@ -662,7 +677,10 @@ async fn open_wiki_folder(app: tauri::AppHandle, path: String) -> Result<(), Str
             if wiki_path == &path {
                 // Focus existing window
                 if let Some(window) = app.get_webview_window(label) {
+                    #[cfg(desktop)]
                     let _ = window.set_focus();
+                    #[cfg(not(desktop))]
+                    let _ = &window; // Suppress unused warning
                     return Ok(());
                 }
             }
@@ -746,18 +764,29 @@ async fn open_wiki_folder(app: tauri::AppHandle, path: String) -> Result<(), Str
 
     let server_url = format!("http://127.0.0.1:{}", port);
 
-    let icon = Image::from_bytes(include_bytes!("../icons/icon.png"))
-        .map_err(|e| format!("Failed to load icon: {}", e))?;
+    #[cfg(desktop)]
+    let window = {
+        let icon = Image::from_bytes(include_bytes!("../icons/icon.png"))
+            .map_err(|e| format!("Failed to load icon: {}", e))?;
+        WebviewWindowBuilder::new(&app, &label, WebviewUrl::External(server_url.parse().unwrap()))
+            .title(&folder_name)
+            .inner_size(1200.0, 800.0)
+            .icon(icon)
+            .map_err(|e| format!("Failed to set icon: {}", e))?
+            .window_classname("tiddlydesktop-rs")
+            .initialization_script(get_dialog_init_script())
+            .build()
+            .map_err(|e| format!("Failed to create window: {}", e))?
+    };
 
-    let window = WebviewWindowBuilder::new(&app, &label, WebviewUrl::External(server_url.parse().unwrap()))
-        .title(&folder_name)
-        .inner_size(1200.0, 800.0)
-        .icon(icon)
-        .map_err(|e| format!("Failed to set icon: {}", e))?
-        .window_classname("tiddlydesktop-rs")
-        .initialization_script(get_dialog_init_script())
-        .build()
-        .map_err(|e| format!("Failed to create window: {}", e))?;
+    #[cfg(not(desktop))]
+    let window = {
+        let _ = &folder_name; // Suppress unused warning
+        WebviewWindowBuilder::new(&app, &label, WebviewUrl::External(server_url.parse().unwrap()))
+            .initialization_script(get_dialog_init_script())
+            .build()
+            .map_err(|e| format!("Failed to create window: {}", e))?
+    };
 
     // Handle window close - JS onCloseRequested handles unsaved changes confirmation
     let app_handle = app.clone();
@@ -1300,7 +1329,10 @@ async fn open_wiki_window(app: tauri::AppHandle, path: String) -> Result<(), Str
             if wiki_path == &path {
                 // Focus existing window
                 if let Some(window) = app.get_webview_window(label) {
+                    #[cfg(desktop)]
                     let _ = window.set_focus();
+                    #[cfg(not(desktop))]
+                    let _ = &window; // Suppress unused warning
                     return Ok(());
                 }
             }
@@ -1366,18 +1398,29 @@ async fn open_wiki_window(app: tauri::AppHandle, path: String) -> Result<(), Str
     // Use wikifile:// protocol directly
     let wiki_url = format!("wikifile://localhost/{}", path_key);
 
-    let icon = Image::from_bytes(include_bytes!("../icons/icon.png"))
-        .map_err(|e| format!("Failed to load icon: {}", e))?;
+    #[cfg(desktop)]
+    let window = {
+        let icon = Image::from_bytes(include_bytes!("../icons/icon.png"))
+            .map_err(|e| format!("Failed to load icon: {}", e))?;
+        WebviewWindowBuilder::new(&app, &label, WebviewUrl::External(wiki_url.parse().unwrap()))
+            .title(&title)
+            .inner_size(1200.0, 800.0)
+            .icon(icon)
+            .map_err(|e| format!("Failed to set icon: {}", e))?
+            .window_classname("tiddlydesktop-rs")
+            .initialization_script(get_dialog_init_script())
+            .build()
+            .map_err(|e| format!("Failed to create window: {}", e))?
+    };
 
-    let window = WebviewWindowBuilder::new(&app, &label, WebviewUrl::External(wiki_url.parse().unwrap()))
-        .title(&title)
-        .inner_size(1200.0, 800.0)
-        .icon(icon)
-        .map_err(|e| format!("Failed to set icon: {}", e))?
-        .window_classname("tiddlydesktop-rs")
-        .initialization_script(get_dialog_init_script())
-        .build()
-        .map_err(|e| format!("Failed to create window: {}", e))?;
+    #[cfg(not(desktop))]
+    let window = {
+        let _ = &title; // Suppress unused warning
+        WebviewWindowBuilder::new(&app, &label, WebviewUrl::External(wiki_url.parse().unwrap()))
+            .initialization_script(get_dialog_init_script())
+            .build()
+            .map_err(|e| format!("Failed to create window: {}", e))?
+    };
 
     // Handle window close - JS onCloseRequested handles unsaved changes confirmation
     let app_handle = app.clone();
@@ -1414,19 +1457,22 @@ fn wiki_protocol_handler(app: &tauri::AppHandle, request: Request<Vec<u8>>) -> R
 
     // Handle title-sync requests: wikifile://title-sync/{label}/{title}
     if path.starts_with("title-sync/") {
-        let parts: Vec<&str> = path.strip_prefix("title-sync/").unwrap().splitn(2, '/').collect();
-        if parts.len() == 2 {
-            let label = urlencoding::decode(parts[0]).unwrap_or_default().to_string();
-            let title = urlencoding::decode(parts[1]).unwrap_or_default().to_string();
+        #[cfg(desktop)]
+        {
+            let parts: Vec<&str> = path.strip_prefix("title-sync/").unwrap().splitn(2, '/').collect();
+            if parts.len() == 2 {
+                let label = urlencoding::decode(parts[0]).unwrap_or_default().to_string();
+                let title = urlencoding::decode(parts[1]).unwrap_or_default().to_string();
 
-            // Update window title
-            let app_clone = app.clone();
-            let app_inner = app_clone.clone();
-            let _ = app_clone.run_on_main_thread(move || {
-                if let Some(window) = app_inner.get_webview_window(&label) {
-                    let _ = window.set_title(&title);
-                }
-            });
+                // Update window title
+                let app_clone = app.clone();
+                let app_inner = app_clone.clone();
+                let _ = app_clone.run_on_main_thread(move || {
+                    if let Some(window) = app_inner.get_webview_window(&label) {
+                        let _ = window.set_title(&title);
+                    }
+                });
+            }
         }
         return Response::builder()
             .status(200)
@@ -1683,6 +1729,7 @@ window.__SAVE_URL__ = "{}";
     }
 }
 
+#[cfg(desktop)]
 fn setup_system_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     let open_wiki = MenuItemBuilder::with_id("open_wiki", "Open Wiki...").build(app)?;
     let quit = MenuItemBuilder::with_id("quit", "Quit").build(app)?;
@@ -1735,16 +1782,26 @@ pub fn run() {
             });
 
             // Create the main window programmatically with initialization script
-            let icon = Image::from_bytes(include_bytes!("../icons/icon.png"))?;
-            WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
-                .title("TiddlyDesktopRS")
-                .inner_size(800.0, 600.0)
-                .icon(icon)?
-                .window_classname("tiddlydesktop-rs")
-                .initialization_script(get_dialog_init_script())
-                .build()?;
+            #[cfg(desktop)]
+            {
+                let icon = Image::from_bytes(include_bytes!("../icons/icon.png"))?;
+                WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
+                    .title("TiddlyDesktopRS")
+                    .inner_size(800.0, 600.0)
+                    .icon(icon)?
+                    .window_classname("tiddlydesktop-rs")
+                    .initialization_script(get_dialog_init_script())
+                    .build()?;
 
-            setup_system_tray(app)?;
+                setup_system_tray(app)?;
+            }
+
+            #[cfg(not(desktop))]
+            {
+                WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
+                    .initialization_script(get_dialog_init_script())
+                    .build()?;
+            }
             Ok(())
         })
         .register_uri_scheme_protocol("wikifile", |ctx, request| {

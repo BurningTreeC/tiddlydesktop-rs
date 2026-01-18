@@ -27,7 +27,17 @@ title: $:/plugins/tiddlywiki/tiddlydesktop-rs/WikiList
 </div>
 <div class="td-toolbar-item">
 <$button message="tm-tiddlydesktop-open-wiki" class="td-button">
-{{$:/core/images/file}} Add wiki file
+{{$:/core/images/file}} Open wiki file
+</$button>
+</div>
+<div class="td-toolbar-item">
+<$button message="tm-tiddlydesktop-open-folder" class="td-button">
+{{$:/core/images/folder}} Open wiki folder
+</$button>
+</div>
+<div class="td-toolbar-item">
+<$button message="tm-tiddlydesktop-create-wiki" class="td-button td-button-create-new">
+{{$:/core/images/new-button}} Create wiki file
 </$button>
 </div>
 </div>
@@ -35,39 +45,66 @@ title: $:/plugins/tiddlywiki/tiddlydesktop-rs/WikiList
 <div class="td-drop-zone">
 <$reveal state="$:/temp/tiddlydesktop/drag-over" type="match" text="yes">
 <div class="td-drop-active">
-Drop wiki file here
+Drop wiki file or folder here
 </div>
 </$reveal>
 <$reveal state="$:/temp/tiddlydesktop/drag-over" type="nomatch" text="yes">
 <div class="td-drop-hint">
-{{$:/core/images/file}} Drop TiddlyWiki files here
+{{$:/core/images/file}} Drop TiddlyWiki files or folders here
 </div>
 </$reveal>
 </div>
 
 <div class="td-wikilist">
 <$list filter="[prefix[$:/temp/tiddlydesktop/wikis/]sort[title]]" emptyMessage={{$:/plugins/tiddlywiki/tiddlydesktop-rs/EmptyMessage}}>
-<$let path={{!!path}} filename={{!!filename}} favicon={{!!favicon}}>
+<$let path={{!!path}} filename={{!!filename}} favicon={{!!favicon}} isFolder={{!!is_folder}} backupsEnabled={{!!backups_enabled}}>
 <div class="td-wikilist-item">
 <div class="td-wikilist-thumbnail">
-<$button message="tm-tiddlydesktop-open-path" param=<<path>> class="tc-btn-invisible">
+<$button message="tm-tiddlydesktop-open-path" messageIsFolder=<<isFolder>> param=<<path>> class="tc-btn-invisible">
+<$list filter="[<isFolder>match[true]]" variable="ignore">
+{{$:/plugins/tiddlywiki/tiddlydesktop-rs/images/folder-icon}}
+</$list>
+<$list filter="[<isFolder>!match[true]]" variable="ignore">
 <$list filter="[<favicon>!is[blank]]" variable="ignore" emptyMessage="{{$:/plugins/tiddlywiki/tiddlydesktop-rs/images/file-icon}}">
 <img src=<<favicon>> class="td-favicon"/>
+</$list>
 </$list>
 </$button>
 </div>
 <div class="td-wikilist-info">
 <div class="td-wiki-title">
+<$list filter="[<isFolder>match[true]]" variable="ignore">
+{{$:/core/images/folder}}
+</$list>
+<$list filter="[<isFolder>!match[true]]" variable="ignore">
 <$list filter="[<favicon>!is[blank]]" variable="ignore" emptyMessage="{{$:/core/images/file}}">
 <img src=<<favicon>> class="td-favicon-small"/>
+</$list>
 </$list>
 <$text text=<<filename>>/>
 </div>
 <div class="td-wiki-url"><$text text=<<path>>/></div>
 <div class="td-wiki-toolbar">
-<$button message="tm-tiddlydesktop-open-path" param=<<path>> class="tc-btn-invisible td-button td-button-open">open</$button>
+<$button class="tc-btn-invisible td-button td-button-open">
+<$action-sendmessage $message="tm-tiddlydesktop-open-path" path=<<path>> isFolder=<<isFolder>>/>
+open
+</$button>
 <$button message="tm-tiddlydesktop-reveal" param=<<path>> class="tc-btn-invisible td-button td-button-reveal">reveal</$button>
 <$button message="tm-tiddlydesktop-remove" param=<<path>> class="tc-btn-invisible td-button td-button-remove">remove</$button>
+<$list filter="[<isFolder>!match[true]]" variable="ignore">
+<$list filter="[<backupsEnabled>match[true]]" variable="ignore">
+<$button class="tc-btn-invisible td-button td-button-backup td-backup-on" tooltip="Backups enabled - click to disable">
+<$action-sendmessage $message="tm-tiddlydesktop-set-backups" path=<<path>> enabled="false"/>
+{{$:/core/images/done-button}} backup
+</$button>
+</$list>
+<$list filter="[<backupsEnabled>!match[true]]" variable="ignore">
+<$button class="tc-btn-invisible td-button td-button-backup td-backup-off" tooltip="Backups disabled - click to enable">
+<$action-sendmessage $message="tm-tiddlydesktop-set-backups" path=<<path>> enabled="true"/>
+{{$:/core/images/close-button}} backup
+</$button>
+</$list>
+</$list>
 </div>
 </div>
 </div>

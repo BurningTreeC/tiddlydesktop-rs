@@ -30,7 +30,14 @@ exports.startup = function(callback) {
 	$tw.tiddlydesktop = {
 		invoke: invoke,
 		listen: listen,
-		openDialog: openDialog
+		openDialog: openDialog,
+		// Async dialog methods for TiddlyWiki to use
+		alert: function(message) {
+			return invoke("show_alert", { message: String(message || "") });
+		},
+		confirm: function(message) {
+			return invoke("show_confirm", { message: String(message || "") });
+		}
 	};
 
 	// Message handler: open wiki file dialog
@@ -57,12 +64,265 @@ exports.startup = function(callback) {
 		});
 	});
 
-	// Message handler: open a specific wiki path
+	// Message handler: open wiki folder dialog
+	$tw.rootWidget.addEventListener("tm-tiddlydesktop-open-folder", function(event) {
+		console.log("tm-tiddlydesktop-open-folder triggered");
+		openDialog({
+			directory: true,
+			multiple: false
+		}).then(function(folder) {
+			console.log("Dialog returned folder:", folder);
+			if (folder) {
+				// Check folder status first
+				invoke("check_folder_status", { path: folder }).then(function(status) {
+					console.log("Folder status:", status);
+					if (status.is_wiki) {
+						// Already a wiki folder, open it directly
+						invoke("open_wiki_folder", { path: folder }).then(function() {
+							console.log("open_wiki_folder completed, refreshing list");
+							refreshWikiList();
+						}).catch(function(err) {
+							console.error("open_wiki_folder error:", err);
+							alert("Failed to open wiki folder: " + err);
+						});
+					} else {
+						// Not a wiki folder, show edition selection
+						showEditionSelector(folder, status);
+					}
+				}).catch(function(err) {
+					console.error("check_folder_status error:", err);
+					alert("Failed to check folder: " + err);
+				});
+			}
+		}).catch(function(err) {
+			console.error("openDialog error:", err);
+		});
+	});
+
+	// Function to show edition selector for initializing a new wiki folder
+	function showEditionSelector(folderPath, folderStatus) {
+		// Store the folder path for later use
+		$tw.wiki.setText("$:/temp/tiddlydesktop/init-folder-path", "text", null, folderPath);
+		$tw.wiki.setText("$:/temp/tiddlydesktop/init-folder-name", "text", null, folderStatus.name);
+		$tw.wiki.setText("$:/temp/tiddlydesktop/init-folder-empty", "text", null, folderStatus.is_empty ? "yes" : "no");
+		$tw.wiki.setText("$:/temp/tiddlydesktop/selected-edition", "text", null, "empty");
+		$tw.wiki.setText("$:/temp/tiddlydesktop/selected-plugins", "text", null, "");
+		$tw.wiki.setText("$:/temp/tiddlydesktop/create-mode", "text", null, "folder");
+
+		loadEditionsAndPlugins();
+	}
+
+	// Function to show edition selector for creating a new wiki file
+	function showFileCreator(filePath) {
+		// Store the file path for later use
+		$tw.wiki.setText("$:/temp/tiddlydesktop/init-file-path", "text", null, filePath);
+		$tw.wiki.setText("$:/temp/tiddlydesktop/selected-edition", "text", null, "empty");
+		$tw.wiki.setText("$:/temp/tiddlydesktop/selected-plugins", "text", null, "");
+		$tw.wiki.setText("$:/temp/tiddlydesktop/create-mode", "text", null, "file");
+
+		loadEditionsAndPlugins();
+	}
+
+	// Function to load editions and plugins and show the modal
+	function loadEditionsAndPlugins() {
+		// Load available editions and plugins in parallel
+		Promise.all([
+			invoke("get_available_editions"),
+			invoke("get_available_plugins")
+		]).then(function(results) {
+			var editions = results[0];
+			var plugins = results[1];
+
+			console.log("Available editions:", editions);
+			console.log("Available plugins:", plugins);
+
+			// Clear existing entries
+			$tw.wiki.filterTiddlers("[prefix[$:/temp/tiddlydesktop/editions/]]").forEach(function(title) {
+				$tw.wiki.deleteTiddler(title);
+			});
+			$tw.wiki.filterTiddlers("[prefix[$:/temp/tiddlydesktop/plugins/]]").forEach(function(title) {
+				$tw.wiki.deleteTiddler(title);
+			});
+
+			// Add edition entries
+			editions.forEach(function(edition, index) {
+				$tw.wiki.addTiddler({
+					title: "$:/temp/tiddlydesktop/editions/" + index,
+					id: edition.id,
+					name: edition.name,
+					description: edition.description,
+					text: ""
+				});
+			});
+
+			// Add plugin entries
+			plugins.forEach(function(plugin, index) {
+				$tw.wiki.addTiddler({
+					title: "$:/temp/tiddlydesktop/plugins/" + plugin.id,
+					id: plugin.id,
+					name: plugin.name,
+					description: plugin.description,
+					category: plugin.category,
+					selected: "no",
+					text: ""
+				});
+			});
+
+			// Show the edition selector modal
+			$tw.wiki.setText("$:/temp/tiddlydesktop/show-edition-selector", "text", null, "yes");
+		}).catch(function(err) {
+			console.error("Failed to load editions/plugins:", err);
+			alert("Failed to load editions: " + err);
+		});
+	}
+
+	// Message handler: create new wiki file (shows save dialog then edition selector)
+	$tw.rootWidget.addEventListener("tm-tiddlydesktop-create-wiki", function(event) {
+		console.log("tm-tiddlydesktop-create-wiki triggered");
+		var saveDialog = window.__TAURI__.dialog.save;
+		saveDialog({
+			filters: [{
+				name: "TiddlyWiki",
+				extensions: ["html"]
+			}],
+			defaultPath: "wiki.html"
+		}).then(function(filePath) {
+			console.log("Save dialog returned:", filePath);
+			if (filePath) {
+				showFileCreator(filePath);
+			}
+		}).catch(function(err) {
+			console.error("Save dialog error:", err);
+		});
+	});
+
+	// Message handler: create wiki file with selected edition and plugins
+	$tw.rootWidget.addEventListener("tm-tiddlydesktop-create-file", function(event) {
+		var filePath = $tw.wiki.getTiddlerText("$:/temp/tiddlydesktop/init-file-path");
+		var editionId = $tw.wiki.getTiddlerText("$:/temp/tiddlydesktop/selected-edition") || "empty";
+
+		// Collect selected plugins
+		var selectedPlugins = [];
+		$tw.wiki.filterTiddlers("[prefix[$:/temp/tiddlydesktop/plugins/]]").forEach(function(title) {
+			var tiddler = $tw.wiki.getTiddler(title);
+			if (tiddler && tiddler.fields.selected === "yes" && tiddler.fields.id) {
+				selectedPlugins.push(tiddler.fields.id);
+			}
+		});
+
+		console.log("Creating wiki file:", filePath, "edition:", editionId, "plugins:", selectedPlugins);
+
+		if (!filePath) {
+			alert("Missing file path");
+			return;
+		}
+
+		// Hide the selector and show loading state
+		$tw.wiki.setText("$:/temp/tiddlydesktop/show-edition-selector", "text", null, "no");
+		$tw.wiki.setText("$:/temp/tiddlydesktop/init-loading", "text", null, "yes");
+
+		invoke("create_wiki_file", { path: filePath, edition: editionId, plugins: selectedPlugins }).then(function() {
+			console.log("Wiki file created successfully");
+			$tw.wiki.setText("$:/temp/tiddlydesktop/init-loading", "text", null, "no");
+
+			// Open the newly created wiki file
+			invoke("open_wiki_window", { path: filePath }).then(function() {
+				refreshWikiList();
+			}).catch(function(err) {
+				console.error("Failed to open created wiki:", err);
+				alert("Wiki created but failed to open: " + err);
+			});
+		}).catch(function(err) {
+			console.error("create_wiki_file error:", err);
+			$tw.wiki.setText("$:/temp/tiddlydesktop/init-loading", "text", null, "no");
+			alert("Failed to create wiki file: " + err);
+		});
+	});
+
+	// Message handler: toggle plugin selection
+	$tw.rootWidget.addEventListener("tm-tiddlydesktop-toggle-plugin", function(event) {
+		var pluginId = event.param || (event.paramObject && event.paramObject.plugin);
+		if (pluginId) {
+			var tiddler = $tw.wiki.getTiddler("$:/temp/tiddlydesktop/plugins/" + pluginId);
+			if (tiddler) {
+				var isSelected = tiddler.fields.selected === "yes";
+				$tw.wiki.setText("$:/temp/tiddlydesktop/plugins/" + pluginId, "selected", null, isSelected ? "no" : "yes");
+			}
+		}
+	});
+
+	// Message handler: initialize wiki folder with selected edition and plugins
+	$tw.rootWidget.addEventListener("tm-tiddlydesktop-init-folder", function(event) {
+		var editionId = event.param || (event.paramObject && event.paramObject.edition);
+		var folderPath = $tw.wiki.getTiddlerText("$:/temp/tiddlydesktop/init-folder-path");
+
+		// If no edition passed, use the selected one
+		if (!editionId) {
+			editionId = $tw.wiki.getTiddlerText("$:/temp/tiddlydesktop/selected-edition") || "server";
+		}
+
+		// Collect selected plugins
+		var selectedPlugins = [];
+		var allPluginTiddlers = $tw.wiki.filterTiddlers("[prefix[$:/temp/tiddlydesktop/plugins/]]");
+		console.log("All plugin tiddlers:", allPluginTiddlers);
+
+		allPluginTiddlers.forEach(function(title) {
+			var tiddler = $tw.wiki.getTiddler(title);
+			console.log("Plugin tiddler:", title, "selected:", tiddler ? tiddler.fields.selected : "no tiddler");
+			if (tiddler && tiddler.fields.selected === "yes" && tiddler.fields.id) {
+				selectedPlugins.push(tiddler.fields.id);
+			}
+		});
+
+		console.log("Initializing folder:", folderPath, "with edition:", editionId, "plugins:", selectedPlugins);
+
+		if (!folderPath || !editionId) {
+			alert("Missing folder path or edition");
+			return;
+		}
+
+		// Hide the selector and show loading state
+		$tw.wiki.setText("$:/temp/tiddlydesktop/show-edition-selector", "text", null, "no");
+		$tw.wiki.setText("$:/temp/tiddlydesktop/init-loading", "text", null, "yes");
+
+		invoke("init_wiki_folder", { path: folderPath, edition: editionId, plugins: selectedPlugins }).then(function() {
+			console.log("Wiki folder initialized successfully");
+			$tw.wiki.setText("$:/temp/tiddlydesktop/init-loading", "text", null, "no");
+
+			// Now open the newly initialized folder
+			invoke("open_wiki_folder", { path: folderPath }).then(function() {
+				refreshWikiList();
+			}).catch(function(err) {
+				console.error("Failed to open initialized folder:", err);
+				alert("Wiki initialized but failed to open: " + err);
+			});
+		}).catch(function(err) {
+			console.error("init_wiki_folder error:", err);
+			$tw.wiki.setText("$:/temp/tiddlydesktop/init-loading", "text", null, "no");
+			alert("Failed to initialize wiki folder: " + err);
+		});
+	});
+
+	// Message handler: cancel edition selection
+	$tw.rootWidget.addEventListener("tm-tiddlydesktop-cancel-init", function(event) {
+		$tw.wiki.setText("$:/temp/tiddlydesktop/show-edition-selector", "text", null, "no");
+		$tw.wiki.deleteTiddler("$:/temp/tiddlydesktop/init-folder-path");
+		$tw.wiki.deleteTiddler("$:/temp/tiddlydesktop/init-folder-name");
+		$tw.wiki.deleteTiddler("$:/temp/tiddlydesktop/init-file-path");
+		$tw.wiki.deleteTiddler("$:/temp/tiddlydesktop/create-mode");
+	});
+
+	// Message handler: open a specific wiki path (auto-detect file vs folder)
 	$tw.rootWidget.addEventListener("tm-tiddlydesktop-open-path", function(event) {
 		var path = event.param || event.paramObject.path;
+		var isFolder = event.paramObject && event.paramObject.isFolder === "true";
 		if (path) {
-			invoke("open_wiki_window", { path: path }).then(function() {
+			var command = isFolder ? "open_wiki_folder" : "open_wiki_window";
+			invoke(command, { path: path }).then(function() {
 				refreshWikiList();
+			}).catch(function(err) {
+				console.error("Failed to open wiki:", err);
+				alert("Failed to open: " + err);
 			});
 		}
 	});
@@ -87,14 +347,37 @@ exports.startup = function(callback) {
 		}
 	});
 
+	// Message handler: toggle backups for a wiki
+	$tw.rootWidget.addEventListener("tm-tiddlydesktop-set-backups", function(event) {
+		var path = event.paramObject && event.paramObject.path;
+		var enabled = event.paramObject && event.paramObject.enabled === "true";
+		if (path) {
+			invoke("set_wiki_backups", { path: path, enabled: enabled }).then(function() {
+				refreshWikiList();
+			});
+		}
+	});
+
 	// Set up drag-drop listeners
 	listen("tauri://drag-drop", function(event) {
 		var paths = event.payload.paths;
 		if (paths && paths.length > 0) {
 			paths.forEach(function(path) {
+				// Check if it's an HTML file or potentially a folder
 				if (path.endsWith(".html") || path.endsWith(".htm")) {
 					invoke("open_wiki_window", { path: path }).then(function() {
 						refreshWikiList();
+					});
+				} else {
+					// Try to open as a folder - backend will verify if it's a valid wiki folder
+					invoke("check_is_wiki_folder", { path: path }).then(function(isFolder) {
+						if (isFolder) {
+							invoke("open_wiki_folder", { path: path }).then(function() {
+								refreshWikiList();
+							}).catch(function(err) {
+								console.error("Failed to open wiki folder:", err);
+							});
+						}
 					});
 				}
 			});
@@ -126,6 +409,8 @@ exports.startup = function(callback) {
 						path: entry.path,
 						filename: entry.filename,
 						favicon: entry.favicon || "",
+						is_folder: entry.is_folder ? "true" : "false",
+						backups_enabled: entry.backups_enabled ? "true" : "false",
 						text: ""
 					});
 				});

@@ -188,17 +188,17 @@ impl TiddlyWikiRuntime {
         // Create the require function
         let require_fn = Function::new(ctx.clone(), move |ctx: Ctx, module_name: String| {
             match module_name.as_str() {
-                "fs" => create_fs_module(&ctx),
-                "path" => create_path_module(&ctx),
-                "os" => create_os_module(&ctx),
-                "crypto" => create_stub_module(&ctx),
-                "zlib" => create_stub_module(&ctx),
-                "http" => create_stub_module(&ctx),
-                "https" => create_stub_module(&ctx),
-                "url" => create_stub_module(&ctx),
-                "util" => create_stub_module(&ctx),
-                "events" => create_stub_module(&ctx),
-                "stream" => create_stub_module(&ctx),
+                "fs" => create_fs_module(ctx),
+                "path" => create_path_module(ctx),
+                "os" => create_os_module(ctx),
+                "crypto" => create_stub_module(ctx),
+                "zlib" => create_stub_module(ctx),
+                "http" => create_stub_module(ctx),
+                "https" => create_stub_module(ctx),
+                "url" => create_stub_module(ctx),
+                "util" => create_stub_module(ctx),
+                "events" => create_stub_module(ctx),
+                "stream" => create_stub_module(ctx),
                 _ => {
                     // Try to load as a file module
                     let module_path = if module_name.starts_with("./") || module_name.starts_with("../") || module_name.starts_with('/') {
@@ -207,7 +207,7 @@ impl TiddlyWikiRuntime {
                         tw_path.join(&module_name)
                     };
 
-                    load_file_module(&ctx, &module_path)
+                    load_file_module(ctx, &module_path)
                 }
             }
         }).map_err(|e| format!("Failed to create require: {}", e))?;
@@ -249,7 +249,7 @@ impl TiddlyWikiRuntime {
 // Node.js Module Polyfills
 // ============================================================================
 
-fn create_fs_module<'js>(ctx: &Ctx<'js>) -> JsResult<Value<'js>> {
+fn create_fs_module<'js>(ctx: Ctx<'js>) -> JsResult<Value<'js>> {
     let fs = Object::new(ctx.clone())?;
 
     // fs.readFileSync
@@ -335,10 +335,10 @@ fn create_fs_module<'js>(ctx: &Ctx<'js>) -> JsResult<Value<'js>> {
     })?;
     fs.set("copyFileSync", copy_file_sync)?;
 
-    fs.into_js(ctx)
+    fs.into_js(&ctx)
 }
 
-fn create_path_module<'js>(ctx: &Ctx<'js>) -> JsResult<Value<'js>> {
+fn create_path_module<'js>(ctx: Ctx<'js>) -> JsResult<Value<'js>> {
     let path = Object::new(ctx.clone())?;
 
     // path.join
@@ -415,10 +415,10 @@ fn create_path_module<'js>(ctx: &Ctx<'js>) -> JsResult<Value<'js>> {
     })?;
     path.set("isAbsolute", is_absolute_fn)?;
 
-    path.into_js(ctx)
+    path.into_js(&ctx)
 }
 
-fn create_os_module<'js>(ctx: &Ctx<'js>) -> JsResult<Value<'js>> {
+fn create_os_module<'js>(ctx: Ctx<'js>) -> JsResult<Value<'js>> {
     let os = Object::new(ctx.clone())?;
 
     // os.platform()
@@ -442,16 +442,16 @@ fn create_os_module<'js>(ctx: &Ctx<'js>) -> JsResult<Value<'js>> {
     #[cfg(not(windows))]
     os.set("EOL", "\n")?;
 
-    os.into_js(ctx)
+    os.into_js(&ctx)
 }
 
-fn create_stub_module<'js>(ctx: &Ctx<'js>) -> JsResult<Value<'js>> {
+fn create_stub_module<'js>(ctx: Ctx<'js>) -> JsResult<Value<'js>> {
     // Return an empty object for modules we don't need to fully implement
     let stub = Object::new(ctx.clone())?;
-    stub.into_js(ctx)
+    stub.into_js(&ctx)
 }
 
-fn load_file_module<'js>(ctx: &Ctx<'js>, path: &Path) -> JsResult<Value<'js>> {
+fn load_file_module<'js>(ctx: Ctx<'js>, path: &Path) -> JsResult<Value<'js>> {
     // Try to load a JS file as a module
     let mut module_path = path.to_path_buf();
 
@@ -466,11 +466,11 @@ fn load_file_module<'js>(ctx: &Ctx<'js>, path: &Path) -> JsResult<Value<'js>> {
     }
 
     if !module_path.exists() {
-        return Err(throw_error(ctx, &format!("Cannot find module '{}'", path.display())));
+        return Err(throw_error(&ctx, &format!("Cannot find module '{}'", path.display())));
     }
 
     let code = std::fs::read_to_string(&module_path)
-        .map_err(|e| throw_error(ctx, &format!("Failed to read module '{}': {}", module_path.display(), e)))?;
+        .map_err(|e| throw_error(&ctx, &format!("Failed to read module '{}': {}", module_path.display(), e)))?;
 
     // Wrap in CommonJS-style module wrapper
     let wrapped = format!(r#"

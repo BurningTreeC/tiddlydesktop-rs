@@ -5,7 +5,7 @@
 //! - Node.js-compatible fs, path, and process polyfills
 //! - Functions to run TiddlyWiki commands (init, render)
 
-use rquickjs::{Context, Runtime, Function, Object, Value, Ctx, Result as JsResult, IntoJs, Error as JsError};
+use rquickjs::{Context, Runtime, Function, Object, Ctx, Result as JsResult, Error as JsError};
 use rquickjs::function::Rest;
 use std::path::{Path, PathBuf};
 

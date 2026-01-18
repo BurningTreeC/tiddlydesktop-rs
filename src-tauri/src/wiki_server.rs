@@ -4,6 +4,7 @@
 //! Implements the TiddlyWeb API that TiddlyWiki's tiddlyweb plugin expects.
 
 use std::collections::HashMap;
+#[allow(unused_imports)] // Used by request.as_reader().read_to_string()
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};

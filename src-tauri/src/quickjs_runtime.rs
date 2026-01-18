@@ -186,7 +186,7 @@ impl TiddlyWikiRuntime {
         let tw_path = self.tiddlywiki_path.clone();
 
         // Create the require function
-        let require_fn = Function::new(ctx.clone(), move |ctx: Ctx, module_name: String| -> JsResult<Value> {
+        let require_fn = Function::new(ctx.clone(), move |ctx: Ctx, module_name: String| {
             match module_name.as_str() {
                 "fs" => create_fs_module(&ctx),
                 "path" => create_path_module(&ctx),

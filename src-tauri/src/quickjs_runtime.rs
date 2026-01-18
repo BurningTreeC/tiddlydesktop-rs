@@ -9,16 +9,6 @@ use rquickjs::{Context, Runtime, Function, Object, Value, Ctx, Result as JsResul
 use rquickjs::function::Rest;
 use std::path::{Path, PathBuf};
 
-/// Helper to throw a JavaScript error and return Exception
-fn throw_error<'js>(ctx: &Ctx<'js>, message: &str) -> JsError {
-    // Create a JavaScript Error object and throw it
-    let error_code = format!("new Error({})", serde_json::json!(message));
-    if let Ok(error) = ctx.eval::<Value, _>(error_code.as_bytes()) {
-        let _ = ctx.throw(error);
-    }
-    JsError::Exception
-}
-
 /// TiddlyWiki QuickJS Runtime
 pub struct TiddlyWikiRuntime {
     runtime: Runtime,
@@ -186,19 +176,117 @@ impl TiddlyWikiRuntime {
         let tw_path = self.tiddlywiki_path.clone();
 
         // Create the require function
-        let require_fn = Function::new(ctx.clone(), move |ctx: Ctx, module_name: String| {
+        // Note: We implement require by evaluating JavaScript that creates the module objects
+        // This avoids complex Rust lifetime issues with rquickjs closures
+        let require_fn = Function::new(ctx.clone(), move |ctx: Ctx<'_>, module_name: String| -> JsResult<Value<'_>> {
+            // For built-in modules, we create them inline to avoid lifetime issues
             match module_name.as_str() {
-                "fs" => create_fs_module(ctx),
-                "path" => create_path_module(ctx),
-                "os" => create_os_module(ctx),
-                "crypto" => create_stub_module(ctx),
-                "zlib" => create_stub_module(ctx),
-                "http" => create_stub_module(ctx),
-                "https" => create_stub_module(ctx),
-                "url" => create_stub_module(ctx),
-                "util" => create_stub_module(ctx),
-                "events" => create_stub_module(ctx),
-                "stream" => create_stub_module(ctx),
+                "fs" | "path" | "os" | "crypto" | "zlib" | "http" | "https" | "url" | "util" | "events" | "stream" => {
+                    // Create module object inline
+                    let module = Object::new(ctx.clone())?;
+
+                    if module_name == "fs" {
+                        // Add fs methods
+                        let read_fn = Function::new(ctx.clone(), |_ctx: Ctx<'_>, path: String, _opts: Option<String>| -> JsResult<String> {
+                            std::fs::read_to_string(&path).map_err(|e| JsError::Exception)
+                        })?;
+                        module.set("readFileSync", read_fn)?;
+
+                        let write_fn = Function::new(ctx.clone(), |_ctx: Ctx<'_>, path: String, data: String, _opts: Option<String>| -> JsResult<()> {
+                            if let Some(parent) = Path::new(&path).parent() {
+                                let _ = std::fs::create_dir_all(parent);
+                            }
+                            std::fs::write(&path, data).map_err(|_| JsError::Exception)
+                        })?;
+                        module.set("writeFileSync", write_fn)?;
+
+                        let exists_fn = Function::new(ctx.clone(), |_ctx: Ctx<'_>, path: String| -> JsResult<bool> {
+                            Ok(Path::new(&path).exists())
+                        })?;
+                        module.set("existsSync", exists_fn)?;
+
+                        let readdir_fn = Function::new(ctx.clone(), |_ctx: Ctx<'_>, path: String| -> JsResult<Vec<String>> {
+                            std::fs::read_dir(&path)
+                                .map(|entries| entries.filter_map(|e| e.ok()).filter_map(|e| e.file_name().into_string().ok()).collect())
+                                .map_err(|_| JsError::Exception)
+                        })?;
+                        module.set("readdirSync", readdir_fn)?;
+
+                        let is_dir_fn = Function::new(ctx.clone(), |_ctx: Ctx<'_>, path: String| -> JsResult<bool> {
+                            Ok(Path::new(&path).is_dir())
+                        })?;
+                        module.set("_isDirectory", is_dir_fn)?;
+
+                        let mkdir_fn = Function::new(ctx.clone(), |_ctx: Ctx<'_>, path: String, _opts: Option<String>| -> JsResult<()> {
+                            std::fs::create_dir_all(&path).map_err(|_| JsError::Exception)
+                        })?;
+                        module.set("mkdirSync", mkdir_fn)?;
+
+                        let unlink_fn = Function::new(ctx.clone(), |_ctx: Ctx<'_>, path: String| -> JsResult<()> {
+                            std::fs::remove_file(&path).map_err(|_| JsError::Exception)
+                        })?;
+                        module.set("unlinkSync", unlink_fn)?;
+
+                        let copy_fn = Function::new(ctx.clone(), |_ctx: Ctx<'_>, src: String, dest: String| -> JsResult<()> {
+                            std::fs::copy(&src, &dest).map(|_| ()).map_err(|_| JsError::Exception)
+                        })?;
+                        module.set("copyFileSync", copy_fn)?;
+                    } else if module_name == "path" {
+                        let join_fn = Function::new(ctx.clone(), |_ctx: Ctx<'_>, args: Rest<String>| -> JsResult<String> {
+                            let mut result = PathBuf::new();
+                            for arg in args.0 {
+                                if arg.starts_with('/') { result = PathBuf::from(&arg); } else { result.push(&arg); }
+                            }
+                            Ok(result.to_string_lossy().to_string())
+                        })?;
+                        module.set("join", join_fn)?;
+
+                        let resolve_fn = Function::new(ctx.clone(), |_ctx: Ctx<'_>, args: Rest<String>| -> JsResult<String> {
+                            let mut result = std::env::current_dir().unwrap_or_default();
+                            for arg in args.0 {
+                                if arg.starts_with('/') { result = PathBuf::from(&arg); } else { result.push(&arg); }
+                            }
+                            Ok(result.to_string_lossy().to_string())
+                        })?;
+                        module.set("resolve", resolve_fn)?;
+
+                        let dirname_fn = Function::new(ctx.clone(), |_ctx: Ctx<'_>, p: String| -> JsResult<String> {
+                            Ok(Path::new(&p).parent().map(|p| p.to_string_lossy().to_string()).unwrap_or_else(|| ".".to_string()))
+                        })?;
+                        module.set("dirname", dirname_fn)?;
+
+                        let basename_fn = Function::new(ctx.clone(), |_ctx: Ctx<'_>, p: String, ext: Option<String>| -> JsResult<String> {
+                            let name = Path::new(&p).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+                            if let Some(ext) = ext { if name.ends_with(&ext) { return Ok(name[..name.len() - ext.len()].to_string()); } }
+                            Ok(name)
+                        })?;
+                        module.set("basename", basename_fn)?;
+
+                        let extname_fn = Function::new(ctx.clone(), |_ctx: Ctx<'_>, p: String| -> JsResult<String> {
+                            Ok(Path::new(&p).extension().map(|e| format!(".{}", e.to_string_lossy())).unwrap_or_default())
+                        })?;
+                        module.set("extname", extname_fn)?;
+
+                        module.set("sep", "/")?;
+
+                        let is_abs_fn = Function::new(ctx.clone(), |_ctx: Ctx<'_>, p: String| -> JsResult<bool> {
+                            Ok(Path::new(&p).is_absolute())
+                        })?;
+                        module.set("isAbsolute", is_abs_fn)?;
+                    } else if module_name == "os" {
+                        let platform_fn = Function::new(ctx.clone(), |_ctx: Ctx<'_>| -> JsResult<String> {
+                            #[cfg(target_os = "android")]
+                            return Ok("android".to_string());
+                            #[cfg(not(target_os = "android"))]
+                            return Ok("linux".to_string());
+                        })?;
+                        module.set("platform", platform_fn)?;
+                        module.set("EOL", "\n")?;
+                    }
+                    // Other modules return empty stub objects
+
+                    module.into_js(&ctx)
+                }
                 _ => {
                     // Try to load as a file module
                     let module_path = if module_name.starts_with("./") || module_name.starts_with("../") || module_name.starts_with('/') {
@@ -207,7 +295,22 @@ impl TiddlyWikiRuntime {
                         tw_path.join(&module_name)
                     };
 
-                    load_file_module(ctx, &module_path)
+                    let mut mp = module_path.clone();
+                    if !mp.exists() && mp.extension().is_none() { mp.set_extension("js"); }
+                    if mp.is_dir() { mp.push("index.js"); }
+
+                    if !mp.exists() {
+                        return Err(JsError::Exception);
+                    }
+
+                    let code = std::fs::read_to_string(&mp).map_err(|_| JsError::Exception)?;
+                    let wrapped = format!(r#"(function(exports, require, module, __filename, __dirname) {{ {} return module.exports; }})(
+                        {{}}, require, {{ exports: {{}} }}, "{}", "{}")"#,
+                        code,
+                        mp.display().to_string().replace('\\', "\\\\").replace('"', "\\\""),
+                        mp.parent().unwrap_or(Path::new(".")).display().to_string().replace('\\', "\\\\").replace('"', "\\\"")
+                    );
+                    ctx.eval(wrapped.as_bytes())
                 }
             }
         }).map_err(|e| format!("Failed to create require: {}", e))?;
@@ -243,254 +346,6 @@ impl TiddlyWikiRuntime {
 
         Ok(())
     }
-}
-
-// ============================================================================
-// Node.js Module Polyfills
-// ============================================================================
-
-fn create_fs_module<'js>(ctx: Ctx<'js>) -> JsResult<Value<'js>> {
-    let fs = Object::new(ctx.clone())?;
-
-    // fs.readFileSync
-    let read_file_sync = Function::new(ctx.clone(), |ctx: Ctx, path: String, _options: Option<String>| -> JsResult<String> {
-        std::fs::read_to_string(&path)
-            .map_err(|_| throw_error(&ctx, &format!("ENOENT: no such file or directory, open '{}'", path)))
-    })?;
-    fs.set("readFileSync", read_file_sync)?;
-
-    // fs.writeFileSync
-    let write_file_sync = Function::new(ctx.clone(), |ctx: Ctx, path: String, data: String, _options: Option<String>| -> JsResult<()> {
-        // Ensure parent directory exists
-        if let Some(parent) = Path::new(&path).parent() {
-            let _ = std::fs::create_dir_all(parent);
-        }
-        std::fs::write(&path, data)
-            .map_err(|e| throw_error(&ctx, &format!("Failed to write file '{}': {}", path, e)))
-    })?;
-    fs.set("writeFileSync", write_file_sync)?;
-
-    // fs.existsSync
-    let exists_sync = Function::new(ctx.clone(), |_ctx: Ctx, path: String| -> JsResult<bool> {
-        Ok(Path::new(&path).exists())
-    })?;
-    fs.set("existsSync", exists_sync)?;
-
-    // fs.readdirSync
-    let readdir_sync = Function::new(ctx.clone(), |ctx: Ctx, path: String| -> JsResult<Vec<String>> {
-        std::fs::read_dir(&path)
-            .map(|entries| {
-                entries
-                    .filter_map(|e| e.ok())
-                    .filter_map(|e| e.file_name().into_string().ok())
-                    .collect()
-            })
-            .map_err(|_| throw_error(&ctx, &format!("ENOENT: no such file or directory, scandir '{}'", path)))
-    })?;
-    fs.set("readdirSync", readdir_sync)?;
-
-    // fs.statSync - returns an object with isDirectory() and isFile() methods
-    let stat_sync_code = r#"
-        (function(path) {
-            var fs = this;
-            var exists = fs.existsSync(path);
-            if (!exists) {
-                throw new Error("ENOENT: no such file or directory, stat '" + path + "'");
-            }
-            // Simple heuristic: if path ends with / or has no extension and exists, assume directory
-            var isDir = fs._isDirectory(path);
-            return {
-                isDirectory: function() { return isDir; },
-                isFile: function() { return !isDir; }
-            };
-        })
-    "#;
-    ctx.eval::<(), _>(stat_sync_code.as_bytes())?;
-
-    // Helper to check if path is a directory
-    let is_directory = Function::new(ctx.clone(), |_ctx: Ctx, path: String| -> JsResult<bool> {
-        Ok(Path::new(&path).is_dir())
-    })?;
-    fs.set("_isDirectory", is_directory)?;
-
-    // fs.mkdirSync
-    let mkdir_sync = Function::new(ctx.clone(), |ctx: Ctx, path: String, _options: Option<String>| -> JsResult<()> {
-        std::fs::create_dir_all(&path)
-            .map_err(|e| throw_error(&ctx, &format!("Failed to create directory '{}': {}", path, e)))
-    })?;
-    fs.set("mkdirSync", mkdir_sync)?;
-
-    // fs.unlinkSync
-    let unlink_sync = Function::new(ctx.clone(), |ctx: Ctx, path: String| -> JsResult<()> {
-        std::fs::remove_file(&path)
-            .map_err(|e| throw_error(&ctx, &format!("Failed to remove file '{}': {}", path, e)))
-    })?;
-    fs.set("unlinkSync", unlink_sync)?;
-
-    // fs.copyFileSync
-    let copy_file_sync = Function::new(ctx.clone(), |ctx: Ctx, src: String, dest: String| -> JsResult<()> {
-        std::fs::copy(&src, &dest)
-            .map(|_| ())
-            .map_err(|e| throw_error(&ctx, &format!("Failed to copy '{}' to '{}': {}", src, dest, e)))
-    })?;
-    fs.set("copyFileSync", copy_file_sync)?;
-
-    fs.into_js(&ctx)
-}
-
-fn create_path_module<'js>(ctx: Ctx<'js>) -> JsResult<Value<'js>> {
-    let path = Object::new(ctx.clone())?;
-
-    // path.join
-    let join_fn = Function::new(ctx.clone(), |_ctx: Ctx, args: Rest<String>| -> JsResult<String> {
-        let mut result = PathBuf::new();
-        for arg in args.0 {
-            if arg.starts_with('/') {
-                result = PathBuf::from(&arg);
-            } else {
-                result.push(&arg);
-            }
-        }
-        Ok(result.to_string_lossy().to_string())
-    })?;
-    path.set("join", join_fn)?;
-
-    // path.resolve
-    let resolve_fn = Function::new(ctx.clone(), |_ctx: Ctx, args: Rest<String>| -> JsResult<String> {
-        let mut result = std::env::current_dir().unwrap_or_default();
-        for arg in args.0 {
-            if arg.starts_with('/') {
-                result = PathBuf::from(&arg);
-            } else {
-                result.push(&arg);
-            }
-        }
-        Ok(result.to_string_lossy().to_string())
-    })?;
-    path.set("resolve", resolve_fn)?;
-
-    // path.dirname
-    let dirname_fn = Function::new(ctx.clone(), |_ctx: Ctx, p: String| -> JsResult<String> {
-        Ok(Path::new(&p)
-            .parent()
-            .map(|p| p.to_string_lossy().to_string())
-            .unwrap_or_else(|| ".".to_string()))
-    })?;
-    path.set("dirname", dirname_fn)?;
-
-    // path.basename
-    let basename_fn = Function::new(ctx.clone(), |_ctx: Ctx, p: String, ext: Option<String>| -> JsResult<String> {
-        let name = Path::new(&p)
-            .file_name()
-            .map(|n| n.to_string_lossy().to_string())
-            .unwrap_or_default();
-
-        if let Some(ext) = ext {
-            if name.ends_with(&ext) {
-                return Ok(name[..name.len() - ext.len()].to_string());
-            }
-        }
-        Ok(name)
-    })?;
-    path.set("basename", basename_fn)?;
-
-    // path.extname
-    let extname_fn = Function::new(ctx.clone(), |_ctx: Ctx, p: String| -> JsResult<String> {
-        Ok(Path::new(&p)
-            .extension()
-            .map(|e| format!(".{}", e.to_string_lossy()))
-            .unwrap_or_default())
-    })?;
-    path.set("extname", extname_fn)?;
-
-    // path.sep
-    #[cfg(windows)]
-    path.set("sep", "\\")?;
-    #[cfg(not(windows))]
-    path.set("sep", "/")?;
-
-    // path.isAbsolute
-    let is_absolute_fn = Function::new(ctx.clone(), |_ctx: Ctx, p: String| -> JsResult<bool> {
-        Ok(Path::new(&p).is_absolute())
-    })?;
-    path.set("isAbsolute", is_absolute_fn)?;
-
-    path.into_js(&ctx)
-}
-
-fn create_os_module<'js>(ctx: Ctx<'js>) -> JsResult<Value<'js>> {
-    let os = Object::new(ctx.clone())?;
-
-    // os.platform()
-    let platform_fn = Function::new(ctx.clone(), |_ctx: Ctx| -> JsResult<String> {
-        #[cfg(target_os = "android")]
-        return Ok("android".to_string());
-        #[cfg(target_os = "linux")]
-        return Ok("linux".to_string());
-        #[cfg(target_os = "macos")]
-        return Ok("darwin".to_string());
-        #[cfg(target_os = "windows")]
-        return Ok("win32".to_string());
-        #[cfg(not(any(target_os = "android", target_os = "linux", target_os = "macos", target_os = "windows")))]
-        return Ok("unknown".to_string());
-    })?;
-    os.set("platform", platform_fn)?;
-
-    // os.EOL
-    #[cfg(windows)]
-    os.set("EOL", "\r\n")?;
-    #[cfg(not(windows))]
-    os.set("EOL", "\n")?;
-
-    os.into_js(&ctx)
-}
-
-fn create_stub_module<'js>(ctx: Ctx<'js>) -> JsResult<Value<'js>> {
-    // Return an empty object for modules we don't need to fully implement
-    let stub = Object::new(ctx.clone())?;
-    stub.into_js(&ctx)
-}
-
-fn load_file_module<'js>(ctx: Ctx<'js>, path: &Path) -> JsResult<Value<'js>> {
-    // Try to load a JS file as a module
-    let mut module_path = path.to_path_buf();
-
-    // Try with .js extension if not present
-    if !module_path.exists() && module_path.extension().is_none() {
-        module_path.set_extension("js");
-    }
-
-    // Try index.js if it's a directory
-    if module_path.is_dir() {
-        module_path.push("index.js");
-    }
-
-    if !module_path.exists() {
-        return Err(throw_error(&ctx, &format!("Cannot find module '{}'", path.display())));
-    }
-
-    let code = std::fs::read_to_string(&module_path)
-        .map_err(|e| throw_error(&ctx, &format!("Failed to read module '{}': {}", module_path.display(), e)))?;
-
-    // Wrap in CommonJS-style module wrapper
-    let wrapped = format!(r#"
-        (function(exports, require, module, __filename, __dirname) {{
-            {}
-            return module.exports;
-        }})(
-            {{}},
-            require,
-            {{ exports: {{}} }},
-            "{}",
-            "{}"
-        )
-    "#,
-        code,
-        module_path.display().to_string().replace('\\', "\\\\").replace('"', "\\\""),
-        module_path.parent().unwrap_or(Path::new(".")).display().to_string().replace('\\', "\\\\").replace('"', "\\\"")
-    );
-
-    ctx.eval(wrapped.as_bytes())
 }
 
 // ============================================================================

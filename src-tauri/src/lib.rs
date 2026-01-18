@@ -3,9 +3,10 @@ use chrono::Local;
 use serde::{Deserialize, Serialize};
 use tauri::{
     http::{Request, Response},
-    image::Image,
     Manager, WebviewUrl, WebviewWindowBuilder,
 };
+#[cfg(desktop)]
+use tauri::image::Image;
 #[cfg(desktop)]
 use tauri::{
     menu::{MenuBuilder, MenuItemBuilder},
@@ -367,7 +368,8 @@ fn close_window(window: tauri::Window) {
     }
     #[cfg(not(desktop))]
     {
-        let _ = window.close();
+        // On mobile, windows can't be programmatically closed
+        let _ = &window;
     }
 }
 
@@ -1311,6 +1313,12 @@ async fn reveal_in_folder(path: String) -> Result<(), String> {
             .arg(&path)
             .spawn()
             .map_err(|e| e.to_string())?;
+    }
+
+    #[cfg(target_os = "android")]
+    {
+        // Android doesn't have a traditional file manager reveal
+        let _ = &path;
     }
 
     Ok(())

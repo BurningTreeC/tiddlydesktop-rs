@@ -89,6 +89,11 @@ jobs:
   build-windows:
     runs-on: windows-latest
     steps:
+      - name: Enable long paths
+        run: |
+          git config --system core.longpaths true
+          reg add "HKLM\SYSTEM\CurrentControlSet\Control\FileSystem" /v LongPathsEnabled /t REG_DWORD /d 1 /f
+
       - name: Checkout tiddlydesktop-rs
         uses: actions/checkout@v4
         with:

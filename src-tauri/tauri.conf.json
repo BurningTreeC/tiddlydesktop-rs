@@ -28,6 +28,11 @@
     ],
     "resources": [
       "resources/tiddlywiki/**/*"
-    ]
+    ],
+    "windows": {
+      "wix": {
+        "enableLongPaths": true
+      }
+    }
   }
 }

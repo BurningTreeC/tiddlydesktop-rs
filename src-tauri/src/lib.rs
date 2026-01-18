@@ -1,6 +1,12 @@
 use std::{collections::HashMap, path::PathBuf, sync::Mutex};
 #[cfg(desktop)]
 use std::process::{Child, Command};
+#[cfg(all(desktop, target_os = "windows"))]
+use std::os::windows::process::CommandExt;
+
+/// Windows flag to prevent console window from appearing
+#[cfg(all(desktop, target_os = "windows"))]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
 use chrono::Local;
 use serde::{Deserialize, Serialize};
 use tauri::{
@@ -254,9 +260,13 @@ async fn save_wiki(path: String, content: String) -> Result<(), String> {
         .await
         .map_err(|e| format!("Failed to write temp file: {}", e))?;
 
-    tokio::fs::rename(&temp_path, &path)
-        .await
-        .map_err(|e| format!("Failed to rename temp file: {}", e))?;
+    // Try rename first, fall back to direct write if it fails (Windows file locking)
+    if let Err(_) = tokio::fs::rename(&temp_path, &path).await {
+        let _ = tokio::fs::remove_file(&temp_path).await;
+        tokio::fs::write(&path, &content)
+            .await
+            .map_err(|e| format!("Failed to save file: {}", e))?;
+    }
 
     Ok(())
 }
@@ -783,13 +793,15 @@ async fn open_wiki_folder(app: tauri::AppHandle, path: String) -> Result<(), Str
         println!("  Wiki folder: {:?}", path_buf);
         println!("  Port: {}", port);
 
-        let child = Command::new(&node_path)
-            .arg(&tw_path)
+        let mut cmd = Command::new(&node_path);
+        cmd.arg(&tw_path)
             .arg(&path_buf)
             .arg("--listen")
             .arg(format!("port={}", port))
-            .arg("host=127.0.0.1")
-            .spawn()
+            .arg("host=127.0.0.1");
+        #[cfg(target_os = "windows")]
+        cmd.creation_flags(CREATE_NO_WINDOW);
+        let child = cmd.spawn()
             .map_err(|e| format!("Failed to start TiddlyWiki server: {}", e))?;
 
         // Give the server a moment to start
@@ -1098,12 +1110,14 @@ async fn init_wiki_folder(app: tauri::AppHandle, path: String, edition: String, 
         println!("  TiddlyWiki: {:?}", tw_path);
 
         // Run tiddlywiki --init <edition>
-        let output = Command::new(&node_path)
-            .arg(&tw_path)
+        let mut cmd = Command::new(&node_path);
+        cmd.arg(&tw_path)
             .arg(&path_buf)
             .arg("--init")
-            .arg(&edition)
-            .output()
+            .arg(&edition);
+        #[cfg(target_os = "windows")]
+        cmd.creation_flags(CREATE_NO_WINDOW);
+        let output = cmd.output()
             .map_err(|e| format!("Failed to run TiddlyWiki init: {}", e))?;
 
         if !output.status.success() {
@@ -1246,12 +1260,14 @@ async fn create_wiki_file(app: tauri::AppHandle, path: String, edition: String, 
         println!("  Temp dir: {:?}", temp_dir);
 
         // Initialize the temp directory with the selected edition
-        let init_output = Command::new(&node_path)
-            .arg(&tw_path)
+        let mut init_cmd = Command::new(&node_path);
+        init_cmd.arg(&tw_path)
             .arg(&temp_dir)
             .arg("--init")
-            .arg(&edition)
-            .output()
+            .arg(&edition);
+        #[cfg(target_os = "windows")]
+        init_cmd.creation_flags(CREATE_NO_WINDOW);
+        let init_output = init_cmd.output()
             .map_err(|e| format!("Failed to run TiddlyWiki init: {}", e))?;
 
         if !init_output.status.success() {
@@ -1299,8 +1315,8 @@ async fn create_wiki_file(app: tauri::AppHandle, path: String, edition: String, 
             .unwrap_or("wiki.html");
 
         // Build the single-file wiki
-        let build_output = Command::new(&node_path)
-            .arg(&tw_path)
+        let mut build_cmd = Command::new(&node_path);
+        build_cmd.arg(&tw_path)
             .arg(&temp_dir)
             .arg("--output")
             .arg(temp_dir.join("output"))
@@ -1308,8 +1324,10 @@ async fn create_wiki_file(app: tauri::AppHandle, path: String, edition: String, 
             .arg("$:/core/save/all")
             .arg(output_filename)
             .arg("text/plain")
-            .current_dir(tw_dir)
-            .output()
+            .current_dir(tw_dir);
+        #[cfg(target_os = "windows")]
+        build_cmd.creation_flags(CREATE_NO_WINDOW);
+        let build_output = build_cmd.output()
             .map_err(|e| format!("Failed to build wiki: {}", e))?;
 
         if !build_output.status.success() {
@@ -1678,11 +1696,25 @@ fn wiki_protocol_handler(app: &tauri::AppHandle, request: Request<Vec<u8>>) -> R
                             .body(Vec::new())
                             .unwrap();
                     }
-                    Err(e) => {
-                        return Response::builder()
-                            .status(500)
-                            .body(format!("Failed to save: {}", e).into_bytes())
-                            .unwrap();
+                    Err(_rename_err) => {
+                        // On Windows, rename can fail if file is locked
+                        // Fall back to direct write after removing temp file
+                        let _ = std::fs::remove_file(&temp_path);
+                        match std::fs::write(&wiki_path, &content) {
+                            Ok(_) => {
+                                return Response::builder()
+                                    .status(200)
+                                    .header("Access-Control-Allow-Origin", "*")
+                                    .body(Vec::new())
+                                    .unwrap();
+                            }
+                            Err(e) => {
+                                return Response::builder()
+                                    .status(500)
+                                    .body(format!("Failed to save: {}", e).into_bytes())
+                                    .unwrap();
+                            }
+                        }
                     }
                 }
             }

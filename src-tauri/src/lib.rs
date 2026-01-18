@@ -1729,6 +1729,18 @@ fn wiki_protocol_handler(app: &tauri::AppHandle, request: Request<Vec<u8>>) -> R
     let uri = request.uri();
     let path = uri.path().trim_start_matches('/');
 
+    // Handle OPTIONS preflight requests for CORS (required for PUT requests on some platforms)
+    if request.method() == "OPTIONS" {
+        return Response::builder()
+            .status(200)
+            .header("Access-Control-Allow-Origin", "*")
+            .header("Access-Control-Allow-Methods", "GET, PUT, POST, OPTIONS")
+            .header("Access-Control-Allow-Headers", "Content-Type")
+            .header("Access-Control-Max-Age", "86400")
+            .body(Vec::new())
+            .unwrap();
+    }
+
     // Handle title-sync requests: wikifile://title-sync/{label}/{title}
     if path.starts_with("title-sync/") {
         #[cfg(desktop)]

@@ -321,21 +321,13 @@ jobs:
         working-directory: tiddlydesktop-rs
         run: npm run tauri android init
 
-      - name: Build Android APK
+      - name: Build Android APK and AAB
         working-directory: tiddlydesktop-rs
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
         run: |
-          npm run tauri android build -- --apk
-
-      - name: Build Android AAB
-        working-directory: tiddlydesktop-rs
-        env:
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-        run: |
-          npm run tauri android build -- --aab
+          npm run tauri android build -- --apk true --aab true
 
       - name: Upload Android artifacts
         uses: actions/upload-artifact@v4

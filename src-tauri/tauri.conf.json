@@ -29,10 +29,10 @@
     ],
     "linux": {
       "deb": {
-        "depends": ["nodejs (>= 18.0.0)", "libayatana-appindicator3-1"]
+        "depends": ["libayatana-appindicator3-1"]
       },
       "rpm": {
-        "depends": ["nodejs >= 18.0.0", "libayatana-appindicator-gtk3"]
+        "depends": ["libayatana-appindicator-gtk3"]
       }
     },
     "windows": {},

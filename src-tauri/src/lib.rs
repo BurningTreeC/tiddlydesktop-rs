@@ -13,6 +13,36 @@ use tauri::{
     tray::TrayIconBuilder,
 };
 
+// QuickJS runtime for Android (no Node.js) - only compiled on mobile
+#[cfg(not(desktop))]
+mod quickjs_runtime;
+
+// Rust-based wiki folder HTTP server for Android - only compiled on mobile
+#[cfg(not(desktop))]
+mod wiki_server;
+
+/// Recursively copy a directory (used for edition initialization on Android)
+#[cfg(not(desktop))]
+fn copy_dir_recursive(src: &std::path::Path, dst: &std::path::Path) -> std::io::Result<()> {
+    if !dst.exists() {
+        std::fs::create_dir_all(dst)?;
+    }
+
+    for entry in std::fs::read_dir(src)? {
+        let entry = entry?;
+        let src_path = entry.path();
+        let dst_path = dst.join(entry.file_name());
+
+        if src_path.is_dir() {
+            copy_dir_recursive(&src_path, &dst_path)?;
+        } else {
+            std::fs::copy(&src_path, &dst_path)?;
+        }
+    }
+
+    Ok(())
+}
+
 /// A wiki entry in the recent files list
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct WikiEntry {
@@ -33,7 +63,10 @@ fn default_backups_enabled() -> bool {
 /// A running wiki folder server
 #[allow(dead_code)] // Fields may be used for status display in future
 struct WikiFolderServer {
+    #[cfg(desktop)]
     process: Child,
+    #[cfg(not(desktop))]
+    http_server: Option<wiki_server::WikiFolderHttpServer>,
     port: u16,
     path: String,
 }
@@ -695,29 +728,6 @@ async fn open_wiki_folder(app: tauri::AppHandle, path: String) -> Result<(), Str
     // Allocate a port for this server
     let port = allocate_port(&state);
 
-    // Get paths to Node.js and TiddlyWiki
-    let node_path = get_node_path(&app)?;
-    let tw_path = get_tiddlywiki_path(&app)?;
-
-    println!("Starting wiki folder server:");
-    println!("  Node.js: {:?}", node_path);
-    println!("  TiddlyWiki: {:?}", tw_path);
-    println!("  Wiki folder: {:?}", path_buf);
-    println!("  Port: {}", port);
-
-    // Start the TiddlyWiki server
-    let child = Command::new(&node_path)
-        .arg(&tw_path)
-        .arg(&path_buf)
-        .arg("--listen")
-        .arg(format!("port={}", port))
-        .arg("host=127.0.0.1")
-        .spawn()
-        .map_err(|e| format!("Failed to start TiddlyWiki server: {}", e))?;
-
-    // Give the server a moment to start
-    std::thread::sleep(std::time::Duration::from_millis(500));
-
     // Add to recent files
     let folder_name = path_buf
         .file_name()
@@ -757,12 +767,55 @@ async fn open_wiki_folder(app: tauri::AppHandle, path: String) -> Result<(), Str
     // Track this wiki as open
     state.open_wikis.lock().unwrap().insert(label.clone(), path.clone());
 
-    // Store the server info
-    state.wiki_servers.lock().unwrap().insert(label.clone(), WikiFolderServer {
-        process: child,
-        port,
-        path: path.clone(),
-    });
+    // Start the server - different implementation for desktop vs mobile
+    #[cfg(desktop)]
+    {
+        // Desktop: Use Node.js + TiddlyWiki server
+        let node_path = get_node_path(&app)?;
+        let tw_path = get_tiddlywiki_path(&app)?;
+
+        println!("Starting wiki folder server:");
+        println!("  Node.js: {:?}", node_path);
+        println!("  TiddlyWiki: {:?}", tw_path);
+        println!("  Wiki folder: {:?}", path_buf);
+        println!("  Port: {}", port);
+
+        let child = Command::new(&node_path)
+            .arg(&tw_path)
+            .arg(&path_buf)
+            .arg("--listen")
+            .arg(format!("port={}", port))
+            .arg("host=127.0.0.1")
+            .spawn()
+            .map_err(|e| format!("Failed to start TiddlyWiki server: {}", e))?;
+
+        // Give the server a moment to start
+        std::thread::sleep(std::time::Duration::from_millis(500));
+
+        // Store the server info
+        state.wiki_servers.lock().unwrap().insert(label.clone(), WikiFolderServer {
+            process: child,
+            port,
+            path: path.clone(),
+        });
+    }
+
+    #[cfg(not(desktop))]
+    {
+        // Mobile: Use Rust HTTP server
+        println!("Starting wiki folder server (Rust):");
+        println!("  Wiki folder: {:?}", path_buf);
+        println!("  Port: {}", port);
+
+        let http_server = wiki_server::WikiFolderHttpServer::start(path_buf.clone(), port)?;
+
+        // Store the server info
+        state.wiki_servers.lock().unwrap().insert(label.clone(), WikiFolderServer {
+            http_server: Some(http_server),
+            port,
+            path: path.clone(),
+        });
+    }
 
     let server_url = format!("http://127.0.0.1:{}", port);
 
@@ -796,9 +849,18 @@ async fn open_wiki_folder(app: tauri::AppHandle, path: String) -> Result<(), Str
     window.on_window_event(move |event| {
         if let tauri::WindowEvent::Destroyed = event {
             let state = app_handle.state::<AppState>();
-            // Stop the server process
+            // Stop the server
             if let Some(mut server) = state.wiki_servers.lock().unwrap().remove(&label_clone) {
-                let _ = server.process.kill();
+                #[cfg(desktop)]
+                {
+                    let _ = server.process.kill();
+                }
+                #[cfg(not(desktop))]
+                {
+                    if let Some(mut http_server) = server.http_server.take() {
+                        http_server.stop();
+                    }
+                }
             }
             // Remove from open wikis
             state.open_wikis.lock().unwrap().remove(&label_clone);
@@ -1014,30 +1076,53 @@ async fn init_wiki_folder(app: tauri::AppHandle, path: String, edition: String, 
         return Err("Folder already contains a TiddlyWiki".to_string());
     }
 
-    // Get paths to Node.js and TiddlyWiki
-    let node_path = get_node_path(&app)?;
-    let tw_path = get_tiddlywiki_path(&app)?;
-
     println!("Initializing wiki folder:");
-    println!("  Node.js: {:?}", node_path);
-    println!("  TiddlyWiki: {:?}", tw_path);
     println!("  Target folder: {:?}", path_buf);
     println!("  Edition: {}", edition);
     println!("  Additional plugins: {:?}", plugins);
 
-    // Run tiddlywiki --init <edition>
-    let output = Command::new(&node_path)
-        .arg(&tw_path)
-        .arg(&path_buf)
-        .arg("--init")
-        .arg(&edition)
-        .output()
-        .map_err(|e| format!("Failed to run TiddlyWiki init: {}", e))?;
+    #[cfg(desktop)]
+    {
+        // Desktop: Use Node.js + TiddlyWiki
+        let node_path = get_node_path(&app)?;
+        let tw_path = get_tiddlywiki_path(&app)?;
 
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        return Err(format!("TiddlyWiki init failed:\n{}\n{}", stdout, stderr));
+        println!("  Node.js: {:?}", node_path);
+        println!("  TiddlyWiki: {:?}", tw_path);
+
+        // Run tiddlywiki --init <edition>
+        let output = Command::new(&node_path)
+            .arg(&tw_path)
+            .arg(&path_buf)
+            .arg("--init")
+            .arg(&edition)
+            .output()
+            .map_err(|e| format!("Failed to run TiddlyWiki init: {}", e))?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            return Err(format!("TiddlyWiki init failed:\n{}\n{}", stdout, stderr));
+        }
+    }
+
+    #[cfg(not(desktop))]
+    {
+        // Mobile: Copy edition files from bundled TiddlyWiki
+        let tw_path = get_tiddlywiki_path(&app)?;
+        let tw_dir = tw_path.parent().ok_or("Failed to get TiddlyWiki directory")?;
+        let editions_dir = tw_dir.join("editions");
+
+        let edition_path = editions_dir.join(&edition);
+        if !edition_path.exists() {
+            return Err(format!("Edition '{}' not found", edition));
+        }
+
+        // Copy edition files to target folder
+        copy_dir_recursive(&edition_path, &path_buf)
+            .map_err(|e| format!("Failed to copy edition files: {}", e))?;
+
+        println!("  Copied edition files from: {:?}", edition_path);
     }
 
     // Verify initialization succeeded
@@ -1046,7 +1131,7 @@ async fn init_wiki_folder(app: tauri::AppHandle, path: String, edition: String, 
         return Err("Initialization failed - tiddlywiki.info not created".to_string());
     }
 
-    // Always ensure required plugins for Node.js server are present
+    // Always ensure required plugins for server are present
     // Plus any additional user-selected plugins
     let required_plugins = vec!["tiddlywiki/tiddlyweb", "tiddlywiki/filesystem"];
 
@@ -1123,114 +1208,154 @@ async fn create_wiki_file(app: tauri::AppHandle, path: String, edition: String, 
         output_path.with_extension("html")
     };
 
-    // Get paths to Node.js and TiddlyWiki
-    let node_path = get_node_path(&app)?;
-    let tw_path = get_tiddlywiki_path(&app)?;
-    let tw_dir = tw_path.parent().ok_or("Failed to get TiddlyWiki directory")?;
-
-    // Create a temporary directory for the build
-    let temp_dir = std::env::temp_dir().join(format!("tiddlydesktop-build-{}", std::process::id()));
-    std::fs::create_dir_all(&temp_dir)
-        .map_err(|e| format!("Failed to create temp directory: {}", e))?;
-
     println!("Creating single-file wiki:");
     println!("  Output: {:?}", output_path);
     println!("  Edition: {}", edition);
     println!("  Plugins: {:?}", plugins);
-    println!("  Temp dir: {:?}", temp_dir);
 
-    // Initialize the temp directory with the selected edition
-    let init_output = Command::new(&node_path)
-        .arg(&tw_path)
-        .arg(&temp_dir)
-        .arg("--init")
-        .arg(&edition)
-        .output()
-        .map_err(|e| format!("Failed to run TiddlyWiki init: {}", e))?;
+    #[cfg(desktop)]
+    {
+        // Desktop: Use Node.js to build the wiki
+        let node_path = get_node_path(&app)?;
+        let tw_path = get_tiddlywiki_path(&app)?;
+        let tw_dir = tw_path.parent().ok_or("Failed to get TiddlyWiki directory")?;
 
-    if !init_output.status.success() {
-        let _ = std::fs::remove_dir_all(&temp_dir);
-        let stderr = String::from_utf8_lossy(&init_output.stderr);
-        return Err(format!("TiddlyWiki init failed: {}", stderr));
-    }
+        // Create a temporary directory for the build
+        let temp_dir = std::env::temp_dir().join(format!("tiddlydesktop-build-{}", std::process::id()));
+        std::fs::create_dir_all(&temp_dir)
+            .map_err(|e| format!("Failed to create temp directory: {}", e))?;
 
-    // Add plugins to tiddlywiki.info if any selected
-    if !plugins.is_empty() {
-        let info_path = temp_dir.join("tiddlywiki.info");
-        if info_path.exists() {
-            let content = std::fs::read_to_string(&info_path)
-                .map_err(|e| format!("Failed to read tiddlywiki.info: {}", e))?;
-            let mut info: serde_json::Value = serde_json::from_str(&content)
-                .map_err(|e| format!("Failed to parse tiddlywiki.info: {}", e))?;
+        println!("  Temp dir: {:?}", temp_dir);
 
-            let plugins_array = info.get_mut("plugins")
-                .and_then(|v| v.as_array_mut());
+        // Initialize the temp directory with the selected edition
+        let init_output = Command::new(&node_path)
+            .arg(&tw_path)
+            .arg(&temp_dir)
+            .arg("--init")
+            .arg(&edition)
+            .output()
+            .map_err(|e| format!("Failed to run TiddlyWiki init: {}", e))?;
 
-            if let Some(arr) = plugins_array {
-                for plugin in &plugins {
-                    let plugin_path = format!("tiddlywiki/{}", plugin);
-                    if !arr.iter().any(|p| p.as_str() == Some(&plugin_path)) {
-                        arr.push(serde_json::Value::String(plugin_path));
-                    }
-                }
-            } else {
-                let plugin_values: Vec<serde_json::Value> = plugins.iter()
-                    .map(|p| serde_json::Value::String(format!("tiddlywiki/{}", p)))
-                    .collect();
-                info["plugins"] = serde_json::Value::Array(plugin_values);
-            }
-
-            let updated_content = serde_json::to_string_pretty(&info)
-                .map_err(|e| format!("Failed to serialize tiddlywiki.info: {}", e))?;
-            std::fs::write(&info_path, updated_content)
-                .map_err(|e| format!("Failed to write tiddlywiki.info: {}", e))?;
+        if !init_output.status.success() {
+            let _ = std::fs::remove_dir_all(&temp_dir);
+            let stderr = String::from_utf8_lossy(&init_output.stderr);
+            return Err(format!("TiddlyWiki init failed: {}", stderr));
         }
-    }
 
-    // Get the output filename
-    let output_filename = output_path.file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("wiki.html");
+        // Add plugins to tiddlywiki.info if any selected
+        if !plugins.is_empty() {
+            let info_path = temp_dir.join("tiddlywiki.info");
+            if info_path.exists() {
+                let content = std::fs::read_to_string(&info_path)
+                    .map_err(|e| format!("Failed to read tiddlywiki.info: {}", e))?;
+                let mut info: serde_json::Value = serde_json::from_str(&content)
+                    .map_err(|e| format!("Failed to parse tiddlywiki.info: {}", e))?;
 
-    // Build the single-file wiki
-    let build_output = Command::new(&node_path)
-        .arg(&tw_path)
-        .arg(&temp_dir)
-        .arg("--output")
-        .arg(temp_dir.join("output"))
-        .arg("--render")
-        .arg("$:/core/save/all")
-        .arg(output_filename)
-        .arg("text/plain")
-        .current_dir(tw_dir)
-        .output()
-        .map_err(|e| format!("Failed to build wiki: {}", e))?;
+                let plugins_array = info.get_mut("plugins")
+                    .and_then(|v| v.as_array_mut());
 
-    if !build_output.status.success() {
+                if let Some(arr) = plugins_array {
+                    for plugin in &plugins {
+                        let plugin_path = format!("tiddlywiki/{}", plugin);
+                        if !arr.iter().any(|p| p.as_str() == Some(&plugin_path)) {
+                            arr.push(serde_json::Value::String(plugin_path));
+                        }
+                    }
+                } else {
+                    let plugin_values: Vec<serde_json::Value> = plugins.iter()
+                        .map(|p| serde_json::Value::String(format!("tiddlywiki/{}", p)))
+                        .collect();
+                    info["plugins"] = serde_json::Value::Array(plugin_values);
+                }
+
+                let updated_content = serde_json::to_string_pretty(&info)
+                    .map_err(|e| format!("Failed to serialize tiddlywiki.info: {}", e))?;
+                std::fs::write(&info_path, updated_content)
+                    .map_err(|e| format!("Failed to write tiddlywiki.info: {}", e))?;
+            }
+        }
+
+        // Get the output filename
+        let output_filename = output_path.file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("wiki.html");
+
+        // Build the single-file wiki
+        let build_output = Command::new(&node_path)
+            .arg(&tw_path)
+            .arg(&temp_dir)
+            .arg("--output")
+            .arg(temp_dir.join("output"))
+            .arg("--render")
+            .arg("$:/core/save/all")
+            .arg(output_filename)
+            .arg("text/plain")
+            .current_dir(tw_dir)
+            .output()
+            .map_err(|e| format!("Failed to build wiki: {}", e))?;
+
+        if !build_output.status.success() {
+            let _ = std::fs::remove_dir_all(&temp_dir);
+            let stderr = String::from_utf8_lossy(&build_output.stderr);
+            let stdout = String::from_utf8_lossy(&build_output.stdout);
+            return Err(format!("Wiki build failed:\n{}\n{}", stdout, stderr));
+        }
+
+        // Move the output file to the target location
+        let built_file = temp_dir.join("output").join(output_filename);
+        if !built_file.exists() {
+            let _ = std::fs::remove_dir_all(&temp_dir);
+            return Err("Build succeeded but output file not found".to_string());
+        }
+
+        // Ensure parent directory exists
+        if let Some(parent) = output_path.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| format!("Failed to create output directory: {}", e))?;
+        }
+
+        std::fs::copy(&built_file, &output_path)
+            .map_err(|e| format!("Failed to copy wiki to destination: {}", e))?;
+
+        // Clean up temp directory
         let _ = std::fs::remove_dir_all(&temp_dir);
-        let stderr = String::from_utf8_lossy(&build_output.stderr);
-        let stdout = String::from_utf8_lossy(&build_output.stdout);
-        return Err(format!("Wiki build failed:\n{}\n{}", stdout, stderr));
     }
 
-    // Move the output file to the target location
-    let built_file = temp_dir.join("output").join(output_filename);
-    if !built_file.exists() {
-        let _ = std::fs::remove_dir_all(&temp_dir);
-        return Err("Build succeeded but output file not found".to_string());
+    #[cfg(not(desktop))]
+    {
+        // Mobile: Use pre-built wiki from bundled TiddlyWiki or use QuickJS
+        let tw_path = get_tiddlywiki_path(&app)?;
+        let tw_dir = tw_path.parent().ok_or("Failed to get TiddlyWiki directory")?;
+
+        // Try to find a pre-built wiki HTML in the edition's output directory
+        let edition_output = tw_dir.join("editions").join(&edition).join("output").join("index.html");
+        let empty_output = tw_dir.join("editions").join("empty").join("output").join("index.html");
+
+        let source_html = if edition_output.exists() {
+            edition_output
+        } else if empty_output.exists() {
+            empty_output
+        } else {
+            // Fall back to using QuickJS to render (experimental)
+            return quickjs_runtime::quickjs_render_wiki(
+                tw_dir,
+                &tw_dir.join("editions").join(&edition),
+                output_path.parent().unwrap_or(std::path::Path::new(".")),
+                output_path.file_name().and_then(|n| n.to_str()).unwrap_or("wiki.html")
+            );
+        };
+
+        // Ensure parent directory exists
+        if let Some(parent) = output_path.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| format!("Failed to create output directory: {}", e))?;
+        }
+
+        std::fs::copy(&source_html, &output_path)
+            .map_err(|e| format!("Failed to copy wiki template: {}", e))?;
+
+        println!("  Copied pre-built wiki from: {:?}", source_html);
     }
-
-    // Ensure parent directory exists
-    if let Some(parent) = output_path.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|e| format!("Failed to create output directory: {}", e))?;
-    }
-
-    std::fs::copy(&built_file, &output_path)
-        .map_err(|e| format!("Failed to copy wiki to destination: {}", e))?;
-
-    // Clean up temp directory
-    let _ = std::fs::remove_dir_all(&temp_dir);
 
     println!("Single-file wiki created successfully: {:?}", output_path);
     Ok(())

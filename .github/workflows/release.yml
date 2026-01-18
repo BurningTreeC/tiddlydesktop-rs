@@ -340,13 +340,45 @@ jobs:
         working-directory: tiddlydesktop-rs
         run: npm run tauri android init
 
+      - name: Configure Android signing
+        working-directory: tiddlydesktop-rs
+        run: |
+          # Create keystore.properties for gradle
+          cat > src-tauri/gen/android/keystore.properties << EOF
+          storeFile=../../release.keystore
+          storePassword=${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          keyAlias=${{ secrets.ANDROID_KEY_ALIAS }}
+          keyPassword=${{ secrets.ANDROID_KEY_PASSWORD }}
+          EOF
+
+          # Patch build.gradle.kts to use the keystore
+          cat >> src-tauri/gen/android/app/build.gradle.kts << 'GRADLE'
+
+          // Release signing configuration
+          val keystorePropertiesFile = rootProject.file("keystore.properties")
+          if (keystorePropertiesFile.exists()) {
+              val keystoreProperties = java.util.Properties()
+              keystoreProperties.load(java.io.FileInputStream(keystorePropertiesFile))
+
+              android.signingConfigs {
+                  create("release") {
+                      storeFile = file(keystoreProperties["storeFile"] as String)
+                      storePassword = keystoreProperties["storePassword"] as String
+                      keyAlias = keystoreProperties["keyAlias"] as String
+                      keyPassword = keystoreProperties["keyPassword"] as String
+                  }
+              }
+
+              android.buildTypes.getByName("release") {
+                  signingConfig = android.signingConfigs.getByName("release")
+              }
+          }
+          GRADLE
+
       - name: Build Android APK and AAB
         working-directory: tiddlydesktop-rs
-        env:
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
         run: |
-          npm run tauri android build -- --apk true --aab true
+          npm run tauri android build -- --apk --aab
 
       - name: Upload Android artifacts
         uses: actions/upload-artifact@v4

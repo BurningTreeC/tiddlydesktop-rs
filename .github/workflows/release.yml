@@ -304,6 +304,22 @@ jobs:
           LLVM_VERSION=$(llvm-config --version | cut -d. -f1)
           echo "LIBCLANG_PATH=/usr/lib/llvm-${LLVM_VERSION}/lib" >> $GITHUB_ENV
 
+      - name: Configure NDK for bindgen cross-compilation
+        run: |
+          # Find the NDK path
+          NDK_HOME="${ANDROID_NDK_HOME:-$ANDROID_HOME/ndk/$(ls $ANDROID_HOME/ndk | sort -V | tail -1)}"
+          echo "NDK_HOME=$NDK_HOME" >> $GITHUB_ENV
+
+          # Set up bindgen to use NDK sysroot for each Android target
+          # aarch64
+          echo "BINDGEN_EXTRA_CLANG_ARGS_aarch64_linux_android=--sysroot=$NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/sysroot -I$NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/include -I$NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/include/aarch64-linux-android" >> $GITHUB_ENV
+          # armv7
+          echo "BINDGEN_EXTRA_CLANG_ARGS_armv7_linux_androideabi=--sysroot=$NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/sysroot -I$NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/include -I$NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/include/arm-linux-androideabi" >> $GITHUB_ENV
+          # x86_64
+          echo "BINDGEN_EXTRA_CLANG_ARGS_x86_64_linux_android=--sysroot=$NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/sysroot -I$NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/include -I$NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/include/x86_64-linux-android" >> $GITHUB_ENV
+          # i686
+          echo "BINDGEN_EXTRA_CLANG_ARGS_i686_linux_android=--sysroot=$NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/sysroot -I$NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/include -I$NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/include/i686-linux-android" >> $GITHUB_ENV
+
       - name: Install npm dependencies
         working-directory: tiddlydesktop-rs
         run: npm install

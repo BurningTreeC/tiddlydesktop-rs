@@ -42,6 +42,12 @@ Download the latest release for your platform from the [Releases page](../../rel
 
 ### Linux
 
+**Requirements**:
+- **Node.js 18+**: Required for wiki folder support. Install via your package manager, [NodeSource](https://github.com/nodesource/distributions), or [nvm](https://github.com/nvm-sh/nvm). Single-file wikis work without Node.js.
+- **libayatana-appindicator**: Required for system tray support.
+  - Debian/Ubuntu: `sudo apt install libayatana-appindicator3-1`
+  - Fedora: `sudo dnf install libayatana-appindicator-gtk3`
+
 **Debian/Ubuntu (.deb)**:
 ```bash
 sudo dpkg -i tiddlydesktop-rs_*.deb

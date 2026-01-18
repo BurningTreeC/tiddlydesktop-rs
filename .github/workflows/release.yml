@@ -379,6 +379,16 @@ jobs:
       - name: Display structure of downloaded files
         run: ls -R artifacts
 
+      - name: Generate SHA256 checksums
+        run: |
+          cd artifacts
+          # Find all release files and generate checksums
+          find . -type f \( -name "*.deb" -o -name "*.rpm" -o -name "*.AppImage" \
+            -o -name "*.msi" -o -name "*.exe" -o -name "*.dmg" -o -name "*.zip" \
+            -o -name "*.apk" -o -name "*.aab" \) -exec sha256sum {} \; | \
+            sed 's|  \./|  |' | sort -k2 > ../CHECKSUMS-SHA256.txt
+          cat ../CHECKSUMS-SHA256.txt
+
       - name: Create Release
         uses: softprops/action-gh-release@v1
         with:
@@ -393,7 +403,9 @@ jobs:
             artifacts/**/*.msi
             artifacts/**/*.exe
             artifacts/**/*.dmg
+            artifacts/**/*.zip
             artifacts/**/*.apk
             artifacts/**/*.aab
+            CHECKSUMS-SHA256.txt
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

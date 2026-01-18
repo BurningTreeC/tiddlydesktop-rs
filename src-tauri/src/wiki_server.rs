@@ -13,9 +13,11 @@ use tiny_http::{Server, Request, Response, Header, Method};
 
 /// A running wiki folder server
 pub struct WikiFolderHttpServer {
+    #[allow(dead_code)] // Handle kept alive to maintain server thread
     server_handle: Option<thread::JoinHandle<()>>,
     shutdown_flag: Arc<Mutex<bool>>,
     port: u16,
+    #[allow(dead_code)] // Stored for potential future use (status display, debugging)
     wiki_path: PathBuf,
 }
 

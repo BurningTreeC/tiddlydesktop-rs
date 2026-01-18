@@ -589,6 +589,7 @@ fn allocate_port(state: &AppState) -> u16 {
 }
 
 /// Get path to bundled Node.js binary
+#[cfg(desktop)]
 fn get_node_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     let resource_path = app.path().resource_dir()
         .map_err(|e| format!("Failed to get resource dir: {}", e))?;
@@ -803,13 +804,14 @@ async fn open_wiki_folder(app: tauri::AppHandle, path: String) -> Result<(), Str
     }
 
     #[cfg(not(desktop))]
-    {
+    let server_url = {
         // Mobile: Use Rust HTTP server
         println!("Starting wiki folder server (Rust):");
         println!("  Wiki folder: {:?}", path_buf);
         println!("  Port: {}", port);
 
         let http_server = wiki_server::WikiFolderHttpServer::start(path_buf.clone(), port)?;
+        let url = http_server.url();
 
         // Store the server info
         state.wiki_servers.lock().unwrap().insert(label.clone(), WikiFolderServer {
@@ -817,8 +819,11 @@ async fn open_wiki_folder(app: tauri::AppHandle, path: String) -> Result<(), Str
             port,
             path: path.clone(),
         });
-    }
 
+        url
+    };
+
+    #[cfg(desktop)]
     let server_url = format!("http://127.0.0.1:{}", port);
 
     #[cfg(desktop)]
@@ -1110,21 +1115,32 @@ async fn init_wiki_folder(app: tauri::AppHandle, path: String, edition: String, 
 
     #[cfg(not(desktop))]
     {
-        // Mobile: Copy edition files from bundled TiddlyWiki
+        // Mobile: Try QuickJS first, fall back to copying files
         let tw_path = get_tiddlywiki_path(&app)?;
         let tw_dir = tw_path.parent().ok_or("Failed to get TiddlyWiki directory")?;
-        let editions_dir = tw_dir.join("editions");
 
-        let edition_path = editions_dir.join(&edition);
-        if !edition_path.exists() {
-            return Err(format!("Edition '{}' not found", edition));
+        // Try using QuickJS to run TiddlyWiki's init command
+        match quickjs_runtime::quickjs_init_wiki(tw_dir, &path_buf, &edition) {
+            Ok(()) => {
+                println!("  Initialized wiki using QuickJS");
+            }
+            Err(e) => {
+                // QuickJS failed, fall back to copying edition files
+                println!("  QuickJS init failed ({}), falling back to file copy", e);
+
+                let editions_dir = tw_dir.join("editions");
+                let edition_path = editions_dir.join(&edition);
+                if !edition_path.exists() {
+                    return Err(format!("Edition '{}' not found", edition));
+                }
+
+                // Copy edition files to target folder
+                copy_dir_recursive(&edition_path, &path_buf)
+                    .map_err(|e| format!("Failed to copy edition files: {}", e))?;
+
+                println!("  Copied edition files from: {:?}", edition_path);
+            }
         }
-
-        // Copy edition files to target folder
-        copy_dir_recursive(&edition_path, &path_buf)
-            .map_err(|e| format!("Failed to copy edition files: {}", e))?;
-
-        println!("  Copied edition files from: {:?}", edition_path);
     }
 
     // Verify initialization succeeded

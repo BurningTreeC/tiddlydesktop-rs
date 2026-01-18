@@ -72,6 +72,7 @@ jobs:
         run: |
           mkdir -p src-tauri/resources
           cp -r ../TiddlyWiki5 src-tauri/resources/tiddlywiki
+          rm -rf src-tauri/resources/tiddlywiki/.git
           rm -rf src-tauri/resources/tiddlywiki/editions/tiddlywiki-surveys
 
       - name: Build Tauri (Linux)
@@ -150,6 +151,7 @@ jobs:
         run: |
           mkdir -p src-tauri/resources
           cp -r ../TiddlyWiki5 src-tauri/resources/tiddlywiki
+          rm -rf src-tauri/resources/tiddlywiki/.git
           rm -rf src-tauri/resources/tiddlywiki/editions/tiddlywiki-surveys
 
       - name: Build Tauri (Windows)
@@ -226,6 +228,7 @@ jobs:
         run: |
           mkdir -p src-tauri/resources
           cp -r ../TiddlyWiki5 src-tauri/resources/tiddlywiki
+          rm -rf src-tauri/resources/tiddlywiki/.git
           rm -rf src-tauri/resources/tiddlywiki/editions/tiddlywiki-surveys
 
       - name: Add Rust targets for universal binary
@@ -334,6 +337,7 @@ jobs:
         run: |
           mkdir -p src-tauri/resources
           cp -r ../TiddlyWiki5 src-tauri/resources/tiddlywiki
+          rm -rf src-tauri/resources/tiddlywiki/.git
           rm -rf src-tauri/resources/tiddlywiki/editions/tiddlywiki-surveys
 
       - name: Decode keystore

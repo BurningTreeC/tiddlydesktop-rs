@@ -82,7 +82,21 @@ fn determine_storage_mode(app: &tauri::App) -> Result<PathBuf, String> {
 /// Windows: determine storage mode based on marker file
 #[cfg(target_os = "windows")]
 fn determine_storage_mode(app: &tauri::App) -> Result<PathBuf, String> {
-    get_main_wiki_dir(app)
+    let exe_path = std::env::current_exe().map_err(|e| e.to_string())?;
+    let exe_dir = exe_path.parent().ok_or("No exe directory")?;
+
+    // Check for portable marker
+    if exe_dir.join("portable").exists() || exe_dir.join("portable.txt").exists() {
+        return Ok(exe_dir.to_path_buf());
+    }
+
+    // Check if portable data file already exists (user chose portable mode previously)
+    if exe_dir.join("tiddlydesktop.html").exists() {
+        return Ok(exe_dir.to_path_buf());
+    }
+
+    // Installed mode: app data directory
+    app.path().app_data_dir().map_err(|e| e.to_string())
 }
 
 /// Ensure main wiki file exists, extracting from resources if needed

@@ -23,11 +23,11 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
-    "resources": [
-      "resources/tiddlywiki/**/*",
-      "resources/binaries/*",
-      "../src/index.html"
-    ],
+    "resources": {
+      "resources/tiddlywiki/**/*": "resources/tiddlywiki/",
+      "resources/binaries/*": "resources/binaries/",
+      "../src/index.html": "index.html"
+    },
     "linux": {
       "deb": {
         "depends": ["libayatana-appindicator3-1"]

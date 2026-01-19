@@ -25,7 +25,6 @@
     ],
     "resources": {
       "resources/tiddlywiki/**/*": "resources/tiddlywiki/",
-      "resources/binaries/*": "resources/binaries/",
       "../src/index.html": "index.html"
     },
     "linux": {

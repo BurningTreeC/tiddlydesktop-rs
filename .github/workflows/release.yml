@@ -226,7 +226,7 @@ jobs:
 
       - name: Build Tauri (Windows)
         working-directory: tiddlydesktop-rs
-        run: npm run tauri build
+        run: npm run tauri build -- -c src-tauri/tauri.windows.conf.json
 
       - name: Upload Windows artifacts
         uses: actions/upload-artifact@v4
@@ -309,7 +309,7 @@ jobs:
 
       - name: Build Tauri (macOS universal)
         working-directory: tiddlydesktop-rs
-        run: npm run tauri build -- --target universal-apple-darwin
+        run: npm run tauri build -- -c src-tauri/tauri.macos.conf.json --target universal-apple-darwin
 
       - name: Zip the .app bundle
         working-directory: tiddlydesktop-rs

@@ -132,51 +132,11 @@ fn default_backups_enabled() -> bool {
     true
 }
 
-/// Determine storage mode for first run on macOS/Linux
-/// Returns the path where the main wiki should be stored
+/// Determine storage mode for macOS/Linux
+/// Always uses the app data directory (portable mode only available on Windows)
 #[cfg(not(target_os = "windows"))]
 fn determine_storage_mode(app: &tauri::App) -> Result<PathBuf, String> {
-    use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
-
-    let exe_path = std::env::current_exe().map_err(|e| e.to_string())?;
-    let exe_dir = exe_path.parent().ok_or("No exe directory")?;
-    let app_data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
-
-    let portable_path = exe_dir.join("tiddlydesktop.html");
-    let installed_path = app_data_dir.join("tiddlydesktop.html");
-
-    // Check for existing data file
-    if portable_path.exists() {
-        return Ok(exe_dir.to_path_buf());
-    }
-    if installed_path.exists() {
-        return Ok(app_data_dir);
-    }
-
-    // Check for portable marker (from Windows installer or user)
-    if exe_dir.join("portable").exists() || exe_dir.join("portable.txt").exists() {
-        return Ok(exe_dir.to_path_buf());
-    }
-
-    // First run - show dialog
-    let choice = app.dialog()
-        .message("How would you like to use TiddlyDesktop?\n\n\
-                  Install mode: Data stored in your user folder\n\
-                  Portable mode: Data stored next to the app (USB-friendly)")
-        .title("TiddlyDesktop Setup")
-        .buttons(MessageDialogButtons::OkCancelCustom(
-            "Install Mode".into(),
-            "Portable Mode".into()
-        ))
-        .blocking_show();
-
-    if choice {
-        // User chose "Install Mode" (OK button)
-        Ok(app_data_dir)
-    } else {
-        // User chose "Portable Mode" (Cancel button)
-        Ok(exe_dir.to_path_buf())
-    }
+    app.path().app_data_dir().map_err(|e| e.to_string())
 }
 
 /// Windows: determine storage mode based on marker file
@@ -293,10 +253,15 @@ fn get_bundled_index_path(app: &tauri::App) -> Result<PathBuf, String> {
         }
     }
 
-    // Development fallback
-    let dev_source = PathBuf::from("src/index.html");
-    if dev_source.exists() {
-        return Ok(dev_source);
+    // Development fallback (cargo runs from src-tauri directory)
+    let dev_sources = [
+        PathBuf::from("../src/index.html"),
+        PathBuf::from("src/index.html"),
+    ];
+    for dev_source in &dev_sources {
+        if dev_source.exists() {
+            return Ok(dev_source.clone());
+        }
     }
 
     Err(format!("Could not find source index.html. Tried: {:?}", possible_sources))

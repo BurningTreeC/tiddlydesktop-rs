@@ -29,6 +29,10 @@ mod quickjs_runtime;
 #[cfg(not(desktop))]
 mod wiki_server;
 
+// SAF (Storage Access Framework) plugin for Android directory listing
+// Always compiled, but only functional on Android
+mod saf_plugin;
+
 /// Extract bundled TiddlyWiki tar.gz to app data directory (mobile only)
 /// Returns the path to the extracted tiddlywiki directory
 #[cfg(not(desktop))]
@@ -2526,6 +2530,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
+        .plugin(saf_plugin::init())
         .invoke_handler(tauri::generate_handler![
             load_wiki,
             save_wiki,

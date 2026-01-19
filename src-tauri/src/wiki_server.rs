@@ -13,6 +13,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use tiny_http::{Server, Request, Response, Header, Method};
 use tauri_plugin_fs::FsExt;
+use crate::saf_plugin::SafExt;
 
 /// A running wiki folder server
 pub struct WikiFolderHttpServer {
@@ -183,36 +184,60 @@ impl Tiddler {
     }
 }
 
+/// List directory contents using std::fs or SAF (for content:// URIs on Android)
+pub fn list_directory(path: &Path, app_handle: Option<&tauri::AppHandle>) -> Vec<(String, bool)> {
+    let path_str = path.to_string_lossy();
+
+    // Check if this is a content:// URI (Android SAF)
+    if path_str.starts_with("content://") {
+        if let Some(app) = app_handle {
+            println!("[WikiServer] Using SAF to list directory: {}", path_str);
+            match app.saf().list_directory(&path_str) {
+                Ok(entries) => {
+                    return entries
+                        .into_iter()
+                        .map(|e| (e.name, e.is_file))
+                        .collect();
+                }
+                Err(e) => {
+                    println!("[WikiServer] SAF list_directory failed: {}", e);
+                    return Vec::new();
+                }
+            }
+        } else {
+            println!("[WikiServer] Cannot list content:// URI without app handle");
+            return Vec::new();
+        }
+    }
+
+    // Use standard filesystem for regular paths
+    match std::fs::read_dir(path) {
+        Ok(iter) => iter
+            .filter_map(|e| e.ok())
+            .map(|e| {
+                let name = e.file_name().to_string_lossy().to_string();
+                let is_file = e.file_type().map(|t| t.is_file()).unwrap_or(false);
+                (name, is_file)
+            })
+            .collect(),
+        Err(e) => {
+            println!("[WikiServer] Could not list directory {:?}: {}", path, e);
+            Vec::new()
+        }
+    }
+}
+
 /// Load all tiddlers from the wiki folder
 fn load_tiddlers(wiki_path: &Path, app_handle: Option<&tauri::AppHandle>) -> HashMap<String, Tiddler> {
     let mut tiddlers = HashMap::new();
     let tiddlers_dir = wiki_path.join("tiddlers");
 
-    // Read directory entries - use fs plugin if available, else std::fs
-    let entries: Vec<(String, bool)> = if let Some(app) = app_handle {
-        match app.fs().read_dir(&tiddlers_dir) {
-            Ok(iter) => iter
-                .filter_map(|e| e.ok())
-                .map(|e| (e.name.clone(), e.is_file))
-                .collect(),
-            Err(e) => {
-                println!("[WikiServer] Could not read tiddlers dir: {}", e);
-                return tiddlers;
-            }
-        }
-    } else {
-        match std::fs::read_dir(&tiddlers_dir) {
-            Ok(iter) => iter
-                .filter_map(|e| e.ok())
-                .map(|e| {
-                    let name = e.file_name().to_string_lossy().to_string();
-                    let is_file = e.file_type().map(|t| t.is_file()).unwrap_or(false);
-                    (name, is_file)
-                })
-                .collect(),
-            Err(_) => return tiddlers,
-        }
-    };
+    // Read directory entries using std::fs or SAF (for content:// URIs on Android)
+    let entries = list_directory(&tiddlers_dir, app_handle);
+
+    if entries.is_empty() {
+        println!("[WikiServer] No tiddler files found in {:?}", tiddlers_dir);
+    }
 
     for (name, is_file) in entries {
         if !is_file {

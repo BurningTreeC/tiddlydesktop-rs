@@ -2,6 +2,8 @@
 //!
 //! This provides wiki folder functionality on Android where Node.js isn't available.
 //! Implements the TiddlyWeb API that TiddlyWiki's tiddlyweb plugin expects.
+//!
+//! On Android, uses Tauri's fs plugin to handle content:// URIs directly.
 
 use std::collections::HashMap;
 #[allow(unused_imports)] // Used by request.as_reader().read_to_string()
@@ -10,6 +12,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use tiny_http::{Server, Request, Response, Header, Method};
+use tauri_plugin_fs::FsExt;
 
 /// A running wiki folder server
 pub struct WikiFolderHttpServer {
@@ -23,7 +26,10 @@ pub struct WikiFolderHttpServer {
 
 impl WikiFolderHttpServer {
     /// Start a new wiki folder server
-    pub fn start(wiki_path: PathBuf, port: u16) -> Result<Self, String> {
+    ///
+    /// On Android, pass the app_handle to enable content:// URI support via fs plugin.
+    /// On desktop, app_handle can be None to use standard filesystem.
+    pub fn start(wiki_path: PathBuf, port: u16, app_handle: Option<tauri::AppHandle>) -> Result<Self, String> {
         let server = Server::http(format!("127.0.0.1:{}", port))
             .map_err(|e| format!("Failed to start HTTP server: {}", e))?;
 
@@ -32,7 +38,7 @@ impl WikiFolderHttpServer {
         let path_clone = wiki_path.clone();
 
         let handle = thread::spawn(move || {
-            run_server(server, path_clone, shutdown_clone);
+            run_server(server, path_clone, shutdown_clone, app_handle);
         });
 
         Ok(Self {
@@ -61,9 +67,15 @@ impl Drop for WikiFolderHttpServer {
     }
 }
 
-fn run_server(server: Server, wiki_path: PathBuf, shutdown_flag: Arc<Mutex<bool>>) {
+fn run_server(
+    server: Server,
+    wiki_path: PathBuf,
+    shutdown_flag: Arc<Mutex<bool>>,
+    app_handle: Option<tauri::AppHandle>,
+) {
     // Load tiddlers into memory for faster access
-    let tiddlers = Arc::new(Mutex::new(load_tiddlers(&wiki_path)));
+    let tiddlers = Arc::new(Mutex::new(load_tiddlers(&wiki_path, app_handle.as_ref())));
+    let app_handle = Arc::new(app_handle);
 
     loop {
         // Check shutdown flag
@@ -74,7 +86,7 @@ fn run_server(server: Server, wiki_path: PathBuf, shutdown_flag: Arc<Mutex<bool>
         // Wait for request with timeout
         match server.recv_timeout(std::time::Duration::from_millis(500)) {
             Ok(Some(request)) => {
-                handle_request(request, &wiki_path, &tiddlers);
+                handle_request(request, &wiki_path, &tiddlers, &app_handle);
             }
             Ok(None) => continue, // Timeout, check shutdown flag
             Err(e) => {
@@ -85,7 +97,12 @@ fn run_server(server: Server, wiki_path: PathBuf, shutdown_flag: Arc<Mutex<bool>
     }
 }
 
-fn handle_request(request: Request, wiki_path: &Path, tiddlers: &Arc<Mutex<HashMap<String, Tiddler>>>) {
+fn handle_request(
+    request: Request,
+    wiki_path: &Path,
+    tiddlers: &Arc<Mutex<HashMap<String, Tiddler>>>,
+    app_handle: &Arc<Option<tauri::AppHandle>>,
+) {
     let url = request.url().to_string();
     let method = request.method().clone();
 
@@ -94,7 +111,7 @@ fn handle_request(request: Request, wiki_path: &Path, tiddlers: &Arc<Mutex<HashM
     // PUT requests need special handling because they consume the request body
     if method == Method::Put && url.starts_with("/recipes/default/tiddlers/") {
         let title = urlencoding::decode(&url[26..]).unwrap_or_default().to_string();
-        handle_put_tiddler(request, &title, wiki_path, tiddlers);
+        handle_put_tiddler(request, &title, wiki_path, tiddlers, app_handle);
         return;
     }
 
@@ -108,12 +125,12 @@ fn handle_request(request: Request, wiki_path: &Path, tiddlers: &Arc<Mutex<HashM
         }
         (Method::Delete, path) if path.starts_with("/recipes/default/tiddlers/") => {
             let title = urlencoding::decode(&path[26..]).unwrap_or_default().to_string();
-            handle_delete_tiddler(&title, wiki_path, tiddlers)
+            handle_delete_tiddler(&title, wiki_path, tiddlers, app_handle)
         }
         // Static file serving
-        (Method::Get, "/") => serve_index(wiki_path),
-        (Method::Get, "/favicon.ico") => serve_favicon(wiki_path),
-        (Method::Get, path) => serve_static_file(wiki_path, path),
+        (Method::Get, "/") => serve_index(wiki_path, app_handle),
+        (Method::Get, "/favicon.ico") => serve_favicon(wiki_path, app_handle),
+        (Method::Get, path) => serve_static_file(wiki_path, path, app_handle),
         // OPTIONS for CORS
         (Method::Options, _) => handle_options(),
         _ => Response::from_string("Not Found").with_status_code(404),
@@ -166,24 +183,53 @@ impl Tiddler {
     }
 }
 
-fn load_tiddlers(wiki_path: &Path) -> HashMap<String, Tiddler> {
+/// Load all tiddlers from the wiki folder
+fn load_tiddlers(wiki_path: &Path, app_handle: Option<&tauri::AppHandle>) -> HashMap<String, Tiddler> {
     let mut tiddlers = HashMap::new();
     let tiddlers_dir = wiki_path.join("tiddlers");
 
-    if !tiddlers_dir.exists() {
-        return tiddlers;
-    }
+    // Read directory entries - use fs plugin if available, else std::fs
+    let entries: Vec<(String, bool)> = if let Some(app) = app_handle {
+        match app.fs().read_dir(&tiddlers_dir) {
+            Ok(iter) => iter
+                .filter_map(|e| e.ok())
+                .map(|e| (e.name.clone(), e.is_file))
+                .collect(),
+            Err(e) => {
+                println!("[WikiServer] Could not read tiddlers dir: {}", e);
+                return tiddlers;
+            }
+        }
+    } else {
+        match std::fs::read_dir(&tiddlers_dir) {
+            Ok(iter) => iter
+                .filter_map(|e| e.ok())
+                .map(|e| {
+                    let name = e.file_name().to_string_lossy().to_string();
+                    let is_file = e.file_type().map(|t| t.is_file()).unwrap_or(false);
+                    (name, is_file)
+                })
+                .collect(),
+            Err(_) => return tiddlers,
+        }
+    };
 
-    if let Ok(entries) = std::fs::read_dir(&tiddlers_dir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.extension().map(|e| e == "tid").unwrap_or(false) {
-                if let Some(tiddler) = parse_tid_file(&path) {
+    for (name, is_file) in entries {
+        if !is_file {
+            continue;
+        }
+
+        let file_path = tiddlers_dir.join(&name);
+
+        if name.ends_with(".tid") {
+            if let Some(content) = read_file_content(&file_path, app_handle) {
+                if let Some(tiddler) = parse_tid_content(&content, &name) {
                     tiddlers.insert(tiddler.title.clone(), tiddler);
                 }
-            } else if path.extension().map(|e| e == "json").unwrap_or(false) {
-                // Handle .json tiddler files
-                if let Some(tiddler) = parse_json_tiddler(&path) {
+            }
+        } else if name.ends_with(".json") {
+            if let Some(content) = read_file_content(&file_path, app_handle) {
+                if let Some(tiddler) = parse_json_tiddler_content(&content) {
                     tiddlers.insert(tiddler.title.clone(), tiddler);
                 }
             }
@@ -194,8 +240,67 @@ fn load_tiddlers(wiki_path: &Path) -> HashMap<String, Tiddler> {
     tiddlers
 }
 
-fn parse_tid_file(path: &Path) -> Option<Tiddler> {
-    let content = std::fs::read_to_string(path).ok()?;
+/// Read file content using fs plugin if available, else std::fs
+fn read_file_content(path: &Path, app_handle: Option<&tauri::AppHandle>) -> Option<String> {
+    if let Some(app) = app_handle {
+        app.fs().read_to_string(path).ok()
+    } else {
+        std::fs::read_to_string(path).ok()
+    }
+}
+
+/// Read file bytes using fs plugin if available, else std::fs
+fn read_file_bytes(path: &Path, app_handle: Option<&tauri::AppHandle>) -> Option<Vec<u8>> {
+    if let Some(app) = app_handle {
+        app.fs().read(path).ok()
+    } else {
+        std::fs::read(path).ok()
+    }
+}
+
+/// Write file using fs plugin if available, else std::fs
+fn write_file(path: &Path, content: &[u8], app_handle: Option<&tauri::AppHandle>) -> Result<(), String> {
+    if let Some(app) = app_handle {
+        app.fs().write(path, content)
+            .map_err(|e| format!("Failed to write file: {}", e))
+    } else {
+        std::fs::write(path, content)
+            .map_err(|e| format!("Failed to write file: {}", e))
+    }
+}
+
+/// Create directory using fs plugin if available, else std::fs
+fn create_dir(path: &Path, app_handle: Option<&tauri::AppHandle>) -> Result<(), String> {
+    if let Some(app) = app_handle {
+        app.fs().create_dir(path)
+            .map_err(|e| format!("Failed to create dir: {}", e))
+    } else {
+        std::fs::create_dir_all(path)
+            .map_err(|e| format!("Failed to create dir: {}", e))
+    }
+}
+
+/// Remove file using fs plugin if available, else std::fs
+fn remove_file(path: &Path, app_handle: Option<&tauri::AppHandle>) -> Result<(), String> {
+    if let Some(app) = app_handle {
+        app.fs().remove_file(path)
+            .map_err(|e| format!("Failed to remove file: {}", e))
+    } else {
+        std::fs::remove_file(path)
+            .map_err(|e| format!("Failed to remove file: {}", e))
+    }
+}
+
+/// Check if file exists using fs plugin if available, else std::fs
+fn file_exists(path: &Path, app_handle: Option<&tauri::AppHandle>) -> bool {
+    if let Some(app) = app_handle {
+        app.fs().read(path).is_ok()
+    } else {
+        path.exists()
+    }
+}
+
+fn parse_tid_content(content: &str, filename: &str) -> Option<Tiddler> {
     let mut lines = content.lines();
     let mut fields = HashMap::new();
     let mut title = String::new();
@@ -219,17 +324,15 @@ fn parse_tid_file(path: &Path) -> Option<Tiddler> {
 
     if title.is_empty() {
         // Try to derive title from filename
-        title = path.file_stem()?.to_string_lossy().to_string();
-        // Handle URL-encoded filenames
-        title = urlencoding::decode(&title).unwrap_or_default().to_string();
+        let stem = filename.trim_end_matches(".tid");
+        title = urlencoding::decode(stem).unwrap_or_default().to_string();
     }
 
     Some(Tiddler { title, fields, text })
 }
 
-fn parse_json_tiddler(path: &Path) -> Option<Tiddler> {
-    let content = std::fs::read_to_string(path).ok()?;
-    let json: serde_json::Value = serde_json::from_str(&content).ok()?;
+fn parse_json_tiddler_content(content: &str) -> Option<Tiddler> {
+    let json: serde_json::Value = serde_json::from_str(content).ok()?;
 
     let title = json.get("title")?.as_str()?.to_string();
     let text = json.get("text").and_then(|v| v.as_str()).unwrap_or("").to_string();
@@ -248,10 +351,13 @@ fn parse_json_tiddler(path: &Path) -> Option<Tiddler> {
     Some(Tiddler { title, fields, text })
 }
 
-fn save_tiddler_to_file(wiki_path: &Path, tiddler: &Tiddler) -> Result<(), String> {
+fn save_tiddler_to_file(
+    wiki_path: &Path,
+    tiddler: &Tiddler,
+    app_handle: Option<&tauri::AppHandle>,
+) -> Result<(), String> {
     let tiddlers_dir = wiki_path.join("tiddlers");
-    std::fs::create_dir_all(&tiddlers_dir)
-        .map_err(|e| format!("Failed to create tiddlers dir: {}", e))?;
+    create_dir(&tiddlers_dir, app_handle)?;
 
     // Encode title for filename (handle special characters)
     let safe_filename = encode_filename(&tiddler.title);
@@ -276,22 +382,22 @@ fn save_tiddler_to_file(wiki_path: &Path, tiddler: &Tiddler) -> Result<(), Strin
     // Write text
     content.push_str(&tiddler.text);
 
-    std::fs::write(&file_path, content)
-        .map_err(|e| format!("Failed to write tiddler: {}", e))?;
-
-    Ok(())
+    write_file(&file_path, content.as_bytes(), app_handle)
 }
 
-fn delete_tiddler_file(wiki_path: &Path, title: &str) -> Result<(), String> {
+fn delete_tiddler_file(
+    wiki_path: &Path,
+    title: &str,
+    app_handle: Option<&tauri::AppHandle>,
+) -> Result<(), String> {
     let tiddlers_dir = wiki_path.join("tiddlers");
     let safe_filename = encode_filename(title);
 
     // Try both .tid and .json extensions
     for ext in &["tid", "json"] {
         let file_path = tiddlers_dir.join(format!("{}.{}", safe_filename, ext));
-        if file_path.exists() {
-            std::fs::remove_file(&file_path)
-                .map_err(|e| format!("Failed to delete tiddler: {}", e))?;
+        if file_exists(&file_path, app_handle) {
+            remove_file(&file_path, app_handle)?;
             return Ok(());
         }
     }
@@ -366,7 +472,8 @@ fn handle_put_tiddler(
     mut request: Request,
     title: &str,
     wiki_path: &Path,
-    tiddlers: &Arc<Mutex<HashMap<String, Tiddler>>>
+    tiddlers: &Arc<Mutex<HashMap<String, Tiddler>>>,
+    app_handle: &Arc<Option<tauri::AppHandle>>,
 ) {
     // Read request body
     let mut body = String::new();
@@ -410,14 +517,16 @@ fn handle_put_tiddler(
         text,
     };
 
-    // Save to file
-    if let Err(e) = save_tiddler_to_file(wiki_path, &tiddler) {
+    // Save to file (uses fs plugin on Android for content:// URI support)
+    if let Err(e) = save_tiddler_to_file(wiki_path, &tiddler, app_handle.as_ref().as_ref()) {
         let response = Response::from_string(format!("Failed to save: {}", e))
             .with_status_code(500)
             .with_header(Header::from_bytes("Access-Control-Allow-Origin", "*").unwrap());
         let _ = request.respond(response);
         return;
     }
+
+    println!("[WikiServer] Saved tiddler '{}'", title);
 
     // Update in-memory cache
     tiddlers.lock().unwrap().insert(title.to_string(), tiddler);
@@ -431,14 +540,17 @@ fn handle_put_tiddler(
 fn handle_delete_tiddler(
     title: &str,
     wiki_path: &Path,
-    tiddlers: &Arc<Mutex<HashMap<String, Tiddler>>>
+    tiddlers: &Arc<Mutex<HashMap<String, Tiddler>>>,
+    app_handle: &Arc<Option<tauri::AppHandle>>,
 ) -> Response<std::io::Cursor<Vec<u8>>> {
-    // Delete from file system
-    if let Err(e) = delete_tiddler_file(wiki_path, title) {
+    // Delete from file system (uses fs plugin on Android for content:// URI support)
+    if let Err(e) = delete_tiddler_file(wiki_path, title, app_handle.as_ref().as_ref()) {
         return Response::from_string(format!("Failed to delete: {}", e))
             .with_status_code(500)
             .with_header(Header::from_bytes("Access-Control-Allow-Origin", "*").unwrap());
     }
+
+    println!("[WikiServer] Deleted tiddler '{}'", title);
 
     // Remove from in-memory cache
     tiddlers.lock().unwrap().remove(title);
@@ -460,16 +572,14 @@ fn handle_options() -> Response<std::io::Cursor<Vec<u8>>> {
 // Static File Serving
 // ============================================================================
 
-fn serve_index(wiki_path: &Path) -> Response<std::io::Cursor<Vec<u8>>> {
+fn serve_index(wiki_path: &Path, app_handle: &Arc<Option<tauri::AppHandle>>) -> Response<std::io::Cursor<Vec<u8>>> {
     // Try to serve tiddlywiki.html or index.html
     for filename in &["tiddlywiki.html", "index.html", "output/index.html"] {
         let file_path = wiki_path.join(filename);
-        if file_path.exists() {
-            if let Ok(content) = std::fs::read(&file_path) {
-                return Response::from_data(content)
-                    .with_header(Header::from_bytes("Content-Type", "text/html; charset=utf-8").unwrap())
-                    .with_header(Header::from_bytes("Access-Control-Allow-Origin", "*").unwrap());
-            }
+        if let Some(content) = read_file_bytes(&file_path, app_handle.as_ref().as_ref()) {
+            return Response::from_data(content)
+                .with_header(Header::from_bytes("Content-Type", "text/html; charset=utf-8").unwrap())
+                .with_header(Header::from_bytes("Access-Control-Allow-Origin", "*").unwrap());
         }
     }
 
@@ -480,29 +590,25 @@ fn serve_index(wiki_path: &Path) -> Response<std::io::Cursor<Vec<u8>>> {
         .with_header(Header::from_bytes("Access-Control-Allow-Origin", "*").unwrap())
 }
 
-fn serve_favicon(wiki_path: &Path) -> Response<std::io::Cursor<Vec<u8>>> {
+fn serve_favicon(wiki_path: &Path, app_handle: &Arc<Option<tauri::AppHandle>>) -> Response<std::io::Cursor<Vec<u8>>> {
     let favicon_path = wiki_path.join("tiddlers").join("favicon.ico");
-    if favicon_path.exists() {
-        if let Ok(content) = std::fs::read(&favicon_path) {
-            return Response::from_data(content)
-                .with_header(Header::from_bytes("Content-Type", "image/x-icon").unwrap());
-        }
+    if let Some(content) = read_file_bytes(&favicon_path, app_handle.as_ref().as_ref()) {
+        return Response::from_data(content)
+            .with_header(Header::from_bytes("Content-Type", "image/x-icon").unwrap());
     }
 
     Response::from_string("")
         .with_status_code(404)
 }
 
-fn serve_static_file(wiki_path: &Path, path: &str) -> Response<std::io::Cursor<Vec<u8>>> {
+fn serve_static_file(wiki_path: &Path, path: &str, app_handle: &Arc<Option<tauri::AppHandle>>) -> Response<std::io::Cursor<Vec<u8>>> {
     let file_path = wiki_path.join(path.trim_start_matches('/'));
 
-    if file_path.exists() && file_path.is_file() {
-        if let Ok(content) = std::fs::read(&file_path) {
-            let content_type = guess_content_type(&file_path);
-            return Response::from_data(content)
-                .with_header(Header::from_bytes("Content-Type", content_type).unwrap())
-                .with_header(Header::from_bytes("Access-Control-Allow-Origin", "*").unwrap());
-        }
+    if let Some(content) = read_file_bytes(&file_path, app_handle.as_ref().as_ref()) {
+        let content_type = guess_content_type(&file_path);
+        return Response::from_data(content)
+            .with_header(Header::from_bytes("Content-Type", content_type).unwrap())
+            .with_header(Header::from_bytes("Access-Control-Allow-Origin", "*").unwrap());
     }
 
     Response::from_string("Not Found")
@@ -523,6 +629,7 @@ fn guess_content_type(path: &Path) -> &'static str {
         Some("woff") => "font/woff",
         Some("woff2") => "font/woff2",
         Some("ttf") => "font/ttf",
+        Some("tid") => "text/plain; charset=utf-8",
         _ => "application/octet-stream",
     }
 }

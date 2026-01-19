@@ -35,11 +35,11 @@ mod wiki_server;
 fn extract_tiddlywiki_bundle(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     use flate2::read::GzDecoder;
     use tar::Archive;
-    use tauri::path::BaseDirectory;
-    use tauri_plugin_fs::FsExt;
 
     let app_data_dir = app.path().app_data_dir()
         .map_err(|e| format!("Failed to get app data dir: {}", e))?;
+    std::fs::create_dir_all(&app_data_dir)
+        .map_err(|e| format!("Failed to create app data dir: {}", e))?;
     let tiddlywiki_dir = app_data_dir.join("tiddlywiki");
 
     // Check if already extracted (marker file)
@@ -51,13 +51,30 @@ fn extract_tiddlywiki_bundle(app: &tauri::AppHandle) -> Result<PathBuf, String> 
 
     println!("Extracting TiddlyWiki bundle to {:?}", app_data_dir);
 
-    // Read the tar.gz from bundled resources using Tauri's fs plugin
-    let resource_path = app.path()
-        .resolve("resources/tiddlywiki.tar.gz", BaseDirectory::Resource)
-        .map_err(|e| format!("Failed to resolve resource path: {}", e))?;
+    // Read the tar.gz from frontend assets using Tauri's asset resolver
+    // On Android, bundle.resources doesn't work, but frontend assets do
+    // The tar.gz is placed in the src/ folder during build
+    let resolver = app.asset_resolver();
 
-    let archive_bytes = app.fs().read(&resource_path)
-        .map_err(|e| format!("Failed to read TiddlyWiki archive: {}", e))?;
+    // Try different possible asset paths (frontend assets)
+    let possible_paths = [
+        "tiddlywiki.tar.gz",                    // In src/ folder (frontend root)
+        "assets/tiddlywiki.tar.gz",             // In src/assets/ folder
+        "resources/tiddlywiki.tar.gz",          // Fallback: bundle resources path
+    ];
+
+    let mut archive_bytes: Option<Vec<u8>> = None;
+    for asset_path in &possible_paths {
+        println!("Trying asset path: {}", asset_path);
+        if let Some(asset) = resolver.get(asset_path.to_string()) {
+            archive_bytes = Some(asset.into_owned());
+            println!("Found TiddlyWiki archive at: {}", asset_path);
+            break;
+        }
+    }
+
+    let archive_bytes = archive_bytes
+        .ok_or_else(|| format!("TiddlyWiki archive not found in bundled assets. Tried: {:?}", possible_paths))?;
 
     println!("Archive size: {} bytes", archive_bytes.len());
 
@@ -147,6 +164,10 @@ struct AppState {
     wiki_servers: Mutex<HashMap<String, WikiFolderServer>>,
     /// Next available port for wiki folder servers
     next_port: Mutex<u16>,
+    /// Android: Mapping of file URIs to their parent folder tree URIs
+    /// Used for creating backup files next to wiki files
+    #[cfg(not(desktop))]
+    backup_folder_access: Mutex<HashMap<String, String>>,
 }
 
 const MAX_RECENT_FILES: usize = 50;
@@ -293,36 +314,107 @@ async fn cleanup_old_backups(backup_dir: &PathBuf, keep: usize) {
 
 /// Load wiki content from disk
 #[tauri::command]
-async fn load_wiki(path: String) -> Result<String, String> {
-    tokio::fs::read_to_string(&path)
-        .await
-        .map_err(|e| format!("Failed to read wiki: {}", e))
+async fn load_wiki(app: tauri::AppHandle, path: String) -> Result<String, String> {
+    // On mobile, use Tauri's fs plugin which can handle content:// URIs
+    #[cfg(not(desktop))]
+    {
+        use tauri_plugin_fs::FsExt;
+        let path_buf = PathBuf::from(&path);
+        app.fs().read_to_string(&path_buf)
+            .map_err(|e| format!("Failed to read wiki: {}", e))
+    }
+
+    // On desktop, use standard filesystem operations
+    #[cfg(desktop)]
+    {
+        let _ = app; // Suppress unused warning
+        tokio::fs::read_to_string(&path)
+            .await
+            .map_err(|e| format!("Failed to read wiki: {}", e))
+    }
 }
 
 /// Save wiki content to disk with backup
 #[tauri::command]
-async fn save_wiki(path: String, content: String) -> Result<(), String> {
-    let path = PathBuf::from(&path);
+async fn save_wiki(app: tauri::AppHandle, path: String, content: String) -> Result<(), String> {
+    let path_buf = PathBuf::from(&path);
 
-    // Create backup first
-    create_backup(&path).await?;
+    // On mobile, use Tauri's fs plugin which can handle content:// URIs
+    #[cfg(not(desktop))]
+    {
+        use tauri_plugin_fs::FsExt;
 
-    // Write to a temp file first, then rename for atomic operation
-    let temp_path = path.with_extension("tmp");
+        // Check if backups are enabled for this wiki
+        let state = app.state::<AppState>();
+        let backups_enabled = are_backups_enabled(&state, &path);
 
-    tokio::fs::write(&temp_path, &content)
-        .await
-        .map_err(|e| format!("Failed to write temp file: {}", e))?;
+        // Create backup if enabled
+        if backups_enabled {
+            if let Ok(original_content) = app.fs().read(&path_buf) {
+                let filename = path_buf.file_name()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("wiki.html");
+                let stem = filename.trim_end_matches(".html").trim_end_matches(".HTML");
+                let timestamp = chrono::Local::now().format("%Y%m%d-%H%M%S");
+                let backup_name = format!("{}.{}.html", stem, timestamp);
 
-    // Try rename first, fall back to direct write if it fails (Windows file locking)
-    if let Err(_) = tokio::fs::rename(&temp_path, &path).await {
-        let _ = tokio::fs::remove_file(&temp_path).await;
-        tokio::fs::write(&path, &content)
-            .await
-            .map_err(|e| format!("Failed to save file: {}", e))?;
+                // Check if we have folder access for this wiki
+                let folder_uri = get_backup_folder_uri(&state, &path);
+
+                let backup_written = if let Some(folder_uri) = folder_uri {
+                    // Use the granted folder URI to create backup
+                    let backup_dir = PathBuf::from(&folder_uri).join(format!("{}.backups", stem));
+                    let _ = app.fs().create_dir(&backup_dir);
+                    let backup_path = backup_dir.join(&backup_name);
+                    app.fs().write(&backup_path, &original_content).is_ok()
+                } else {
+                    false
+                };
+
+                // Fallback to local storage if folder access not granted or write failed
+                if !backup_written {
+                    if let Ok(app_data_dir) = app.path().app_data_dir() {
+                        let safe_name = filename.replace(|c: char| !c.is_alphanumeric() && c != '.' && c != '-' && c != '_', "_");
+                        let local_backup_dir = app_data_dir.join("backups").join(&safe_name);
+                        let _ = std::fs::create_dir_all(&local_backup_dir);
+                        let local_backup_path = local_backup_dir.join(&backup_name);
+                        let _ = std::fs::write(&local_backup_path, &original_content);
+                    }
+                }
+            }
+        }
+
+        // Write using fs plugin (handles content:// URIs)
+        app.fs().write(&path_buf, content.as_bytes())
+            .map_err(|e| format!("Failed to save wiki: {}", e))?;
+        return Ok(());
     }
 
-    Ok(())
+    // On desktop, use standard filesystem operations with backup
+    #[cfg(desktop)]
+    {
+        let _ = app; // Suppress unused warning
+
+        // Create backup first
+        create_backup(&path_buf).await?;
+
+        // Write to a temp file first, then rename for atomic operation
+        let temp_path = path_buf.with_extension("tmp");
+
+        tokio::fs::write(&temp_path, &content)
+            .await
+            .map_err(|e| format!("Failed to write temp file: {}", e))?;
+
+        // Try rename first, fall back to direct write if it fails (Windows file locking)
+        if let Err(_) = tokio::fs::rename(&temp_path, &path_buf).await {
+            let _ = tokio::fs::remove_file(&temp_path).await;
+            tokio::fs::write(&path_buf, &content)
+                .await
+                .map_err(|e| format!("Failed to save file: {}", e))?;
+        }
+
+        Ok(())
+    }
 }
 
 /// Set window title
@@ -430,6 +522,92 @@ fn update_wiki_favicon(state: tauri::State<AppState>, path: String, favicon: Str
         // Save to disk
         save_wiki_list(&state.data_file, &recent);
     }
+}
+
+/// Request folder access for backups (Android only)
+/// Returns the folder URI if granted, or error message
+#[tauri::command]
+async fn request_backup_folder_access(
+    app: tauri::AppHandle,
+    wiki_path: String,
+) -> Result<String, String> {
+    #[cfg(not(desktop))]
+    {
+        use tauri_plugin_dialog::DialogExt;
+
+        // Show explanation dialog first
+        let confirmed = app.dialog()
+            .message("To save backups next to your wiki file, please select the folder containing your wiki.")
+            .title("Grant Folder Access")
+            .ok_button_label("Select Folder")
+            .cancel_button_label("Skip")
+            .blocking_show();
+
+        if !confirmed {
+            return Err("User cancelled folder access request".to_string());
+        }
+
+        // Open folder picker
+        let folder_result = app.dialog()
+            .file()
+            .blocking_pick_folder();
+
+        match folder_result {
+            Some(folder_path) => {
+                let folder_uri = folder_path.to_string();
+
+                // Store the mapping
+                let state = app.state::<AppState>();
+                let mut access_map = state.backup_folder_access.lock().unwrap();
+                access_map.insert(wiki_path, folder_uri.clone());
+
+                Ok(folder_uri)
+            }
+            None => Err("No folder selected".to_string()),
+        }
+    }
+
+    #[cfg(desktop)]
+    {
+        let _ = (app, wiki_path);
+        Err("Folder access request not needed on desktop".to_string())
+    }
+}
+
+/// Check if we have folder access for a wiki's backups (Android only)
+#[tauri::command]
+fn has_backup_folder_access(state: tauri::State<AppState>, wiki_path: String) -> bool {
+    #[cfg(not(desktop))]
+    {
+        let access_map = state.backup_folder_access.lock().unwrap();
+        access_map.contains_key(&wiki_path)
+    }
+
+    #[cfg(desktop)]
+    {
+        let _ = (state, wiki_path);
+        true // Always have access on desktop
+    }
+}
+
+/// Check if running on mobile (Android/iOS)
+#[tauri::command]
+fn is_mobile() -> bool {
+    #[cfg(not(desktop))]
+    {
+        true
+    }
+    #[cfg(desktop)]
+    {
+        false
+    }
+}
+
+/// Get the backup folder URI for a wiki (Android only)
+#[cfg(not(desktop))]
+fn get_backup_folder_uri(state: &AppState, wiki_path: &str) -> Option<String> {
+    let access_map = state.backup_folder_access.lock().unwrap();
+    access_map.get(wiki_path).cloned()
 }
 
 /// Show an alert dialog
@@ -664,8 +842,21 @@ fn normalize_path(path: PathBuf) -> PathBuf {
 }
 
 /// Check if a path is a wiki folder (contains tiddlywiki.info)
+/// Check if a path is a wiki folder (desktop version)
+#[cfg(desktop)]
 fn is_wiki_folder(path: &std::path::Path) -> bool {
     path.is_dir() && path.join("tiddlywiki.info").exists()
+}
+
+/// Check if a path is a wiki folder (mobile version - uses fs plugin for content:// URIs)
+#[cfg(not(desktop))]
+fn is_wiki_folder_mobile(app: &tauri::AppHandle, path: &std::path::Path) -> bool {
+    use tauri_plugin_fs::FsExt;
+    let fs = app.fs();
+
+    // Check if tiddlywiki.info exists in the folder
+    let info_path = path.join("tiddlywiki.info");
+    fs.read_to_string(&info_path).is_ok()
 }
 
 /// Get the next available port for a wiki folder server
@@ -884,8 +1075,14 @@ async fn open_wiki_folder(app: tauri::AppHandle, path: String) -> Result<(), Str
     let path_buf = PathBuf::from(&path);
     let state = app.state::<AppState>();
 
-    // Verify it's a wiki folder
+    // Verify it's a wiki folder - different check for mobile vs desktop
+    #[cfg(desktop)]
     if !is_wiki_folder(&path_buf) {
+        return Err("Not a valid wiki folder (missing tiddlywiki.info)".to_string());
+    }
+
+    #[cfg(not(desktop))]
+    if !is_wiki_folder_mobile(&app, &path_buf) {
         return Err("Not a valid wiki folder (missing tiddlywiki.info)".to_string());
     }
 
@@ -992,12 +1189,17 @@ async fn open_wiki_folder(app: tauri::AppHandle, path: String) -> Result<(), Str
 
     #[cfg(not(desktop))]
     let server_url = {
-        // Mobile: Use Rust HTTP server
-        println!("Starting wiki folder server (Rust):");
-        println!("  Wiki folder: {:?}", path_buf);
+        // Mobile: Use Rust HTTP server with fs plugin for content:// URI support
+        println!("Opening wiki folder on mobile:");
+        println!("  Path: {:?}", path_buf);
         println!("  Port: {}", port);
 
-        let http_server = wiki_server::WikiFolderHttpServer::start(path_buf.clone(), port)?;
+        // Start server directly on the original path - fs plugin handles content:// URIs
+        let http_server = wiki_server::WikiFolderHttpServer::start(
+            path_buf.clone(),
+            port,
+            Some(app.clone()), // Pass app handle for fs plugin access
+        )?;
         let url = http_server.url();
 
         // Store the server info
@@ -1684,6 +1886,21 @@ async fn open_wiki_window(app: tauri::AppHandle, path: String) -> Result<(), Str
     }
 
     // Read only the first 64KB to extract favicon (it's always in <head>)
+    // On mobile, use fs plugin to handle content:// URIs
+    #[cfg(not(desktop))]
+    let favicon = {
+        use tauri_plugin_fs::FsExt;
+        // Read full file then truncate (fs plugin doesn't support partial reads)
+        match app.fs().read(&path_buf) {
+            Ok(bytes) => {
+                let truncated: Vec<u8> = bytes.into_iter().take(65536).collect();
+                String::from_utf8(truncated).ok().and_then(|s| extract_favicon(&s))
+            }
+            Err(_) => None,
+        }
+    };
+
+    #[cfg(desktop)]
     let favicon = {
         use tokio::io::AsyncReadExt;
         let mut buffer = vec![0u8; 65536];
@@ -1857,59 +2074,123 @@ fn wiki_protocol_handler(app: &tauri::AppHandle, request: Request<Vec<u8>>) -> R
         let state = app.state::<AppState>();
         let backups_enabled = are_backups_enabled(&state, wiki_path.to_string_lossy().as_ref());
 
-        // Create backup if enabled (synchronous since protocol handlers can't be async)
-        if backups_enabled && wiki_path.exists() {
-            if let Some(parent) = wiki_path.parent() {
-                let filename = wiki_path.file_stem().and_then(|s| s.to_str()).unwrap_or("wiki");
-                let backup_dir = parent.join(format!("{}.backups", filename));
-                let _ = std::fs::create_dir_all(&backup_dir);
+        // Mobile: Use fs plugin for content:// URI support
+        #[cfg(not(desktop))]
+        {
+            use tauri_plugin_fs::FsExt;
 
-                let timestamp = Local::now().format("%Y%m%d-%H%M%S");
-                let backup_name = format!("{}.{}.html", filename, timestamp);
-                let backup_path = backup_dir.join(backup_name);
-                let _ = std::fs::copy(&wiki_path, &backup_path);
-            }
-        }
+            // Create backup if enabled
+            if backups_enabled {
+                if let Ok(original_content) = app.fs().read(&wiki_path) {
+                    let wiki_path_str = wiki_path.to_string_lossy().to_string();
+                    let filename = wiki_path.file_name()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or("wiki.html");
+                    let stem = filename.trim_end_matches(".html").trim_end_matches(".HTML");
+                    let timestamp = Local::now().format("%Y%m%d-%H%M%S");
+                    let backup_name = format!("{}.{}.html", stem, timestamp);
 
-        // Write to temp file then rename for atomic operation
-        let temp_path = wiki_path.with_extension("tmp");
-        match std::fs::write(&temp_path, &content) {
-            Ok(_) => {
-                match std::fs::rename(&temp_path, &wiki_path) {
-                    Ok(_) => {
-                        return Response::builder()
-                            .status(200)
-                            .header("Access-Control-Allow-Origin", "*")
-                            .body(Vec::new())
-                            .unwrap();
-                    }
-                    Err(_rename_err) => {
-                        // On Windows, rename can fail if file is locked
-                        // Fall back to direct write after removing temp file
-                        let _ = std::fs::remove_file(&temp_path);
-                        match std::fs::write(&wiki_path, &content) {
-                            Ok(_) => {
-                                return Response::builder()
-                                    .status(200)
-                                    .header("Access-Control-Allow-Origin", "*")
-                                    .body(Vec::new())
-                                    .unwrap();
-                            }
-                            Err(e) => {
-                                return Response::builder()
-                                    .status(500)
-                                    .body(format!("Failed to save: {}", e).into_bytes())
-                                    .unwrap();
-                            }
+                    // Check if we have folder access for this wiki
+                    let folder_uri = get_backup_folder_uri(&state, &wiki_path_str);
+
+                    let backup_written = if let Some(folder_uri) = folder_uri {
+                        // Use the granted folder URI to create backup
+                        let backup_dir = PathBuf::from(&folder_uri).join(format!("{}.backups", stem));
+                        let _ = app.fs().create_dir(&backup_dir);
+                        let backup_path = backup_dir.join(&backup_name);
+                        app.fs().write(&backup_path, &original_content).is_ok()
+                    } else {
+                        false
+                    };
+
+                    // Fallback to local storage if folder access not granted or write failed
+                    if !backup_written {
+                        if let Ok(app_data_dir) = app.path().app_data_dir() {
+                            let safe_name = filename.replace(|c: char| !c.is_alphanumeric() && c != '.' && c != '-' && c != '_', "_");
+                            let local_backup_dir = app_data_dir.join("backups").join(&safe_name);
+                            let _ = std::fs::create_dir_all(&local_backup_dir);
+                            let local_backup_path = local_backup_dir.join(&backup_name);
+                            let _ = std::fs::write(&local_backup_path, &original_content);
                         }
                     }
                 }
             }
-            Err(e) => {
-                return Response::builder()
-                    .status(500)
-                    .body(format!("Failed to write: {}", e).into_bytes())
-                    .unwrap();
+
+            // Write using fs plugin (handles content:// URIs)
+            match app.fs().write(&wiki_path, content.as_bytes()) {
+                Ok(_) => {
+                    return Response::builder()
+                        .status(200)
+                        .header("Access-Control-Allow-Origin", "*")
+                        .body(Vec::new())
+                        .unwrap();
+                }
+                Err(e) => {
+                    return Response::builder()
+                        .status(500)
+                        .body(format!("Failed to save: {}", e).into_bytes())
+                        .unwrap();
+                }
+            }
+        }
+
+        // Desktop: Use standard filesystem with atomic write
+        #[cfg(desktop)]
+        {
+            // Create backup if enabled (synchronous since protocol handlers can't be async)
+            if backups_enabled && wiki_path.exists() {
+                if let Some(parent) = wiki_path.parent() {
+                    let filename = wiki_path.file_stem().and_then(|s| s.to_str()).unwrap_or("wiki");
+                    let backup_dir = parent.join(format!("{}.backups", filename));
+                    let _ = std::fs::create_dir_all(&backup_dir);
+
+                    let timestamp = Local::now().format("%Y%m%d-%H%M%S");
+                    let backup_name = format!("{}.{}.html", filename, timestamp);
+                    let backup_path = backup_dir.join(backup_name);
+                    let _ = std::fs::copy(&wiki_path, &backup_path);
+                }
+            }
+
+            // Write to temp file then rename for atomic operation
+            let temp_path = wiki_path.with_extension("tmp");
+            match std::fs::write(&temp_path, &content) {
+                Ok(_) => {
+                    match std::fs::rename(&temp_path, &wiki_path) {
+                        Ok(_) => {
+                            return Response::builder()
+                                .status(200)
+                                .header("Access-Control-Allow-Origin", "*")
+                                .body(Vec::new())
+                                .unwrap();
+                        }
+                        Err(_rename_err) => {
+                            // On Windows, rename can fail if file is locked
+                            // Fall back to direct write after removing temp file
+                            let _ = std::fs::remove_file(&temp_path);
+                            match std::fs::write(&wiki_path, &content) {
+                                Ok(_) => {
+                                    return Response::builder()
+                                        .status(200)
+                                        .header("Access-Control-Allow-Origin", "*")
+                                        .body(Vec::new())
+                                        .unwrap();
+                                }
+                                Err(e) => {
+                                    return Response::builder()
+                                        .status(500)
+                                        .body(format!("Failed to save: {}", e).into_bytes())
+                                        .unwrap();
+                                }
+                            }
+                        }
+                    }
+                }
+                Err(e) => {
+                    return Response::builder()
+                        .status(500)
+                        .body(format!("Failed to write: {}", e).into_bytes())
+                        .unwrap();
+                }
             }
         }
     }
@@ -1944,7 +2225,18 @@ fn wiki_protocol_handler(app: &tauri::AppHandle, request: Request<Vec<u8>>) -> R
     // Generate the save URL for this wiki
     let save_url = format!("wikifile://localhost/save/{}", path);
 
-    match std::fs::read_to_string(&file_path) {
+    // Read file content - use Tauri's fs plugin on mobile for content:// URI support
+    #[cfg(not(desktop))]
+    let read_result = {
+        use tauri_plugin_fs::FsExt;
+        app.fs().read_to_string(&file_path)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))
+    };
+
+    #[cfg(desktop)]
+    let read_result = std::fs::read_to_string(&file_path);
+
+    match read_result {
         Ok(content) => {
             // Inject variables and a custom saver for TiddlyWiki
             let script_injection = format!(
@@ -2167,6 +2459,8 @@ pub fn run() {
                 data_file,
                 wiki_servers: Mutex::new(HashMap::new()),
                 next_port: Mutex::new(8080),
+                #[cfg(not(desktop))]
+                backup_folder_access: Mutex::new(HashMap::new()),
             });
 
             // Create the main window programmatically with initialization script
@@ -2216,6 +2510,9 @@ pub fn run() {
             set_wiki_backups,
             reveal_in_folder,
             update_wiki_favicon,
+            request_backup_folder_access,
+            has_backup_folder_access,
+            is_mobile,
             show_alert,
             show_confirm,
             close_window

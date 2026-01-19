@@ -31,6 +31,7 @@ exports.startup = function(callback) {
 		invoke: invoke,
 		listen: listen,
 		openDialog: openDialog,
+		isMobile: false, // Will be updated on startup
 		// Async dialog methods for TiddlyWiki to use
 		alert: function(message) {
 			return invoke("show_alert", { message: String(message || "") });
@@ -39,6 +40,13 @@ exports.startup = function(callback) {
 			return invoke("show_confirm", { message: String(message || "") });
 		}
 	};
+
+	// Detect if running on mobile
+	invoke("is_mobile").then(function(mobile) {
+		$tw.tiddlydesktop.isMobile = mobile;
+		$tw.wiki.setText("$:/temp/tiddlydesktop/is-mobile", "text", null, mobile ? "yes" : "no");
+		console.log("Platform detected: " + (mobile ? "mobile" : "desktop"));
+	});
 
 	// Message handler: open wiki file dialog
 	$tw.rootWidget.addEventListener("tm-tiddlydesktop-open-wiki", function(event) {
@@ -352,8 +360,45 @@ exports.startup = function(callback) {
 		var path = event.paramObject && event.paramObject.path;
 		var enabled = event.paramObject && event.paramObject.enabled === "true";
 		if (path) {
-			invoke("set_wiki_backups", { path: path, enabled: enabled }).then(function() {
+			if (enabled && $tw.tiddlydesktop.isMobile) {
+				// On mobile, check if we have folder access before enabling backups
+				invoke("has_backup_folder_access", { wikiPath: path }).then(function(hasAccess) {
+					if (hasAccess) {
+						// Already have access, just enable backups
+						invoke("set_wiki_backups", { path: path, enabled: true }).then(function() {
+							refreshWikiList();
+						});
+					} else {
+						// Need to request folder access first
+						invoke("request_backup_folder_access", { wikiPath: path }).then(function() {
+							// Access granted, now enable backups
+							invoke("set_wiki_backups", { path: path, enabled: true }).then(function() {
+								refreshWikiList();
+							});
+						}).catch(function(err) {
+							console.log("Folder access not granted:", err);
+							// User cancelled or denied - don't enable backups
+							refreshWikiList();
+						});
+					}
+				});
+			} else {
+				// Desktop or disabling backups - just update directly
+				invoke("set_wiki_backups", { path: path, enabled: enabled }).then(function() {
+					refreshWikiList();
+				});
+			}
+		}
+	});
+
+	// Message handler: request backup folder access (mobile only)
+	$tw.rootWidget.addEventListener("tm-tiddlydesktop-request-backup-access", function(event) {
+		var path = event.paramObject && event.paramObject.path;
+		if (path) {
+			invoke("request_backup_folder_access", { wikiPath: path }).then(function() {
 				refreshWikiList();
+			}).catch(function(err) {
+				console.log("Folder access request failed:", err);
 			});
 		}
 	});
@@ -402,20 +447,50 @@ exports.startup = function(callback) {
 			});
 			// Add new entries
 			if (entries && entries.length > 0) {
-				entries.forEach(function(entry, index) {
-					console.log("Adding wiki entry:", index, entry);
-					$tw.wiki.addTiddler({
-						title: "$:/temp/tiddlydesktop/wikis/" + index,
-						path: entry.path,
-						filename: entry.filename,
-						favicon: entry.favicon || "",
-						is_folder: entry.is_folder ? "true" : "false",
-						backups_enabled: entry.backups_enabled ? "true" : "false",
-						text: ""
+				// On mobile, also check backup folder access for each file wiki
+				var accessChecks = [];
+				if ($tw.tiddlydesktop.isMobile) {
+					entries.forEach(function(entry) {
+						if (!entry.is_folder) {
+							accessChecks.push(
+								invoke("has_backup_folder_access", { wikiPath: entry.path })
+									.then(function(hasAccess) {
+										return { path: entry.path, hasAccess: hasAccess };
+									})
+									.catch(function() {
+										return { path: entry.path, hasAccess: false };
+									})
+							);
+						}
 					});
+				}
+
+				Promise.all(accessChecks).then(function(accessResults) {
+					// Build a map of path -> hasAccess
+					var accessMap = {};
+					accessResults.forEach(function(result) {
+						accessMap[result.path] = result.hasAccess;
+					});
+
+					entries.forEach(function(entry, index) {
+						console.log("Adding wiki entry:", index, entry);
+						var hasFolderAccess = entry.is_folder ? true : (accessMap[entry.path] || false);
+						$tw.wiki.addTiddler({
+							title: "$:/temp/tiddlydesktop/wikis/" + index,
+							path: entry.path,
+							filename: entry.filename,
+							favicon: entry.favicon || "",
+							is_folder: entry.is_folder ? "true" : "false",
+							backups_enabled: entry.backups_enabled ? "true" : "false",
+							has_folder_access: hasFolderAccess ? "true" : "false",
+							text: ""
+						});
+					});
+					$tw.wiki.setText("$:/temp/tiddlydesktop/wiki-count", "text", null, String(entries.length));
 				});
+			} else {
+				$tw.wiki.setText("$:/temp/tiddlydesktop/wiki-count", "text", null, "0");
 			}
-			$tw.wiki.setText("$:/temp/tiddlydesktop/wiki-count", "text", null, String(entries ? entries.length : 0));
 		}).catch(function(err) {
 			console.error("get_recent_files error:", err);
 		});

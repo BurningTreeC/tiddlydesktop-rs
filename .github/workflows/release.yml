@@ -330,9 +330,12 @@ jobs:
           cp -r ../TiddlyWiki5 src-tauri/resources/tiddlywiki
           rm -rf src-tauri/resources/tiddlywiki/.git
           rm -rf src-tauri/resources/tiddlywiki/editions/tiddlywiki-surveys
-          # For Android: create tar.gz archive (assets can't be accessed as filesystem)
+          # For Android: create tar.gz archive and place in frontend assets
+          # (bundle.resources doesn't work on Android, but frontend assets do)
           cd src-tauri/resources
           tar -czf tiddlywiki.tar.gz tiddlywiki
+          # Copy to frontend src folder so it's accessible via asset resolver
+          cp tiddlywiki.tar.gz ../../src/
 
       - name: Decode keystore
         working-directory: tiddlydesktop-rs

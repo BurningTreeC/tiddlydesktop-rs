@@ -42,6 +42,7 @@ title: $:/plugins/tiddlywiki/tiddlydesktop-rs/WikiList
 </div>
 </div>
 
+<$list filter="[{$:/temp/tiddlydesktop/is-mobile}!match[yes]]" variable="ignore">
 <div class="td-drop-zone">
 <$reveal state="$:/temp/tiddlydesktop/drag-over" type="match" text="yes">
 <div class="td-drop-active">
@@ -54,6 +55,7 @@ Drop wiki file or folder here
 </div>
 </$reveal>
 </div>
+</$list>
 
 <div class="td-wikilist">
 <$list filter="[prefix[$:/temp/tiddlydesktop/wikis/]sort[title]]" emptyMessage={{$:/plugins/tiddlywiki/tiddlydesktop-rs/EmptyMessage}}>
@@ -90,13 +92,16 @@ Drop wiki file or folder here
 <$action-sendmessage $message="tm-tiddlydesktop-open-path" path=<<path>> isFolder=<<isFolder>>/>
 open
 </$button>
+<$list filter="[{$:/temp/tiddlydesktop/is-mobile}!match[yes]]" variable="ignore">
 <$button message="tm-tiddlydesktop-reveal" param=<<path>> class="tc-btn-invisible td-button td-button-reveal">reveal</$button>
+</$list>
 <$button message="tm-tiddlydesktop-remove" param=<<path>> class="tc-btn-invisible td-button td-button-remove">remove</$button>
 <$list filter="[<isFolder>!match[true]]" variable="ignore">
+<$let hasFolderAccess={{!!has_folder_access}} isMobile={{$:/temp/tiddlydesktop/is-mobile}}>
 <$list filter="[<backupsEnabled>match[true]]" variable="ignore">
 <$button class="tc-btn-invisible td-button td-button-backup td-backup-on" tooltip="Backups enabled - click to disable">
 <$action-sendmessage $message="tm-tiddlydesktop-set-backups" path=<<path>> enabled="false"/>
-{{$:/core/images/done-button}} backup
+{{$:/core/images/done-button}} backup<$list filter="[<isMobile>match[yes]]" variable="ignore"><$list filter="[<hasFolderAccess>!match[true]]" variable="ignore"> (local)</$list></$list>
 </$button>
 </$list>
 <$list filter="[<backupsEnabled>!match[true]]" variable="ignore">
@@ -105,6 +110,7 @@ open
 {{$:/core/images/close-button}} backup
 </$button>
 </$list>
+</$let>
 </$list>
 </div>
 </div>

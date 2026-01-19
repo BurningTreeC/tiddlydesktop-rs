@@ -641,6 +641,7 @@ fn get_dialog_init_script() -> &'static str {
 
 /// Normalize a path for cross-platform compatibility
 /// On Windows: removes \\?\ prefixes and ensures proper separators
+#[cfg(desktop)]
 fn normalize_path(path: PathBuf) -> PathBuf {
     // Use dunce to simplify Windows paths (removes \\?\ UNC prefixes)
     let normalized = dunce::simplified(&path).to_path_buf();

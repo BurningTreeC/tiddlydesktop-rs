@@ -136,6 +136,18 @@ npm run tauri build
 3. Optionally select additional plugins
 4. Choose the save location
 
+### Custom Editions
+
+You can add custom TiddlyWiki editions by placing them in the user editions directory:
+
+| Platform | Path |
+|----------|------|
+| Linux | `~/.local/share/tiddlydesktop-rs/editions/` |
+| macOS | `~/Library/Application Support/tiddlydesktop-rs/editions/` |
+| Windows | `%APPDATA%\tiddlydesktop-rs\editions\` |
+
+Each edition must be a directory containing a valid `tiddlywiki.info` file. Custom editions will appear in the edition selector when creating new wikis.
+
 ### Wiki Folders vs Single Files
 
 | Feature | Single File | Wiki Folder |

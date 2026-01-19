@@ -240,6 +240,13 @@ fn determine_storage_mode(app: &tauri::App) -> Result<PathBuf, String> {
     app.path().app_data_dir().map_err(|e| e.to_string())
 }
 
+/// Get the user editions directory path
+/// Location: ~/.local/share/tiddlydesktop-rs/editions/ (Linux) or equivalent on other platforms
+fn get_user_editions_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    let data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    Ok(data_dir.join("editions"))
+}
+
 /// Extract a tiddler's text content from TiddlyWiki HTML
 /// Supports both JSON format (TW 5.2+) and div format (older)
 fn extract_tiddler_from_html(html: &str, tiddler_title: &str) -> Option<String> {
@@ -1214,18 +1221,25 @@ pub struct EditionInfo {
     pub id: String,
     pub name: String,
     pub description: String,
+    pub is_user_edition: bool,
 }
 
 /// Get list of available TiddlyWiki editions
 #[tauri::command]
 async fn get_available_editions(app: tauri::AppHandle) -> Result<Vec<EditionInfo>, String> {
     let tw_path = get_tiddlywiki_path(&app)?;
-    let editions_dir = tw_path.parent()
+    let bundled_editions_dir = tw_path.parent()
         .ok_or("Failed to get TiddlyWiki directory")?
         .join("editions");
 
-    if !editions_dir.exists() {
+    if !bundled_editions_dir.exists() {
         return Err("Editions directory not found".to_string());
+    }
+
+    // Get user editions directory and create it if it doesn't exist
+    let user_editions_dir = get_user_editions_dir(&app)?;
+    if !user_editions_dir.exists() {
+        let _ = std::fs::create_dir_all(&user_editions_dir);
     }
 
     // Common editions with friendly names and descriptions
@@ -1242,12 +1256,54 @@ async fn get_available_editions(app: tauri::AppHandle) -> Result<Vec<EditionInfo
     // Editions to skip (test/internal editions)
     let skip_editions = ["test", "testcommonjs", "pluginlibrary", "tiddlydesktop-rs"];
 
+    // Helper to read editions from a directory
+    let read_editions_from_dir = |dir: &PathBuf, is_user_edition: bool, skip_ids: &[&str]| -> Vec<EditionInfo> {
+        if !dir.exists() {
+            return Vec::new();
+        }
+        std::fs::read_dir(dir)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .filter_map(|entry| {
+                let path = entry.path();
+                if !path.is_dir() {
+                    return None;
+                }
+                let name = path.file_name()?.to_str()?;
+
+                // Skip if in skip list
+                if skip_ids.contains(&name) {
+                    return None;
+                }
+                // Skip if no tiddlywiki.info
+                if !path.join("tiddlywiki.info").exists() {
+                    return None;
+                }
+
+                let (display_name, description) = edition_metadata
+                    .get(name)
+                    .map(|(n, d)| (n.to_string(), d.to_string()))
+                    .unwrap_or_else(|| {
+                        (name.replace('-', " ").replace('_', " "), format!("{} edition", name))
+                    });
+
+                Some(EditionInfo {
+                    id: name.to_string(),
+                    name: display_name,
+                    description,
+                    is_user_edition,
+                })
+            })
+            .collect()
+    };
+
     let mut editions = Vec::new();
 
-    // First add the common/recommended editions in order
+    // First add the common/recommended built-in editions in order
     let priority_editions = ["server", "empty", "full", "dev"];
     for edition_id in &priority_editions {
-        let edition_path = editions_dir.join(edition_id);
+        let edition_path = bundled_editions_dir.join(edition_id);
         if edition_path.exists() && edition_path.join("tiddlywiki.info").exists() {
             let (name, desc) = edition_metadata
                 .get(*edition_id)
@@ -1259,49 +1315,28 @@ async fn get_available_editions(app: tauri::AppHandle) -> Result<Vec<EditionInfo
                 id: edition_id.to_string(),
                 name,
                 description: desc,
+                is_user_edition: false,
             });
         }
     }
 
-    // Then add all other editions alphabetically
-    let mut other_editions: Vec<_> = std::fs::read_dir(&editions_dir)
-        .map_err(|e| format!("Failed to read editions directory: {}", e))?
-        .flatten()
-        .filter_map(|entry| {
-            let path = entry.path();
-            if !path.is_dir() {
-                return None;
-            }
-            let name = path.file_name()?.to_str()?;
+    // Then add user editions (sorted alphabetically)
+    let mut user_editions = read_editions_from_dir(&user_editions_dir, true, &skip_editions);
+    user_editions.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    let user_edition_ids: Vec<String> = user_editions.iter().map(|e| e.id.clone()).collect();
+    editions.extend(user_editions);
 
-            // Skip if already added as priority or in skip list
-            if priority_editions.contains(&name) || skip_editions.contains(&name) {
-                return None;
-            }
-            // Skip if no tiddlywiki.info
-            if !path.join("tiddlywiki.info").exists() {
-                return None;
-            }
+    // Then add other built-in editions alphabetically (excluding priority and user editions with same id)
+    let mut skip_for_builtin: Vec<&str> = skip_editions.to_vec();
+    skip_for_builtin.extend(priority_editions.iter());
+    for id in &user_edition_ids {
+        skip_for_builtin.push(id.as_str());
+    }
+    let mut other_builtin = read_editions_from_dir(&bundled_editions_dir, false, &skip_for_builtin);
+    other_builtin.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    editions.extend(other_builtin);
 
-            let (display_name, description) = edition_metadata
-                .get(name)
-                .map(|(n, d)| (n.to_string(), d.to_string()))
-                .unwrap_or_else(|| {
-                    (name.replace('-', " ").replace('_', " "), format!("{} edition", name))
-                });
-
-            Some(EditionInfo {
-                id: name.to_string(),
-                name: display_name,
-                description,
-            })
-        })
-        .collect();
-
-    // Sort other editions alphabetically by display name
-    other_editions.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
-    println!("Editions: {} priority + {} other = {} total", editions.len(), other_editions.len(), editions.len() + other_editions.len());
-    editions.extend(other_editions);
+    println!("Editions: {} total ({} user editions from {:?})", editions.len(), user_edition_ids.len(), user_editions_dir);
 
     Ok(editions)
 }
@@ -1438,6 +1473,9 @@ async fn init_wiki_folder(app: tauri::AppHandle, path: String, edition: String, 
         .arg(&path_buf)
         .arg("--init")
         .arg(&edition);
+    // Set TIDDLYWIKI_EDITION_PATH so TiddlyWiki can find user editions
+    let user_editions_dir = get_user_editions_dir(&app)?;
+    cmd.env("TIDDLYWIKI_EDITION_PATH", &user_editions_dir);
     #[cfg(target_os = "windows")]
     cmd.creation_flags(CREATE_NO_WINDOW);
     let output = cmd.output()
@@ -1555,6 +1593,9 @@ async fn create_wiki_file(app: tauri::AppHandle, path: String, edition: String, 
         .arg(&temp_dir)
         .arg("--init")
         .arg(&edition);
+    // Set TIDDLYWIKI_EDITION_PATH so TiddlyWiki can find user editions
+    let user_editions_dir = get_user_editions_dir(&app)?;
+    init_cmd.env("TIDDLYWIKI_EDITION_PATH", &user_editions_dir);
     #[cfg(target_os = "windows")]
     init_cmd.creation_flags(CREATE_NO_WINDOW);
     let init_output = init_cmd.output()

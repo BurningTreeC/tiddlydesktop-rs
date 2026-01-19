@@ -67,7 +67,7 @@ fn extract_tiddlywiki_bundle(app: &tauri::AppHandle) -> Result<PathBuf, String> 
     for asset_path in &possible_paths {
         println!("Trying asset path: {}", asset_path);
         if let Some(asset) = resolver.get(asset_path.to_string()) {
-            archive_bytes = Some(asset.into_owned());
+            archive_bytes = Some(asset.bytes);
             println!("Found TiddlyWiki archive at: {}", asset_path);
             break;
         }
@@ -363,10 +363,18 @@ async fn save_wiki(app: tauri::AppHandle, path: String, content: String) -> Resu
 
                 let backup_written = if let Some(folder_uri) = folder_uri {
                     // Use the granted folder URI to create backup
+                    use std::io::Write;
+                    use tauri_plugin_fs::{FsExt, OpenOptions};
                     let backup_dir = PathBuf::from(&folder_uri).join(format!("{}.backups", stem));
-                    let _ = app.fs().create_dir(&backup_dir);
+                    let _ = std::fs::create_dir_all(&backup_dir);
                     let backup_path = backup_dir.join(&backup_name);
-                    app.fs().write(&backup_path, &original_content).is_ok()
+                    let mut opts = OpenOptions::new();
+                    opts.write(true).create(true).truncate(true);
+                    if let Ok(mut file) = app.fs().open(&backup_path, opts) {
+                        file.write_all(&original_content).is_ok()
+                    } else {
+                        false
+                    }
                 } else {
                     false
                 };
@@ -385,8 +393,16 @@ async fn save_wiki(app: tauri::AppHandle, path: String, content: String) -> Resu
         }
 
         // Write using fs plugin (handles content:// URIs)
-        app.fs().write(&path_buf, content.as_bytes())
-            .map_err(|e| format!("Failed to save wiki: {}", e))?;
+        {
+            use std::io::Write;
+            use tauri_plugin_fs::{FsExt, OpenOptions};
+            let mut opts = OpenOptions::new();
+            opts.write(true).create(true).truncate(true);
+            let mut file = app.fs().open(&path_buf, opts)
+                .map_err(|e| format!("Failed to open wiki for writing: {}", e))?;
+            file.write_all(content.as_bytes())
+                .map_err(|e| format!("Failed to save wiki: {}", e))?;
+        }
         return Ok(());
     }
 
@@ -524,54 +540,37 @@ fn update_wiki_favicon(state: tauri::State<AppState>, path: String, favicon: Str
     }
 }
 
-/// Request folder access for backups (Android only)
-/// Returns the folder URI if granted, or error message
+/// Set folder access for backups (Android only)
+/// Called by frontend after it picks the folder via dialog
 #[tauri::command]
-async fn request_backup_folder_access(
-    app: tauri::AppHandle,
+fn set_backup_folder_access(
+    state: tauri::State<AppState>,
     wiki_path: String,
-) -> Result<String, String> {
+    folder_uri: String,
+) -> Result<(), String> {
     #[cfg(not(desktop))]
     {
-        use tauri_plugin_dialog::DialogExt;
-
-        // Show explanation dialog first
-        let confirmed = app.dialog()
-            .message("To save backups next to your wiki file, please select the folder containing your wiki.")
-            .title("Grant Folder Access")
-            .ok_button_label("Select Folder")
-            .cancel_button_label("Skip")
-            .blocking_show();
-
-        if !confirmed {
-            return Err("User cancelled folder access request".to_string());
-        }
-
-        // Open folder picker
-        let folder_result = app.dialog()
-            .file()
-            .blocking_pick_folder();
-
-        match folder_result {
-            Some(folder_path) => {
-                let folder_uri = folder_path.to_string();
-
-                // Store the mapping
-                let state = app.state::<AppState>();
-                let mut access_map = state.backup_folder_access.lock().unwrap();
-                access_map.insert(wiki_path, folder_uri.clone());
-
-                Ok(folder_uri)
-            }
-            None => Err("No folder selected".to_string()),
-        }
+        let mut access_map = state.backup_folder_access.lock().unwrap();
+        access_map.insert(wiki_path, folder_uri);
+        Ok(())
     }
 
     #[cfg(desktop)]
     {
-        let _ = (app, wiki_path);
-        Err("Folder access request not needed on desktop".to_string())
+        let _ = (state, wiki_path, folder_uri);
+        Err("Folder access not needed on desktop".to_string())
     }
+}
+
+/// Request folder access for backups - deprecated, frontend should use set_backup_folder_access
+#[tauri::command]
+async fn request_backup_folder_access(
+    _app: tauri::AppHandle,
+    _wiki_path: String,
+) -> Result<String, String> {
+    // This command is now handled by the frontend which picks the folder
+    // and then calls set_backup_folder_access with the result
+    Err("Use set_backup_folder_access instead - folder picking is done on frontend".to_string())
 }
 
 /// Check if we have folder access for a wiki's backups (Android only)
@@ -851,12 +850,12 @@ fn is_wiki_folder(path: &std::path::Path) -> bool {
 /// Check if a path is a wiki folder (mobile version - uses fs plugin for content:// URIs)
 #[cfg(not(desktop))]
 fn is_wiki_folder_mobile(app: &tauri::AppHandle, path: &std::path::Path) -> bool {
-    use tauri_plugin_fs::FsExt;
-    let fs = app.fs();
+    use tauri_plugin_fs::{FsExt, OpenOptions};
 
     // Check if tiddlywiki.info exists in the folder
     let info_path = path.join("tiddlywiki.info");
-    fs.read_to_string(&info_path).is_ok()
+    let opts = OpenOptions::new();
+    app.fs().open(&info_path, opts).is_ok()
 }
 
 /// Get the next available port for a wiki folder server
@@ -1268,8 +1267,19 @@ async fn open_wiki_folder(app: tauri::AppHandle, path: String) -> Result<(), Str
 
 /// Check if a path is a wiki folder
 #[tauri::command]
-fn check_is_wiki_folder(path: String) -> bool {
-    is_wiki_folder(&PathBuf::from(&path))
+fn check_is_wiki_folder(app: tauri::AppHandle, path: String) -> bool {
+    let path_buf = PathBuf::from(&path);
+
+    #[cfg(desktop)]
+    {
+        let _ = app;
+        is_wiki_folder(&path_buf)
+    }
+
+    #[cfg(not(desktop))]
+    {
+        is_wiki_folder_mobile(&app, &path_buf)
+    }
 }
 
 /// Edition info for UI display
@@ -2077,11 +2087,23 @@ fn wiki_protocol_handler(app: &tauri::AppHandle, request: Request<Vec<u8>>) -> R
         // Mobile: Use fs plugin for content:// URI support
         #[cfg(not(desktop))]
         {
-            use tauri_plugin_fs::FsExt;
+            use std::io::{Read, Write};
+            use tauri_plugin_fs::{FsExt, OpenOptions};
 
             // Create backup if enabled
             if backups_enabled {
-                if let Ok(original_content) = app.fs().read(&wiki_path) {
+                // Read original content
+                let original_content: Option<Vec<u8>> = {
+                    let opts = OpenOptions::new();
+                    if let Ok(mut file) = app.fs().open(&wiki_path, opts) {
+                        let mut content = Vec::new();
+                        file.read_to_end(&mut content).ok().map(|_| content)
+                    } else {
+                        None
+                    }
+                };
+
+                if let Some(original_content) = original_content {
                     let wiki_path_str = wiki_path.to_string_lossy().to_string();
                     let filename = wiki_path.file_name()
                         .and_then(|s| s.to_str())
@@ -2096,9 +2118,15 @@ fn wiki_protocol_handler(app: &tauri::AppHandle, request: Request<Vec<u8>>) -> R
                     let backup_written = if let Some(folder_uri) = folder_uri {
                         // Use the granted folder URI to create backup
                         let backup_dir = PathBuf::from(&folder_uri).join(format!("{}.backups", stem));
-                        let _ = app.fs().create_dir(&backup_dir);
+                        let _ = std::fs::create_dir_all(&backup_dir);
                         let backup_path = backup_dir.join(&backup_name);
-                        app.fs().write(&backup_path, &original_content).is_ok()
+                        let mut opts = OpenOptions::new();
+                        opts.write(true).create(true).truncate(true);
+                        if let Ok(mut file) = app.fs().open(&backup_path, opts) {
+                            file.write_all(&original_content).is_ok()
+                        } else {
+                            false
+                        }
                     } else {
                         false
                     };
@@ -2117,7 +2145,13 @@ fn wiki_protocol_handler(app: &tauri::AppHandle, request: Request<Vec<u8>>) -> R
             }
 
             // Write using fs plugin (handles content:// URIs)
-            match app.fs().write(&wiki_path, content.as_bytes()) {
+            let write_result = {
+                let mut opts = OpenOptions::new();
+                opts.write(true).create(true).truncate(true);
+                app.fs().open(&wiki_path, opts)
+                    .and_then(|mut file| file.write_all(content.as_bytes()))
+            };
+            match write_result {
                 Ok(_) => {
                     return Response::builder()
                         .status(200)
@@ -2511,6 +2545,7 @@ pub fn run() {
             reveal_in_folder,
             update_wiki_favicon,
             request_backup_folder_access,
+            set_backup_folder_access,
             has_backup_folder_access,
             is_mobile,
             show_alert,

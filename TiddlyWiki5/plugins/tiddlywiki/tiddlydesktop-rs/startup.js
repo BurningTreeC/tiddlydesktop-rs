@@ -369,15 +369,29 @@ exports.startup = function(callback) {
 							refreshWikiList();
 						});
 					} else {
-						// Need to request folder access first
-						invoke("request_backup_folder_access", { wikiPath: path }).then(function() {
-							// Access granted, now enable backups
-							invoke("set_wiki_backups", { path: path, enabled: true }).then(function() {
+						// Need to request folder access first - use folder picker dialog
+						openDialog({
+							directory: true,
+							multiple: false,
+							title: "Select folder containing your wiki for backups"
+						}).then(function(folderUri) {
+							if (folderUri) {
+								// Store the folder access
+								invoke("set_backup_folder_access", { wikiPath: path, folderUri: folderUri }).then(function() {
+									// Now enable backups
+									invoke("set_wiki_backups", { path: path, enabled: true }).then(function() {
+										refreshWikiList();
+									});
+								}).catch(function(err) {
+									console.error("Failed to set folder access:", err);
+									refreshWikiList();
+								});
+							} else {
+								console.log("Folder selection cancelled");
 								refreshWikiList();
-							});
+							}
 						}).catch(function(err) {
-							console.log("Folder access not granted:", err);
-							// User cancelled or denied - don't enable backups
+							console.log("Folder picker failed:", err);
 							refreshWikiList();
 						});
 					}
@@ -391,14 +405,24 @@ exports.startup = function(callback) {
 		}
 	});
 
-	// Message handler: request backup folder access (mobile only)
+	// Message handler: request backup folder access (mobile only) - uses folder picker
 	$tw.rootWidget.addEventListener("tm-tiddlydesktop-request-backup-access", function(event) {
 		var path = event.paramObject && event.paramObject.path;
 		if (path) {
-			invoke("request_backup_folder_access", { wikiPath: path }).then(function() {
-				refreshWikiList();
+			openDialog({
+				directory: true,
+				multiple: false,
+				title: "Select folder containing your wiki for backups"
+			}).then(function(folderUri) {
+				if (folderUri) {
+					invoke("set_backup_folder_access", { wikiPath: path, folderUri: folderUri }).then(function() {
+						refreshWikiList();
+					}).catch(function(err) {
+						console.error("Failed to set folder access:", err);
+					});
+				}
 			}).catch(function(err) {
-				console.log("Folder access request failed:", err);
+				console.log("Folder picker failed:", err);
 			});
 		}
 	});

@@ -242,8 +242,14 @@ fn load_tiddlers(wiki_path: &Path, app_handle: Option<&tauri::AppHandle>) -> Has
 
 /// Read file content using fs plugin if available, else std::fs
 fn read_file_content(path: &Path, app_handle: Option<&tauri::AppHandle>) -> Option<String> {
+    use std::io::Read;
     if let Some(app) = app_handle {
-        app.fs().read_to_string(path).ok()
+        use tauri_plugin_fs::{FsExt, OpenOptions};
+        let opts = OpenOptions::new();
+        let mut file = app.fs().open(path, opts).ok()?;
+        let mut content = String::new();
+        file.read_to_string(&mut content).ok()?;
+        Some(content)
     } else {
         std::fs::read_to_string(path).ok()
     }
@@ -251,8 +257,14 @@ fn read_file_content(path: &Path, app_handle: Option<&tauri::AppHandle>) -> Opti
 
 /// Read file bytes using fs plugin if available, else std::fs
 fn read_file_bytes(path: &Path, app_handle: Option<&tauri::AppHandle>) -> Option<Vec<u8>> {
+    use std::io::Read;
     if let Some(app) = app_handle {
-        app.fs().read(path).ok()
+        use tauri_plugin_fs::{FsExt, OpenOptions};
+        let opts = OpenOptions::new();
+        let mut file = app.fs().open(path, opts).ok()?;
+        let mut content = Vec::new();
+        file.read_to_end(&mut content).ok()?;
+        Some(content)
     } else {
         std::fs::read(path).ok()
     }
@@ -260,8 +272,14 @@ fn read_file_bytes(path: &Path, app_handle: Option<&tauri::AppHandle>) -> Option
 
 /// Write file using fs plugin if available, else std::fs
 fn write_file(path: &Path, content: &[u8], app_handle: Option<&tauri::AppHandle>) -> Result<(), String> {
+    use std::io::Write;
     if let Some(app) = app_handle {
-        app.fs().write(path, content)
+        use tauri_plugin_fs::{FsExt, OpenOptions};
+        let mut opts = OpenOptions::new();
+        opts.write(true).create(true).truncate(true);
+        let mut file = app.fs().open(path, opts)
+            .map_err(|e| format!("Failed to open file for writing: {}", e))?;
+        file.write_all(content)
             .map_err(|e| format!("Failed to write file: {}", e))
     } else {
         std::fs::write(path, content)
@@ -270,31 +288,29 @@ fn write_file(path: &Path, content: &[u8], app_handle: Option<&tauri::AppHandle>
 }
 
 /// Create directory using fs plugin if available, else std::fs
+/// Note: On Android with content:// URIs, directory creation may not be supported
 fn create_dir(path: &Path, app_handle: Option<&tauri::AppHandle>) -> Result<(), String> {
-    if let Some(app) = app_handle {
-        app.fs().create_dir(path)
-            .map_err(|e| format!("Failed to create dir: {}", e))
-    } else {
-        std::fs::create_dir_all(path)
-            .map_err(|e| format!("Failed to create dir: {}", e))
-    }
+    let _ = app_handle; // Directory creation via content:// URIs is handled differently
+    // For regular paths, use std::fs
+    std::fs::create_dir_all(path)
+        .map_err(|e| format!("Failed to create dir: {}", e))
 }
 
 /// Remove file using fs plugin if available, else std::fs
+/// Note: On Android with content:// URIs, we can't easily delete files
 fn remove_file(path: &Path, app_handle: Option<&tauri::AppHandle>) -> Result<(), String> {
-    if let Some(app) = app_handle {
-        app.fs().remove_file(path)
-            .map_err(|e| format!("Failed to remove file: {}", e))
-    } else {
-        std::fs::remove_file(path)
-            .map_err(|e| format!("Failed to remove file: {}", e))
-    }
+    let _ = app_handle; // File deletion via content:// URIs is not supported this way
+    // For regular paths, use std::fs
+    std::fs::remove_file(path)
+        .map_err(|e| format!("Failed to remove file: {}", e))
 }
 
 /// Check if file exists using fs plugin if available, else std::fs
 fn file_exists(path: &Path, app_handle: Option<&tauri::AppHandle>) -> bool {
     if let Some(app) = app_handle {
-        app.fs().read(path).is_ok()
+        use tauri_plugin_fs::{FsExt, OpenOptions};
+        let opts = OpenOptions::new();
+        app.fs().open(path, opts).is_ok()
     } else {
         path.exists()
     }

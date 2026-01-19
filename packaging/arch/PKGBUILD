@@ -1,0 +1,38 @@
+# Maintainer: BurningTreeC <burningtreec@gmail.com>
+pkgname=tiddlydesktop-rs-bin
+_pkgname=tiddlydesktop-rs
+pkgver=0.0.11
+pkgrel=1
+pkgdesc="A desktop application for TiddlyWiki built with Tauri"
+arch=('x86_64')
+url="https://github.com/BurningTreeC/tiddlydesktop-rs"
+license=('MIT')
+depends=(
+    'webkit2gtk-4.1'
+    'gtk3'
+    'libayatana-appindicator'
+)
+optdepends=(
+    'nodejs: Required for wiki folder support'
+)
+provides=("$_pkgname")
+conflicts=("$_pkgname")
+options=('!strip')
+source=(
+    "${_pkgname}-${pkgver}.deb::${url}/releases/download/v${pkgver}/${_pkgname}_${pkgver}_amd64.deb"
+    "${_pkgname}.desktop"
+)
+sha256sums=('SKIP'
+            'SKIP')
+
+package() {
+    # Extract the deb package
+    bsdtar -xf data.tar.gz -C "$pkgdir"
+
+    # Fix permissions
+    chmod 755 "$pkgdir/usr/bin/$_pkgname"
+
+    # Install license
+    install -Dm644 "$pkgdir/usr/share/doc/$_pkgname/copyright" \
+        "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}

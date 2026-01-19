@@ -142,6 +142,10 @@ jobs:
         working-directory: tiddlydesktop-rs
         run: npm run tauri build -- -c src-tauri/tauri.linux.conf.json
 
+      - name: Build Arch Linux package
+        working-directory: tiddlydesktop-rs
+        run: ./scripts/build-arch-pkg.sh
+
       - name: Upload Linux artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -150,6 +154,7 @@ jobs:
             tiddlydesktop-rs/src-tauri/target/release/bundle/deb/*.deb
             tiddlydesktop-rs/src-tauri/target/release/bundle/rpm/*.rpm
             tiddlydesktop-rs/src-tauri/target/release/bundle/appimage/*.AppImage
+            tiddlydesktop-rs/src-tauri/target/release/bundle/arch/*.pkg.tar.zst
 
   build-windows:
     needs: increment-version
@@ -341,7 +346,8 @@ jobs:
           cd artifacts
           # Find all release files and generate checksums
           find . -type f \( -name "*.deb" -o -name "*.rpm" -o -name "*.AppImage" \
-            -o -name "*.msi" -o -name "*.exe" -o -name "*.dmg" -o -name "*.zip" \) \
+            -o -name "*.msi" -o -name "*.exe" -o -name "*.dmg" -o -name "*.zip" \
+            -o -name "*.pkg.tar.zst" \) \
             -exec sha256sum {} \; | \
             sed 's|  \./|  |' | sort -k2 > ../CHECKSUMS-SHA256.txt
           cat ../CHECKSUMS-SHA256.txt
@@ -357,6 +363,7 @@ jobs:
             artifacts/**/*.deb
             artifacts/**/*.rpm
             artifacts/**/*.AppImage
+            artifacts/**/*.pkg.tar.zst
             artifacts/**/*.msi
             artifacts/**/*.exe
             artifacts/**/*.dmg

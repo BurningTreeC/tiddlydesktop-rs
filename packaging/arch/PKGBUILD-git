@@ -1,0 +1,63 @@
+# Maintainer: BurningTreeC <burningtreec@gmail.com>
+pkgname=tiddlydesktop-rs-git
+_pkgname=tiddlydesktop-rs
+pkgver=0.0.11
+pkgrel=1
+pkgdesc="A desktop application for TiddlyWiki built with Tauri (git version)"
+arch=('x86_64')
+url="https://github.com/BurningTreeC/tiddlydesktop-rs"
+license=('MIT')
+depends=(
+    'webkit2gtk-4.1'
+    'gtk3'
+    'libayatana-appindicator'
+)
+makedepends=(
+    'rust'
+    'cargo'
+    'nodejs'
+    'npm'
+    'git'
+    'webkit2gtk-4.1'
+    'base-devel'
+    'curl'
+    'wget'
+    'file'
+    'openssl'
+    'appmenu-gtk-module'
+    'libappindicator-gtk3'
+    'librsvg'
+)
+optdepends=(
+    'nodejs: Required for wiki folder support'
+)
+provides=("$_pkgname")
+conflicts=("$_pkgname" "$_pkgname-bin")
+source=("git+${url}.git")
+sha256sums=('SKIP')
+
+pkgver() {
+    cd "$_pkgname"
+    git describe --tags --long 2>/dev/null | sed 's/^v//;s/-/.r/;s/-/./' || \
+    printf "r%s.%s" "$(git rev-list --count HEAD)" "$(git rev-parse --short HEAD)"
+}
+
+build() {
+    cd "$_pkgname"
+    npm install
+    npm run tauri build -- --bundles deb
+}
+
+package() {
+    cd "$_pkgname"
+
+    # Extract the built deb
+    bsdtar -xf "src-tauri/target/release/bundle/deb/${_pkgname}_${pkgver}_amd64.deb" -C "$srcdir"
+    bsdtar -xf "$srcdir/data.tar.gz" -C "$pkgdir"
+
+    # Fix permissions
+    chmod 755 "$pkgdir/usr/bin/$_pkgname"
+
+    # Install license
+    install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}

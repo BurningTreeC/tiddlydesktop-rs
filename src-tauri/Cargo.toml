@@ -35,6 +35,10 @@ tiny_http = "0.12"
 # Path simplification for Windows (removes \\?\ prefixes)
 dunce = "1.0"
 
+# For setting PR_SET_PDEATHSIG on Linux (kill child when parent dies)
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = "0.2"
+
 # QuickJS for running TiddlyWiki on Android (no Node.js)
 # Only enabled for mobile targets - requires clang for bindgen
 [target.'cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))'.dependencies]

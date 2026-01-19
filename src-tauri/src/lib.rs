@@ -1,10 +1,105 @@
 use std::{collections::HashMap, path::PathBuf, process::{Child, Command}, sync::Mutex};
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
+#[cfg(target_os = "linux")]
+use std::os::unix::process::CommandExt as UnixCommandExt;
 
 /// Windows flag to prevent console window from appearing
 #[cfg(target_os = "windows")]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
+
+/// Windows Job Object for killing child processes when parent dies
+#[cfg(target_os = "windows")]
+mod windows_job {
+    use std::ptr;
+    use std::sync::OnceLock;
+
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn CreateJobObjectW(lpJobAttributes: *mut std::ffi::c_void, lpName: *const u16) -> *mut std::ffi::c_void;
+        fn SetInformationJobObject(hJob: *mut std::ffi::c_void, JobObjectInformationClass: u32, lpJobObjectInformation: *const std::ffi::c_void, cbJobObjectInformationLength: u32) -> i32;
+        fn AssignProcessToJobObject(hJob: *mut std::ffi::c_void, hProcess: *mut std::ffi::c_void) -> i32;
+        fn OpenProcess(dwDesiredAccess: u32, bInheritHandle: i32, dwProcessId: u32) -> *mut std::ffi::c_void;
+        fn CloseHandle(hObject: *mut std::ffi::c_void) -> i32;
+    }
+
+    const JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE: u32 = 0x2000;
+    const JOBOBJECT_EXTENDED_LIMIT_INFORMATION: u32 = 9;
+    const PROCESS_ALL_ACCESS: u32 = 0x1F0FFF;
+
+    #[repr(C)]
+    struct JOBOBJECT_BASIC_LIMIT_INFORMATION {
+        per_process_user_time_limit: i64,
+        per_job_user_time_limit: i64,
+        limit_flags: u32,
+        minimum_working_set_size: usize,
+        maximum_working_set_size: usize,
+        active_process_limit: u32,
+        affinity: usize,
+        priority_class: u32,
+        scheduling_class: u32,
+    }
+
+    #[repr(C)]
+    struct IO_COUNTERS {
+        read_operation_count: u64,
+        write_operation_count: u64,
+        other_operation_count: u64,
+        read_transfer_count: u64,
+        write_transfer_count: u64,
+        other_transfer_count: u64,
+    }
+
+    #[repr(C)]
+    struct JOBOBJECT_EXTENDED_LIMIT_INFORMATION {
+        basic_limit_information: JOBOBJECT_BASIC_LIMIT_INFORMATION,
+        io_info: IO_COUNTERS,
+        process_memory_limit: usize,
+        job_memory_limit: usize,
+        peak_process_memory_used: usize,
+        peak_job_memory_used: usize,
+    }
+
+    static JOB_HANDLE: OnceLock<*mut std::ffi::c_void> = OnceLock::new();
+
+    pub fn get_job_handle() -> *mut std::ffi::c_void {
+        *JOB_HANDLE.get_or_init(|| {
+            unsafe {
+                let job = CreateJobObjectW(ptr::null_mut(), ptr::null());
+                if job.is_null() {
+                    return ptr::null_mut();
+                }
+
+                let mut info: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = std::mem::zeroed();
+                info.basic_limit_information.limit_flags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+
+                SetInformationJobObject(
+                    job,
+                    JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+                    &info as *const _ as *const std::ffi::c_void,
+                    std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+                );
+
+                job
+            }
+        })
+    }
+
+    pub fn assign_process_to_job(pid: u32) {
+        let job = get_job_handle();
+        if job.is_null() {
+            return;
+        }
+
+        unsafe {
+            let process = OpenProcess(PROCESS_ALL_ACCESS, 0, pid);
+            if !process.is_null() {
+                AssignProcessToJobObject(job, process);
+                CloseHandle(process);
+            }
+        }
+    }
+}
 use chrono::Local;
 use serde::{Deserialize, Serialize};
 use tauri::{
@@ -843,8 +938,22 @@ async fn open_wiki_folder(app: tauri::AppHandle, path: String) -> Result<WikiEnt
         .arg("host=127.0.0.1");
     #[cfg(target_os = "windows")]
     cmd.creation_flags(CREATE_NO_WINDOW);
+    // On Linux, set up child to die when parent dies
+    #[cfg(target_os = "linux")]
+    unsafe {
+        cmd.pre_exec(|| {
+            // PR_SET_PDEATHSIG = 1, SIGKILL = 9
+            libc::prctl(1, 9);
+            Ok(())
+        });
+    }
     let mut child = cmd.spawn()
         .map_err(|e| format!("Failed to start TiddlyWiki server: {}", e))?;
+    // On Windows, assign process to job object so it dies when parent dies
+    #[cfg(target_os = "windows")]
+    if let Some(pid) = child.id() {
+        windows_job::assign_process_to_job(pid);
+    }
 
     // Wait for server to be ready (10s timeout)
     if let Err(e) = wait_for_server_ready(port, &mut child, std::time::Duration::from_secs(10)) {

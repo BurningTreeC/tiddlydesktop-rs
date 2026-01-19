@@ -29,6 +29,60 @@ mod quickjs_runtime;
 #[cfg(not(desktop))]
 mod wiki_server;
 
+/// Extract bundled TiddlyWiki tar.gz to app data directory (mobile only)
+/// Returns the path to the extracted tiddlywiki directory
+#[cfg(not(desktop))]
+fn extract_tiddlywiki_bundle(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    use flate2::read::GzDecoder;
+    use tar::Archive;
+    use tauri::path::BaseDirectory;
+    use tauri_plugin_fs::FsExt;
+
+    let app_data_dir = app.path().app_data_dir()
+        .map_err(|e| format!("Failed to get app data dir: {}", e))?;
+    let tiddlywiki_dir = app_data_dir.join("tiddlywiki");
+
+    // Check if already extracted (marker file)
+    let marker = app_data_dir.join(".tiddlywiki_extracted");
+    if marker.exists() && tiddlywiki_dir.exists() {
+        println!("TiddlyWiki already extracted at {:?}", tiddlywiki_dir);
+        return Ok(tiddlywiki_dir);
+    }
+
+    println!("Extracting TiddlyWiki bundle to {:?}", app_data_dir);
+
+    // Read the tar.gz from bundled resources using Tauri's fs plugin
+    let resource_path = app.path()
+        .resolve("resources/tiddlywiki.tar.gz", BaseDirectory::Resource)
+        .map_err(|e| format!("Failed to resolve resource path: {}", e))?;
+
+    let archive_bytes = app.fs().read(&resource_path)
+        .map_err(|e| format!("Failed to read TiddlyWiki archive: {}", e))?;
+
+    println!("Archive size: {} bytes", archive_bytes.len());
+
+    // Decompress and extract
+    let decoder = GzDecoder::new(&archive_bytes[..]);
+    let mut archive = Archive::new(decoder);
+
+    // Clean up any partial extraction
+    if tiddlywiki_dir.exists() {
+        std::fs::remove_dir_all(&tiddlywiki_dir)
+            .map_err(|e| format!("Failed to clean up partial extraction: {}", e))?;
+    }
+
+    // Extract to app data dir (archive contains "tiddlywiki/" prefix)
+    archive.unpack(&app_data_dir)
+        .map_err(|e| format!("Failed to extract TiddlyWiki archive: {}", e))?;
+
+    // Create marker file
+    std::fs::write(&marker, "extracted")
+        .map_err(|e| format!("Failed to write marker file: {}", e))?;
+
+    println!("TiddlyWiki extraction complete");
+    Ok(tiddlywiki_dir)
+}
+
 /// Recursively copy a directory (used for edition initialization on Android)
 #[cfg(not(desktop))]
 fn copy_dir_recursive(src: &std::path::Path, dst: &std::path::Path) -> std::io::Result<()> {
@@ -699,6 +753,7 @@ fn get_node_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
 }
 
 /// Get path to bundled TiddlyWiki
+#[cfg(desktop)]
 fn get_tiddlywiki_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     let resource_path = app.path().resource_dir()
         .map_err(|e| format!("Failed to get resource dir: {}", e))?;
@@ -716,6 +771,20 @@ fn get_tiddlywiki_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
         Ok(normalize_path(canonical))
     } else {
         Err(format!("TiddlyWiki not found at {:?} or {:?}", tw_path, dev_path))
+    }
+}
+
+/// Get path to bundled TiddlyWiki (mobile: extracted from tar.gz)
+#[cfg(not(desktop))]
+fn get_tiddlywiki_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    // On mobile, TiddlyWiki is extracted to app data directory
+    let tiddlywiki_dir = extract_tiddlywiki_bundle(app)?;
+    let tw_path = tiddlywiki_dir.join("tiddlywiki.js");
+
+    if tw_path.exists() {
+        Ok(tw_path)
+    } else {
+        Err(format!("TiddlyWiki not found at {:?} (extraction may have failed)", tw_path))
     }
 }
 

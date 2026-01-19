@@ -330,6 +330,9 @@ jobs:
           cp -r ../TiddlyWiki5 src-tauri/resources/tiddlywiki
           rm -rf src-tauri/resources/tiddlywiki/.git
           rm -rf src-tauri/resources/tiddlywiki/editions/tiddlywiki-surveys
+          # For Android: create tar.gz archive (assets can't be accessed as filesystem)
+          cd src-tauri/resources
+          tar -czf tiddlywiki.tar.gz tiddlywiki
 
       - name: Decode keystore
         working-directory: tiddlydesktop-rs
@@ -339,6 +342,39 @@ jobs:
       - name: Initialize Android project
         working-directory: tiddlydesktop-rs
         run: npm run tauri android init
+
+      - name: Setup Android icons
+        working-directory: tiddlydesktop-rs
+        run: |
+          # Install ImageMagick for icon resizing
+          sudo apt-get install -y imagemagick
+
+          # Source icon (use the 512x512 or largest available)
+          SOURCE_ICON="src-tauri/icons/icon.png"
+          ANDROID_RES="src-tauri/gen/android/app/src/main/res"
+
+          # Create mipmap directories if they don't exist
+          mkdir -p "$ANDROID_RES/mipmap-mdpi"
+          mkdir -p "$ANDROID_RES/mipmap-hdpi"
+          mkdir -p "$ANDROID_RES/mipmap-xhdpi"
+          mkdir -p "$ANDROID_RES/mipmap-xxhdpi"
+          mkdir -p "$ANDROID_RES/mipmap-xxxhdpi"
+
+          # Generate icons at required sizes
+          convert "$SOURCE_ICON" -resize 48x48 "$ANDROID_RES/mipmap-mdpi/ic_launcher.png"
+          convert "$SOURCE_ICON" -resize 72x72 "$ANDROID_RES/mipmap-hdpi/ic_launcher.png"
+          convert "$SOURCE_ICON" -resize 96x96 "$ANDROID_RES/mipmap-xhdpi/ic_launcher.png"
+          convert "$SOURCE_ICON" -resize 144x144 "$ANDROID_RES/mipmap-xxhdpi/ic_launcher.png"
+          convert "$SOURCE_ICON" -resize 192x192 "$ANDROID_RES/mipmap-xxxhdpi/ic_launcher.png"
+
+          # Also create round icons (same for now, Android will handle masking)
+          cp "$ANDROID_RES/mipmap-mdpi/ic_launcher.png" "$ANDROID_RES/mipmap-mdpi/ic_launcher_round.png"
+          cp "$ANDROID_RES/mipmap-hdpi/ic_launcher.png" "$ANDROID_RES/mipmap-hdpi/ic_launcher_round.png"
+          cp "$ANDROID_RES/mipmap-xhdpi/ic_launcher.png" "$ANDROID_RES/mipmap-xhdpi/ic_launcher_round.png"
+          cp "$ANDROID_RES/mipmap-xxhdpi/ic_launcher.png" "$ANDROID_RES/mipmap-xxhdpi/ic_launcher_round.png"
+          cp "$ANDROID_RES/mipmap-xxxhdpi/ic_launcher.png" "$ANDROID_RES/mipmap-xxxhdpi/ic_launcher_round.png"
+
+          echo "Android icons generated successfully"
 
       - name: Configure Android signing
         working-directory: tiddlydesktop-rs

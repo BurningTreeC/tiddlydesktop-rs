@@ -3,7 +3,7 @@
   "bundle": {
     "externalBin": [],
     "resources": [
-      "resources/tiddlywiki/**/*"
+      "resources/tiddlywiki.tar.gz"
     ]
   }
 }

@@ -39,4 +39,7 @@ dunce = "1.0"
 # Only enabled for mobile targets - requires clang for bindgen
 [target.'cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))'.dependencies]
 rquickjs = { version = "0.11", features = ["bindgen", "classes", "loader", "futures", "parallel"] }
+# Tar extraction for bundled TiddlyWiki on Android
+flate2 = "1.1"
+tar = "0.4"
 

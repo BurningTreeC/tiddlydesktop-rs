@@ -121,7 +121,7 @@ Section "Main Application" SecMain
     ; Install files (Tauri will add these dynamically)
     {{#each resources_dirs}}
     SetOutPath "$INSTDIR\\{{this}}"
-    File /r "{{@../resources_path}}\\{{this}}\\*.*"
+    File /nonfatal /r "{{@../resources_path}}\\{{this}}\\*.*"
     {{/each}}
 
     SetOutPath "$INSTDIR"

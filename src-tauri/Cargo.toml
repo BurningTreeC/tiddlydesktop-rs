@@ -28,9 +28,7 @@ tokio = { version = "1.49.0", features = ["fs", "sync", "rt"] }
 base64 = "0.22.1"
 chrono = "0.4.43"
 urlencoding = "2.1.3"
-
-# HTTP server for wiki folders on Android
-tiny_http = "0.12"
+regex = "1.10"
 
 # Path simplification for Windows (removes \\?\ prefixes)
 dunce = "1.0"
@@ -38,12 +36,4 @@ dunce = "1.0"
 # For setting PR_SET_PDEATHSIG on Linux (kill child when parent dies)
 [target.'cfg(target_os = "linux")'.dependencies]
 libc = "0.2"
-
-# QuickJS for running TiddlyWiki on Android (no Node.js)
-# Only enabled for mobile targets - requires clang for bindgen
-[target.'cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))'.dependencies]
-rquickjs = { version = "0.11", features = ["bindgen", "classes", "loader", "futures", "parallel"] }
-# Tar extraction for bundled TiddlyWiki on Android
-flate2 = "1.1"
-tar = "0.4"
 

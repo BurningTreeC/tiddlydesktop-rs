@@ -199,45 +199,158 @@ fn determine_storage_mode(app: &tauri::App) -> Result<PathBuf, String> {
     app.path().app_data_dir().map_err(|e| e.to_string())
 }
 
+/// Extract a tiddler's text content from TiddlyWiki HTML
+/// Tiddlers are stored as: <div title="TiddlerTitle" ...>content</div>
+fn extract_tiddler_from_html(html: &str, tiddler_title: &str) -> Option<String> {
+    // Escape special regex characters in title
+    let escaped_title = regex::escape(tiddler_title);
+    // Match <div ... title="TiddlerTitle" ...>content</div>
+    // The content may be HTML-encoded
+    let pattern = format!(
+        r#"<div[^>]*\stitle="{}"[^>]*>([\s\S]*?)</div>"#,
+        escaped_title
+    );
+    let re = regex::Regex::new(&pattern).ok()?;
+    let caps = re.captures(html)?;
+    let content = caps.get(1)?.as_str();
+    // Decode HTML entities
+    Some(html_decode(content))
+}
+
+/// Decode basic HTML entities
+fn html_decode(s: &str) -> String {
+    s.replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&amp;", "&")
+        .replace("&quot;", "\"")
+        .replace("&#34;", "\"")
+}
+
+/// Encode basic HTML entities
+fn html_encode(s: &str) -> String {
+    s.replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace("\"", "&quot;")
+}
+
+/// Inject or replace a tiddler in TiddlyWiki HTML
+fn inject_tiddler_into_html(html: &str, tiddler_title: &str, tiddler_type: &str, content: &str) -> String {
+    let escaped_title = regex::escape(tiddler_title);
+    let pattern = format!(
+        r#"<div[^>]*\stitle="{}"[^>]*>[\s\S]*?</div>"#,
+        escaped_title
+    );
+
+    let encoded_content = html_encode(content);
+    let new_div = format!(
+        r#"<div title="{}" type="{}">{}</div>"#,
+        tiddler_title, tiddler_type, encoded_content
+    );
+
+    if let Ok(re) = regex::Regex::new(&pattern) {
+        if re.is_match(html) {
+            // Replace existing tiddler
+            return re.replace(html, new_div.as_str()).to_string();
+        }
+    }
+
+    // Tiddler doesn't exist, insert before </div><!--~~ Library modules ~~-->
+    // or before the closing store area
+    let store_end_markers = [
+        "</div><!--~~ Library modules ~~-->",
+        r#"</div><script"#,
+    ];
+
+    for marker in &store_end_markers {
+        if let Some(pos) = html.find(marker) {
+            let mut result = String::with_capacity(html.len() + new_div.len() + 1);
+            result.push_str(&html[..pos]);
+            result.push_str(&new_div);
+            result.push('\n');
+            result.push_str(&html[pos..]);
+            return result;
+        }
+    }
+
+    // Fallback: return unchanged (shouldn't happen with valid TiddlyWiki HTML)
+    html.to_string()
+}
+
+/// Get the bundled index.html path
+fn get_bundled_index_path(app: &tauri::App) -> Result<PathBuf, String> {
+    let resource_path = app.path().resource_dir().map_err(|e| e.to_string())?;
+    let resource_path = normalize_path(resource_path);
+
+    let possible_sources = [
+        resource_path.join("resources").join("index.html"),
+        resource_path.join("index.html"),
+    ];
+
+    for source in &possible_sources {
+        if source.exists() {
+            return Ok(source.clone());
+        }
+    }
+
+    // Development fallback
+    let dev_source = PathBuf::from("src/index.html");
+    if dev_source.exists() {
+        return Ok(dev_source);
+    }
+
+    Err(format!("Could not find source index.html. Tried: {:?}", possible_sources))
+}
+
 /// Ensure main wiki file exists, extracting from resources if needed
+/// Also handles migration when bundled version is newer than existing
 fn ensure_main_wiki_exists(app: &tauri::App) -> Result<PathBuf, String> {
     let wiki_dir = determine_storage_mode(app)?;
     std::fs::create_dir_all(&wiki_dir).map_err(|e| format!("Failed to create wiki dir: {}", e))?;
 
     let main_wiki_path = wiki_dir.join("tiddlydesktop.html");
+    let bundled_path = get_bundled_index_path(app)?;
 
     if !main_wiki_path.exists() {
-        // Extract from embedded resources
-        let resource_path = app.path().resource_dir().map_err(|e| e.to_string())?;
-        let resource_path = normalize_path(resource_path);
+        // First run: copy from bundled resources
+        std::fs::copy(&bundled_path, &main_wiki_path)
+            .map_err(|e| format!("Failed to copy wiki: {}", e))?;
+        println!("Created main wiki from {:?}", bundled_path);
+    } else {
+        // Check if we need to migrate to a newer version
+        let existing_html = std::fs::read_to_string(&main_wiki_path)
+            .map_err(|e| format!("Failed to read existing wiki: {}", e))?;
+        let bundled_html = std::fs::read_to_string(&bundled_path)
+            .map_err(|e| format!("Failed to read bundled wiki: {}", e))?;
 
-        // Try different possible locations for the source index.html
-        let possible_sources = [
-            resource_path.join("resources").join("index.html"),
-            resource_path.join("index.html"),
-        ];
+        let existing_version = extract_tiddler_from_html(&existing_html, "$:/TiddlyDesktop/AppVersion")
+            .and_then(|v| v.trim().parse::<u32>().ok())
+            .unwrap_or(0);
+        let bundled_version = extract_tiddler_from_html(&bundled_html, "$:/TiddlyDesktop/AppVersion")
+            .and_then(|v| v.trim().parse::<u32>().ok())
+            .unwrap_or(0);
 
-        let mut copied = false;
-        for source in &possible_sources {
-            if source.exists() {
-                std::fs::copy(source, &main_wiki_path)
-                    .map_err(|e| format!("Failed to copy wiki: {}", e))?;
-                println!("Copied main wiki from {:?} to {:?}", source, main_wiki_path);
-                copied = true;
-                break;
+        println!("Existing wiki version: {}, Bundled version: {}", existing_version, bundled_version);
+
+        if bundled_version > existing_version {
+            println!("Migrating to newer version...");
+
+            // Extract user data from existing wiki
+            let wiki_list = extract_tiddler_from_html(&existing_html, "$:/TiddlyDesktop/WikiList");
+
+            // Start with bundled HTML
+            let mut new_html = bundled_html;
+
+            // Inject user data into new HTML
+            if let Some(list) = wiki_list {
+                println!("Preserving wiki list during migration");
+                new_html = inject_tiddler_into_html(&new_html, "$:/TiddlyDesktop/WikiList", "application/json", &list);
             }
-        }
 
-        if !copied {
-            // In development, copy from the src directory
-            let dev_source = PathBuf::from("src/index.html");
-            if dev_source.exists() {
-                std::fs::copy(&dev_source, &main_wiki_path)
-                    .map_err(|e| format!("Failed to copy wiki: {}", e))?;
-                println!("Copied main wiki from dev source to {:?}", main_wiki_path);
-            } else {
-                return Err(format!("Could not find source index.html. Tried: {:?}", possible_sources));
-            }
+            // Write the migrated wiki
+            std::fs::write(&main_wiki_path, new_html)
+                .map_err(|e| format!("Failed to write migrated wiki: {}", e))?;
+            println!("Migration complete");
         }
     }
 

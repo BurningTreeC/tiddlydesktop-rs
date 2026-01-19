@@ -223,6 +223,8 @@ jobs:
           cp -r ../TiddlyWiki5 src-tauri/resources/tiddlywiki
           rm -rf src-tauri/resources/tiddlywiki/.git
           rm -rf src-tauri/resources/tiddlywiki/editions/tiddlywiki-surveys
+          # Copy index.html to resources for bundling (avoids WiX issues with map format)
+          cp src/index.html src-tauri/resources/index.html
 
       - name: Build Tauri (Windows)
         working-directory: tiddlydesktop-rs
@@ -301,6 +303,8 @@ jobs:
           cp -r ../TiddlyWiki5 src-tauri/resources/tiddlywiki
           rm -rf src-tauri/resources/tiddlywiki/.git
           rm -rf src-tauri/resources/tiddlywiki/editions/tiddlywiki-surveys
+          # Copy index.html to resources for bundling
+          cp src/index.html src-tauri/resources/index.html
 
       - name: Add Rust targets for universal binary
         run: |

@@ -118,17 +118,22 @@ FunctionEnd
 Section "Main Application" SecMain
     SetOutPath "$INSTDIR"
 
-    ; Install files (Tauri will add these dynamically)
-    {{#each resources_dirs}}
-    SetOutPath "$INSTDIR\\{{this}}"
-    File /nonfatal /r "{{@../resources_path}}\\{{this}}\\*.*"
-    {{/each}}
-
-    SetOutPath "$INSTDIR"
+    ; Install main binary
     File "${MAINBINARYSRCPATH}"
 
+    ; Create resource directories
+    {{#each resources_dirs}}
+    CreateDirectory "$INSTDIR\\{{this}}"
+    {{/each}}
+
+    ; Install resource files
+    {{#each resources}}
+    File /a "/oname={{this.[1]}}" "{{no-escape @key}}"
+    {{/each}}
+
+    ; Install additional binaries
     {{#each binaries}}
-    File "{{this}}"
+    File /a "/oname={{this}}" "{{no-escape @key}}"
     {{/each}}
 
     ; Create portable marker file if in portable mode

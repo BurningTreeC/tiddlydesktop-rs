@@ -42,7 +42,7 @@ in folder: <strong>{{$:/temp/tiddlydesktop/init-folder-name}}</strong>
 <div class="td-section">
 <h3>Select Edition</h3>
 <div class="td-edition-grid">
-<$list filter="[prefix[$:/temp/tiddlydesktop/editions/]limit[8]]">
+<$list filter="[prefix[$:/temp/tiddlydesktop/editions/]]">
 <$button class={{{ [[$:/temp/tiddlydesktop/selected-edition]get[text]match{!!id}then[td-edition-btn td-edition-selected]else[td-edition-btn]] }}}>
 <$action-setfield $tiddler="$:/temp/tiddlydesktop/selected-edition" text={{!!id}}/>
 <div class="td-edition-name">{{!!name}}</div>

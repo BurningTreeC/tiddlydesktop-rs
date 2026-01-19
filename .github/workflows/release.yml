@@ -137,6 +137,7 @@ jobs:
           cp -r ../TiddlyWiki5 src-tauri/resources/tiddlywiki
           rm -rf src-tauri/resources/tiddlywiki/.git
           rm -rf src-tauri/resources/tiddlywiki/editions/tiddlywiki-surveys
+          cp src/index.html src-tauri/resources/index.html
 
       - name: Build Tauri (Linux)
         working-directory: tiddlydesktop-rs

@@ -103,7 +103,7 @@ jobs:
       - name: Copy plugin to TiddlyWiki5
         run: |
           cp -r tiddlydesktop-rs/TiddlyWiki5/plugins/tiddlywiki/tiddlydesktop-rs TiddlyWiki5/plugins/tiddlywiki/
-          cp -r tiddlydesktop-rs/TiddlyWiki5/editions/tiddlydesktop TiddlyWiki5/editions/
+          cp -r tiddlydesktop-rs/TiddlyWiki5/editions/tiddlydesktop-rs TiddlyWiki5/editions/
 
       - name: Install system dependencies
         run: |
@@ -125,7 +125,7 @@ jobs:
       - name: Build TiddlyWiki
         working-directory: TiddlyWiki5
         run: |
-          node tiddlywiki.js editions/tiddlydesktop --output ../tiddlydesktop-rs/src --render '$:/core/save/all' 'index.html' 'text/plain'
+          node tiddlywiki.js editions/tiddlydesktop-rs --output ../tiddlydesktop-rs/src --render '$:/core/save/all' 'index.html' 'text/plain'
 
       # Linux uses system Node.js - no bundled binary needed
       # Package dependencies (nodejs >= 18) are declared in tauri.conf.json
@@ -182,7 +182,7 @@ jobs:
         shell: bash
         run: |
           cp -r tiddlydesktop-rs/TiddlyWiki5/plugins/tiddlywiki/tiddlydesktop-rs TiddlyWiki5/plugins/tiddlywiki/
-          cp -r tiddlydesktop-rs/TiddlyWiki5/editions/tiddlydesktop TiddlyWiki5/editions/
+          cp -r tiddlydesktop-rs/TiddlyWiki5/editions/tiddlydesktop-rs TiddlyWiki5/editions/
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -203,7 +203,7 @@ jobs:
         working-directory: TiddlyWiki5
         shell: bash
         run: |
-          node tiddlywiki.js editions/tiddlydesktop --output ../tiddlydesktop-rs/src --render '$:/core/save/all' 'index.html' 'text/plain'
+          node tiddlywiki.js editions/tiddlydesktop-rs --output ../tiddlydesktop-rs/src --render '$:/core/save/all' 'index.html' 'text/plain'
 
       - name: Download Node.js for bundling
         working-directory: tiddlydesktop-rs
@@ -258,7 +258,7 @@ jobs:
       - name: Copy plugin to TiddlyWiki5
         run: |
           cp -r tiddlydesktop-rs/TiddlyWiki5/plugins/tiddlywiki/tiddlydesktop-rs TiddlyWiki5/plugins/tiddlywiki/
-          cp -r tiddlydesktop-rs/TiddlyWiki5/editions/tiddlydesktop TiddlyWiki5/editions/
+          cp -r tiddlydesktop-rs/TiddlyWiki5/editions/tiddlydesktop-rs TiddlyWiki5/editions/
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -275,7 +275,7 @@ jobs:
       - name: Build TiddlyWiki
         working-directory: TiddlyWiki5
         run: |
-          node tiddlywiki.js editions/tiddlydesktop --output ../tiddlydesktop-rs/src --render '$:/core/save/all' 'index.html' 'text/plain'
+          node tiddlywiki.js editions/tiddlydesktop-rs --output ../tiddlydesktop-rs/src --render '$:/core/save/all' 'index.html' 'text/plain'
 
       - name: Download Node.js for bundling (universal binary)
         working-directory: tiddlydesktop-rs

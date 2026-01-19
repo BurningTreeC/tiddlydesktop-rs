@@ -241,12 +241,42 @@ fn determine_storage_mode(app: &tauri::App) -> Result<PathBuf, String> {
 }
 
 /// Extract a tiddler's text content from TiddlyWiki HTML
-/// Tiddlers are stored as: <div title="TiddlerTitle" ...>content</div>
+/// Supports both JSON format (TW 5.2+) and div format (older)
 fn extract_tiddler_from_html(html: &str, tiddler_title: &str) -> Option<String> {
-    // Escape special regex characters in title
+    // First try JSON format (TiddlyWiki 5.2+)
+    // The JSON is embedded and escaped: \"$:/Title\":{\"title\":\"...\",\"text\":\"value\",...}
+    // We search for the escaped title pattern and extract the text field
+
+    // Build the search pattern for the escaped title (JSON embedded in JS string)
+    let escaped_search = format!(r#"\"{}\":{{"#, tiddler_title);
+
+    if let Some(start_idx) = html.find(&escaped_search) {
+        // Found the title, now find the "text" field after it
+        let after_title = &html[start_idx..std::cmp::min(start_idx + 500, html.len())];
+        // Look for \"text\":\" and capture until the next \"
+        let text_pattern = r#"\"text\":\""#;
+        if let Some(text_start) = after_title.find(text_pattern) {
+            let text_content_start = text_start + 11; // length of \"text\":\" (11 chars)
+            if text_content_start < after_title.len() {
+                let remaining = &after_title[text_content_start..];
+                // Find the closing \" (backslash followed by quote)
+                if let Some(end_pos) = remaining.find(r#"\""#) {
+                    let text = &remaining[..end_pos];
+                    // Unescape double-escaped JSON (embedded in JS string)
+                    // The source has: \\n (backslash backslash n) which means newline
+                    let unescaped = text
+                        .replace("\\\\n", "\n")   // \\n → newline
+                        .replace("\\\\t", "\t")   // \\t → tab
+                        .replace("\\\\r", "\r")   // \\r → carriage return
+                        .replace("\\\\\\\\", "\\"); // \\\\ → single backslash
+                    return Some(unescaped);
+                }
+            }
+        }
+    }
+
+    // Fallback to div format (older TiddlyWiki)
     let escaped_title = regex::escape(tiddler_title);
-    // Match <div ... title="TiddlerTitle" ...>content</div>
-    // The content may be HTML-encoded
     let pattern = format!(
         r#"<div[^>]*\stitle="{}"[^>]*>([\s\S]*?)</div>"#,
         escaped_title
@@ -375,8 +405,6 @@ fn ensure_main_wiki_exists(app: &tauri::App) -> Result<PathBuf, String> {
         let bundled_version = extract_tiddler_from_html(&bundled_html, "$:/TiddlyDesktop/AppVersion")
             .and_then(|v| v.trim().parse::<u32>().ok())
             .unwrap_or(0);
-
-        println!("Existing wiki version: {}, Bundled version: {}", existing_version, bundled_version);
 
         if bundled_version > existing_version {
             println!("Migrating to newer version...");
@@ -638,6 +666,7 @@ fn close_window(window: tauri::Window) {
 fn get_dialog_init_script() -> &'static str {
     r#"
     (function() {
+        console.log('[TiddlyDesktop] Initialization script loaded');
         var promptWrapper = null;
         var confirmationBypassed = false;
 
@@ -792,6 +821,7 @@ fn get_dialog_init_script() -> &'static str {
         }
 
         setupCloseHandler();
+
     })();
     "#
 }
@@ -1136,6 +1166,7 @@ async fn open_wiki_folder(app: tauri::AppHandle, path: String) -> Result<WikiEnt
         .map_err(|e| format!("Failed to set icon: {}", e))?
         .window_classname("tiddlydesktop-rs")
         .initialization_script(get_dialog_init_script())
+        .disable_drag_drop_handler() // Enable HTML5 drag & drop in webview
         .build()
         .map_err(|e| format!("Failed to create window: {}", e))?;
 
@@ -1208,6 +1239,9 @@ async fn get_available_editions(app: tauri::AppHandle) -> Result<Vec<EditionInfo
         ("prerelease", ("Prerelease", "Latest prerelease features")),
     ].iter().cloned().collect();
 
+    // Editions to skip (test/internal editions)
+    let skip_editions = ["test", "testcommonjs", "pluginlibrary", "tiddlydesktop-rs"];
+
     let mut editions = Vec::new();
 
     // First add the common/recommended editions in order
@@ -1215,50 +1249,59 @@ async fn get_available_editions(app: tauri::AppHandle) -> Result<Vec<EditionInfo
     for edition_id in &priority_editions {
         let edition_path = editions_dir.join(edition_id);
         if edition_path.exists() && edition_path.join("tiddlywiki.info").exists() {
-            if let Some((name, desc)) = edition_metadata.get(*edition_id) {
-                editions.push(EditionInfo {
-                    id: edition_id.to_string(),
-                    name: name.to_string(),
-                    description: desc.to_string(),
+            let (name, desc) = edition_metadata
+                .get(*edition_id)
+                .map(|(n, d)| (n.to_string(), d.to_string()))
+                .unwrap_or_else(|| {
+                    (edition_id.replace('-', " ").replace('_', " "), format!("{} edition", edition_id))
                 });
-            }
+            editions.push(EditionInfo {
+                id: edition_id.to_string(),
+                name,
+                description: desc,
+            });
         }
     }
 
-    // Then add other editions
-    if let Ok(entries) = std::fs::read_dir(&editions_dir) {
-        for entry in entries.flatten() {
+    // Then add all other editions alphabetically
+    let mut other_editions: Vec<_> = std::fs::read_dir(&editions_dir)
+        .map_err(|e| format!("Failed to read editions directory: {}", e))?
+        .flatten()
+        .filter_map(|entry| {
             let path = entry.path();
-            if path.is_dir() {
-                if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                    // Skip if already added or if it doesn't have tiddlywiki.info
-                    if priority_editions.contains(&name) {
-                        continue;
-                    }
-                    if !path.join("tiddlywiki.info").exists() {
-                        continue;
-                    }
-                    // Skip test/internal editions
-                    if name.starts_with("test") || name == "pluginlibrary" {
-                        continue;
-                    }
-
-                    let (display_name, description) = edition_metadata
-                        .get(name)
-                        .map(|(n, d)| (n.to_string(), d.to_string()))
-                        .unwrap_or_else(|| {
-                            (name.replace('-', " ").replace('_', " "), format!("{} edition", name))
-                        });
-
-                    editions.push(EditionInfo {
-                        id: name.to_string(),
-                        name: display_name,
-                        description,
-                    });
-                }
+            if !path.is_dir() {
+                return None;
             }
-        }
-    }
+            let name = path.file_name()?.to_str()?;
+
+            // Skip if already added as priority or in skip list
+            if priority_editions.contains(&name) || skip_editions.contains(&name) {
+                return None;
+            }
+            // Skip if no tiddlywiki.info
+            if !path.join("tiddlywiki.info").exists() {
+                return None;
+            }
+
+            let (display_name, description) = edition_metadata
+                .get(name)
+                .map(|(n, d)| (n.to_string(), d.to_string()))
+                .unwrap_or_else(|| {
+                    (name.replace('-', " ").replace('_', " "), format!("{} edition", name))
+                });
+
+            Some(EditionInfo {
+                id: name.to_string(),
+                name: display_name,
+                description,
+            })
+        })
+        .collect();
+
+    // Sort other editions alphabetically by display name
+    other_editions.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    println!("Editions: {} priority + {} other = {} total", editions.len(), other_editions.len(), editions.len() + other_editions.len());
+    editions.extend(other_editions);
 
     Ok(editions)
 }
@@ -1789,6 +1832,7 @@ async fn open_wiki_window(app: tauri::AppHandle, path: String) -> Result<WikiEnt
         .map_err(|e| format!("Failed to set icon: {}", e))?
         .window_classname("tiddlydesktop-rs")
         .initialization_script(get_dialog_init_script())
+        .disable_drag_drop_handler() // Enable HTML5 drag & drop in webview
         .build()
         .map_err(|e| format!("Failed to create window: {}", e))?;
 

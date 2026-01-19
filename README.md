@@ -101,14 +101,14 @@ git clone https://github.com/TiddlyWiki/TiddlyWiki5.git ../TiddlyWiki5
 
 # Copy plugins
 cp -r TiddlyWiki5/plugins/tiddlywiki/tiddlydesktop-rs ../TiddlyWiki5/plugins/tiddlywiki/
-cp -r TiddlyWiki5/editions/tiddlydesktop ../TiddlyWiki5/editions/
+cp -r TiddlyWiki5/editions/tiddlydesktop-rs ../TiddlyWiki5/editions/
 
 # Install dependencies
 npm install
 
 # Build TiddlyWiki
 cd ../TiddlyWiki5
-node tiddlywiki.js editions/tiddlydesktop --output ../tiddlydesktop-rs/src --render '$:/core/save/all' 'index.html' 'text/plain'
+node tiddlywiki.js editions/tiddlydesktop-rs --output ../tiddlydesktop-rs/src --render '$:/core/save/all' 'index.html' 'text/plain'
 cd ../tiddlydesktop-rs
 
 # Bundle TiddlyWiki for the app

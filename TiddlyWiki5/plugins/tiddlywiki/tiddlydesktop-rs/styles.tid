@@ -251,6 +251,11 @@ tags: $:/tags/Stylesheet
 	display: none !important;
 }
 
+/* Hide save notifications on the main wiki (landing page) */
+body.td-main-wiki .tc-notification {
+	display: none !important;
+}
+
 .tc-story-river {
 	margin: 0 !important;
 	padding: 0 !important;

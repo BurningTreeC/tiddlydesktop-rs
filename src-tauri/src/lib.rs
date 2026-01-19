@@ -60,14 +60,19 @@ mod windows_job {
         peak_job_memory_used: usize,
     }
 
-    static JOB_HANDLE: OnceLock<*mut std::ffi::c_void> = OnceLock::new();
+    // Wrapper to make the handle Send+Sync (safe because Job Objects are thread-safe Windows handles)
+    struct JobHandle(*mut std::ffi::c_void);
+    unsafe impl Send for JobHandle {}
+    unsafe impl Sync for JobHandle {}
+
+    static JOB_HANDLE: OnceLock<JobHandle> = OnceLock::new();
 
     pub fn get_job_handle() -> *mut std::ffi::c_void {
-        *JOB_HANDLE.get_or_init(|| {
+        JOB_HANDLE.get_or_init(|| {
             unsafe {
                 let job = CreateJobObjectW(ptr::null_mut(), ptr::null());
                 if job.is_null() {
-                    return ptr::null_mut();
+                    return JobHandle(ptr::null_mut());
                 }
 
                 let mut info: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = std::mem::zeroed();
@@ -80,9 +85,9 @@ mod windows_job {
                     std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
                 );
 
-                job
+                JobHandle(job)
             }
-        })
+        }).0
     }
 
     pub fn assign_process_to_job(pid: u32) {
@@ -951,9 +956,7 @@ async fn open_wiki_folder(app: tauri::AppHandle, path: String) -> Result<WikiEnt
         .map_err(|e| format!("Failed to start TiddlyWiki server: {}", e))?;
     // On Windows, assign process to job object so it dies when parent dies
     #[cfg(target_os = "windows")]
-    if let Some(pid) = child.id() {
-        windows_job::assign_process_to_job(pid);
-    }
+    windows_job::assign_process_to_job(child.id());
 
     // Wait for server to be ready (10s timeout)
     if let Err(e) = wait_for_server_ready(port, &mut child, std::time::Duration::from_secs(10)) {

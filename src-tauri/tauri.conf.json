@@ -38,7 +38,8 @@
     },
     "windows": {
       "nsis": {
-        "template": "nsis/installer.nsi"
+        "template": "nsis/installer.nsi",
+        "license": "../LICENSE"
       }
     },
     "macOS": {}

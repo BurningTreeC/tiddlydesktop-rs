@@ -146,6 +146,24 @@ npm run tauri build
 | Plugins | Embedded in file | External plugin folders |
 | Node.js required | No | Yes |
 
+## Known Limitations
+
+### macOS: Orphaned Node.js Processes
+
+When using wiki folders, TiddlyDesktop-RS spawns a Node.js server process. On **Linux** and **Windows**, if the app is forcefully terminated (e.g., via Task Manager or `kill -9`), these Node.js processes are automatically killed.
+
+On **macOS**, due to OS limitations, forcefully killing the app may leave orphaned Node.js processes running. To clean them up manually:
+
+```bash
+# Find orphaned Node.js processes
+ps aux | grep "node.*tiddlywiki"
+
+# Kill them (replace PID with actual process ID)
+kill PID
+```
+
+This only affects wiki folders, not single-file wikis. Normal app closure (quit via menu/tray) always cleans up properly on all platforms.
+
 ## Why the Security Warnings?
 
 The application is not code-signed, which means your operating system can't verify the publisher. Code signing certificates cost $100-400+ per year, which isn't feasible for this free, open-source project.

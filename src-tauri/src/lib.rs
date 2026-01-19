@@ -132,6 +132,87 @@ fn default_backups_enabled() -> bool {
     true
 }
 
+/// Get the path to the recent files JSON
+fn get_recent_files_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    let data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    Ok(data_dir.join("recent_wikis.json"))
+}
+
+/// Load recent files from disk
+fn load_recent_files_from_disk(app: &tauri::AppHandle) -> Vec<WikiEntry> {
+    let path = match get_recent_files_path(app) {
+        Ok(p) => p,
+        Err(_) => return Vec::new(),
+    };
+
+    if !path.exists() {
+        return Vec::new();
+    }
+
+    match std::fs::read_to_string(&path) {
+        Ok(content) => serde_json::from_str(&content).unwrap_or_default(),
+        Err(_) => Vec::new(),
+    }
+}
+
+/// Save recent files to disk
+fn save_recent_files_to_disk(app: &tauri::AppHandle, entries: &[WikiEntry]) -> Result<(), String> {
+    let path = get_recent_files_path(app)?;
+
+    // Ensure parent directory exists
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+
+    let json = serde_json::to_string_pretty(entries).map_err(|e| e.to_string())?;
+    std::fs::write(&path, json).map_err(|e| e.to_string())
+}
+
+/// Add or update a wiki in the recent files list
+fn add_to_recent_files(app: &tauri::AppHandle, entry: WikiEntry) -> Result<(), String> {
+    let mut entries = load_recent_files_from_disk(app);
+
+    // Remove existing entry with same path (if any)
+    entries.retain(|e| e.path != entry.path);
+
+    // Add new entry at the beginning
+    entries.insert(0, entry);
+
+    // Keep only the most recent 50 entries
+    entries.truncate(50);
+
+    save_recent_files_to_disk(app, &entries)
+}
+
+/// Get recent files list
+#[tauri::command]
+fn get_recent_files(app: tauri::AppHandle) -> Vec<WikiEntry> {
+    load_recent_files_from_disk(&app)
+}
+
+/// Remove a wiki from the recent files list
+#[tauri::command]
+fn remove_recent_file(app: tauri::AppHandle, path: String) -> Result<(), String> {
+    let mut entries = load_recent_files_from_disk(&app);
+    entries.retain(|e| e.path != path);
+    save_recent_files_to_disk(&app, &entries)
+}
+
+/// Set backups enabled/disabled for a wiki
+#[tauri::command]
+fn set_wiki_backups(app: tauri::AppHandle, path: String, enabled: bool) -> Result<(), String> {
+    let mut entries = load_recent_files_from_disk(&app);
+
+    for entry in entries.iter_mut() {
+        if entry.path == path {
+            entry.backups_enabled = enabled;
+            break;
+        }
+    }
+
+    save_recent_files_to_disk(&app, &entries)
+}
+
 /// Determine storage mode for macOS/Linux
 /// Always uses the app data directory (portable mode only available on Windows)
 #[cfg(not(target_os = "windows"))]
@@ -514,12 +595,6 @@ fn should_create_backup(state: &AppState, path: &str) -> bool {
 #[tauri::command]
 fn get_main_wiki_path(state: tauri::State<AppState>) -> String {
     state.main_wiki_path.to_string_lossy().to_string()
-}
-
-/// Check if running on mobile (Android/iOS)
-#[tauri::command]
-fn is_mobile() -> bool {
-    false
 }
 
 /// Show an alert dialog
@@ -1079,14 +1154,20 @@ async fn open_wiki_folder(app: tauri::AppHandle, path: String) -> Result<WikiEnt
         }
     });
 
-    // Return the wiki entry so frontend can update its list
-    Ok(WikiEntry {
+    // Create the wiki entry
+    let entry = WikiEntry {
         path,
         filename: folder_name,
         favicon: None,
         is_folder: true,
         backups_enabled: false, // Not applicable for folder wikis (they use autosave)
-    })
+    };
+
+    // Add to recent files list
+    let _ = add_to_recent_files(&app, entry.clone());
+
+    // Return the wiki entry so frontend can update its list
+    Ok(entry)
 }
 
 /// Check if a path is a wiki folder
@@ -1721,14 +1802,20 @@ async fn open_wiki_window(app: tauri::AppHandle, path: String) -> Result<WikiEnt
         }
     });
 
-    // Return the wiki entry so frontend can update its list
-    Ok(WikiEntry {
+    // Create the wiki entry
+    let entry = WikiEntry {
         path,
         filename,
         favicon,
         is_folder: false,
         backups_enabled: true,
-    })
+    };
+
+    // Add to recent files list
+    let _ = add_to_recent_files(&app, entry.clone());
+
+    // Return the wiki entry so frontend can update its list
+    Ok(entry)
 }
 
 /// Simple base64 URL-safe encoding for path keys
@@ -2194,10 +2281,12 @@ pub fn run() {
             get_window_label,
             get_main_wiki_path,
             reveal_in_folder,
-            is_mobile,
             show_alert,
             show_confirm,
-            close_window
+            close_window,
+            get_recent_files,
+            remove_recent_file,
+            set_wiki_backups
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

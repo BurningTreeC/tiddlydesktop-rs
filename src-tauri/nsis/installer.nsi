@@ -40,7 +40,6 @@ RequestExecutionLevel user
 InstallDir "$LOCALAPPDATA\${PRODUCTNAME}"
 
 !insertmacro MUI_PAGE_WELCOME
-!insertmacro MUI_PAGE_LICENSE "${LICENSEFILEPATH}"
 
 ; Custom page for Install Mode selection
 Page custom InstallModePage InstallModePageLeave

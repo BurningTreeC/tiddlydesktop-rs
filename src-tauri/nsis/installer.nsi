@@ -167,6 +167,22 @@ Section "Main Application" SecMain
         IntFmt $0 "0x%08X" $0
         WriteRegDWORD SHCTX "Software\Microsoft\Windows\CurrentVersion\Uninstall\${PRODUCTNAME}" "EstimatedSize" "$0"
 
+        ; Register file associations for HTML files
+        ; Create ProgID for TiddlyDesktop HTML files
+        WriteRegStr SHCTX "Software\Classes\${PRODUCTNAME}.html" "" "TiddlyWiki HTML File"
+        WriteRegStr SHCTX "Software\Classes\${PRODUCTNAME}.html\DefaultIcon" "" "$INSTDIR\${MAINBINARYNAME}.exe,0"
+        WriteRegStr SHCTX "Software\Classes\${PRODUCTNAME}.html\shell\open\command" "" '"$INSTDIR\${MAINBINARYNAME}.exe" "%1"'
+
+        ; Associate .html and .htm extensions with our ProgID
+        WriteRegStr SHCTX "Software\Classes\.html\OpenWithProgids" "${PRODUCTNAME}.html" ""
+        WriteRegStr SHCTX "Software\Classes\.htm\OpenWithProgids" "${PRODUCTNAME}.html" ""
+
+        ; Register in Applications list
+        WriteRegStr SHCTX "Software\Classes\Applications\${MAINBINARYNAME}.exe" "FriendlyAppName" "${PRODUCTNAME}"
+        WriteRegStr SHCTX "Software\Classes\Applications\${MAINBINARYNAME}.exe\shell\open\command" "" '"$INSTDIR\${MAINBINARYNAME}.exe" "%1"'
+        WriteRegStr SHCTX "Software\Classes\Applications\${MAINBINARYNAME}.exe\SupportedTypes" ".html" ""
+        WriteRegStr SHCTX "Software\Classes\Applications\${MAINBINARYNAME}.exe\SupportedTypes" ".htm" ""
+
         ; Create uninstaller
         WriteUninstaller "$INSTDIR\uninstall.exe"
     ${EndIf}
@@ -186,6 +202,12 @@ Section "Uninstall"
 
     ; Remove registry entries
     DeleteRegKey SHCTX "Software\Microsoft\Windows\CurrentVersion\Uninstall\${PRODUCTNAME}"
+
+    ; Remove file association registry entries
+    DeleteRegKey SHCTX "Software\Classes\${PRODUCTNAME}.html"
+    DeleteRegValue SHCTX "Software\Classes\.html\OpenWithProgids" "${PRODUCTNAME}.html"
+    DeleteRegValue SHCTX "Software\Classes\.htm\OpenWithProgids" "${PRODUCTNAME}.html"
+    DeleteRegKey SHCTX "Software\Classes\Applications\${MAINBINARYNAME}.exe"
 SectionEnd
 
 ; WebView2 installation (Tauri standard)

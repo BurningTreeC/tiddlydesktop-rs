@@ -41,6 +41,17 @@
         "template": "nsis/installer.nsi"
       }
     },
-    "macOS": {}
+    "macOS": {
+      "minimumSystemVersion": "10.13"
+    },
+    "fileAssociations": [
+      {
+        "ext": ["html", "htm"],
+        "name": "TiddlyWiki HTML File",
+        "description": "TiddlyWiki HTML File",
+        "mimeType": "text/html",
+        "role": "Editor"
+      }
+    ]
   }
 }

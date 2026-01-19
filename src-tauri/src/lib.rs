@@ -2152,6 +2152,25 @@ pub fn run() {
 
             setup_system_tray(app)?;
 
+            // Handle files passed as command-line arguments
+            let args: Vec<String> = std::env::args().skip(1).collect();
+            for arg in args {
+                let path = PathBuf::from(&arg);
+                // Only open files that exist and have .html or .htm extension
+                if path.exists() && path.is_file() {
+                    if let Some(ext) = path.extension() {
+                        let ext_lower = ext.to_string_lossy().to_lowercase();
+                        if ext_lower == "html" || ext_lower == "htm" {
+                            let app_handle = app.handle().clone();
+                            let path_str = arg.clone();
+                            tauri::async_runtime::spawn(async move {
+                                let _ = open_wiki_window(app_handle, path_str).await;
+                            });
+                        }
+                    }
+                }
+            }
+
             Ok(())
         })
         .register_uri_scheme_protocol("wikifile", |ctx, request| {
@@ -2180,6 +2199,30 @@ pub fn run() {
             show_confirm,
             close_window
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app, event| {
+            // Handle files opened via macOS file associations
+            #[cfg(target_os = "macos")]
+            if let tauri::RunEvent::Opened { urls } = event {
+                for url in urls {
+                    if let Ok(path) = url.to_file_path() {
+                        if let Some(ext) = path.extension() {
+                            let ext_lower = ext.to_string_lossy().to_lowercase();
+                            if ext_lower == "html" || ext_lower == "htm" {
+                                let app_handle = app.clone();
+                                let path_str = path.to_string_lossy().to_string();
+                                tauri::async_runtime::spawn(async move {
+                                    let _ = open_wiki_window(app_handle, path_str).await;
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Suppress unused variable warnings on non-macOS platforms
+            #[cfg(not(target_os = "macos"))]
+            let _ = (app, event);
+        });
 }

@@ -67,3 +67,10 @@ coverage/
 # Bundled binaries and resources (downloaded at build time)
 src-tauri/binaries/
 src-tauri/resources/
+
+# Android build artifacts (gen/android source is tracked for custom plugins)
+src-tauri/gen/android/.gradle/
+src-tauri/gen/android/build/
+src-tauri/gen/android/app/build/
+src-tauri/gen/android/buildSrc/build/
+src-tauri/gen/android/local.properties

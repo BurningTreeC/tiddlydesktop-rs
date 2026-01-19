@@ -351,14 +351,18 @@ jobs:
           keyPassword=${{ secrets.ANDROID_KEY_PASSWORD }}
           EOF
 
+          # Add imports to the top of build.gradle.kts (after the plugins block)
+          sed -i '1s/^/import java.util.Properties\nimport java.io.FileInputStream\n\n/' \
+            src-tauri/gen/android/app/build.gradle.kts
+
           # Patch build.gradle.kts to use the keystore
           cat >> src-tauri/gen/android/app/build.gradle.kts << 'GRADLE'
 
           // Release signing configuration
           val keystorePropertiesFile = rootProject.file("keystore.properties")
           if (keystorePropertiesFile.exists()) {
-              val keystoreProperties = java.util.Properties()
-              keystoreProperties.load(java.io.FileInputStream(keystorePropertiesFile))
+              val keystoreProperties = Properties()
+              keystoreProperties.load(FileInputStream(keystorePropertiesFile))
 
               android.signingConfigs {
                   create("release") {

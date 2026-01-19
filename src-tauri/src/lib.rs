@@ -1,130 +1,19 @@
-use std::{collections::HashMap, path::PathBuf, sync::Mutex};
-#[cfg(desktop)]
-use std::process::{Child, Command};
-#[cfg(all(desktop, target_os = "windows"))]
+use std::{collections::HashMap, path::PathBuf, process::{Child, Command}, sync::Mutex};
+#[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
 
 /// Windows flag to prevent console window from appearing
-#[cfg(all(desktop, target_os = "windows"))]
+#[cfg(target_os = "windows")]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 use chrono::Local;
 use serde::{Deserialize, Serialize};
 use tauri::{
+    image::Image,
     http::{Request, Response},
-    Manager, WebviewUrl, WebviewWindowBuilder,
-};
-#[cfg(desktop)]
-use tauri::image::Image;
-#[cfg(desktop)]
-use tauri::{
     menu::{MenuBuilder, MenuItemBuilder},
     tray::TrayIconBuilder,
+    Manager, WebviewUrl, WebviewWindowBuilder,
 };
-
-// QuickJS runtime for Android (no Node.js) - only compiled on mobile
-#[cfg(not(desktop))]
-mod quickjs_runtime;
-
-// Rust-based wiki folder HTTP server for Android - only compiled on mobile
-#[cfg(not(desktop))]
-mod wiki_server;
-
-// SAF (Storage Access Framework) plugin for Android directory listing
-// Always compiled, but only functional on Android
-mod saf_plugin;
-
-/// Extract bundled TiddlyWiki tar.gz to app data directory (mobile only)
-/// Returns the path to the extracted tiddlywiki directory
-#[cfg(not(desktop))]
-fn extract_tiddlywiki_bundle(app: &tauri::AppHandle) -> Result<PathBuf, String> {
-    use flate2::read::GzDecoder;
-    use tar::Archive;
-
-    let app_data_dir = app.path().app_data_dir()
-        .map_err(|e| format!("Failed to get app data dir: {}", e))?;
-    std::fs::create_dir_all(&app_data_dir)
-        .map_err(|e| format!("Failed to create app data dir: {}", e))?;
-    let tiddlywiki_dir = app_data_dir.join("tiddlywiki");
-
-    // Check if already extracted (marker file)
-    let marker = app_data_dir.join(".tiddlywiki_extracted");
-    if marker.exists() && tiddlywiki_dir.exists() {
-        println!("TiddlyWiki already extracted at {:?}", tiddlywiki_dir);
-        return Ok(tiddlywiki_dir);
-    }
-
-    println!("Extracting TiddlyWiki bundle to {:?}", app_data_dir);
-
-    // Read the tar.gz from frontend assets using Tauri's asset resolver
-    // On Android, bundle.resources doesn't work, but frontend assets do
-    // The tar.gz is placed in the src/ folder during build
-    let resolver = app.asset_resolver();
-
-    // Try different possible asset paths (frontend assets)
-    let possible_paths = [
-        "tiddlywiki.tar.gz",                    // In src/ folder (frontend root)
-        "assets/tiddlywiki.tar.gz",             // In src/assets/ folder
-        "resources/tiddlywiki.tar.gz",          // Fallback: bundle resources path
-    ];
-
-    let mut archive_bytes: Option<Vec<u8>> = None;
-    for asset_path in &possible_paths {
-        println!("Trying asset path: {}", asset_path);
-        if let Some(asset) = resolver.get(asset_path.to_string()) {
-            archive_bytes = Some(asset.bytes);
-            println!("Found TiddlyWiki archive at: {}", asset_path);
-            break;
-        }
-    }
-
-    let archive_bytes = archive_bytes
-        .ok_or_else(|| format!("TiddlyWiki archive not found in bundled assets. Tried: {:?}", possible_paths))?;
-
-    println!("Archive size: {} bytes", archive_bytes.len());
-
-    // Decompress and extract
-    let decoder = GzDecoder::new(&archive_bytes[..]);
-    let mut archive = Archive::new(decoder);
-
-    // Clean up any partial extraction
-    if tiddlywiki_dir.exists() {
-        std::fs::remove_dir_all(&tiddlywiki_dir)
-            .map_err(|e| format!("Failed to clean up partial extraction: {}", e))?;
-    }
-
-    // Extract to app data dir (archive contains "tiddlywiki/" prefix)
-    archive.unpack(&app_data_dir)
-        .map_err(|e| format!("Failed to extract TiddlyWiki archive: {}", e))?;
-
-    // Create marker file
-    std::fs::write(&marker, "extracted")
-        .map_err(|e| format!("Failed to write marker file: {}", e))?;
-
-    println!("TiddlyWiki extraction complete");
-    Ok(tiddlywiki_dir)
-}
-
-/// Recursively copy a directory (used for edition initialization on Android)
-#[cfg(not(desktop))]
-fn copy_dir_recursive(src: &std::path::Path, dst: &std::path::Path) -> std::io::Result<()> {
-    if !dst.exists() {
-        std::fs::create_dir_all(dst)?;
-    }
-
-    for entry in std::fs::read_dir(src)? {
-        let entry = entry?;
-        let src_path = entry.path();
-        let dst_path = dst.join(entry.file_name());
-
-        if src_path.is_dir() {
-            copy_dir_recursive(&src_path, &dst_path)?;
-        } else {
-            std::fs::copy(&src_path, &dst_path)?;
-        }
-    }
-
-    Ok(())
-}
 
 /// A wiki entry in the recent files list
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -146,10 +35,7 @@ fn default_backups_enabled() -> bool {
 /// A running wiki folder server
 #[allow(dead_code)] // Fields may be used for status display in future
 struct WikiFolderServer {
-    #[cfg(desktop)]
     process: Child,
-    #[cfg(not(desktop))]
-    http_server: Option<wiki_server::WikiFolderHttpServer>,
     port: u16,
     path: String,
 }
@@ -168,10 +54,6 @@ struct AppState {
     wiki_servers: Mutex<HashMap<String, WikiFolderServer>>,
     /// Next available port for wiki folder servers
     next_port: Mutex<u16>,
-    /// Android: Mapping of file URIs to their parent folder tree URIs
-    /// Used for creating backup files next to wiki files
-    #[cfg(not(desktop))]
-    backup_folder_access: Mutex<HashMap<String, String>>,
 }
 
 const MAX_RECENT_FILES: usize = 50;
@@ -318,135 +200,43 @@ async fn cleanup_old_backups(backup_dir: &PathBuf, keep: usize) {
 
 /// Load wiki content from disk
 #[tauri::command]
-async fn load_wiki(app: tauri::AppHandle, path: String) -> Result<String, String> {
-    // On mobile, use Tauri's fs plugin which can handle content:// URIs
-    #[cfg(not(desktop))]
-    {
-        use tauri_plugin_fs::FsExt;
-        let path_buf = PathBuf::from(&path);
-        app.fs().read_to_string(&path_buf)
-            .map_err(|e| format!("Failed to read wiki: {}", e))
-    }
-
-    // On desktop, use standard filesystem operations
-    #[cfg(desktop)]
-    {
-        let _ = app; // Suppress unused warning
-        tokio::fs::read_to_string(&path)
-            .await
-            .map_err(|e| format!("Failed to read wiki: {}", e))
-    }
+async fn load_wiki(_app: tauri::AppHandle, path: String) -> Result<String, String> {
+    tokio::fs::read_to_string(&path)
+        .await
+        .map_err(|e| format!("Failed to read wiki: {}", e))
 }
 
 /// Save wiki content to disk with backup
 #[tauri::command]
-async fn save_wiki(app: tauri::AppHandle, path: String, content: String) -> Result<(), String> {
+async fn save_wiki(_app: tauri::AppHandle, path: String, content: String) -> Result<(), String> {
     let path_buf = PathBuf::from(&path);
 
-    // On mobile, use Tauri's fs plugin which can handle content:// URIs
-    #[cfg(not(desktop))]
-    {
-        use tauri_plugin_fs::FsExt;
+    // Create backup first
+    create_backup(&path_buf).await?;
 
-        // Check if backups are enabled for this wiki
-        let state = app.state::<AppState>();
-        let backups_enabled = are_backups_enabled(&state, &path);
+    // Write to a temp file first, then rename for atomic operation
+    let temp_path = path_buf.with_extension("tmp");
 
-        // Create backup if enabled
-        if backups_enabled {
-            if let Ok(original_content) = app.fs().read(&path_buf) {
-                let filename = path_buf.file_name()
-                    .and_then(|s| s.to_str())
-                    .unwrap_or("wiki.html");
-                let stem = filename.trim_end_matches(".html").trim_end_matches(".HTML");
-                let timestamp = chrono::Local::now().format("%Y%m%d-%H%M%S");
-                let backup_name = format!("{}.{}.html", stem, timestamp);
+    tokio::fs::write(&temp_path, &content)
+        .await
+        .map_err(|e| format!("Failed to write temp file: {}", e))?;
 
-                // Check if we have folder access for this wiki
-                let folder_uri = get_backup_folder_uri(&state, &path);
-
-                let backup_written = if let Some(folder_uri) = folder_uri {
-                    // Use the granted folder URI to create backup
-                    use std::io::Write;
-                    use tauri_plugin_fs::{FsExt, OpenOptions};
-                    let backup_dir = PathBuf::from(&folder_uri).join(format!("{}.backups", stem));
-                    let _ = std::fs::create_dir_all(&backup_dir);
-                    let backup_path = backup_dir.join(&backup_name);
-                    let mut opts = OpenOptions::new();
-                    opts.write(true).create(true).truncate(true);
-                    if let Ok(mut file) = app.fs().open(&backup_path, opts) {
-                        file.write_all(&original_content).is_ok()
-                    } else {
-                        false
-                    }
-                } else {
-                    false
-                };
-
-                // Fallback to local storage if folder access not granted or write failed
-                if !backup_written {
-                    if let Ok(app_data_dir) = app.path().app_data_dir() {
-                        let safe_name = filename.replace(|c: char| !c.is_alphanumeric() && c != '.' && c != '-' && c != '_', "_");
-                        let local_backup_dir = app_data_dir.join("backups").join(&safe_name);
-                        let _ = std::fs::create_dir_all(&local_backup_dir);
-                        let local_backup_path = local_backup_dir.join(&backup_name);
-                        let _ = std::fs::write(&local_backup_path, &original_content);
-                    }
-                }
-            }
-        }
-
-        // Write using fs plugin (handles content:// URIs)
-        {
-            use std::io::Write;
-            use tauri_plugin_fs::{FsExt, OpenOptions};
-            let mut opts = OpenOptions::new();
-            opts.write(true).create(true).truncate(true);
-            let mut file = app.fs().open(&path_buf, opts)
-                .map_err(|e| format!("Failed to open wiki for writing: {}", e))?;
-            file.write_all(content.as_bytes())
-                .map_err(|e| format!("Failed to save wiki: {}", e))?;
-        }
-        return Ok(());
-    }
-
-    // On desktop, use standard filesystem operations with backup
-    #[cfg(desktop)]
-    {
-        let _ = app; // Suppress unused warning
-
-        // Create backup first
-        create_backup(&path_buf).await?;
-
-        // Write to a temp file first, then rename for atomic operation
-        let temp_path = path_buf.with_extension("tmp");
-
-        tokio::fs::write(&temp_path, &content)
+    // Try rename first, fall back to direct write if it fails (Windows file locking)
+    if let Err(_) = tokio::fs::rename(&temp_path, &path_buf).await {
+        let _ = tokio::fs::remove_file(&temp_path).await;
+        tokio::fs::write(&path_buf, &content)
             .await
-            .map_err(|e| format!("Failed to write temp file: {}", e))?;
-
-        // Try rename first, fall back to direct write if it fails (Windows file locking)
-        if let Err(_) = tokio::fs::rename(&temp_path, &path_buf).await {
-            let _ = tokio::fs::remove_file(&temp_path).await;
-            tokio::fs::write(&path_buf, &content)
-                .await
-                .map_err(|e| format!("Failed to save file: {}", e))?;
-        }
-
-        Ok(())
+            .map_err(|e| format!("Failed to save file: {}", e))?;
     }
+
+    Ok(())
 }
 
 /// Set window title
 #[tauri::command]
 async fn set_window_title(app: tauri::AppHandle, label: String, title: String) -> Result<(), String> {
-    #[cfg(desktop)]
     if let Some(window) = app.get_webview_window(&label) {
         window.set_title(&title).map_err(|e| e.to_string())?;
-    }
-    #[cfg(not(desktop))]
-    {
-        let _ = (app, label, title); // Suppress unused warnings
     }
     Ok(())
 }
@@ -544,73 +334,10 @@ fn update_wiki_favicon(state: tauri::State<AppState>, path: String, favicon: Str
     }
 }
 
-/// Set folder access for backups (Android only)
-/// Called by frontend after it picks the folder via dialog
-#[tauri::command]
-fn set_backup_folder_access(
-    state: tauri::State<AppState>,
-    wiki_path: String,
-    folder_uri: String,
-) -> Result<(), String> {
-    #[cfg(not(desktop))]
-    {
-        let mut access_map = state.backup_folder_access.lock().unwrap();
-        access_map.insert(wiki_path, folder_uri);
-        Ok(())
-    }
-
-    #[cfg(desktop)]
-    {
-        let _ = (state, wiki_path, folder_uri);
-        Err("Folder access not needed on desktop".to_string())
-    }
-}
-
-/// Request folder access for backups - deprecated, frontend should use set_backup_folder_access
-#[tauri::command]
-async fn request_backup_folder_access(
-    _app: tauri::AppHandle,
-    _wiki_path: String,
-) -> Result<String, String> {
-    // This command is now handled by the frontend which picks the folder
-    // and then calls set_backup_folder_access with the result
-    Err("Use set_backup_folder_access instead - folder picking is done on frontend".to_string())
-}
-
-/// Check if we have folder access for a wiki's backups (Android only)
-#[tauri::command]
-fn has_backup_folder_access(state: tauri::State<AppState>, wiki_path: String) -> bool {
-    #[cfg(not(desktop))]
-    {
-        let access_map = state.backup_folder_access.lock().unwrap();
-        access_map.contains_key(&wiki_path)
-    }
-
-    #[cfg(desktop)]
-    {
-        let _ = (state, wiki_path);
-        true // Always have access on desktop
-    }
-}
-
 /// Check if running on mobile (Android/iOS)
 #[tauri::command]
 fn is_mobile() -> bool {
-    #[cfg(not(desktop))]
-    {
-        true
-    }
-    #[cfg(desktop)]
-    {
-        false
-    }
-}
-
-/// Get the backup folder URI for a wiki (Android only)
-#[cfg(not(desktop))]
-fn get_backup_folder_uri(state: &AppState, wiki_path: &str) -> Option<String> {
-    let access_map = state.backup_folder_access.lock().unwrap();
-    access_map.get(wiki_path).cloned()
+    false
 }
 
 /// Show an alert dialog
@@ -642,15 +369,7 @@ async fn show_confirm(app: tauri::AppHandle, message: String) -> Result<bool, St
 /// Close the current window (used after confirming unsaved changes)
 #[tauri::command]
 fn close_window(window: tauri::Window) {
-    #[cfg(desktop)]
-    {
-        let _ = window.destroy();
-    }
-    #[cfg(not(desktop))]
-    {
-        // On mobile, windows can't be programmatically closed
-        let _ = &window;
-    }
+    let _ = window.destroy();
 }
 
 // Note: show_prompt is not implemented as a Tauri command because Tauri's dialog plugin
@@ -822,7 +541,6 @@ fn get_dialog_init_script() -> &'static str {
 
 /// Normalize a path for cross-platform compatibility
 /// On Windows: removes \\?\ prefixes and ensures proper separators
-#[cfg(desktop)]
 fn normalize_path(path: PathBuf) -> PathBuf {
     // Use dunce to simplify Windows paths (removes \\?\ UNC prefixes)
     let normalized = dunce::simplified(&path).to_path_buf();
@@ -845,21 +563,8 @@ fn normalize_path(path: PathBuf) -> PathBuf {
 }
 
 /// Check if a path is a wiki folder (contains tiddlywiki.info)
-/// Check if a path is a wiki folder (desktop version)
-#[cfg(desktop)]
 fn is_wiki_folder(path: &std::path::Path) -> bool {
     path.is_dir() && path.join("tiddlywiki.info").exists()
-}
-
-/// Check if a path is a wiki folder (mobile version - uses fs plugin for content:// URIs)
-#[cfg(not(desktop))]
-fn is_wiki_folder_mobile(app: &tauri::AppHandle, path: &std::path::Path) -> bool {
-    use tauri_plugin_fs::{FsExt, OpenOptions};
-
-    // Check if tiddlywiki.info exists in the folder
-    let info_path = path.join("tiddlywiki.info");
-    let opts = OpenOptions::new();
-    app.fs().open(&info_path, opts).is_ok()
 }
 
 /// Get the next available port for a wiki folder server
@@ -871,7 +576,6 @@ fn allocate_port(state: &AppState) -> u16 {
 }
 
 /// Check if system Node.js is available and compatible (v18+)
-#[cfg(desktop)]
 fn find_system_node() -> Option<PathBuf> {
     #[cfg(target_os = "windows")]
     let node_name = "node.exe";
@@ -906,7 +610,6 @@ fn find_system_node() -> Option<PathBuf> {
 }
 
 /// Get path to Node.js binary (prefer system, fall back to bundled)
-#[cfg(desktop)]
 fn get_node_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     // First, try to use system Node.js if available and compatible
     if let Some(system_node) = find_system_node() {
@@ -948,7 +651,6 @@ fn get_node_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
 }
 
 /// Get path to bundled TiddlyWiki
-#[cfg(desktop)]
 fn get_tiddlywiki_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     let resource_path = app.path().resource_dir()
         .map_err(|e| format!("Failed to get resource dir: {}", e))?;
@@ -966,20 +668,6 @@ fn get_tiddlywiki_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
         Ok(normalize_path(canonical))
     } else {
         Err(format!("TiddlyWiki not found at {:?} or {:?}", tw_path, dev_path))
-    }
-}
-
-/// Get path to bundled TiddlyWiki (mobile: extracted from tar.gz)
-#[cfg(not(desktop))]
-fn get_tiddlywiki_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
-    // On mobile, TiddlyWiki is extracted to app data directory
-    let tiddlywiki_dir = extract_tiddlywiki_bundle(app)?;
-    let tw_path = tiddlywiki_dir.join("tiddlywiki.js");
-
-    if tw_path.exists() {
-        Ok(tw_path)
-    } else {
-        Err(format!("TiddlyWiki not found at {:?} (extraction may have failed)", tw_path))
     }
 }
 
@@ -1041,7 +729,6 @@ fn ensure_wiki_folder_config(wiki_path: &PathBuf) {
 }
 
 /// Wait for TCP server with exponential backoff
-#[cfg(desktop)]
 fn wait_for_server_ready(port: u16, process: &mut Child, timeout: std::time::Duration) -> Result<(), String> {
     use std::net::TcpStream;
     use std::time::Instant;
@@ -1078,14 +765,8 @@ async fn open_wiki_folder(app: tauri::AppHandle, path: String) -> Result<(), Str
     let path_buf = PathBuf::from(&path);
     let state = app.state::<AppState>();
 
-    // Verify it's a wiki folder - different check for mobile vs desktop
-    #[cfg(desktop)]
+    // Verify it's a wiki folder
     if !is_wiki_folder(&path_buf) {
-        return Err("Not a valid wiki folder (missing tiddlywiki.info)".to_string());
-    }
-
-    #[cfg(not(desktop))]
-    if !is_wiki_folder_mobile(&app, &path_buf) {
         return Err("Not a valid wiki folder (missing tiddlywiki.info)".to_string());
     }
 
@@ -1096,10 +777,7 @@ async fn open_wiki_folder(app: tauri::AppHandle, path: String) -> Result<(), Str
             if wiki_path == &path {
                 // Focus existing window
                 if let Some(window) = app.get_webview_window(label) {
-                    #[cfg(desktop)]
                     let _ = window.set_focus();
-                    #[cfg(not(desktop))]
-                    let _ = &window; // Suppress unused warning
                     return Ok(());
                 }
             }
@@ -1151,96 +829,54 @@ async fn open_wiki_folder(app: tauri::AppHandle, path: String) -> Result<(), Str
     // Track this wiki as open
     state.open_wikis.lock().unwrap().insert(label.clone(), path.clone());
 
-    // Start the server - different implementation for desktop vs mobile
-    #[cfg(desktop)]
-    {
-        // Desktop: Use Node.js + TiddlyWiki server
-        let node_path = get_node_path(&app)?;
-        let tw_path = get_tiddlywiki_path(&app)?;
+    // Start the Node.js + TiddlyWiki server
+    let node_path = get_node_path(&app)?;
+    let tw_path = get_tiddlywiki_path(&app)?;
 
-        println!("Starting wiki folder server:");
-        println!("  Node.js: {:?}", node_path);
-        println!("  TiddlyWiki: {:?}", tw_path);
-        println!("  Wiki folder: {:?}", path_buf);
-        println!("  Port: {}", port);
+    println!("Starting wiki folder server:");
+    println!("  Node.js: {:?}", node_path);
+    println!("  TiddlyWiki: {:?}", tw_path);
+    println!("  Wiki folder: {:?}", path_buf);
+    println!("  Port: {}", port);
 
-        let mut cmd = Command::new(&node_path);
-        cmd.arg(&tw_path)
-            .arg(&path_buf)
-            .arg("--listen")
-            .arg(format!("port={}", port))
-            .arg("host=127.0.0.1");
-        #[cfg(target_os = "windows")]
-        cmd.creation_flags(CREATE_NO_WINDOW);
-        let mut child = cmd.spawn()
-            .map_err(|e| format!("Failed to start TiddlyWiki server: {}", e))?;
+    let mut cmd = Command::new(&node_path);
+    cmd.arg(&tw_path)
+        .arg(&path_buf)
+        .arg("--listen")
+        .arg(format!("port={}", port))
+        .arg("host=127.0.0.1");
+    #[cfg(target_os = "windows")]
+    cmd.creation_flags(CREATE_NO_WINDOW);
+    let mut child = cmd.spawn()
+        .map_err(|e| format!("Failed to start TiddlyWiki server: {}", e))?;
 
-        // Wait for server to be ready (10s timeout)
-        if let Err(e) = wait_for_server_ready(port, &mut child, std::time::Duration::from_secs(10)) {
-            let _ = child.kill();
-            state.open_wikis.lock().unwrap().remove(&label);
-            return Err(format!("Failed to start wiki server: {}", e));
-        }
-
-        // Store the server info
-        state.wiki_servers.lock().unwrap().insert(label.clone(), WikiFolderServer {
-            process: child,
-            port,
-            path: path.clone(),
-        });
+    // Wait for server to be ready (10s timeout)
+    if let Err(e) = wait_for_server_ready(port, &mut child, std::time::Duration::from_secs(10)) {
+        let _ = child.kill();
+        state.open_wikis.lock().unwrap().remove(&label);
+        return Err(format!("Failed to start wiki server: {}", e));
     }
 
-    #[cfg(not(desktop))]
-    let server_url = {
-        // Mobile: Use Rust HTTP server with fs plugin for content:// URI support
-        println!("Opening wiki folder on mobile:");
-        println!("  Path: {:?}", path_buf);
-        println!("  Port: {}", port);
+    // Store the server info
+    state.wiki_servers.lock().unwrap().insert(label.clone(), WikiFolderServer {
+        process: child,
+        port,
+        path: path.clone(),
+    });
 
-        // Start server directly on the original path - fs plugin handles content:// URIs
-        let http_server = wiki_server::WikiFolderHttpServer::start(
-            path_buf.clone(),
-            port,
-            Some(app.clone()), // Pass app handle for fs plugin access
-        )?;
-        let url = http_server.url();
-
-        // Store the server info
-        state.wiki_servers.lock().unwrap().insert(label.clone(), WikiFolderServer {
-            http_server: Some(http_server),
-            port,
-            path: path.clone(),
-        });
-
-        url
-    };
-
-    #[cfg(desktop)]
     let server_url = format!("http://127.0.0.1:{}", port);
 
-    #[cfg(desktop)]
-    let window = {
-        let icon = Image::from_bytes(include_bytes!("../icons/icon.png"))
-            .map_err(|e| format!("Failed to load icon: {}", e))?;
-        WebviewWindowBuilder::new(&app, &label, WebviewUrl::External(server_url.parse().unwrap()))
-            .title(&folder_name)
-            .inner_size(1200.0, 800.0)
-            .icon(icon)
-            .map_err(|e| format!("Failed to set icon: {}", e))?
-            .window_classname("tiddlydesktop-rs")
-            .initialization_script(get_dialog_init_script())
-            .build()
-            .map_err(|e| format!("Failed to create window: {}", e))?
-    };
-
-    #[cfg(not(desktop))]
-    let window = {
-        let _ = &folder_name; // Suppress unused warning
-        WebviewWindowBuilder::new(&app, &label, WebviewUrl::External(server_url.parse().unwrap()))
-            .initialization_script(get_dialog_init_script())
-            .build()
-            .map_err(|e| format!("Failed to create window: {}", e))?
-    };
+    let icon = Image::from_bytes(include_bytes!("../icons/icon.png"))
+        .map_err(|e| format!("Failed to load icon: {}", e))?;
+    let window = WebviewWindowBuilder::new(&app, &label, WebviewUrl::External(server_url.parse().unwrap()))
+        .title(&folder_name)
+        .inner_size(1200.0, 800.0)
+        .icon(icon)
+        .map_err(|e| format!("Failed to set icon: {}", e))?
+        .window_classname("tiddlydesktop-rs")
+        .initialization_script(get_dialog_init_script())
+        .build()
+        .map_err(|e| format!("Failed to create window: {}", e))?;
 
     // Handle window close - JS onCloseRequested handles unsaved changes confirmation
     let app_handle = app.clone();
@@ -1250,16 +886,7 @@ async fn open_wiki_folder(app: tauri::AppHandle, path: String) -> Result<(), Str
             let state = app_handle.state::<AppState>();
             // Stop the server
             if let Some(mut server) = state.wiki_servers.lock().unwrap().remove(&label_clone) {
-                #[cfg(desktop)]
-                {
-                    let _ = server.process.kill();
-                }
-                #[cfg(not(desktop))]
-                {
-                    if let Some(mut http_server) = server.http_server.take() {
-                        http_server.stop();
-                    }
-                }
+                let _ = server.process.kill();
             }
             // Remove from open wikis
             state.open_wikis.lock().unwrap().remove(&label_clone);
@@ -1271,19 +898,9 @@ async fn open_wiki_folder(app: tauri::AppHandle, path: String) -> Result<(), Str
 
 /// Check if a path is a wiki folder
 #[tauri::command]
-fn check_is_wiki_folder(app: tauri::AppHandle, path: String) -> bool {
+fn check_is_wiki_folder(_app: tauri::AppHandle, path: String) -> bool {
     let path_buf = PathBuf::from(&path);
-
-    #[cfg(desktop)]
-    {
-        let _ = app;
-        is_wiki_folder(&path_buf)
-    }
-
-    #[cfg(not(desktop))]
-    {
-        is_wiki_folder_mobile(&app, &path_buf)
-    }
+    is_wiki_folder(&path_buf)
 }
 
 /// Edition info for UI display
@@ -1491,61 +1108,28 @@ async fn init_wiki_folder(app: tauri::AppHandle, path: String, edition: String, 
     println!("  Edition: {}", edition);
     println!("  Additional plugins: {:?}", plugins);
 
-    #[cfg(desktop)]
-    {
-        // Desktop: Use Node.js + TiddlyWiki
-        let node_path = get_node_path(&app)?;
-        let tw_path = get_tiddlywiki_path(&app)?;
+    // Use Node.js + TiddlyWiki to initialize the wiki
+    let node_path = get_node_path(&app)?;
+    let tw_path = get_tiddlywiki_path(&app)?;
 
-        println!("  Node.js: {:?}", node_path);
-        println!("  TiddlyWiki: {:?}", tw_path);
+    println!("  Node.js: {:?}", node_path);
+    println!("  TiddlyWiki: {:?}", tw_path);
 
-        // Run tiddlywiki --init <edition>
-        let mut cmd = Command::new(&node_path);
-        cmd.arg(&tw_path)
-            .arg(&path_buf)
-            .arg("--init")
-            .arg(&edition);
-        #[cfg(target_os = "windows")]
-        cmd.creation_flags(CREATE_NO_WINDOW);
-        let output = cmd.output()
-            .map_err(|e| format!("Failed to run TiddlyWiki init: {}", e))?;
+    // Run tiddlywiki --init <edition>
+    let mut cmd = Command::new(&node_path);
+    cmd.arg(&tw_path)
+        .arg(&path_buf)
+        .arg("--init")
+        .arg(&edition);
+    #[cfg(target_os = "windows")]
+    cmd.creation_flags(CREATE_NO_WINDOW);
+    let output = cmd.output()
+        .map_err(|e| format!("Failed to run TiddlyWiki init: {}", e))?;
 
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            return Err(format!("TiddlyWiki init failed:\n{}\n{}", stdout, stderr));
-        }
-    }
-
-    #[cfg(not(desktop))]
-    {
-        // Mobile: Try QuickJS first, fall back to copying files
-        let tw_path = get_tiddlywiki_path(&app)?;
-        let tw_dir = tw_path.parent().ok_or("Failed to get TiddlyWiki directory")?;
-
-        // Try using QuickJS to run TiddlyWiki's init command
-        match quickjs_runtime::quickjs_init_wiki(tw_dir, &path_buf, &edition) {
-            Ok(()) => {
-                println!("  Initialized wiki using QuickJS");
-            }
-            Err(e) => {
-                // QuickJS failed, fall back to copying edition files
-                println!("  QuickJS init failed ({}), falling back to file copy", e);
-
-                let editions_dir = tw_dir.join("editions");
-                let edition_path = editions_dir.join(&edition);
-                if !edition_path.exists() {
-                    return Err(format!("Edition '{}' not found", edition));
-                }
-
-                // Copy edition files to target folder
-                copy_dir_recursive(&edition_path, &path_buf)
-                    .map_err(|e| format!("Failed to copy edition files: {}", e))?;
-
-                println!("  Copied edition files from: {:?}", edition_path);
-            }
-        }
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        return Err(format!("TiddlyWiki init failed:\n{}\n{}", stdout, stderr));
     }
 
     // Verify initialization succeeded
@@ -1636,153 +1220,114 @@ async fn create_wiki_file(app: tauri::AppHandle, path: String, edition: String, 
     println!("  Edition: {}", edition);
     println!("  Plugins: {:?}", plugins);
 
-    #[cfg(desktop)]
-    {
-        // Desktop: Use Node.js to build the wiki
-        let node_path = get_node_path(&app)?;
-        let tw_path = get_tiddlywiki_path(&app)?;
-        let tw_dir = tw_path.parent().ok_or("Failed to get TiddlyWiki directory")?;
+    // Use Node.js to build the wiki
+    let node_path = get_node_path(&app)?;
+    let tw_path = get_tiddlywiki_path(&app)?;
+    let tw_dir = tw_path.parent().ok_or("Failed to get TiddlyWiki directory")?;
 
-        // Create a temporary directory for the build
-        let temp_dir = std::env::temp_dir().join(format!("tiddlydesktop-build-{}", std::process::id()));
-        std::fs::create_dir_all(&temp_dir)
-            .map_err(|e| format!("Failed to create temp directory: {}", e))?;
+    // Create a temporary directory for the build
+    let temp_dir = std::env::temp_dir().join(format!("tiddlydesktop-build-{}", std::process::id()));
+    std::fs::create_dir_all(&temp_dir)
+        .map_err(|e| format!("Failed to create temp directory: {}", e))?;
 
-        println!("  Temp dir: {:?}", temp_dir);
+    println!("  Temp dir: {:?}", temp_dir);
 
-        // Initialize the temp directory with the selected edition
-        let mut init_cmd = Command::new(&node_path);
-        init_cmd.arg(&tw_path)
-            .arg(&temp_dir)
-            .arg("--init")
-            .arg(&edition);
-        #[cfg(target_os = "windows")]
-        init_cmd.creation_flags(CREATE_NO_WINDOW);
-        let init_output = init_cmd.output()
-            .map_err(|e| format!("Failed to run TiddlyWiki init: {}", e))?;
+    // Initialize the temp directory with the selected edition
+    let mut init_cmd = Command::new(&node_path);
+    init_cmd.arg(&tw_path)
+        .arg(&temp_dir)
+        .arg("--init")
+        .arg(&edition);
+    #[cfg(target_os = "windows")]
+    init_cmd.creation_flags(CREATE_NO_WINDOW);
+    let init_output = init_cmd.output()
+        .map_err(|e| format!("Failed to run TiddlyWiki init: {}", e))?;
 
-        if !init_output.status.success() {
-            let _ = std::fs::remove_dir_all(&temp_dir);
-            let stderr = String::from_utf8_lossy(&init_output.stderr);
-            return Err(format!("TiddlyWiki init failed: {}", stderr));
-        }
-
-        // Add plugins to tiddlywiki.info if any selected
-        if !plugins.is_empty() {
-            let info_path = temp_dir.join("tiddlywiki.info");
-            if info_path.exists() {
-                let content = std::fs::read_to_string(&info_path)
-                    .map_err(|e| format!("Failed to read tiddlywiki.info: {}", e))?;
-                let mut info: serde_json::Value = serde_json::from_str(&content)
-                    .map_err(|e| format!("Failed to parse tiddlywiki.info: {}", e))?;
-
-                let plugins_array = info.get_mut("plugins")
-                    .and_then(|v| v.as_array_mut());
-
-                if let Some(arr) = plugins_array {
-                    for plugin in &plugins {
-                        let plugin_path = format!("tiddlywiki/{}", plugin);
-                        if !arr.iter().any(|p| p.as_str() == Some(&plugin_path)) {
-                            arr.push(serde_json::Value::String(plugin_path));
-                        }
-                    }
-                } else {
-                    let plugin_values: Vec<serde_json::Value> = plugins.iter()
-                        .map(|p| serde_json::Value::String(format!("tiddlywiki/{}", p)))
-                        .collect();
-                    info["plugins"] = serde_json::Value::Array(plugin_values);
-                }
-
-                let updated_content = serde_json::to_string_pretty(&info)
-                    .map_err(|e| format!("Failed to serialize tiddlywiki.info: {}", e))?;
-                std::fs::write(&info_path, updated_content)
-                    .map_err(|e| format!("Failed to write tiddlywiki.info: {}", e))?;
-            }
-        }
-
-        // Get the output filename
-        let output_filename = output_path.file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("wiki.html");
-
-        // Build the single-file wiki
-        let mut build_cmd = Command::new(&node_path);
-        build_cmd.arg(&tw_path)
-            .arg(&temp_dir)
-            .arg("--output")
-            .arg(temp_dir.join("output"))
-            .arg("--render")
-            .arg("$:/core/save/all")
-            .arg(output_filename)
-            .arg("text/plain")
-            .current_dir(tw_dir);
-        #[cfg(target_os = "windows")]
-        build_cmd.creation_flags(CREATE_NO_WINDOW);
-        let build_output = build_cmd.output()
-            .map_err(|e| format!("Failed to build wiki: {}", e))?;
-
-        if !build_output.status.success() {
-            let _ = std::fs::remove_dir_all(&temp_dir);
-            let stderr = String::from_utf8_lossy(&build_output.stderr);
-            let stdout = String::from_utf8_lossy(&build_output.stdout);
-            return Err(format!("Wiki build failed:\n{}\n{}", stdout, stderr));
-        }
-
-        // Move the output file to the target location
-        let built_file = temp_dir.join("output").join(output_filename);
-        if !built_file.exists() {
-            let _ = std::fs::remove_dir_all(&temp_dir);
-            return Err("Build succeeded but output file not found".to_string());
-        }
-
-        // Ensure parent directory exists
-        if let Some(parent) = output_path.parent() {
-            std::fs::create_dir_all(parent)
-                .map_err(|e| format!("Failed to create output directory: {}", e))?;
-        }
-
-        std::fs::copy(&built_file, &output_path)
-            .map_err(|e| format!("Failed to copy wiki to destination: {}", e))?;
-
-        // Clean up temp directory
+    if !init_output.status.success() {
         let _ = std::fs::remove_dir_all(&temp_dir);
+        let stderr = String::from_utf8_lossy(&init_output.stderr);
+        return Err(format!("TiddlyWiki init failed: {}", stderr));
     }
 
-    #[cfg(not(desktop))]
-    {
-        // Mobile: Use pre-built wiki from bundled TiddlyWiki or use QuickJS
-        let tw_path = get_tiddlywiki_path(&app)?;
-        let tw_dir = tw_path.parent().ok_or("Failed to get TiddlyWiki directory")?;
+    // Add plugins to tiddlywiki.info if any selected
+    if !plugins.is_empty() {
+        let info_path = temp_dir.join("tiddlywiki.info");
+        if info_path.exists() {
+            let content = std::fs::read_to_string(&info_path)
+                .map_err(|e| format!("Failed to read tiddlywiki.info: {}", e))?;
+            let mut info: serde_json::Value = serde_json::from_str(&content)
+                .map_err(|e| format!("Failed to parse tiddlywiki.info: {}", e))?;
 
-        // Try to find a pre-built wiki HTML in the edition's output directory
-        let edition_output = tw_dir.join("editions").join(&edition).join("output").join("index.html");
-        let empty_output = tw_dir.join("editions").join("empty").join("output").join("index.html");
+            let plugins_array = info.get_mut("plugins")
+                .and_then(|v| v.as_array_mut());
 
-        let source_html = if edition_output.exists() {
-            edition_output
-        } else if empty_output.exists() {
-            empty_output
-        } else {
-            // Fall back to using QuickJS to render (experimental)
-            return quickjs_runtime::quickjs_render_wiki(
-                tw_dir,
-                &tw_dir.join("editions").join(&edition),
-                output_path.parent().unwrap_or(std::path::Path::new(".")),
-                output_path.file_name().and_then(|n| n.to_str()).unwrap_or("wiki.html")
-            );
-        };
+            if let Some(arr) = plugins_array {
+                for plugin in &plugins {
+                    let plugin_path = format!("tiddlywiki/{}", plugin);
+                    if !arr.iter().any(|p| p.as_str() == Some(&plugin_path)) {
+                        arr.push(serde_json::Value::String(plugin_path));
+                    }
+                }
+            } else {
+                let plugin_values: Vec<serde_json::Value> = plugins.iter()
+                    .map(|p| serde_json::Value::String(format!("tiddlywiki/{}", p)))
+                    .collect();
+                info["plugins"] = serde_json::Value::Array(plugin_values);
+            }
 
-        // Ensure parent directory exists
-        if let Some(parent) = output_path.parent() {
-            std::fs::create_dir_all(parent)
-                .map_err(|e| format!("Failed to create output directory: {}", e))?;
+            let updated_content = serde_json::to_string_pretty(&info)
+                .map_err(|e| format!("Failed to serialize tiddlywiki.info: {}", e))?;
+            std::fs::write(&info_path, updated_content)
+                .map_err(|e| format!("Failed to write tiddlywiki.info: {}", e))?;
         }
-
-        std::fs::copy(&source_html, &output_path)
-            .map_err(|e| format!("Failed to copy wiki template: {}", e))?;
-
-        println!("  Copied pre-built wiki from: {:?}", source_html);
     }
+
+    // Get the output filename
+    let output_filename = output_path.file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("wiki.html");
+
+    // Build the single-file wiki
+    let mut build_cmd = Command::new(&node_path);
+    build_cmd.arg(&tw_path)
+        .arg(&temp_dir)
+        .arg("--output")
+        .arg(temp_dir.join("output"))
+        .arg("--render")
+        .arg("$:/core/save/all")
+        .arg(output_filename)
+        .arg("text/plain")
+        .current_dir(tw_dir);
+    #[cfg(target_os = "windows")]
+    build_cmd.creation_flags(CREATE_NO_WINDOW);
+    let build_output = build_cmd.output()
+        .map_err(|e| format!("Failed to build wiki: {}", e))?;
+
+    if !build_output.status.success() {
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        let stderr = String::from_utf8_lossy(&build_output.stderr);
+        let stdout = String::from_utf8_lossy(&build_output.stdout);
+        return Err(format!("Wiki build failed:\n{}\n{}", stdout, stderr));
+    }
+
+    // Move the output file to the target location
+    let built_file = temp_dir.join("output").join(output_filename);
+    if !built_file.exists() {
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        return Err("Build succeeded but output file not found".to_string());
+    }
+
+    // Ensure parent directory exists
+    if let Some(parent) = output_path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("Failed to create output directory: {}", e))?;
+    }
+
+    std::fs::copy(&built_file, &output_path)
+        .map_err(|e| format!("Failed to copy wiki to destination: {}", e))?;
+
+    // Clean up temp directory
+    let _ = std::fs::remove_dir_all(&temp_dir);
 
     println!("Single-file wiki created successfully: {:?}", output_path);
     Ok(())
@@ -1867,12 +1412,6 @@ async fn reveal_in_folder(path: String) -> Result<(), String> {
             .map_err(|e| e.to_string())?;
     }
 
-    #[cfg(target_os = "android")]
-    {
-        // Android doesn't have a traditional file manager reveal
-        let _ = &path;
-    }
-
     Ok(())
 }
 
@@ -1889,10 +1428,7 @@ async fn open_wiki_window(app: tauri::AppHandle, path: String) -> Result<(), Str
             if wiki_path == &path {
                 // Focus existing window
                 if let Some(window) = app.get_webview_window(label) {
-                    #[cfg(desktop)]
                     let _ = window.set_focus();
-                    #[cfg(not(desktop))]
-                    let _ = &window; // Suppress unused warning
                     return Ok(());
                 }
             }
@@ -1900,21 +1436,6 @@ async fn open_wiki_window(app: tauri::AppHandle, path: String) -> Result<(), Str
     }
 
     // Read only the first 64KB to extract favicon (it's always in <head>)
-    // On mobile, use fs plugin to handle content:// URIs
-    #[cfg(not(desktop))]
-    let favicon = {
-        use tauri_plugin_fs::FsExt;
-        // Read full file then truncate (fs plugin doesn't support partial reads)
-        match app.fs().read(&path_buf) {
-            Ok(bytes) => {
-                let truncated: Vec<u8> = bytes.into_iter().take(65536).collect();
-                String::from_utf8(truncated).ok().and_then(|s| extract_favicon(&s))
-            }
-            Err(_) => None,
-        }
-    };
-
-    #[cfg(desktop)]
     let favicon = {
         use tokio::io::AsyncReadExt;
         let mut buffer = vec![0u8; 65536];
@@ -1973,29 +1494,17 @@ async fn open_wiki_window(app: tauri::AppHandle, path: String) -> Result<(), Str
     // Use wikifile:// protocol directly
     let wiki_url = format!("wikifile://localhost/{}", path_key);
 
-    #[cfg(desktop)]
-    let window = {
-        let icon = Image::from_bytes(include_bytes!("../icons/icon.png"))
-            .map_err(|e| format!("Failed to load icon: {}", e))?;
-        WebviewWindowBuilder::new(&app, &label, WebviewUrl::External(wiki_url.parse().unwrap()))
-            .title(&title)
-            .inner_size(1200.0, 800.0)
-            .icon(icon)
-            .map_err(|e| format!("Failed to set icon: {}", e))?
-            .window_classname("tiddlydesktop-rs")
-            .initialization_script(get_dialog_init_script())
-            .build()
-            .map_err(|e| format!("Failed to create window: {}", e))?
-    };
-
-    #[cfg(not(desktop))]
-    let window = {
-        let _ = &title; // Suppress unused warning
-        WebviewWindowBuilder::new(&app, &label, WebviewUrl::External(wiki_url.parse().unwrap()))
-            .initialization_script(get_dialog_init_script())
-            .build()
-            .map_err(|e| format!("Failed to create window: {}", e))?
-    };
+    let icon = Image::from_bytes(include_bytes!("../icons/icon.png"))
+        .map_err(|e| format!("Failed to load icon: {}", e))?;
+    let window = WebviewWindowBuilder::new(&app, &label, WebviewUrl::External(wiki_url.parse().unwrap()))
+        .title(&title)
+        .inner_size(1200.0, 800.0)
+        .icon(icon)
+        .map_err(|e| format!("Failed to set icon: {}", e))?
+        .window_classname("tiddlydesktop-rs")
+        .initialization_script(get_dialog_init_script())
+        .build()
+        .map_err(|e| format!("Failed to create window: {}", e))?;
 
     // Handle window close - JS onCloseRequested handles unsaved changes confirmation
     let app_handle = app.clone();
@@ -2044,22 +1553,19 @@ fn wiki_protocol_handler(app: &tauri::AppHandle, request: Request<Vec<u8>>) -> R
 
     // Handle title-sync requests: wikifile://title-sync/{label}/{title}
     if path.starts_with("title-sync/") {
-        #[cfg(desktop)]
-        {
-            let parts: Vec<&str> = path.strip_prefix("title-sync/").unwrap().splitn(2, '/').collect();
-            if parts.len() == 2 {
-                let label = urlencoding::decode(parts[0]).unwrap_or_default().to_string();
-                let title = urlencoding::decode(parts[1]).unwrap_or_default().to_string();
+        let parts: Vec<&str> = path.strip_prefix("title-sync/").unwrap().splitn(2, '/').collect();
+        if parts.len() == 2 {
+            let label = urlencoding::decode(parts[0]).unwrap_or_default().to_string();
+            let title = urlencoding::decode(parts[1]).unwrap_or_default().to_string();
 
-                // Update window title
-                let app_clone = app.clone();
-                let app_inner = app_clone.clone();
-                let _ = app_clone.run_on_main_thread(move || {
-                    if let Some(window) = app_inner.get_webview_window(&label) {
-                        let _ = window.set_title(&title);
-                    }
-                });
-            }
+            // Update window title
+            let app_clone = app.clone();
+            let app_inner = app_clone.clone();
+            let _ = app_clone.run_on_main_thread(move || {
+                if let Some(window) = app_inner.get_webview_window(&label) {
+                    let _ = window.set_title(&title);
+                }
+            });
         }
         return Response::builder()
             .status(200)
@@ -2088,147 +1594,59 @@ fn wiki_protocol_handler(app: &tauri::AppHandle, request: Request<Vec<u8>>) -> R
         let state = app.state::<AppState>();
         let backups_enabled = are_backups_enabled(&state, wiki_path.to_string_lossy().as_ref());
 
-        // Mobile: Use fs plugin for content:// URI support
-        #[cfg(not(desktop))]
-        {
-            use std::io::{Read, Write};
-            use tauri_plugin_fs::{FsExt, OpenOptions};
+        // Create backup if enabled (synchronous since protocol handlers can't be async)
+        if backups_enabled && wiki_path.exists() {
+            if let Some(parent) = wiki_path.parent() {
+                let filename = wiki_path.file_stem().and_then(|s| s.to_str()).unwrap_or("wiki");
+                let backup_dir = parent.join(format!("{}.backups", filename));
+                let _ = std::fs::create_dir_all(&backup_dir);
 
-            // Create backup if enabled
-            if backups_enabled {
-                // Read original content
-                let original_content: Option<Vec<u8>> = {
-                    let opts = OpenOptions::new();
-                    if let Ok(mut file) = app.fs().open(&wiki_path, opts) {
-                        let mut content = Vec::new();
-                        file.read_to_end(&mut content).ok().map(|_| content)
-                    } else {
-                        None
-                    }
-                };
-
-                if let Some(original_content) = original_content {
-                    let wiki_path_str = wiki_path.to_string_lossy().to_string();
-                    let filename = wiki_path.file_name()
-                        .and_then(|s| s.to_str())
-                        .unwrap_or("wiki.html");
-                    let stem = filename.trim_end_matches(".html").trim_end_matches(".HTML");
-                    let timestamp = Local::now().format("%Y%m%d-%H%M%S");
-                    let backup_name = format!("{}.{}.html", stem, timestamp);
-
-                    // Check if we have folder access for this wiki
-                    let folder_uri = get_backup_folder_uri(&state, &wiki_path_str);
-
-                    let backup_written = if let Some(folder_uri) = folder_uri {
-                        // Use the granted folder URI to create backup
-                        let backup_dir = PathBuf::from(&folder_uri).join(format!("{}.backups", stem));
-                        let _ = std::fs::create_dir_all(&backup_dir);
-                        let backup_path = backup_dir.join(&backup_name);
-                        let mut opts = OpenOptions::new();
-                        opts.write(true).create(true).truncate(true);
-                        if let Ok(mut file) = app.fs().open(&backup_path, opts) {
-                            file.write_all(&original_content).is_ok()
-                        } else {
-                            false
-                        }
-                    } else {
-                        false
-                    };
-
-                    // Fallback to local storage if folder access not granted or write failed
-                    if !backup_written {
-                        if let Ok(app_data_dir) = app.path().app_data_dir() {
-                            let safe_name = filename.replace(|c: char| !c.is_alphanumeric() && c != '.' && c != '-' && c != '_', "_");
-                            let local_backup_dir = app_data_dir.join("backups").join(&safe_name);
-                            let _ = std::fs::create_dir_all(&local_backup_dir);
-                            let local_backup_path = local_backup_dir.join(&backup_name);
-                            let _ = std::fs::write(&local_backup_path, &original_content);
-                        }
-                    }
-                }
-            }
-
-            // Write using fs plugin (handles content:// URIs)
-            let write_result = {
-                let mut opts = OpenOptions::new();
-                opts.write(true).create(true).truncate(true);
-                app.fs().open(&wiki_path, opts)
-                    .and_then(|mut file| file.write_all(content.as_bytes()))
-            };
-            match write_result {
-                Ok(_) => {
-                    return Response::builder()
-                        .status(200)
-                        .header("Access-Control-Allow-Origin", "*")
-                        .body(Vec::new())
-                        .unwrap();
-                }
-                Err(e) => {
-                    return Response::builder()
-                        .status(500)
-                        .body(format!("Failed to save: {}", e).into_bytes())
-                        .unwrap();
-                }
+                let timestamp = Local::now().format("%Y%m%d-%H%M%S");
+                let backup_name = format!("{}.{}.html", filename, timestamp);
+                let backup_path = backup_dir.join(backup_name);
+                let _ = std::fs::copy(&wiki_path, &backup_path);
             }
         }
 
-        // Desktop: Use standard filesystem with atomic write
-        #[cfg(desktop)]
-        {
-            // Create backup if enabled (synchronous since protocol handlers can't be async)
-            if backups_enabled && wiki_path.exists() {
-                if let Some(parent) = wiki_path.parent() {
-                    let filename = wiki_path.file_stem().and_then(|s| s.to_str()).unwrap_or("wiki");
-                    let backup_dir = parent.join(format!("{}.backups", filename));
-                    let _ = std::fs::create_dir_all(&backup_dir);
-
-                    let timestamp = Local::now().format("%Y%m%d-%H%M%S");
-                    let backup_name = format!("{}.{}.html", filename, timestamp);
-                    let backup_path = backup_dir.join(backup_name);
-                    let _ = std::fs::copy(&wiki_path, &backup_path);
-                }
-            }
-
-            // Write to temp file then rename for atomic operation
-            let temp_path = wiki_path.with_extension("tmp");
-            match std::fs::write(&temp_path, &content) {
-                Ok(_) => {
-                    match std::fs::rename(&temp_path, &wiki_path) {
-                        Ok(_) => {
-                            return Response::builder()
-                                .status(200)
-                                .header("Access-Control-Allow-Origin", "*")
-                                .body(Vec::new())
-                                .unwrap();
-                        }
-                        Err(_rename_err) => {
-                            // On Windows, rename can fail if file is locked
-                            // Fall back to direct write after removing temp file
-                            let _ = std::fs::remove_file(&temp_path);
-                            match std::fs::write(&wiki_path, &content) {
-                                Ok(_) => {
-                                    return Response::builder()
-                                        .status(200)
-                                        .header("Access-Control-Allow-Origin", "*")
-                                        .body(Vec::new())
-                                        .unwrap();
-                                }
-                                Err(e) => {
-                                    return Response::builder()
-                                        .status(500)
-                                        .body(format!("Failed to save: {}", e).into_bytes())
-                                        .unwrap();
-                                }
+        // Write to temp file then rename for atomic operation
+        let temp_path = wiki_path.with_extension("tmp");
+        match std::fs::write(&temp_path, &content) {
+            Ok(_) => {
+                match std::fs::rename(&temp_path, &wiki_path) {
+                    Ok(_) => {
+                        return Response::builder()
+                            .status(200)
+                            .header("Access-Control-Allow-Origin", "*")
+                            .body(Vec::new())
+                            .unwrap();
+                    }
+                    Err(_rename_err) => {
+                        // On Windows, rename can fail if file is locked
+                        // Fall back to direct write after removing temp file
+                        let _ = std::fs::remove_file(&temp_path);
+                        match std::fs::write(&wiki_path, &content) {
+                            Ok(_) => {
+                                return Response::builder()
+                                    .status(200)
+                                    .header("Access-Control-Allow-Origin", "*")
+                                    .body(Vec::new())
+                                    .unwrap();
+                            }
+                            Err(e) => {
+                                return Response::builder()
+                                    .status(500)
+                                    .body(format!("Failed to save: {}", e).into_bytes())
+                                    .unwrap();
                             }
                         }
                     }
                 }
-                Err(e) => {
-                    return Response::builder()
-                        .status(500)
-                        .body(format!("Failed to write: {}", e).into_bytes())
-                        .unwrap();
-                }
+            }
+            Err(e) => {
+                return Response::builder()
+                    .status(500)
+                    .body(format!("Failed to write: {}", e).into_bytes())
+                    .unwrap();
             }
         }
     }
@@ -2263,15 +1681,7 @@ fn wiki_protocol_handler(app: &tauri::AppHandle, request: Request<Vec<u8>>) -> R
     // Generate the save URL for this wiki
     let save_url = format!("wikifile://localhost/save/{}", path);
 
-    // Read file content - use Tauri's fs plugin on mobile for content:// URI support
-    #[cfg(not(desktop))]
-    let read_result = {
-        use tauri_plugin_fs::FsExt;
-        app.fs().read_to_string(&file_path)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))
-    };
-
-    #[cfg(desktop)]
+    // Read file content
     let read_result = std::fs::read_to_string(&file_path);
 
     match read_result {
@@ -2447,7 +1857,6 @@ window.__SAVE_URL__ = "{}";
     }
 }
 
-#[cfg(desktop)]
 fn setup_system_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     let open_wiki = MenuItemBuilder::with_id("open_wiki", "Open Wiki...").build(app)?;
     let quit = MenuItemBuilder::with_id("quit", "Quit").build(app)?;
@@ -2481,7 +1890,6 @@ fn setup_system_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>>
     Ok(())
 }
 
-#[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .setup(|app| {
@@ -2497,31 +1905,20 @@ pub fn run() {
                 data_file,
                 wiki_servers: Mutex::new(HashMap::new()),
                 next_port: Mutex::new(8080),
-                #[cfg(not(desktop))]
-                backup_folder_access: Mutex::new(HashMap::new()),
             });
 
             // Create the main window programmatically with initialization script
-            #[cfg(desktop)]
-            {
-                let icon = Image::from_bytes(include_bytes!("../icons/icon.png"))?;
-                WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
-                    .title("TiddlyDesktopRS")
-                    .inner_size(800.0, 600.0)
-                    .icon(icon)?
-                    .window_classname("tiddlydesktop-rs")
-                    .initialization_script(get_dialog_init_script())
-                    .build()?;
+            let icon = Image::from_bytes(include_bytes!("../icons/icon.png"))?;
+            WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
+                .title("TiddlyDesktopRS")
+                .inner_size(800.0, 600.0)
+                .icon(icon)?
+                .window_classname("tiddlydesktop-rs")
+                .initialization_script(get_dialog_init_script())
+                .build()?;
 
-                setup_system_tray(app)?;
-            }
+            setup_system_tray(app)?;
 
-            #[cfg(not(desktop))]
-            {
-                WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
-                    .initialization_script(get_dialog_init_script())
-                    .build()?;
-            }
             Ok(())
         })
         .register_uri_scheme_protocol("wikifile", |ctx, request| {
@@ -2530,7 +1927,6 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
-        .plugin(saf_plugin::init())
         .invoke_handler(tauri::generate_handler![
             load_wiki,
             save_wiki,
@@ -2549,9 +1945,6 @@ pub fn run() {
             set_wiki_backups,
             reveal_in_folder,
             update_wiki_favicon,
-            request_backup_folder_access,
-            set_backup_folder_access,
-            has_backup_folder_access,
             is_mobile,
             show_alert,
             show_confirm,

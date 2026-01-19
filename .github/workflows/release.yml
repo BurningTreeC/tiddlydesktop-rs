@@ -247,198 +247,8 @@ jobs:
             tiddlydesktop-rs/src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg
             tiddlydesktop-rs/src-tauri/target/universal-apple-darwin/release/bundle/macos/*.zip
 
-  build-android:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout tiddlydesktop-rs
-        uses: actions/checkout@v4
-        with:
-          path: tiddlydesktop-rs
-
-      - name: Checkout TiddlyWiki5
-        uses: actions/checkout@v4
-        with:
-          repository: TiddlyWiki/TiddlyWiki5
-          path: TiddlyWiki5
-
-      - name: Copy plugin to TiddlyWiki5
-        run: |
-          cp -r tiddlydesktop-rs/TiddlyWiki5/plugins/tiddlywiki/tiddlydesktop-rs TiddlyWiki5/plugins/tiddlywiki/
-          cp -r tiddlydesktop-rs/TiddlyWiki5/editions/tiddlydesktop TiddlyWiki5/editions/
-
-      - name: Setup Java
-        uses: actions/setup-java@v4
-        with:
-          distribution: 'temurin'
-          java-version: '17'
-
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Add Android targets
-        run: |
-          rustup target add aarch64-linux-android
-          rustup target add armv7-linux-androideabi
-          rustup target add x86_64-linux-android
-          rustup target add i686-linux-android
-
-      - name: Install LLVM/Clang for bindgen
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y llvm-dev libclang-dev clang
-          # Find and export LIBCLANG_PATH
-          LLVM_VERSION=$(llvm-config --version | cut -d. -f1)
-          echo "LIBCLANG_PATH=/usr/lib/llvm-${LLVM_VERSION}/lib" >> $GITHUB_ENV
-
-      - name: Configure NDK for bindgen cross-compilation
-        run: |
-          # Find the NDK path
-          NDK_HOME="${ANDROID_NDK_HOME:-$ANDROID_HOME/ndk/$(ls $ANDROID_HOME/ndk | sort -V | tail -1)}"
-          echo "NDK_HOME=$NDK_HOME" >> $GITHUB_ENV
-
-          # Set up bindgen to use NDK sysroot for each Android target
-          # aarch64
-          echo "BINDGEN_EXTRA_CLANG_ARGS_aarch64_linux_android=--sysroot=$NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/sysroot -I$NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/include -I$NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/include/aarch64-linux-android" >> $GITHUB_ENV
-          # armv7
-          echo "BINDGEN_EXTRA_CLANG_ARGS_armv7_linux_androideabi=--sysroot=$NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/sysroot -I$NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/include -I$NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/include/arm-linux-androideabi" >> $GITHUB_ENV
-          # x86_64
-          echo "BINDGEN_EXTRA_CLANG_ARGS_x86_64_linux_android=--sysroot=$NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/sysroot -I$NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/include -I$NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/include/x86_64-linux-android" >> $GITHUB_ENV
-          # i686
-          echo "BINDGEN_EXTRA_CLANG_ARGS_i686_linux_android=--sysroot=$NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/sysroot -I$NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/include -I$NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/include/i686-linux-android" >> $GITHUB_ENV
-
-      - name: Install npm dependencies
-        working-directory: tiddlydesktop-rs
-        run: npm install
-
-      - name: Build TiddlyWiki
-        working-directory: TiddlyWiki5
-        run: |
-          node tiddlywiki.js editions/tiddlydesktop --output ../tiddlydesktop-rs/src --render '$:/core/save/all' 'index.html' 'text/plain'
-
-      - name: Bundle TiddlyWiki
-        working-directory: tiddlydesktop-rs
-        run: |
-          mkdir -p src-tauri/resources
-          cp -r ../TiddlyWiki5 src-tauri/resources/tiddlywiki
-          rm -rf src-tauri/resources/tiddlywiki/.git
-          rm -rf src-tauri/resources/tiddlywiki/editions/tiddlywiki-surveys
-          # For Android: create tar.gz archive and place in frontend assets
-          # (bundle.resources doesn't work on Android, but frontend assets do)
-          cd src-tauri/resources
-          tar -czf tiddlywiki.tar.gz tiddlywiki
-          # Copy to frontend src folder so it's accessible via asset resolver
-          cp tiddlywiki.tar.gz ../../src/
-
-      - name: Decode keystore
-        working-directory: tiddlydesktop-rs
-        run: |
-          echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 -d > src-tauri/release.keystore
-
-      - name: Initialize Android project
-        working-directory: tiddlydesktop-rs
-        run: npm run tauri android init
-
-      - name: Setup Android icons
-        working-directory: tiddlydesktop-rs
-        run: |
-          # Install ImageMagick for icon resizing
-          sudo apt-get install -y imagemagick
-
-          # Source icon (use the 512x512 or largest available)
-          SOURCE_ICON="src-tauri/icons/icon.png"
-          ANDROID_RES="src-tauri/gen/android/app/src/main/res"
-
-          # Create mipmap directories if they don't exist
-          mkdir -p "$ANDROID_RES/mipmap-mdpi"
-          mkdir -p "$ANDROID_RES/mipmap-hdpi"
-          mkdir -p "$ANDROID_RES/mipmap-xhdpi"
-          mkdir -p "$ANDROID_RES/mipmap-xxhdpi"
-          mkdir -p "$ANDROID_RES/mipmap-xxxhdpi"
-
-          # Generate icons at required sizes
-          convert "$SOURCE_ICON" -resize 48x48 "$ANDROID_RES/mipmap-mdpi/ic_launcher.png"
-          convert "$SOURCE_ICON" -resize 72x72 "$ANDROID_RES/mipmap-hdpi/ic_launcher.png"
-          convert "$SOURCE_ICON" -resize 96x96 "$ANDROID_RES/mipmap-xhdpi/ic_launcher.png"
-          convert "$SOURCE_ICON" -resize 144x144 "$ANDROID_RES/mipmap-xxhdpi/ic_launcher.png"
-          convert "$SOURCE_ICON" -resize 192x192 "$ANDROID_RES/mipmap-xxxhdpi/ic_launcher.png"
-
-          # Also create round icons (same for now, Android will handle masking)
-          cp "$ANDROID_RES/mipmap-mdpi/ic_launcher.png" "$ANDROID_RES/mipmap-mdpi/ic_launcher_round.png"
-          cp "$ANDROID_RES/mipmap-hdpi/ic_launcher.png" "$ANDROID_RES/mipmap-hdpi/ic_launcher_round.png"
-          cp "$ANDROID_RES/mipmap-xhdpi/ic_launcher.png" "$ANDROID_RES/mipmap-xhdpi/ic_launcher_round.png"
-          cp "$ANDROID_RES/mipmap-xxhdpi/ic_launcher.png" "$ANDROID_RES/mipmap-xxhdpi/ic_launcher_round.png"
-          cp "$ANDROID_RES/mipmap-xxxhdpi/ic_launcher.png" "$ANDROID_RES/mipmap-xxxhdpi/ic_launcher_round.png"
-
-          echo "Android icons generated successfully"
-
-      - name: Configure Android signing
-        working-directory: tiddlydesktop-rs
-        run: |
-          # Create keystore.properties for gradle
-          # Path is relative to build.gradle.kts in src-tauri/gen/android/app/
-          cat > src-tauri/gen/android/keystore.properties << EOF
-          storeFile=../../../release.keystore
-          storePassword=${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-          keyAlias=${{ secrets.ANDROID_KEY_ALIAS }}
-          keyPassword=${{ secrets.ANDROID_KEY_PASSWORD }}
-          EOF
-
-          # Add imports to the top of build.gradle.kts (only if not already present)
-          BUILD_FILE="src-tauri/gen/android/app/build.gradle.kts"
-          if ! grep -q "import java.util.Properties" "$BUILD_FILE"; then
-            sed -i '1s/^/import java.util.Properties\n/' "$BUILD_FILE"
-          fi
-          if ! grep -q "import java.io.FileInputStream" "$BUILD_FILE"; then
-            sed -i '1s/^/import java.io.FileInputStream\n/' "$BUILD_FILE"
-          fi
-
-          # Patch build.gradle.kts to use the keystore
-          cat >> src-tauri/gen/android/app/build.gradle.kts << 'GRADLE'
-
-          // Release signing configuration
-          val keystorePropertiesFile = rootProject.file("keystore.properties")
-          if (keystorePropertiesFile.exists()) {
-              val keystoreProperties = Properties()
-              keystoreProperties.load(FileInputStream(keystorePropertiesFile))
-
-              android.signingConfigs {
-                  create("release") {
-                      storeFile = file(keystoreProperties["storeFile"] as String)
-                      storePassword = keystoreProperties["storePassword"] as String
-                      keyAlias = keystoreProperties["keyAlias"] as String
-                      keyPassword = keystoreProperties["keyPassword"] as String
-                  }
-              }
-
-              android.buildTypes.getByName("release") {
-                  signingConfig = android.signingConfigs.getByName("release")
-              }
-          }
-          GRADLE
-
-      - name: Build Android APK and AAB
-        working-directory: tiddlydesktop-rs
-        run: |
-          npm run tauri android build -- --apk true --aab true
-
-      - name: Upload Android artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: android-artifacts
-          path: |
-            tiddlydesktop-rs/src-tauri/gen/android/app/build/outputs/apk/**/*.apk
-            tiddlydesktop-rs/src-tauri/gen/android/app/build/outputs/bundle/**/*.aab
-
   create-release:
-    needs: [build-linux, build-windows, build-macos, build-android]
+    needs: [build-linux, build-windows, build-macos]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -456,8 +266,8 @@ jobs:
           cd artifacts
           # Find all release files and generate checksums
           find . -type f \( -name "*.deb" -o -name "*.rpm" -o -name "*.AppImage" \
-            -o -name "*.msi" -o -name "*.exe" -o -name "*.dmg" -o -name "*.zip" \
-            -o -name "*.apk" -o -name "*.aab" \) -exec sha256sum {} \; | \
+            -o -name "*.msi" -o -name "*.exe" -o -name "*.dmg" -o -name "*.zip" \) \
+            -exec sha256sum {} \; | \
             sed 's|  \./|  |' | sort -k2 > ../CHECKSUMS-SHA256.txt
           cat ../CHECKSUMS-SHA256.txt
 
@@ -476,8 +286,6 @@ jobs:
             artifacts/**/*.exe
             artifacts/**/*.dmg
             artifacts/**/*.zip
-            artifacts/**/*.apk
-            artifacts/**/*.aab
             CHECKSUMS-SHA256.txt
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

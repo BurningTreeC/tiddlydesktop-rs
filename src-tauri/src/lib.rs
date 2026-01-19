@@ -32,6 +32,104 @@ fn default_backups_enabled() -> bool {
     true
 }
 
+/// Determine storage mode for first run on macOS/Linux
+/// Returns the path where the main wiki should be stored
+#[cfg(not(target_os = "windows"))]
+fn determine_storage_mode(app: &tauri::App) -> Result<PathBuf, String> {
+    use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
+
+    let exe_path = std::env::current_exe().map_err(|e| e.to_string())?;
+    let exe_dir = exe_path.parent().ok_or("No exe directory")?;
+    let app_data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+
+    let portable_path = exe_dir.join("tiddlydesktop.html");
+    let installed_path = app_data_dir.join("tiddlydesktop.html");
+
+    // Check for existing data file
+    if portable_path.exists() {
+        return Ok(exe_dir.to_path_buf());
+    }
+    if installed_path.exists() {
+        return Ok(app_data_dir);
+    }
+
+    // Check for portable marker (from Windows installer or user)
+    if exe_dir.join("portable").exists() || exe_dir.join("portable.txt").exists() {
+        return Ok(exe_dir.to_path_buf());
+    }
+
+    // First run - show dialog
+    let choice = app.dialog()
+        .message("How would you like to use TiddlyDesktop?\n\n\
+                  Install mode: Data stored in your user folder\n\
+                  Portable mode: Data stored next to the app (USB-friendly)")
+        .title("TiddlyDesktop Setup")
+        .buttons(MessageDialogButtons::OkCancelCustom(
+            "Install Mode".into(),
+            "Portable Mode".into()
+        ))
+        .blocking_show();
+
+    if choice {
+        // User chose "Install Mode" (OK button)
+        Ok(app_data_dir)
+    } else {
+        // User chose "Portable Mode" (Cancel button)
+        Ok(exe_dir.to_path_buf())
+    }
+}
+
+/// Windows: determine storage mode based on marker file
+#[cfg(target_os = "windows")]
+fn determine_storage_mode(app: &tauri::App) -> Result<PathBuf, String> {
+    get_main_wiki_dir(app)
+}
+
+/// Ensure main wiki file exists, extracting from resources if needed
+fn ensure_main_wiki_exists(app: &tauri::App) -> Result<PathBuf, String> {
+    let wiki_dir = determine_storage_mode(app)?;
+    std::fs::create_dir_all(&wiki_dir).map_err(|e| format!("Failed to create wiki dir: {}", e))?;
+
+    let main_wiki_path = wiki_dir.join("tiddlydesktop.html");
+
+    if !main_wiki_path.exists() {
+        // Extract from embedded resources
+        let resource_path = app.path().resource_dir().map_err(|e| e.to_string())?;
+        let resource_path = normalize_path(resource_path);
+
+        // Try different possible locations for the source index.html
+        let possible_sources = [
+            resource_path.join("resources").join("index.html"),
+            resource_path.join("index.html"),
+        ];
+
+        let mut copied = false;
+        for source in &possible_sources {
+            if source.exists() {
+                std::fs::copy(source, &main_wiki_path)
+                    .map_err(|e| format!("Failed to copy wiki: {}", e))?;
+                println!("Copied main wiki from {:?} to {:?}", source, main_wiki_path);
+                copied = true;
+                break;
+            }
+        }
+
+        if !copied {
+            // In development, copy from the src directory
+            let dev_source = PathBuf::from("src/index.html");
+            if dev_source.exists() {
+                std::fs::copy(&dev_source, &main_wiki_path)
+                    .map_err(|e| format!("Failed to copy wiki: {}", e))?;
+                println!("Copied main wiki from dev source to {:?}", main_wiki_path);
+            } else {
+                return Err(format!("Could not find source index.html. Tried: {:?}", possible_sources));
+            }
+        }
+    }
+
+    Ok(main_wiki_path)
+}
+
 /// A running wiki folder server
 #[allow(dead_code)] // Fields may be used for status display in future
 struct WikiFolderServer {
@@ -46,51 +144,12 @@ struct AppState {
     wiki_paths: Mutex<HashMap<String, PathBuf>>,
     /// Mapping of window labels to wiki paths (for duplicate detection)
     open_wikis: Mutex<HashMap<String, String>>,
-    /// Recently opened wiki entries
-    recent_files: Mutex<Vec<WikiEntry>>,
-    /// Path to the data file for persistence
-    data_file: PathBuf,
     /// Running wiki folder servers (keyed by window label)
     wiki_servers: Mutex<HashMap<String, WikiFolderServer>>,
     /// Next available port for wiki folder servers
     next_port: Mutex<u16>,
-}
-
-const MAX_RECENT_FILES: usize = 50;
-
-/// Get the path to the wiki list data file
-fn get_data_file_path(app: &tauri::App) -> PathBuf {
-    let app_data_dir = app.path().app_data_dir().expect("Failed to get app data dir");
-    std::fs::create_dir_all(&app_data_dir).ok();
-    app_data_dir.join("wiki-list.json")
-}
-
-/// Load wiki list from disk
-fn load_wiki_list(data_file: &PathBuf) -> Vec<WikiEntry> {
-    if data_file.exists() {
-        match std::fs::read_to_string(data_file) {
-            Ok(content) => {
-                match serde_json::from_str(&content) {
-                    Ok(entries) => return entries,
-                    Err(e) => eprintln!("Failed to parse wiki list: {}", e),
-                }
-            }
-            Err(e) => eprintln!("Failed to read wiki list: {}", e),
-        }
-    }
-    Vec::new()
-}
-
-/// Save wiki list to disk
-fn save_wiki_list(data_file: &PathBuf, entries: &[WikiEntry]) {
-    match serde_json::to_string_pretty(entries) {
-        Ok(json) => {
-            if let Err(e) = std::fs::write(data_file, json) {
-                eprintln!("Failed to save wiki list: {}", e);
-            }
-        }
-        Err(e) => eprintln!("Failed to serialize wiki list: {}", e),
-    }
+    /// Path to the main wiki file (tiddlydesktop.html)
+    main_wiki_path: PathBuf,
 }
 
 /// Extract favicon from wiki HTML content
@@ -247,91 +306,22 @@ fn get_window_label(window: tauri::Window) -> String {
     window.label().to_string()
 }
 
-/// Add to recent files with optional favicon extraction
-fn add_to_recent(state: &AppState, path: &str, favicon: Option<String>) {
-    let mut recent = state.recent_files.lock().unwrap();
-
-    // Check if already exists and preserve favicon and backup settings
-    let existing_entry = recent.iter()
-        .find(|e| e.path == path)
-        .cloned();
-
-    // Remove if already exists
-    recent.retain(|e| e.path != path);
-
-    // Extract filename
-    let filename = PathBuf::from(path)
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("Unknown")
-        .to_string();
-
-    // Use provided favicon, or keep existing one
-    let final_favicon = favicon.or(existing_entry.as_ref().and_then(|e| e.favicon.clone()));
-
-    // Preserve backup setting from existing entry, default to true
-    let backups_enabled = existing_entry.map(|e| e.backups_enabled).unwrap_or(true);
-
-    // Add to front
-    recent.insert(0, WikiEntry {
-        path: path.to_string(),
-        filename,
-        favicon: final_favicon,
-        is_folder: false, // Single file wikis are not folders
-        backups_enabled,
-    });
-
-    // Trim to max size
-    recent.truncate(MAX_RECENT_FILES);
-
-    // Save to disk
-    save_wiki_list(&state.data_file, &recent);
-}
-
-/// Get recent files
-#[tauri::command]
-fn get_recent_files(state: tauri::State<AppState>) -> Vec<WikiEntry> {
-    state.recent_files.lock().unwrap().clone()
-}
-
-/// Remove a file from recent list
-#[tauri::command]
-fn remove_recent_file(state: tauri::State<AppState>, path: String) {
-    let mut recent = state.recent_files.lock().unwrap();
-    recent.retain(|e| e.path != path);
-    // Save to disk
-    save_wiki_list(&state.data_file, &recent);
-}
-
-/// Toggle backups for a wiki
-#[tauri::command]
-fn set_wiki_backups(state: tauri::State<AppState>, path: String, enabled: bool) {
-    let mut recent = state.recent_files.lock().unwrap();
-    if let Some(entry) = recent.iter_mut().find(|e| e.path == path) {
-        entry.backups_enabled = enabled;
-        // Save to disk
-        save_wiki_list(&state.data_file, &recent);
+/// Check if backups should be created for a wiki path
+/// Backups are enabled for all user wikis, but not for the main TiddlyDesktop wiki
+fn should_create_backup(state: &AppState, path: &str) -> bool {
+    // Don't backup the main TiddlyDesktop wiki
+    let main_wiki = state.main_wiki_path.to_string_lossy();
+    if path == main_wiki {
+        return false;
     }
+    // Enable backups for all other wikis
+    true
 }
 
-/// Check if backups are enabled for a wiki path
-fn are_backups_enabled(state: &AppState, path: &str) -> bool {
-    let recent = state.recent_files.lock().unwrap();
-    recent.iter()
-        .find(|e| e.path == path)
-        .map(|e| e.backups_enabled)
-        .unwrap_or(true) // Default to enabled if not found
-}
-
-/// Update favicon for a wiki
+/// Get path to main wiki file
 #[tauri::command]
-fn update_wiki_favicon(state: tauri::State<AppState>, path: String, favicon: String) {
-    let mut recent = state.recent_files.lock().unwrap();
-    if let Some(entry) = recent.iter_mut().find(|e| e.path == path) {
-        entry.favicon = Some(favicon);
-        // Save to disk
-        save_wiki_list(&state.data_file, &recent);
-    }
+fn get_main_wiki_path(state: tauri::State<AppState>) -> String {
+    state.main_wiki_path.to_string_lossy().to_string()
 }
 
 /// Check if running on mobile (Android/iOS)
@@ -760,10 +750,18 @@ fn wait_for_server_ready(port: u16, process: &mut Child, timeout: std::time::Dur
 }
 
 /// Open a wiki folder in a new window with its own server
+/// Returns WikiEntry so frontend can update its wiki list
 #[tauri::command]
-async fn open_wiki_folder(app: tauri::AppHandle, path: String) -> Result<(), String> {
+async fn open_wiki_folder(app: tauri::AppHandle, path: String) -> Result<WikiEntry, String> {
     let path_buf = PathBuf::from(&path);
     let state = app.state::<AppState>();
+
+    // Get folder name
+    let folder_name = path_buf
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("Unknown")
+        .to_string();
 
     // Verify it's a wiki folder
     if !is_wiki_folder(&path_buf) {
@@ -778,7 +776,14 @@ async fn open_wiki_folder(app: tauri::AppHandle, path: String) -> Result<(), Str
                 // Focus existing window
                 if let Some(window) = app.get_webview_window(label) {
                     let _ = window.set_focus();
-                    return Ok(());
+                    // Return entry even when focusing existing window
+                    return Ok(WikiEntry {
+                        path: path.clone(),
+                        filename: folder_name,
+                        favicon: None,
+                        is_folder: true,
+                        backups_enabled: false,
+                    });
                 }
             }
         }
@@ -789,29 +794,6 @@ async fn open_wiki_folder(app: tauri::AppHandle, path: String) -> Result<(), Str
 
     // Allocate a port for this server
     let port = allocate_port(&state);
-
-    // Add to recent files
-    let folder_name = path_buf
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("Unknown")
-        .to_string();
-
-    {
-        let mut recent = state.recent_files.lock().unwrap();
-        // Remove if already exists
-        recent.retain(|e| e.path != path);
-        // Add to front with is_folder flag
-        recent.insert(0, WikiEntry {
-            path: path.clone(),
-            filename: folder_name.clone(),
-            favicon: None, // Folders don't have embedded favicons
-            is_folder: true,
-            backups_enabled: false, // Not applicable for folder wikis (they use autosave)
-        });
-        recent.truncate(MAX_RECENT_FILES);
-        save_wiki_list(&state.data_file, &recent);
-    }
 
     // Generate unique window label
     let base_label = folder_name.replace(|c: char| !c.is_alphanumeric(), "-");
@@ -893,7 +875,14 @@ async fn open_wiki_folder(app: tauri::AppHandle, path: String) -> Result<(), Str
         }
     });
 
-    Ok(())
+    // Return the wiki entry so frontend can update its list
+    Ok(WikiEntry {
+        path,
+        filename: folder_name,
+        favicon: None,
+        is_folder: true,
+        backups_enabled: false, // Not applicable for folder wikis (they use autosave)
+    })
 }
 
 /// Check if a path is a wiki folder
@@ -1416,10 +1405,18 @@ async fn reveal_in_folder(path: String) -> Result<(), String> {
 }
 
 /// Open a wiki file in a new window
+/// Returns WikiEntry so frontend can update its wiki list
 #[tauri::command]
-async fn open_wiki_window(app: tauri::AppHandle, path: String) -> Result<(), String> {
+async fn open_wiki_window(app: tauri::AppHandle, path: String) -> Result<WikiEntry, String> {
     let path_buf = PathBuf::from(&path);
     let state = app.state::<AppState>();
+
+    // Extract filename
+    let filename = path_buf
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("Unknown")
+        .to_string();
 
     // Check if this wiki is already open
     {
@@ -1429,7 +1426,14 @@ async fn open_wiki_window(app: tauri::AppHandle, path: String) -> Result<(), Str
                 // Focus existing window
                 if let Some(window) = app.get_webview_window(label) {
                     let _ = window.set_focus();
-                    return Ok(());
+                    // Return entry even when focusing existing window
+                    return Ok(WikiEntry {
+                        path: path.clone(),
+                        filename,
+                        favicon: None,
+                        is_folder: false,
+                        backups_enabled: true,
+                    });
                 }
             }
         }
@@ -1450,9 +1454,6 @@ async fn open_wiki_window(app: tauri::AppHandle, path: String) -> Result<(), Str
             None
         }
     };
-
-    // Add to recent files with favicon
-    add_to_recent(&state, &path, favicon);
 
     // Create a unique key for this wiki path
     let path_key = base64_url_encode(&path);
@@ -1516,7 +1517,14 @@ async fn open_wiki_window(app: tauri::AppHandle, path: String) -> Result<(), Str
         }
     });
 
-    Ok(())
+    // Return the wiki entry so frontend can update its list
+    Ok(WikiEntry {
+        path,
+        filename,
+        favicon,
+        is_folder: false,
+        backups_enabled: true,
+    })
 }
 
 /// Simple base64 URL-safe encoding for path keys
@@ -1590,12 +1598,12 @@ fn wiki_protocol_handler(app: &tauri::AppHandle, request: Request<Vec<u8>>) -> R
 
         let content = String::from_utf8_lossy(request.body()).to_string();
 
-        // Check if backups are enabled for this wiki
+        // Check if backups should be created for this wiki
         let state = app.state::<AppState>();
-        let backups_enabled = are_backups_enabled(&state, wiki_path.to_string_lossy().as_ref());
+        let should_backup = should_create_backup(&state, wiki_path.to_string_lossy().as_ref());
 
-        // Create backup if enabled (synchronous since protocol handlers can't be async)
-        if backups_enabled && wiki_path.exists() {
+        // Create backup if appropriate (synchronous since protocol handlers can't be async)
+        if should_backup && wiki_path.exists() {
             if let Some(parent) = wiki_path.parent() {
                 let filename = wiki_path.file_stem().and_then(|s| s.to_str()).unwrap_or("wiki");
                 let backup_dir = parent.join(format!("{}.backups", filename));
@@ -1678,6 +1686,9 @@ fn wiki_protocol_handler(app: &tauri::AppHandle, request: Request<Vec<u8>>) -> R
 
     drop(paths); // Release the lock before file I/O
 
+    // Check if this is the main wiki
+    let is_main_wiki = file_path == state.main_wiki_path;
+
     // Generate the save URL for this wiki
     let save_url = format!("wikifile://localhost/save/{}", path);
 
@@ -1692,6 +1703,7 @@ fn wiki_protocol_handler(app: &tauri::AppHandle, request: Request<Vec<u8>>) -> R
 window.__WIKI_PATH__ = "{}";
 window.__WINDOW_LABEL__ = "{}";
 window.__SAVE_URL__ = "{}";
+window.__IS_MAIN_WIKI__ = {};
 
 // TiddlyDesktop custom saver - registers as a proper TiddlyWiki module before boot
 (function() {{
@@ -1816,6 +1828,7 @@ window.__SAVE_URL__ = "{}";
                 file_path.display().to_string().replace('\\', "\\\\").replace('"', "\\\""),
                 window_label.replace('\\', "\\\\").replace('"', "\\\""),
                 save_url,
+                is_main_wiki,
                 save_url
             );
 
@@ -1893,23 +1906,39 @@ fn setup_system_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>>
 pub fn run() {
     tauri::Builder::default()
         .setup(|app| {
-            // Get data file path and load wiki list
-            let data_file = get_data_file_path(app);
-            let wiki_list = load_wiki_list(&data_file);
+            // Ensure main wiki exists (creates from template if needed)
+            // This also handles first-run mode selection on macOS/Linux
+            let main_wiki_path = ensure_main_wiki_exists(app)
+                .map_err(|e| Box::new(std::io::Error::new(std::io::ErrorKind::Other, e)) as Box<dyn std::error::Error>)?;
 
-            // Initialize app state with loaded data
+            println!("Main wiki path: {:?}", main_wiki_path);
+
+            // Initialize app state
             app.manage(AppState {
                 wiki_paths: Mutex::new(HashMap::new()),
                 open_wikis: Mutex::new(HashMap::new()),
-                recent_files: Mutex::new(wiki_list),
-                data_file,
                 wiki_servers: Mutex::new(HashMap::new()),
                 next_port: Mutex::new(8080),
+                main_wiki_path: main_wiki_path.clone(),
             });
+
+            // Create a unique key for the main wiki path
+            let path_key = base64_url_encode(&main_wiki_path.to_string_lossy());
+
+            // Store the path mapping for the protocol handler
+            let state = app.state::<AppState>();
+            state.wiki_paths.lock().unwrap().insert(path_key.clone(), main_wiki_path.clone());
+            state.wiki_paths.lock().unwrap().insert(format!("{}_label", path_key), PathBuf::from("main"));
+
+            // Track main wiki as open
+            state.open_wikis.lock().unwrap().insert("main".to_string(), main_wiki_path.to_string_lossy().to_string());
+
+            // Use wikifile:// protocol to load main wiki
+            let wiki_url = format!("wikifile://localhost/{}", path_key);
 
             // Create the main window programmatically with initialization script
             let icon = Image::from_bytes(include_bytes!("../icons/icon.png"))?;
-            WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
+            WebviewWindowBuilder::new(app, "main", WebviewUrl::External(wiki_url.parse().unwrap()))
                 .title("TiddlyDesktopRS")
                 .inner_size(800.0, 600.0)
                 .icon(icon)?
@@ -1940,11 +1969,8 @@ pub fn run() {
             create_wiki_file,
             set_window_title,
             get_window_label,
-            get_recent_files,
-            remove_recent_file,
-            set_wiki_backups,
+            get_main_wiki_path,
             reveal_in_folder,
-            update_wiki_favicon,
             is_mobile,
             show_alert,
             show_confirm,

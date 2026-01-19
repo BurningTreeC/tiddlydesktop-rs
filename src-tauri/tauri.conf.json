@@ -25,7 +25,8 @@
     ],
     "resources": [
       "resources/tiddlywiki/**/*",
-      "resources/binaries/*"
+      "resources/binaries/*",
+      "../src/index.html"
     ],
     "linux": {
       "deb": {
@@ -35,7 +36,11 @@
         "depends": ["libayatana-appindicator-gtk3"]
       }
     },
-    "windows": {},
+    "windows": {
+      "nsis": {
+        "template": "nsis/installer.nsi"
+      }
+    },
     "macOS": {}
   }
 }

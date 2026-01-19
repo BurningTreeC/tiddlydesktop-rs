@@ -5,9 +5,9 @@ A modern, cross-platform desktop application for [TiddlyWiki](https://tiddlywiki
 ## Features
 
 - **Single-file wikis**: Open and edit standalone TiddlyWiki HTML files with automatic saving and backups
-- **Wiki folders**: Full Node.js-powered wiki folder support with real-time syncing (desktop) or Rust-based server (Android)
+- **Wiki folders**: Full Node.js-powered wiki folder support with real-time syncing
 - **Create new wikis**: Initialize new single-file or folder wikis from any TiddlyWiki edition
-- **Cross-platform**: Windows, macOS, Linux, and Android support
+- **Cross-platform**: Windows, macOS, and Linux support
 - **Lightweight**: Small download size and low resource usage thanks to Tauri
 - **Native experience**: System tray, native file dialogs, and platform-specific installers
 
@@ -20,7 +20,6 @@ Download the latest release for your platform from the [Releases page](../../rel
 | Windows | `.msi` (installer) or `.exe` (NSIS installer) |
 | macOS | `.dmg` (disk image) or `.app.zip` |
 | Linux | `.deb` (Debian/Ubuntu), `.rpm` (Fedora/RHEL), or `.AppImage` |
-| Android | `.apk` (direct install) |
 
 ## Installation
 
@@ -63,13 +62,6 @@ sudo rpm -i tiddlydesktop-rs-*.rpm
 chmod +x TiddlyDesktopRS-*.AppImage
 ./TiddlyDesktopRS-*.AppImage
 ```
-
-### Android
-
-1. Download the `.apk` file to your device
-2. Open the file to install
-3. If prompted, enable "Install from unknown sources" for your browser/file manager
-4. Tap **Install**
 
 ## Verifying Downloads
 
@@ -130,24 +122,6 @@ cp -r ../TiddlyWiki5 src-tauri/resources/tiddlywiki
 npm run tauri build
 ```
 
-### Android Build
-
-Additional requirements:
-- Android SDK and NDK
-- Java 17+
-- LLVM/Clang for bindgen
-
-```bash
-# Add Android targets
-rustup target add aarch64-linux-android armv7-linux-androideabi x86_64-linux-android i686-linux-android
-
-# Initialize Android project
-npm run tauri android init
-
-# Build APK
-npm run tauri android build
-```
-
 ## Usage
 
 ### Opening Wikis
@@ -170,7 +144,7 @@ npm run tauri android build
 | Saving | Manual save (Ctrl+S) with backups | Auto-save on every change |
 | Performance | Can be slow with large wikis | Better for large wikis |
 | Plugins | Embedded in file | External plugin folders |
-| Node.js required | No | Yes (desktop) / No (Android) |
+| Node.js required | No | Yes |
 
 ## Why the Security Warnings?
 

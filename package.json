@@ -1,7 +1,7 @@
 {
   "name": "tiddlydesktop-rs",
   "private": true,
-  "version": "0.0.23",
+  "version": "0.0.24",
   "type": "module",
   "scripts": {
     "tauri": "tauri"

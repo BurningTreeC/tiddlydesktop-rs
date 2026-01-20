@@ -1065,6 +1065,17 @@ fn close_window(window: tauri::Window) {
     let _ = window.destroy();
 }
 
+/// Close a window by its label (used by tm-close-window)
+#[tauri::command]
+fn close_window_by_label(app: tauri::AppHandle, label: String) -> Result<(), String> {
+    if let Some(window) = app.get_webview_window(&label) {
+        window.destroy().map_err(|e| e.to_string())?;
+        Ok(())
+    } else {
+        Err(format!("Window '{}' not found", label))
+    }
+}
+
 /// Result of running a command
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CommandResult {
@@ -2602,6 +2613,174 @@ fn get_dialog_init_script() -> &'static str {
             console.log("[TiddlyDesktop] Internal drag-and-drop polyfill ready");
         })();
 
+        // tm-open-window and related handlers for opening tiddlers in new windows
+        (function setupWindowHandlers() {
+            function waitForTiddlyWikiReady() {
+                if (typeof $tw === 'undefined' || !$tw.rootWidget) {
+                    setTimeout(waitForTiddlyWikiReady, 100);
+                    return;
+                }
+
+                // Skip main wiki - it uses its own startup.js handlers
+                if (window.__IS_MAIN_WIKI__) {
+                    console.log('[TiddlyDesktop] Main wiki - window handlers not needed');
+                    return;
+                }
+
+                if (!window.__TAURI__ || !window.__TAURI__.core) {
+                    setTimeout(waitForTiddlyWikiReady, 100);
+                    return;
+                }
+
+                var invoke = window.__TAURI__.core.invoke;
+                var windowLabel = window.__WINDOW_LABEL__ || 'unknown';
+
+                // Store references to opened Tauri windows separately from TiddlyWiki's $tw.windows
+                // TiddlyWiki expects $tw.windows entries to be actual Window objects with document.body
+                // We use our own tracking to avoid conflicts
+                window.__tiddlyDesktopWindows = window.__tiddlyDesktopWindows || {};
+
+                // tm-open-window handler - opens tiddler in new window
+                $tw.rootWidget.addEventListener('tm-open-window', function(event) {
+                    var title = event.param || event.tiddlerTitle;
+                    var paramObject = event.paramObject || {};
+                    var windowTitle = paramObject.windowTitle || title;
+                    var windowID = paramObject.windowID || title;
+                    var template = paramObject.template || '$:/core/templates/single.tiddler.window';
+                    var width = paramObject.width ? parseFloat(paramObject.width) : null;
+                    var height = paramObject.height ? parseFloat(paramObject.height) : null;
+                    var left = paramObject.left ? parseFloat(paramObject.left) : null;
+                    var top = paramObject.top ? parseFloat(paramObject.top) : null;
+
+                    // Collect any additional variables (any params not in the known list)
+                    var knownParams = ['windowTitle', 'windowID', 'template', 'width', 'height', 'left', 'top'];
+                    var extraVariables = {};
+                    for (var key in paramObject) {
+                        if (paramObject.hasOwnProperty(key) && knownParams.indexOf(key) === -1) {
+                            extraVariables[key] = paramObject[key];
+                        }
+                    }
+                    // Always include currentTiddler and tv-window-id
+                    extraVariables.currentTiddler = title;
+                    extraVariables['tv-window-id'] = windowID;
+
+                    console.log('[TiddlyDesktop] tm-open-window:', title, 'template:', template);
+
+                    // Call Tauri command to open tiddler window
+                    invoke('open_tiddler_window', {
+                        parentLabel: windowLabel,
+                        tiddlerTitle: title,
+                        template: template,
+                        windowTitle: windowTitle,
+                        width: width,
+                        height: height,
+                        left: left,
+                        top: top,
+                        variables: JSON.stringify(extraVariables)
+                    }).then(function(newLabel) {
+                        // Store reference in our own tracking (not $tw.windows)
+                        window.__tiddlyDesktopWindows[windowID] = { label: newLabel, title: title };
+                        console.log('[TiddlyDesktop] Opened tiddler window:', newLabel);
+                    }).catch(function(err) {
+                        console.error('[TiddlyDesktop] Failed to open tiddler window:', err);
+                    });
+
+                    // Prevent default TiddlyWiki handler
+                    return false;
+                });
+
+                // tm-close-window handler
+                $tw.rootWidget.addEventListener('tm-close-window', function(event) {
+                    var windowID = event.param;
+                    var windows = window.__tiddlyDesktopWindows || {};
+                    if (windows[windowID]) {
+                        var windowInfo = windows[windowID];
+                        invoke('close_window_by_label', { label: windowInfo.label }).catch(function(err) {
+                            console.error('[TiddlyDesktop] Failed to close window:', err);
+                        });
+                        delete windows[windowID];
+                    }
+                    return false;
+                });
+
+                // tm-close-all-windows handler
+                $tw.rootWidget.addEventListener('tm-close-all-windows', function(event) {
+                    var windows = window.__tiddlyDesktopWindows || {};
+                    Object.keys(windows).forEach(function(windowID) {
+                        var windowInfo = windows[windowID];
+                        invoke('close_window_by_label', { label: windowInfo.label }).catch(function() {});
+                    });
+                    window.__tiddlyDesktopWindows = {};
+                    return false;
+                });
+
+                // tm-open-external-window handler - opens URL in default browser
+                $tw.rootWidget.addEventListener('tm-open-external-window', function(event) {
+                    var url = event.param || 'https://tiddlywiki.com/';
+                    // Use Tauri's opener plugin to open in default browser
+                    if (window.__TAURI__ && window.__TAURI__.opener) {
+                        window.__TAURI__.opener.openUrl(url).catch(function(err) {
+                            console.error('[TiddlyDesktop] Failed to open external URL:', err);
+                        });
+                    }
+                    return false;
+                });
+
+                // ========================================
+                // Cross-window tiddler synchronization
+                // Sync changes between parent wiki and tiddler windows
+                // ========================================
+                var wikiPath = window.__WIKI_PATH__ || '';
+                var currentWindowLabel = window.__WINDOW_LABEL__ || 'unknown';
+                var isReceivingSync = false;  // Flag to prevent sync loops
+                var emit = window.__TAURI__.event.emit;
+                var listen = window.__TAURI__.event.listen;
+
+                // Listen for tiddler changes from other windows
+                listen('wiki-tiddler-change', function(event) {
+                    var payload = event.payload;
+                    // Only process if it's for the same wiki and from a different window
+                    if (payload.wikiPath === wikiPath && payload.sourceWindow !== currentWindowLabel) {
+                        console.log('[TiddlyDesktop] Received tiddler sync:', payload.title, 'from:', payload.sourceWindow);
+                        isReceivingSync = true;
+                        try {
+                            if (payload.deleted) {
+                                $tw.wiki.deleteTiddler(payload.title);
+                            } else if (payload.tiddler) {
+                                $tw.wiki.addTiddler(new $tw.Tiddler(payload.tiddler));
+                            }
+                        } finally {
+                            // Use setTimeout to ensure the change event has fired before clearing flag
+                            setTimeout(function() { isReceivingSync = false; }, 0);
+                        }
+                    }
+                });
+
+                // Watch for local tiddler changes and broadcast to other windows
+                $tw.wiki.addEventListener('change', function(changes) {
+                    // Don't re-broadcast changes we received from sync
+                    if (isReceivingSync) return;
+
+                    Object.keys(changes).forEach(function(title) {
+                        var tiddler = $tw.wiki.getTiddler(title);
+                        var payload = {
+                            wikiPath: wikiPath,
+                            sourceWindow: currentWindowLabel,
+                            title: title,
+                            deleted: changes[title].deleted,
+                            tiddler: tiddler ? tiddler.fields : null
+                        };
+
+                        emit('wiki-tiddler-change', payload);
+                    });
+                });
+
+                console.log('[TiddlyDesktop] Window message handlers ready, sync enabled for:', wikiPath);
+            }
+
+            waitForTiddlyWikiReady();
+        })();
+
     })();
     "#
 }
@@ -3720,6 +3899,110 @@ async fn open_wiki_window(app: tauri::AppHandle, path: String) -> Result<WikiEnt
     Ok(entry)
 }
 
+/// Open a tiddler from a wiki in a new window (single-tiddler view)
+/// The new window shares the same wiki and syncs changes via events
+#[tauri::command]
+async fn open_tiddler_window(
+    app: tauri::AppHandle,
+    parent_label: String,
+    tiddler_title: String,
+    template: Option<String>,
+    window_title: Option<String>,
+    width: Option<f64>,
+    height: Option<f64>,
+    left: Option<f64>,
+    top: Option<f64>,
+    variables: Option<String>, // JSON-encoded additional variables
+) -> Result<String, String> {
+    let state = app.state::<AppState>();
+
+    // Get the wiki path from the parent window
+    let wiki_path = {
+        let open_wikis = state.open_wikis.lock().unwrap();
+        open_wikis.get(&parent_label).cloned()
+    }.ok_or_else(|| format!("Parent window '{}' not found", parent_label))?;
+
+    // Create a unique key for this wiki path
+    let path_key = base64_url_encode(&wiki_path);
+
+    // Generate a unique window label for this tiddler window
+    let safe_title = tiddler_title
+        .chars()
+        .filter(|c| c.is_alphanumeric() || *c == '-')
+        .take(30)
+        .collect::<String>();
+
+    let label = {
+        let open_wikis = state.open_wikis.lock().unwrap();
+        let mut label = format!("tiddler-{}-{}", safe_title, parent_label);
+        let mut counter = 1;
+        while open_wikis.contains_key(&label) {
+            label = format!("tiddler-{}-{}-{}", safe_title, parent_label, counter);
+            counter += 1;
+        }
+        label
+    };
+
+    // Build URL with query parameters for single-tiddler mode
+    let encoded_tiddler = urlencoding::encode(&tiddler_title);
+    let template_param = template.as_deref().unwrap_or("$:/core/templates/single.tiddler.window");
+    let encoded_template = urlencoding::encode(template_param);
+    let encoded_parent = urlencoding::encode(&parent_label);
+
+    let mut wiki_url = format!(
+        "wikifile://localhost/{}?tiddler={}&template={}&parent={}",
+        path_key, encoded_tiddler, encoded_template, encoded_parent
+    );
+
+    // Add variables to URL if provided
+    if let Some(vars) = &variables {
+        let encoded_vars = urlencoding::encode(vars);
+        wiki_url.push_str(&format!("&variables={}", encoded_vars));
+    }
+
+    // Track this window - map to same wiki path but with special marker
+    state.open_wikis.lock().unwrap().insert(label.clone(), format!("{}#tiddler:{}", wiki_path, tiddler_title));
+
+    // Store label for protocol handler
+    state.wiki_paths.lock().unwrap().insert(format!("{}_label", path_key), PathBuf::from(&label));
+
+    let title = window_title.unwrap_or_else(|| tiddler_title.clone());
+    let win_width = width.unwrap_or(700.0);
+    let win_height = height.unwrap_or(600.0);
+
+    let icon = Image::from_bytes(include_bytes!("../icons/icon.png"))
+        .map_err(|e| format!("Failed to load icon: {}", e))?;
+
+    let mut builder = WebviewWindowBuilder::new(&app, &label, WebviewUrl::External(wiki_url.parse().unwrap()))
+        .title(&title)
+        .inner_size(win_width, win_height)
+        .icon(icon)
+        .map_err(|e| format!("Failed to set icon: {}", e))?
+        .window_classname("tiddlydesktop-rs")
+        .initialization_script(get_dialog_init_script());
+
+    // Set window position if specified
+    if let (Some(x), Some(y)) = (left, top) {
+        builder = builder.position(x, y);
+    }
+
+    let window = builder
+        .build()
+        .map_err(|e| format!("Failed to create tiddler window: {}", e))?;
+
+    // Handle window close
+    let app_handle = app.clone();
+    let label_clone = label.clone();
+    window.on_window_event(move |event| {
+        if let tauri::WindowEvent::Destroyed = event {
+            let state = app_handle.state::<AppState>();
+            state.open_wikis.lock().unwrap().remove(&label_clone);
+        }
+    });
+
+    Ok(label)
+}
+
 /// Simple base64 URL-safe encoding for path keys
 fn base64_url_encode(input: &str) -> String {
     use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
@@ -3735,10 +4018,38 @@ fn base64_url_decode(input: &str) -> Option<String> {
         .and_then(|bytes| String::from_utf8(bytes).ok())
 }
 
+/// Parse query string into a HashMap
+fn parse_query_string(query: Option<&str>) -> std::collections::HashMap<String, String> {
+    let mut params = std::collections::HashMap::new();
+    if let Some(q) = query {
+        for pair in q.split('&') {
+            if let Some((key, value)) = pair.split_once('=') {
+                let key = urlencoding::decode(key).unwrap_or_default().to_string();
+                let value = urlencoding::decode(value).unwrap_or_default().to_string();
+                params.insert(key, value);
+            }
+        }
+    }
+    params
+}
+
 /// Handle wiki:// protocol requests
 fn wiki_protocol_handler(app: &tauri::AppHandle, request: Request<Vec<u8>>) -> Response<Vec<u8>> {
     let uri = request.uri();
-    let path = uri.path().trim_start_matches('/');
+    let full_path = uri.path().trim_start_matches('/');
+
+    // Extract path without query string and parse query params
+    let (path, query_params) = {
+        let query = uri.query();
+        let path = full_path.split('?').next().unwrap_or(full_path);
+        (path, parse_query_string(query))
+    };
+
+    // Single-tiddler mode params
+    let single_tiddler = query_params.get("tiddler").cloned();
+    let single_template = query_params.get("template").cloned();
+    let parent_window = query_params.get("parent").cloned();
+    let single_variables = query_params.get("variables").cloned(); // JSON-encoded extra variables
 
     // Handle OPTIONS preflight requests for CORS (required for PUT requests on some platforms)
     if request.method() == "OPTIONS" {
@@ -3942,6 +4253,20 @@ fn wiki_protocol_handler(app: &tauri::AppHandle, request: Request<Vec<u8>>) -> R
     // Generate the save URL for this wiki
     let save_url = format!("wikifile://localhost/save/{}", path);
 
+    // Prepare single-tiddler mode params for injection
+    let single_tiddler_js = single_tiddler.as_ref()
+        .map(|t| format!(r#"window.__SINGLE_TIDDLER__ = "{}";"#, t.replace('\\', "\\\\").replace('"', "\\\"")))
+        .unwrap_or_default();
+    let single_template_js = single_template.as_ref()
+        .map(|t| format!(r#"window.__SINGLE_TEMPLATE__ = "{}";"#, t.replace('\\', "\\\\").replace('"', "\\\"")))
+        .unwrap_or_default();
+    let parent_window_js = parent_window.as_ref()
+        .map(|p| format!(r#"window.__PARENT_WINDOW__ = "{}";"#, p.replace('\\', "\\\\").replace('"', "\\\"")))
+        .unwrap_or_default();
+    let single_variables_js = single_variables.as_ref()
+        .map(|v| format!(r#"window.__SINGLE_VARIABLES__ = {};"#, v)) // Already JSON
+        .unwrap_or_default();
+
     // Read file content
     let read_result = std::fs::read_to_string(&file_path);
 
@@ -3954,6 +4279,10 @@ window.__WIKI_PATH__ = "{}";
 window.__WINDOW_LABEL__ = "{}";
 window.__SAVE_URL__ = "{}";
 window.__IS_MAIN_WIKI__ = {};
+{}
+{}
+{}
+{}
 
 // TiddlyDesktop custom saver - registers as a proper TiddlyWiki module before boot
 (function() {{
@@ -4113,6 +4442,96 @@ window.__IS_MAIN_WIKI__ = {};
         setInterval(syncTitle, 2000);
     }})();
 
+    // Single-tiddler window mode
+    if (window.__SINGLE_TIDDLER__) {{
+        (function() {{
+            var tiddlerTitle = window.__SINGLE_TIDDLER__;
+            var templateTitle = window.__SINGLE_TEMPLATE__ || '$:/core/templates/single.tiddler.window';
+            var parentWindow = window.__PARENT_WINDOW__;
+
+            function renderSingleTiddler() {{
+                if (typeof $tw === 'undefined' || !$tw.wiki || !$tw.rootWidget) {{
+                    setTimeout(renderSingleTiddler, 50);
+                    return;
+                }}
+
+                // Hide the normal TiddlyWiki UI
+                var pageContainer = document.querySelector('.tc-page-container');
+                if (pageContainer) {{
+                    pageContainer.style.display = 'none';
+                }}
+
+                // Create container for single tiddler view
+                var container = document.createElement('div');
+                container.className = 'tc-single-tiddler-window tc-body';
+                document.body.appendChild(container);
+
+                // Set up variables for the template
+                var variables = {{
+                    currentTiddler: tiddlerTitle,
+                    'tv-window-id': window.__WINDOW_LABEL__
+                }};
+
+                // Merge any additional variables passed via paramObject
+                if (window.__SINGLE_VARIABLES__) {{
+                    var extraVars = window.__SINGLE_VARIABLES__;
+                    for (var key in extraVars) {{
+                        if (extraVars.hasOwnProperty(key)) {{
+                            variables[key] = extraVars[key];
+                        }}
+                    }}
+                }}
+
+                // Render styles
+                var styleWidgetNode = $tw.wiki.makeTranscludeWidget('$:/core/ui/PageStylesheet', {{
+                    document: $tw.fakeDocument,
+                    variables: variables,
+                    importPageMacros: true
+                }});
+                var styleContainer = $tw.fakeDocument.createElement('style');
+                styleWidgetNode.render(styleContainer, null);
+                var styleElement = document.createElement('style');
+                styleElement.innerHTML = styleContainer.textContent;
+                document.head.appendChild(styleElement);
+
+                // Render the tiddler using the template
+                var parser = $tw.wiki.parseTiddler(templateTitle);
+                var widgetNode = $tw.wiki.makeWidget(parser, {{
+                    document: document,
+                    parentWidget: $tw.rootWidget,
+                    variables: variables
+                }});
+                widgetNode.render(container, null);
+
+                // Set up refresh handler
+                $tw.wiki.addEventListener('change', function(changes) {{
+                    if (styleWidgetNode.refresh(changes, styleContainer, null)) {{
+                        styleElement.innerHTML = styleContainer.textContent;
+                    }}
+                    widgetNode.refresh(changes);
+                }});
+
+                // Listen for keyboard shortcuts
+                document.addEventListener('keydown', function(event) {{
+                    if ($tw.keyboardManager) {{
+                        $tw.keyboardManager.handleKeydownEvent(event);
+                    }}
+                }});
+
+                // Handle popups
+                document.documentElement.addEventListener('click', function(event) {{
+                    if ($tw.popup) {{
+                        $tw.popup.handleEvent(event);
+                    }}
+                }}, true);
+
+                console.log('Single-tiddler window initialized for:', tiddlerTitle);
+            }}
+
+            renderSingleTiddler();
+        }})();
+    }}
+
     // External attachments support is provided by the initialization script (get_dialog_init_script)
 }})();
 </script>"##,
@@ -4120,6 +4539,10 @@ window.__IS_MAIN_WIKI__ = {};
                 window_label.replace('\\', "\\\\").replace('"', "\\\""),
                 save_url,
                 is_main_wiki,
+                single_tiddler_js,
+                single_template_js,
+                parent_window_js,
+                single_variables_js,
                 save_url
             );
 
@@ -4271,6 +4694,7 @@ pub fn run() {
             save_wiki,
             open_wiki_window,
             open_wiki_folder,
+            open_tiddler_window,
             check_is_wiki_folder,
             check_folder_status,
             get_available_editions,
@@ -4284,6 +4708,7 @@ pub fn run() {
             show_alert,
             show_confirm,
             close_window,
+            close_window_by_label,
             get_recent_files,
             remove_recent_file,
             set_wiki_backups,

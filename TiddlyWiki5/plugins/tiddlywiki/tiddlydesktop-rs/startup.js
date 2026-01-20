@@ -60,7 +60,8 @@ exports.startup = function(callback) {
 		document.body.classList.add("td-main-wiki");
 	}
 
-	// Wiki list is only managed in the main wiki
+	// Non-main wikis don't need the wiki list management - external attachments
+	// and drag-drop are handled by the protocol handler script injection
 	if (!isMainWiki) {
 		console.log("Not main wiki, skipping wiki list management");
 		callback();

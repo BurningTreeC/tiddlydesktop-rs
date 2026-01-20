@@ -138,6 +138,66 @@ fn get_recent_files_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     Ok(data_dir.join("recent_wikis.json"))
 }
 
+/// Configuration for external attachments per wiki
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ExternalAttachmentsConfig {
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default)]
+    pub use_absolute_for_descendents: bool,
+    #[serde(default)]
+    pub use_absolute_for_non_descendents: bool,
+}
+
+impl Default for ExternalAttachmentsConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,  // Enable by default
+            use_absolute_for_descendents: false,
+            use_absolute_for_non_descendents: false,
+        }
+    }
+}
+
+fn default_true() -> bool {
+    true
+}
+
+/// All wiki configs stored in a single file, keyed by wiki path
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+struct WikiConfigs {
+    #[serde(default)]
+    external_attachments: HashMap<String, ExternalAttachmentsConfig>,
+}
+
+/// Get the path to the wiki configs JSON
+fn get_wiki_configs_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    let data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    Ok(data_dir.join("wiki_configs.json"))
+}
+
+/// Load all wiki configs from disk
+fn load_wiki_configs(app: &tauri::AppHandle) -> Result<WikiConfigs, String> {
+    let path = get_wiki_configs_path(app)?;
+    if path.exists() {
+        let content = std::fs::read_to_string(&path)
+            .map_err(|e| format!("Failed to read wiki configs: {}", e))?;
+        serde_json::from_str(&content)
+            .map_err(|e| format!("Failed to parse wiki configs: {}", e))
+    } else {
+        Ok(WikiConfigs::default())
+    }
+}
+
+/// Save all wiki configs to disk
+fn save_wiki_configs(app: &tauri::AppHandle, configs: &WikiConfigs) -> Result<(), String> {
+    let path = get_wiki_configs_path(app)?;
+    let content = serde_json::to_string_pretty(configs)
+        .map_err(|e| format!("Failed to serialize wiki configs: {}", e))?;
+    std::fs::write(&path, content)
+        .map_err(|e| format!("Failed to write wiki configs: {}", e))
+}
+
 /// Load recent files from disk
 fn load_recent_files_from_disk(app: &tauri::AppHandle) -> Vec<WikiEntry> {
     let path = match get_recent_files_path(app) {
@@ -1163,7 +1223,6 @@ fn get_dialog_init_script() -> &'static str {
                 }
 
                 var invoke = window.__TAURI__.core.invoke;
-                var loadingTiddlers = {};
                 var wikiPath = window.__WIKI_PATH__ || '';
 
                 function isUrl(path) {
@@ -1188,9 +1247,30 @@ fn get_dialog_init_script() -> &'static str {
                     return true; // Either absolute or relative filesystem path
                 }
 
+                function normalizePath(path) {
+                    // Normalize path by resolving . and .. segments
+                    var separator = path.indexOf('\\') >= 0 ? '\\' : '/';
+                    var parts = path.split(/[/\\]/);
+                    var result = [];
+                    for (var i = 0; i < parts.length; i++) {
+                        var part = parts[i];
+                        if (part === '..') {
+                            if (result.length > 0 && result[result.length - 1] !== '') {
+                                result.pop();
+                            }
+                        } else if (part !== '.' && part !== '') {
+                            result.push(part);
+                        } else if (part === '' && i === 0) {
+                            // Keep leading empty string for absolute paths (e.g., /home/...)
+                            result.push('');
+                        }
+                    }
+                    return result.join(separator);
+                }
+
                 function resolveFilesystemPath(path) {
                     if(isAbsolutePath(path)) {
-                        return path;
+                        return normalizePath(path);
                     }
                     // Relative path - resolve against wiki path
                     if(!wikiPath) {
@@ -1208,7 +1288,8 @@ fn get_dialog_init_script() -> &'static str {
                     }
                     // Join paths (handle both / and \ separators)
                     var separator = basePath.indexOf('\\') >= 0 ? '\\' : '/';
-                    return basePath + separator + path.replace(/[/\\]/g, separator);
+                    var fullPath = basePath + separator + path.replace(/[/\\]/g, separator);
+                    return normalizePath(fullPath);
                 }
 
                 // Override httpRequest to support filesystem paths
@@ -1262,58 +1343,76 @@ fn get_dialog_init_script() -> &'static str {
                 };
                 console.log('[TiddlyDesktop] httpRequest override installed');
 
-                // Handle _canonical_uri with filesystem paths (absolute or relative)
-                function loadTiddlerContent(title) {
-                    var tiddler = $tw.wiki.getTiddler(title);
-                    if(!tiddler) return;
+                // Intercept media loading to convert filesystem paths to asset:// URLs
+                // TiddlyWiki's parsers set src to _canonical_uri directly for:
+                // - <img> (images), <iframe> (PDFs), <audio>, <video>
+                // We need to convert those paths to URLs the browser can load
+                function setupMediaInterceptor() {
+                    if (!window.__TAURI__ || !window.__TAURI__.core || !window.__TAURI__.core.convertFileSrc) {
+                        setTimeout(setupMediaInterceptor, 100);
+                        return;
+                    }
 
-                    var uri = tiddler.fields._canonical_uri;
-                    if(!uri || !isFilesystemPath(uri)) return;
-                    if(loadingTiddlers[title]) return;
+                    var convertFileSrc = window.__TAURI__.core.convertFileSrc;
 
-                    var resolvedPath = resolveFilesystemPath(uri);
-                    if(!resolvedPath) return;
+                    function convertElementSrc(element) {
+                        var src = element.getAttribute('src');
+                        if (!src) return;
 
-                    loadingTiddlers[title] = true;
-                    console.log('[TiddlyDesktop] Loading _canonical_uri:', resolvedPath, 'for:', title);
+                        // Skip if already converted or is a data URI or web URL
+                        if (src.startsWith('asset://') || src.startsWith('data:') ||
+                            src.startsWith('http://') || src.startsWith('https://') ||
+                            src.startsWith('blob:') || src.startsWith('wikifile://')) {
+                            return;
+                        }
 
-                    invoke('read_file_as_data_uri', { path: resolvedPath })
-                        .then(function(dataUri) {
-                            var match = dataUri.match(/^data:([^;]+);base64,(.+)$/);
-                            if(match) {
-                                var newFields = Object.assign({}, tiddler.fields, {
-                                    text: match[2]
-                                });
-                                delete newFields._canonical_uri;
-                                // Use syncer.storeTiddler to avoid marking wiki as dirty
-                                if($tw.syncer && $tw.syncer.storeTiddler) {
-                                    $tw.syncer.storeTiddler(newFields);
-                                } else {
-                                    $tw.wiki.addTiddler(new $tw.Tiddler(newFields));
+                        // Check if it's a filesystem path (relative or absolute)
+                        var resolvedPath = resolveFilesystemPath(src);
+                        if (resolvedPath) {
+                            var assetUrl = convertFileSrc(resolvedPath);
+                            console.log('[TiddlyDesktop] Converting src:', src, '->', assetUrl);
+                            element.setAttribute('src', assetUrl);
+                        }
+                    }
+
+                    // Elements that can have src pointing to _canonical_uri
+                    var mediaSelectors = 'img, iframe, audio, video, embed, source';
+
+                    // Process existing elements
+                    document.querySelectorAll(mediaSelectors).forEach(convertElementSrc);
+
+                    // Watch for new elements being added or src changes
+                    var observer = new MutationObserver(function(mutations) {
+                        mutations.forEach(function(mutation) {
+                            // Handle added nodes
+                            mutation.addedNodes.forEach(function(node) {
+                                if (node.nodeType === 1) { // Element node
+                                    if (node.matches && node.matches(mediaSelectors)) {
+                                        convertElementSrc(node);
+                                    }
+                                    if (node.querySelectorAll) {
+                                        node.querySelectorAll(mediaSelectors).forEach(convertElementSrc);
+                                    }
                                 }
-                                console.log('[TiddlyDesktop] Loaded content for:', title);
+                            });
+                            // Handle src attribute changes
+                            if (mutation.type === 'attributes' && mutation.attributeName === 'src') {
+                                convertElementSrc(mutation.target);
                             }
-                            delete loadingTiddlers[title];
-                        })
-                        .catch(function(err) {
-                            console.error('[TiddlyDesktop] Failed to load:', uri, err);
-                            delete loadingTiddlers[title];
                         });
+                    });
+
+                    observer.observe(document.body, {
+                        childList: true,
+                        subtree: true,
+                        attributes: true,
+                        attributeFilter: ['src']
+                    });
+
+                    console.log('[TiddlyDesktop] Media interceptor installed');
                 }
 
-                // Process existing tiddlers with absolute _canonical_uri
-                $tw.wiki.each(function(tiddler, title) {
-                    loadTiddlerContent(title);
-                });
-
-                // Listen for new/changed tiddlers
-                $tw.wiki.addEventListener('change', function(changes) {
-                    $tw.utils.each(changes, function(change, title) {
-                        if(!change.deleted) {
-                            loadTiddlerContent(title);
-                        }
-                    });
-                });
+                setupMediaInterceptor();
 
                 console.log('[TiddlyDesktop] Filesystem support installed');
             }
@@ -1322,6 +1421,1068 @@ fn get_dialog_init_script() -> &'static str {
         }
 
         setupFilesystemSupport();
+
+        // ========================================
+        // External Attachments Support
+        // ========================================
+
+        function pathToFileUrl(filepath) {
+            var path = filepath.replace(/\\/g, "/");
+            if (path.charAt(0) !== "/") {
+                path = "/" + path;
+            }
+            if (path.substring(0, 2) === "//") {
+                path = path.substring(1);
+            }
+            return path;
+        }
+
+        function makePathRelative(sourcepath, rootpath, options) {
+            options = options || {};
+            sourcepath = pathToFileUrl(sourcepath);
+            rootpath = pathToFileUrl(rootpath);
+
+            var sourceParts = sourcepath.split("/");
+            var rootParts = rootpath.split("/");
+
+            // Don't URL-encode paths - we're dealing with local filesystem paths
+            // that our filesystem support handles directly
+
+            var c = 0;
+            while (c < sourceParts.length && c < rootParts.length && sourceParts[c] === rootParts[c]) {
+                c += 1;
+            }
+
+            if (c === 1 ||
+                (options.useAbsoluteForNonDescendents && c < rootParts.length) ||
+                (options.useAbsoluteForDescendents && c === rootParts.length)) {
+                // Return absolute path without file:// prefix for our filesystem support
+                return sourcepath;
+            }
+
+            var outputParts = [];
+            for (var p = c; p < rootParts.length - 1; p++) {
+                outputParts.push("..");
+            }
+            for (p = c; p < sourceParts.length; p++) {
+                outputParts.push(sourceParts[p]);
+            }
+            return outputParts.join("/");
+        }
+
+        function getMimeType(filename) {
+            var ext = filename.split(".").pop().toLowerCase();
+            var mimeTypes = {
+                "png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg",
+                "gif": "image/gif", "webp": "image/webp", "svg": "image/svg+xml",
+                "ico": "image/x-icon", "bmp": "image/bmp", "pdf": "application/pdf",
+                "mp3": "audio/mpeg", "mp4": "video/mp4", "webm": "video/webm",
+                "ogg": "audio/ogg", "wav": "audio/wav", "zip": "application/zip"
+            };
+            return mimeTypes[ext] || "application/octet-stream";
+        }
+
+        // Store file paths during drag for the drop event
+        var pendingFilePaths = [];
+
+        function createSyntheticDragEvent(type, position, dataTransfer, relatedTarget) {
+            var event = new DragEvent(type, {
+                bubbles: true,
+                cancelable: true,
+                clientX: position ? position.x : 0,
+                clientY: position ? position.y : 0,
+                dataTransfer: dataTransfer,
+                relatedTarget: relatedTarget !== undefined ? relatedTarget : null
+            });
+            return event;
+        }
+
+        var extAttachRetryCount = 0;
+        function setupExternalAttachments() {
+            extAttachRetryCount++;
+
+            if (!window.__TAURI__ || !window.__TAURI__.event) {
+                if (extAttachRetryCount < 50) {
+                    setTimeout(setupExternalAttachments, 100);
+                }
+                return;
+            }
+
+            // Skip main wiki - no file imports there
+            if (window.__IS_MAIN_WIKI__) {
+                console.log('[TiddlyDesktop] Main wiki - external attachments disabled');
+                return;
+            }
+
+            // Wait for __WIKI_PATH__ to be set (by protocol handler script)
+            if (!window.__WIKI_PATH__) {
+                if (extAttachRetryCount < 50) {
+                    setTimeout(setupExternalAttachments, 100);
+                } else {
+                    console.log('[TiddlyDesktop] No wiki path available after 5s, external attachments disabled');
+                }
+                return;
+            }
+
+            var listen = window.__TAURI__.event.listen;
+            var invoke = window.__TAURI__.core.invoke;
+            var wikiPath = window.__WIKI_PATH__;
+
+            console.log("[TiddlyDesktop] Setting up drag-drop listeners for:", wikiPath);
+
+            // Get element at position - universal, works for any element
+            function getTargetElement(position) {
+                if (position && position.x !== undefined && position.y !== undefined) {
+                    var el = document.elementFromPoint(position.x, position.y);
+                    if (el) return el;
+                }
+                // Fallback to document body
+                return document.body;
+            }
+
+            // Track state for drag operations
+            var enteredTarget = null;
+            var currentTarget = null;
+            var isDragging = false;
+
+            // Helper to create DataTransfer with pending files
+            function createDataTransferWithFiles() {
+                var dt = new DataTransfer();
+                pendingFilePaths.forEach(function(path) {
+                    var filename = path.split(/[/\\]/).pop();
+                    dt.items.add(new File([""], filename, { type: getMimeType(filename) }));
+                });
+                return dt;
+            }
+
+            // Listen to drag-enter events - start of drag over window
+            listen("tauri://drag-enter", function(event) {
+                var paths = event.payload.paths || [];
+
+                // Skip if this is an internal drag (Tauri detects internal drags as external)
+                // Check: all paths are data URLs, or $tw.dragInProgress is set
+                var isInternalDrag = (typeof $tw !== "undefined" && $tw.dragInProgress) ||
+                    (paths.length > 0 && paths.every(function(p) { return p.startsWith("data:"); }));
+
+                if (isInternalDrag) {
+                    console.log("[TiddlyDesktop] tauri://drag-enter skipped (internal drag detected)");
+                    return;
+                }
+
+                console.log("[TiddlyDesktop] tauri://drag-enter received");
+                pendingFilePaths = paths;
+                isDragging = true;
+
+                var target = getTargetElement(event.payload.position);
+                enteredTarget = target;
+                currentTarget = target;
+
+                var dt = createDataTransferWithFiles();
+
+                // Fire dragenter on the target
+                var enterEvent = createSyntheticDragEvent("dragenter", event.payload.position, dt);
+                console.log("[TiddlyDesktop] dragenter ->", target.tagName, target.className);
+                target.dispatchEvent(enterEvent);
+            });
+
+            // Listen to drag-over events - continuous drag over window
+            listen("tauri://drag-over", function(event) {
+                // Skip if not in external drag mode (internal drags handle their own events)
+                if (!isDragging) return;
+
+                // Also skip if $tw.dragInProgress is set (internal drag took over)
+                if (typeof $tw !== "undefined" && $tw.dragInProgress) return;
+
+                var target = getTargetElement(event.payload.position);
+                var dt = createDataTransferWithFiles();
+
+                // If target changed, fire dragleave on old target and dragenter on new target
+                if (currentTarget && currentTarget !== target) {
+                    // relatedTarget for dragleave is the element being entered
+                    var leaveEvent = createSyntheticDragEvent("dragleave", event.payload.position, dt, target);
+                    currentTarget.dispatchEvent(leaveEvent);
+
+                    // relatedTarget for dragenter is the element being left
+                    var enterEvent = createSyntheticDragEvent("dragenter", event.payload.position, dt, currentTarget);
+                    target.dispatchEvent(enterEvent);
+                }
+
+                currentTarget = target;
+
+                // Fire dragover (must be fired continuously and preventDefault called to allow drop)
+                var overEvent = createSyntheticDragEvent("dragover", event.payload.position, dt);
+                target.dispatchEvent(overEvent);
+            });
+
+            // Helper to cancel external drag and clear all dropzone highlights
+            function cancelExternalDrag(reason) {
+                if (!isDragging) return;
+
+                console.log("[TiddlyDesktop] Canceling external drag:", reason);
+
+                var dt = createDataTransferWithFiles();
+
+                // Fire dragleave on current target with relatedTarget=null to signal leaving window
+                if (currentTarget) {
+                    var leaveEvent = createSyntheticDragEvent("dragleave", null, dt, null);
+                    console.log("[TiddlyDesktop] dragleave ->", currentTarget.tagName, currentTarget.className);
+                    currentTarget.dispatchEvent(leaveEvent);
+                }
+
+                // Fire dragleave and dragend on ALL elements with tc-dragover class
+                // The dragend triggers TiddlyWiki's dropzone resetState() method
+                document.querySelectorAll(".tc-dragover").forEach(function(el) {
+                    var droppableLeaveEvent = createSyntheticDragEvent("dragleave", null, dt, null);
+                    el.dispatchEvent(droppableLeaveEvent);
+                    var dropzoneEndEvent = createSyntheticDragEvent("dragend", null, dt, null);
+                    el.dispatchEvent(dropzoneEndEvent);
+                    el.classList.remove("tc-dragover");
+                });
+
+                // Also fire dragend on dropzone elements that might not have tc-dragover yet
+                document.querySelectorAll(".tc-dropzone").forEach(function(el) {
+                    var dropzoneEndEvent = createSyntheticDragEvent("dragend", null, dt, null);
+                    el.dispatchEvent(dropzoneEndEvent);
+                });
+
+                // Remove tc-dragging class from any elements that have it
+                document.querySelectorAll(".tc-dragging").forEach(function(el) {
+                    el.classList.remove("tc-dragging");
+                });
+
+                // Fire dragend on body as well
+                var endEvent = createSyntheticDragEvent("dragend", null, dt, null);
+                document.body.dispatchEvent(endEvent);
+
+                // Reset TiddlyWiki's internal drag state
+                if (typeof $tw !== "undefined") {
+                    $tw.dragInProgress = null;
+                }
+
+                pendingFilePaths = [];
+                enteredTarget = null;
+                currentTarget = null;
+                isDragging = false;
+            }
+
+            // Listen to drag-leave events - drag left the window without dropping
+            listen("tauri://drag-leave", function(event) {
+                // Skip if not in external drag mode
+                if (!isDragging) {
+                    console.log("[TiddlyDesktop] tauri://drag-leave skipped (not in external drag)");
+                    return;
+                }
+                console.log("[TiddlyDesktop] tauri://drag-leave received");
+                cancelExternalDrag("drag left window");
+            });
+
+            // Handle Escape key during external drag
+            document.addEventListener("keydown", function(event) {
+                if (event.key === "Escape" && isDragging) {
+                    cancelExternalDrag("escape pressed");
+                }
+            }, true);
+
+            // Handle window blur during external drag
+            window.addEventListener("blur", function(event) {
+                if (isDragging) {
+                    cancelExternalDrag("window lost focus");
+                }
+            }, true);
+
+            // Global map to store pending file paths for the import hook
+            window.__pendingExternalFiles = window.__pendingExternalFiles || {};
+
+            // Listen to drag-drop events - files dropped on window
+            listen("tauri://drag-drop", function(event) {
+                var paths = event.payload.paths;
+                if (!paths || paths.length === 0) return;
+
+                // Skip if this is from an internal drag (internal drags handle their own drop)
+                var isInternalDrag = (typeof $tw !== "undefined" && $tw.dragInProgress) ||
+                    paths.every(function(p) { return p.startsWith("data:"); });
+
+                if (isInternalDrag) {
+                    console.log("[TiddlyDesktop] tauri://drag-drop skipped (internal drag)");
+                    isDragging = false;
+                    return;
+                }
+
+                console.log("[TiddlyDesktop] tauri://drag-drop received, paths:", paths.length);
+
+                var dropTarget = getTargetElement(event.payload.position);
+                var pos = event.payload.position;
+
+                // Read all files and create File objects for the drop event
+                var filePromises = paths.map(function(filepath) {
+                    // Skip data URLs and non-file paths (from internal TiddlyWiki drag operations)
+                    if (filepath.startsWith("data:") || (!filepath.startsWith("/") && !filepath.match(/^[A-Za-z]:\\/))) {
+                        console.log("[TiddlyDesktop] Skipping non-file path:", filepath.substring(0, 50) + "...");
+                        return Promise.resolve(null);
+                    }
+
+                    var filename = filepath.split(/[/\\]/).pop();
+                    var mimeType = getMimeType(filename);
+
+                    // Skip wiki files
+                    if (filename.toLowerCase().endsWith(".html") || filename.toLowerCase().endsWith(".htm")) {
+                        return Promise.resolve(null);
+                    }
+
+                    return invoke("read_file_as_binary", { path: filepath }).then(function(bytes) {
+                        // Store the path in global map for the import hook to find
+                        window.__pendingExternalFiles[filename] = filepath;
+                        console.log("[TiddlyDesktop] Stored pending file:", filename, "->", filepath);
+
+                        var file = new File([new Uint8Array(bytes)], filename, { type: mimeType });
+                        return file;
+                    }).catch(function(err) {
+                        console.error("[TiddlyDesktop] Failed to read file:", filepath, err);
+                        return null;
+                    });
+                });
+
+                Promise.all(filePromises).then(function(files) {
+                    var validFiles = files.filter(function(f) { return f !== null; });
+                    if (validFiles.length === 0) return;
+
+                    // Create DataTransfer with actual file content
+                    var dt = new DataTransfer();
+                    validFiles.forEach(function(file) {
+                        dt.items.add(file);
+                    });
+
+                    // Fire dragleave on current target first (to unhighlight dropzone)
+                    // Use relatedTarget=null to signal drag is ending, not moving to another element
+                    if (currentTarget) {
+                        var leaveEvent = createSyntheticDragEvent("dragleave", pos, dt, null);
+                        currentTarget.dispatchEvent(leaveEvent);
+                    }
+
+                    console.log("[TiddlyDesktop] Dispatching drop with", validFiles.length, "files to", dropTarget.tagName);
+
+                    // Fire drop event
+                    var dropEvent = createSyntheticDragEvent("drop", pos, dt);
+                    dropTarget.dispatchEvent(dropEvent);
+
+                    // Fire dragend to signal drag operation completed
+                    var endEvent = createSyntheticDragEvent("dragend", pos, dt);
+                    document.body.dispatchEvent(endEvent);
+
+                    // Clear pending files after a delay (import should be done by then)
+                    setTimeout(function() {
+                        window.__pendingExternalFiles = {};
+                    }, 5000);
+                });
+
+                pendingFilePaths = [];
+                enteredTarget = null;
+                currentTarget = null;
+                isDragging = false;
+            });
+
+            // Config tiddler titles (injected temporarily, stored in Tauri)
+            var CONFIG_ENABLE = "$:/config/TiddlyDesktop/ExternalAttachments/Enable";
+            var CONFIG_ABS_DESC = "$:/config/TiddlyDesktop/ExternalAttachments/UseAbsoluteForDescendents";
+            var CONFIG_ABS_NONDESC = "$:/config/TiddlyDesktop/ExternalAttachments/UseAbsoluteForNonDescendents";
+            var CONFIG_SETTINGS_TAB = "$:/plugins/tiddlydesktop/external-attachments/settings";
+            var ALL_CONFIG_TIDDLERS = [CONFIG_ENABLE, CONFIG_ABS_DESC, CONFIG_ABS_NONDESC, CONFIG_SETTINGS_TAB];
+
+            // Install TiddlyWiki import hook to handle external attachments
+            function installImportHook() {
+                if (typeof $tw === 'undefined' || !$tw.hooks) {
+                    setTimeout(installImportHook, 100);
+                    return;
+                }
+
+                $tw.hooks.addHook("th-importing-file", function(info) {
+                    var file = info.file;
+                    var filename = file.name;
+
+                    // Read config from tiddlers
+                    var externalEnabled = $tw.wiki.getTiddlerText(CONFIG_ENABLE, "yes") === "yes";
+                    var useAbsDesc = $tw.wiki.getTiddlerText(CONFIG_ABS_DESC, "no") === "yes";
+                    var useAbsNonDesc = $tw.wiki.getTiddlerText(CONFIG_ABS_NONDESC, "no") === "yes";
+
+                    // Check if this file is in our pending external files map
+                    var originalPath = window.__pendingExternalFiles && window.__pendingExternalFiles[filename];
+
+                    console.log("[TiddlyDesktop] Import hook called for:", filename, "path:", originalPath, "binary:", info.isBinary, "external:", externalEnabled);
+
+                    if (originalPath && externalEnabled && info.isBinary) {
+                        console.log("[TiddlyDesktop] Import hook - converting to external:", filename);
+
+                        // Calculate the canonical URI
+                        var canonicalUri = makePathRelative(originalPath, wikiPath, {
+                            useAbsoluteForDescendents: useAbsDesc,
+                            useAbsoluteForNonDescendents: useAbsNonDesc
+                        });
+
+                        // Remove from pending map
+                        delete window.__pendingExternalFiles[filename];
+
+                        // Call the callback with our external attachment tiddler fields
+                        info.callback([
+                            {
+                                title: filename,
+                                type: info.type,
+                                "_canonical_uri": canonicalUri
+                            }
+                        ]);
+
+                        console.log("[TiddlyDesktop] Created external attachment:", filename, "->", canonicalUri);
+
+                        // Return true to prevent default file reading
+                        return true;
+                    }
+
+                    // Return false to let normal import proceed
+                    return false;
+                });
+
+                console.log("[TiddlyDesktop] Import hook installed");
+            }
+
+            // Read current config from tiddlers and save to Tauri
+            function saveConfigToTauri() {
+                if (typeof $tw === 'undefined' || !$tw.wiki) return;
+
+                var config = {
+                    enabled: $tw.wiki.getTiddlerText(CONFIG_ENABLE, "yes") === "yes",
+                    use_absolute_for_descendents: $tw.wiki.getTiddlerText(CONFIG_ABS_DESC, "no") === "yes",
+                    use_absolute_for_non_descendents: $tw.wiki.getTiddlerText(CONFIG_ABS_NONDESC, "no") === "yes"
+                };
+
+                invoke("set_external_attachments_config", { wikiPath: wikiPath, config: config })
+                    .then(function() {
+                        console.log("[TiddlyDesktop] Saved external attachments config to Tauri");
+                    })
+                    .catch(function(err) {
+                        console.error("[TiddlyDesktop] Failed to save config:", err);
+                    });
+            }
+
+            // Delete all injected config tiddlers
+            function deleteConfigTiddlers() {
+                if (typeof $tw === 'undefined' || !$tw.wiki) return;
+
+                var originalNumChanges = $tw.saverHandler ? $tw.saverHandler.numChanges : 0;
+
+                ALL_CONFIG_TIDDLERS.forEach(function(title) {
+                    if ($tw.wiki.tiddlerExists(title)) {
+                        $tw.wiki.deleteTiddler(title);
+                        console.log("[TiddlyDesktop] Deleted config tiddler:", title);
+                    }
+                });
+
+                // Reset dirty counter so deletions don't trigger save prompt
+                if ($tw.saverHandler) {
+                    setTimeout(function() {
+                        $tw.saverHandler.numChanges = originalNumChanges;
+                        $tw.saverHandler.updateDirtyStatus();
+                    }, 0);
+                }
+            }
+
+            // Inject config tiddlers and settings UI
+            function injectConfigTiddlers(config) {
+                // Wait for TiddlyWiki and saverHandler to be fully initialized
+                if (typeof $tw === 'undefined' || !$tw.wiki || !$tw.wiki.addTiddler || !$tw.saverHandler) {
+                    setTimeout(function() { injectConfigTiddlers(config); }, 100);
+                    return;
+                }
+
+                // Store the current dirty count before adding tiddlers
+                var originalNumChanges = $tw.saverHandler.numChanges || 0;
+
+                // Inject config tiddlers with values from Tauri
+                $tw.wiki.addTiddler(new $tw.Tiddler({
+                    title: CONFIG_ENABLE,
+                    text: config.enabled ? "yes" : "no"
+                }));
+                $tw.wiki.addTiddler(new $tw.Tiddler({
+                    title: CONFIG_ABS_DESC,
+                    text: config.use_absolute_for_descendents ? "yes" : "no"
+                }));
+                $tw.wiki.addTiddler(new $tw.Tiddler({
+                    title: CONFIG_ABS_NONDESC,
+                    text: config.use_absolute_for_non_descendents ? "yes" : "no"
+                }));
+
+                // Inject settings tab using TiddlyWiki's native checkbox widgets
+                $tw.wiki.addTiddler(new $tw.Tiddler({
+                    title: CONFIG_SETTINGS_TAB,
+                    caption: "External Attachments",
+                    tags: "$:/tags/ControlPanel/SettingsTab",
+                    text: "When importing binary files (images, PDFs, etc.) into this wiki, you can optionally store them as external references instead of embedding them.\n\n" +
+                          "This keeps your wiki file smaller and allows the files to be edited externally.\n\n" +
+                          "<$checkbox tiddler=\"" + CONFIG_ENABLE + "\" field=\"text\" checked=\"yes\" unchecked=\"no\" default=\"yes\"> Enable external attachments</$checkbox>\n\n" +
+                          "<$checkbox tiddler=\"" + CONFIG_ABS_DESC + "\" field=\"text\" checked=\"yes\" unchecked=\"no\" default=\"no\"> Use absolute paths for files inside wiki folder</$checkbox>\n\n" +
+                          "<$checkbox tiddler=\"" + CONFIG_ABS_NONDESC + "\" field=\"text\" checked=\"yes\" unchecked=\"no\" default=\"no\"> Use absolute paths for files outside wiki folder</$checkbox>"
+                }));
+
+                // Restore dirty counter after injection
+                setTimeout(function() {
+                    $tw.saverHandler.numChanges = originalNumChanges;
+                    $tw.saverHandler.updateDirtyStatus();
+                    console.log("[TiddlyDesktop] Injected config tiddlers, reset dirty counter");
+                }, 0);
+
+                // Watch for changes to config tiddlers and save to Tauri
+                $tw.wiki.addEventListener("change", function(changes) {
+                    if (changes[CONFIG_ENABLE] || changes[CONFIG_ABS_DESC] || changes[CONFIG_ABS_NONDESC]) {
+                        saveConfigToTauri();
+                    }
+                });
+
+                console.log("[TiddlyDesktop] External Attachments settings UI ready");
+            }
+
+            // Cleanup on window close: save config and delete tiddlers
+            function setupCleanup() {
+                window.addEventListener("beforeunload", function() {
+                    saveConfigToTauri();
+                    deleteConfigTiddlers();
+                });
+
+                // Also handle Tauri window close event
+                if (window.__TAURI__ && window.__TAURI__.event) {
+                    window.__TAURI__.event.listen("tauri://close-requested", function() {
+                        saveConfigToTauri();
+                        deleteConfigTiddlers();
+                    });
+                }
+
+                console.log("[TiddlyDesktop] Cleanup handlers installed");
+            }
+
+            // Load config from Tauri, then inject tiddlers
+            invoke("get_external_attachments_config", { wikiPath: wikiPath })
+                .then(function(config) {
+                    console.log("[TiddlyDesktop] Loaded config from Tauri:", config);
+                    injectConfigTiddlers(config);
+                })
+                .catch(function(err) {
+                    console.error("[TiddlyDesktop] Failed to load config, using defaults:", err);
+                    injectConfigTiddlers({ enabled: true, use_absolute_for_descendents: false, use_absolute_for_non_descendents: false });
+                });
+
+            installImportHook();
+            setupCleanup();
+
+            console.log("[TiddlyDesktop] External attachments ready for:", wikiPath);
+        }
+
+        setupExternalAttachments();
+
+        // Internal drag-and-drop polyfill for WebKitGTK
+        // Native HTML5 drag-and-drop can have issues in Tauri's webview
+        (function setupInternalDragPolyfill() {
+            // Store drag data globally since dataTransfer may not work reliably
+            window.__tiddlyDesktopDragData = null;
+            var internalDragSource = null;
+            var internalDragImage = null;
+            var internalDragActive = false;
+            var dragImageOffsetX = 0;
+            var dragImageOffsetY = 0;
+
+            // Create a drag image element that follows the cursor
+            function createDragImage(sourceElement, clientX, clientY) {
+                // Remove any existing drag image
+                if (internalDragImage && internalDragImage.parentNode) {
+                    internalDragImage.parentNode.removeChild(internalDragImage);
+                }
+
+                // Clone the element for the drag image
+                var clone = sourceElement.cloneNode(true);
+                clone.style.position = "fixed";
+                clone.style.pointerEvents = "none";
+                clone.style.zIndex = "999999";
+                clone.style.opacity = "0.7";
+                clone.style.transform = "scale(0.9)";
+                clone.style.maxWidth = "300px";
+                clone.style.maxHeight = "100px";
+                clone.style.overflow = "hidden";
+                clone.style.whiteSpace = "nowrap";
+                clone.style.textOverflow = "ellipsis";
+                clone.style.background = "var(--tiddler-background, white)";
+                clone.style.padding = "4px 8px";
+                clone.style.borderRadius = "4px";
+                clone.style.boxShadow = "0 2px 8px rgba(0,0,0,0.3)";
+
+                // Calculate offset from mouse to element corner
+                var rect = sourceElement.getBoundingClientRect();
+                dragImageOffsetX = clientX - rect.left;
+                dragImageOffsetY = clientY - rect.top;
+
+                // Position at cursor
+                clone.style.left = (clientX - dragImageOffsetX) + "px";
+                clone.style.top = (clientY - dragImageOffsetY) + "px";
+
+                document.body.appendChild(clone);
+                internalDragImage = clone;
+                return clone;
+            }
+
+            // Update drag image position
+            function updateDragImagePosition(clientX, clientY) {
+                if (internalDragImage) {
+                    internalDragImage.style.left = (clientX - dragImageOffsetX) + "px";
+                    internalDragImage.style.top = (clientY - dragImageOffsetY) + "px";
+                }
+            }
+
+            // Remove drag image
+            function removeDragImage() {
+                if (internalDragImage && internalDragImage.parentNode) {
+                    internalDragImage.parentNode.removeChild(internalDragImage);
+                    internalDragImage = null;
+                }
+            }
+
+            // Patch DataTransfer.prototype.setData to capture data as it's set
+            // This is needed because getData() is restricted during dragstart
+            var originalSetData = DataTransfer.prototype.setData;
+            DataTransfer.prototype.setData = function(type, data) {
+                console.log("[TiddlyDesktop] setData called - type:", type, "data length:", data ? data.length : 0);
+                // Store in our global cache
+                if (!window.__tiddlyDesktopDragData) {
+                    window.__tiddlyDesktopDragData = {};
+                }
+                window.__tiddlyDesktopDragData[type] = data;
+                // Call original
+                return originalSetData.call(this, type, data);
+            };
+
+            // Also patch getData to use our cache as fallback
+            var originalGetData = DataTransfer.prototype.getData;
+            DataTransfer.prototype.getData = function(type) {
+                var result = originalGetData.call(this, type);
+                if (!result && window.__tiddlyDesktopDragData && window.__tiddlyDesktopDragData[type]) {
+                    var cachedData = window.__tiddlyDesktopDragData[type];
+                    console.log("[TiddlyDesktop] getData using cache for type:", type, "data:", cachedData);
+                    return cachedData;
+                }
+                return result;
+            };
+
+            // Store data when drag starts - capture phase to run before TiddlyWiki's handler
+            document.addEventListener("dragstart", function(event) {
+                // Skip synthetic events that we dispatched ourselves
+                if (event.__tiddlyDesktopSynthetic) {
+                    console.log("[TiddlyDesktop] Allowing synthetic dragstart through");
+                    return;
+                }
+
+                var target = event.target;
+
+                // Only handle draggable elements: explicit draggable="true", tc-draggable class, or tc-tiddlylink (tiddler links)
+                if (!target || (target.getAttribute("draggable") !== "true" && !target.classList.contains("tc-draggable") && !target.classList.contains("tc-tiddlylink"))) {
+                    // Check if any ancestor is draggable
+                    target = target.closest("[draggable='true'], .tc-draggable, .tc-tiddlylink");
+                    if (!target) return;
+                }
+
+                // Native drag in WebKitGTK is unreliable - cancel and use synthetic drag for all elements
+                console.log("[TiddlyDesktop] Native drag detected, switching to synthetic:", target.tagName);
+                event.preventDefault();
+
+                // Immediately start our synthetic drag (don't wait for mouse movement threshold)
+                mouseDragStarted = true;
+                internalDragActive = true;
+                internalDragSource = target;
+                mouseDownTarget = target;
+
+                // Disable text selection during drag
+                document.body.style.userSelect = "none";
+                document.body.style.webkitUserSelect = "none";
+
+                // Create and dispatch synthetic dragstart with fresh DataTransfer
+                window.__tiddlyDesktopDragData = {};
+                mouseDragDataTransfer = new DataTransfer();
+                var syntheticDragStart = createSyntheticDragEvent("dragstart", {
+                    clientX: event.clientX,
+                    clientY: event.clientY
+                }, mouseDragDataTransfer);
+                syntheticDragStart.__tiddlyDesktopSynthetic = true;
+
+                console.log("[TiddlyDesktop] Dispatching immediate synthetic dragstart");
+                target.dispatchEvent(syntheticDragStart);
+
+                // Capture effectAllowed that TiddlyWiki set during dragstart
+                window.__tiddlyDesktopEffectAllowed = mouseDragDataTransfer.effectAllowed || "all";
+                console.log("[TiddlyDesktop] Captured effectAllowed:", window.__tiddlyDesktopEffectAllowed);
+
+                // Create drag image that follows cursor
+                createDragImage(target, event.clientX, event.clientY);
+
+                // Fire initial dragenter on current element
+                var enterTarget = document.elementFromPoint(event.clientX, event.clientY);
+                if (enterTarget) {
+                    var enterEvent = createSyntheticDragEvent("dragenter", {
+                        clientX: event.clientX,
+                        clientY: event.clientY,
+                        relatedTarget: null
+                    }, mouseDragDataTransfer);
+                    enterTarget.dispatchEvent(enterEvent);
+                    lastDragOverTarget = enterTarget;
+                }
+            }, true);
+
+            // Clear drag data cache when starting a new drag
+            document.addEventListener("dragstart", function(event) {
+                // Reset the cache at the start of each drag operation
+                // The setData patch will populate it as TiddlyWiki sets data
+                window.__tiddlyDesktopDragData = {};
+            }, true);
+
+            // Enhance dragover to ensure drop is allowed
+            document.addEventListener("dragover", function(event) {
+                if (internalDragActive) {
+                    // Ensure drop is allowed for internal drags
+                    event.preventDefault();
+                    if (event.dataTransfer) {
+                        // Use the effectAllowed set during dragstart, map to appropriate dropEffect
+                        var effect = window.__tiddlyDesktopEffectAllowed || "all";
+                        if (effect === "copyMove" || effect === "all") {
+                            event.dataTransfer.dropEffect = "move";
+                        } else if (effect === "copy" || effect === "copyLink") {
+                            event.dataTransfer.dropEffect = "copy";
+                        } else if (effect === "link" || effect === "linkMove") {
+                            event.dataTransfer.dropEffect = "link";
+                        } else if (effect === "move") {
+                            event.dataTransfer.dropEffect = "move";
+                        } else {
+                            event.dataTransfer.dropEffect = "move";
+                        }
+                    }
+                }
+            }, true);
+
+            // Log drop events for debugging - getData is globally patched
+            document.addEventListener("drop", function(event) {
+                if (internalDragActive && window.__tiddlyDesktopDragData) {
+                    console.log("[TiddlyDesktop] Drop event (capture) - target:", event.target.tagName, event.target.className);
+                    console.log("[TiddlyDesktop] Drop event (capture) - cached data types:", Object.keys(window.__tiddlyDesktopDragData));
+                }
+            }, true);
+
+            // Bubble phase listener to trace event propagation
+            document.addEventListener("drop", function(event) {
+                console.log("[TiddlyDesktop] Drop event (bubble) - reached document, target was:", event.target.tagName);
+            }, false);
+
+            // Clean up when drag ends
+            document.addEventListener("dragend", function(event) {
+                console.log("[TiddlyDesktop] Internal dragend");
+                window.__tiddlyDesktopDragData = null;
+                window.__tiddlyDesktopEffectAllowed = null;
+                internalDragSource = null;
+                internalDragActive = false;
+                removeDragImage();
+                // Restore text selection
+                document.body.style.userSelect = "";
+                document.body.style.webkitUserSelect = "";
+            }, true);
+
+            // Helper to create synthetic drag events with proper dataTransfer
+            // WebKitGTK may not set dataTransfer from DragEvent constructor
+            function createSyntheticDragEvent(type, options, dataTransfer) {
+                var event = new DragEvent(type, Object.assign({
+                    bubbles: true,
+                    cancelable: true,
+                    dataTransfer: dataTransfer
+                }, options));
+
+                // Force dataTransfer if constructor didn't set it
+                if (!event.dataTransfer && dataTransfer) {
+                    Object.defineProperty(event, 'dataTransfer', {
+                        value: dataTransfer,
+                        writable: false
+                    });
+                }
+
+                return event;
+            }
+
+            // Fallback: If native drag events don't fire or are unreliable, use mouse events
+            // WebKitGTK has issues with drag events on non-anchor elements
+            var mouseDownTarget = null;
+            var mouseDownPos = null;
+            var mouseDragStarted = false;
+            var mouseDragDataTransfer = null;
+            var DRAG_THRESHOLD = 3; // Small threshold for responsive feel
+
+            document.addEventListener("mousedown", function(event) {
+                // Find draggable element - check attribute, tc-draggable class, or tc-tiddlylink
+                var target = event.target.closest("[draggable='true'], .tc-draggable, .tc-tiddlylink");
+                if (target && event.button === 0) {
+                    console.log("[TiddlyDesktop] mousedown on draggable:", target.tagName, target.className);
+                    mouseDownTarget = target;
+                    mouseDownPos = { x: event.clientX, y: event.clientY };
+                    mouseDragStarted = false;
+                }
+            }, true);
+
+            // Fallback: if native dragstart didn't fire (edge cases), use mouse movement threshold
+            document.addEventListener("mousemove", function(event) {
+                if (!mouseDownTarget || mouseDragStarted) return;
+
+                // If drag already started via native handler, skip
+                if (internalDragActive) {
+                    mouseDownTarget = null;
+                    return;
+                }
+
+                // Check if we've moved enough to start a drag
+                var dx = event.clientX - mouseDownPos.x;
+                var dy = event.clientY - mouseDownPos.y;
+                if (Math.abs(dx) < DRAG_THRESHOLD && Math.abs(dy) < DRAG_THRESHOLD) return;
+
+                // Native dragstart didn't fire - synthesize drag events as fallback
+                console.log("[TiddlyDesktop] Fallback: synthesizing drag events for:", mouseDownTarget.tagName);
+                mouseDragStarted = true;
+                internalDragActive = true;
+                internalDragSource = mouseDownTarget;
+
+                // Disable text selection during drag
+                document.body.style.userSelect = "none";
+                document.body.style.webkitUserSelect = "none";
+
+                // Create synthetic dragstart with a DataTransfer
+                window.__tiddlyDesktopDragData = {};
+                mouseDragDataTransfer = new DataTransfer();
+                var dragStartEvent = createSyntheticDragEvent("dragstart", {
+                    clientX: mouseDownPos.x,
+                    clientY: mouseDownPos.y
+                }, mouseDragDataTransfer);
+                dragStartEvent.__tiddlyDesktopSynthetic = true;
+
+                console.log("[TiddlyDesktop] Dispatching fallback synthetic dragstart");
+                mouseDownTarget.dispatchEvent(dragStartEvent);
+
+                // Capture effectAllowed that TiddlyWiki set during dragstart
+                window.__tiddlyDesktopEffectAllowed = mouseDragDataTransfer.effectAllowed || "all";
+                console.log("[TiddlyDesktop] Captured effectAllowed:", window.__tiddlyDesktopEffectAllowed);
+
+                // Create drag image that follows cursor
+                createDragImage(mouseDownTarget, event.clientX, event.clientY);
+
+                // Initial dragenter on current element
+                var enterTarget = document.elementFromPoint(event.clientX, event.clientY);
+                if (enterTarget) {
+                    var enterEvent = createSyntheticDragEvent("dragenter", {
+                        clientX: event.clientX,
+                        clientY: event.clientY,
+                        relatedTarget: null
+                    }, mouseDragDataTransfer);
+                    enterTarget.dispatchEvent(enterEvent);
+                    lastDragOverTarget = enterTarget;
+                }
+            }, true);
+
+            var lastDragOverTarget = null;
+
+            document.addEventListener("mousemove", function(event) {
+                if (!mouseDragStarted || !internalDragSource) return;
+
+                // Update drag image position
+                updateDragImagePosition(event.clientX, event.clientY);
+
+                var target = document.elementFromPoint(event.clientX, event.clientY);
+                if (!target) return;
+
+                // If target changed, fire dragleave/dragenter
+                if (lastDragOverTarget && lastDragOverTarget !== target) {
+                    // Find droppable ancestors that we're leaving (not ancestors of new target)
+                    var oldDroppables = [];
+                    var el = lastDragOverTarget;
+                    while (el) {
+                        if (el.classList && (el.classList.contains("tc-droppable") || el.classList.contains("tc-dropzone"))) {
+                            oldDroppables.push(el);
+                        }
+                        el = el.parentElement;
+                    }
+
+                    // Fire dragleave on the old target
+                    var leaveEvent = createSyntheticDragEvent("dragleave", {
+                        clientX: event.clientX,
+                        clientY: event.clientY,
+                        relatedTarget: target
+                    }, mouseDragDataTransfer);
+                    lastDragOverTarget.dispatchEvent(leaveEvent);
+
+                    // Fire dragleave on any droppables we're leaving that don't contain the new target
+                    oldDroppables.forEach(function(droppable) {
+                        if (!droppable.contains(target)) {
+                            var droppableLeaveEvent = createSyntheticDragEvent("dragleave", {
+                                clientX: event.clientX,
+                                clientY: event.clientY,
+                                relatedTarget: target
+                            }, mouseDragDataTransfer);
+                            droppable.dispatchEvent(droppableLeaveEvent);
+                        }
+                    });
+
+                    var enterEvent = createSyntheticDragEvent("dragenter", {
+                        clientX: event.clientX,
+                        clientY: event.clientY,
+                        relatedTarget: lastDragOverTarget
+                    }, mouseDragDataTransfer);
+                    target.dispatchEvent(enterEvent);
+                }
+                lastDragOverTarget = target;
+
+                // Fire dragover
+                var overEvent = createSyntheticDragEvent("dragover", {
+                    clientX: event.clientX,
+                    clientY: event.clientY
+                }, mouseDragDataTransfer);
+                target.dispatchEvent(overEvent);
+            }, true);
+
+            document.addEventListener("mouseup", function(event) {
+                if (mouseDragStarted && internalDragSource) {
+                    var target = document.elementFromPoint(event.clientX, event.clientY);
+
+                    // Fire dragleave
+                    if (lastDragOverTarget) {
+                        var leaveEvent = createSyntheticDragEvent("dragleave", {
+                            clientX: event.clientX,
+                            clientY: event.clientY,
+                            relatedTarget: null
+                        }, mouseDragDataTransfer);
+                        lastDragOverTarget.dispatchEvent(leaveEvent);
+                    }
+
+                    // Fire drop - getData is globally patched to use our cache
+                    if (target) {
+                        console.log("[TiddlyDesktop] Synthesizing drop on:", target.tagName, "with data:", Object.keys(window.__tiddlyDesktopDragData || {}));
+
+                        var dropDt = new DataTransfer();
+                        var dropEvent = createSyntheticDragEvent("drop", {
+                            clientX: event.clientX,
+                            clientY: event.clientY
+                        }, dropDt);
+                        target.dispatchEvent(dropEvent);
+                    }
+
+                    // Fire dragend
+                    var endEvent = createSyntheticDragEvent("dragend", {
+                        clientX: event.clientX,
+                        clientY: event.clientY
+                    }, mouseDragDataTransfer);
+                    internalDragSource.dispatchEvent(endEvent);
+
+                    lastDragOverTarget = null;
+                    mouseDragDataTransfer = null;
+                    // Restore text selection
+                    document.body.style.userSelect = "";
+                    document.body.style.webkitUserSelect = "";
+                }
+
+                mouseDownTarget = null;
+                mouseDownPos = null;
+                mouseDragStarted = false;
+            }, true);
+
+            // Helper to clear all dragover states and end drag
+            function cancelDrag(reason) {
+                if (!internalDragActive && !mouseDragStarted) return;
+
+                console.log("[TiddlyDesktop] Canceling drag:", reason);
+
+                var dt = mouseDragDataTransfer || new DataTransfer();
+
+                // Fire dragleave on lastDragOverTarget
+                if (lastDragOverTarget) {
+                    var leaveEvent = createSyntheticDragEvent("dragleave", {
+                        relatedTarget: null
+                    }, dt);
+                    lastDragOverTarget.dispatchEvent(leaveEvent);
+                }
+
+                // Fire dragleave and dragend on ALL elements with tc-dragover class
+                // The dragend triggers TiddlyWiki's dropzone resetState() method
+                document.querySelectorAll(".tc-dragover").forEach(function(el) {
+                    var droppableLeaveEvent = createSyntheticDragEvent("dragleave", {
+                        relatedTarget: null
+                    }, dt);
+                    el.dispatchEvent(droppableLeaveEvent);
+                    var dropzoneEndEvent = createSyntheticDragEvent("dragend", {}, dt);
+                    el.dispatchEvent(dropzoneEndEvent);
+                    el.classList.remove("tc-dragover");
+                });
+
+                // Also fire dragend on dropzone elements that might not have tc-dragover yet
+                document.querySelectorAll(".tc-dropzone").forEach(function(el) {
+                    var dropzoneEndEvent = createSyntheticDragEvent("dragend", {}, dt);
+                    el.dispatchEvent(dropzoneEndEvent);
+                });
+
+                // Remove tc-dragging class from any elements that have it
+                document.querySelectorAll(".tc-dragging").forEach(function(el) {
+                    el.classList.remove("tc-dragging");
+                });
+
+                if (internalDragSource) {
+                    var endEvent = createSyntheticDragEvent("dragend", {}, dt);
+                    internalDragSource.dispatchEvent(endEvent);
+                }
+
+                // Reset TiddlyWiki's internal drag state
+                if (typeof $tw !== "undefined") {
+                    $tw.dragInProgress = null;
+                }
+
+                window.__tiddlyDesktopDragData = null;
+                window.__tiddlyDesktopEffectAllowed = null;
+                internalDragSource = null;
+                internalDragActive = false;
+                mouseDownTarget = null;
+                mouseDownPos = null;
+                mouseDragStarted = false;
+                mouseDragDataTransfer = null;
+                lastDragOverTarget = null;
+                removeDragImage();
+                // Restore text selection
+                document.body.style.userSelect = "";
+                document.body.style.webkitUserSelect = "";
+            }
+
+            // Handle mouse leaving the window during drag
+            document.addEventListener("mouseleave", function(event) {
+                if (internalDragActive || mouseDragStarted) {
+                    // Only cancel if mouse truly left the document (relatedTarget is null or outside)
+                    // This prevents false positives from DOM manipulations
+                    if (!event.relatedTarget || !document.contains(event.relatedTarget)) {
+                        cancelDrag("mouse left window");
+                    }
+                }
+            }, true);
+
+            // Handle escape key to cancel drag
+            document.addEventListener("keydown", function(event) {
+                if (event.key === "Escape") {
+                    cancelDrag("escape pressed");
+                }
+            }, true);
+
+            // Handle window blur (switching to another app) during drag
+            // Use a small delay to avoid false positives from transient focus changes
+            window.addEventListener("blur", function(event) {
+                if (internalDragActive || mouseDragStarted) {
+                    setTimeout(function() {
+                        // Only cancel if drag is still active and window truly lost focus
+                        if ((internalDragActive || mouseDragStarted) && !document.hasFocus()) {
+                            cancelDrag("window lost focus");
+                        }
+                    }, 100);
+                }
+            }, true);
+
+            console.log("[TiddlyDesktop] Internal drag-and-drop polyfill ready");
+        })();
 
     })();
     "#
@@ -1670,7 +2831,8 @@ async fn open_wiki_folder(app: tauri::AppHandle, path: String) -> Result<WikiEnt
         .map_err(|e| format!("Failed to set icon: {}", e))?
         .window_classname("tiddlydesktop-rs")
         .initialization_script(&get_init_script_with_path(&path))
-        .disable_drag_drop_handler() // Enable HTML5 drag & drop in webview
+        // NOT calling disable_drag_drop_handler() - we need tauri://drag-drop events
+        // for external attachments support. File drops are handled via Tauri events.
         .build()
         .map_err(|e| format!("Failed to create window: {}", e))?;
 
@@ -2290,6 +3452,32 @@ async fn read_file_as_data_uri(path: String) -> Result<String, String> {
     Ok(format!("data:{};base64,{}", mime_type, base64_data))
 }
 
+/// Read a file and return it as raw bytes
+/// Used for external attachments drag-drop support
+#[tauri::command]
+async fn read_file_as_binary(path: String) -> Result<Vec<u8>, String> {
+    let path_buf = PathBuf::from(&path);
+
+    tokio::fs::read(&path_buf)
+        .await
+        .map_err(|e| format!("Failed to read file {}: {}", path, e))
+}
+
+/// Get external attachments config for a specific wiki
+#[tauri::command]
+fn get_external_attachments_config(app: tauri::AppHandle, wiki_path: String) -> Result<ExternalAttachmentsConfig, String> {
+    let configs = load_wiki_configs(&app)?;
+    Ok(configs.external_attachments.get(&wiki_path).cloned().unwrap_or_default())
+}
+
+/// Set external attachments config for a specific wiki
+#[tauri::command]
+fn set_external_attachments_config(app: tauri::AppHandle, wiki_path: String, config: ExternalAttachmentsConfig) -> Result<(), String> {
+    let mut configs = load_wiki_configs(&app)?;
+    configs.external_attachments.insert(wiki_path, config);
+    save_wiki_configs(&app, &configs)
+}
+
 /// Open a wiki file in a new window
 /// Returns WikiEntry so frontend can update its wiki list
 #[tauri::command]
@@ -2383,7 +3571,8 @@ async fn open_wiki_window(app: tauri::AppHandle, path: String) -> Result<WikiEnt
         .map_err(|e| format!("Failed to set icon: {}", e))?
         .window_classname("tiddlydesktop-rs")
         .initialization_script(get_dialog_init_script())
-        .disable_drag_drop_handler() // Enable HTML5 drag & drop in webview
+        // NOT calling disable_drag_drop_handler() - we need tauri://drag-drop events
+        // for external attachments support. File drops are handled via Tauri events.
         .build()
         .map_err(|e| format!("Failed to create window: {}", e))?;
 
@@ -2766,6 +3955,7 @@ window.__IS_MAIN_WIKI__ = {};
     }}
 
     registerWithTiddlyWiki();
+    // External attachments support is provided by the initialization script (get_dialog_init_script)
 }})();
 </script>"##,
                 file_path.display().to_string().replace('\\', "\\\\").replace('"', "\\\""),
@@ -2939,7 +4129,10 @@ pub fn run() {
             get_recent_files,
             remove_recent_file,
             set_wiki_backups,
-            read_file_as_data_uri
+            read_file_as_data_uri,
+            read_file_as_binary,
+            get_external_attachments_config,
+            set_external_attachments_config
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

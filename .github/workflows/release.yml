@@ -156,7 +156,6 @@ jobs:
           path: |
             tiddlydesktop-rs/src-tauri/target/release/bundle/deb/*.deb
             tiddlydesktop-rs/src-tauri/target/release/bundle/rpm/*.rpm
-            tiddlydesktop-rs/src-tauri/target/release/bundle/appimage/*.AppImage
             tiddlydesktop-rs/src-tauri/target/release/bundle/arch/*.pkg.tar.zst
 
   build-windows:
@@ -356,7 +355,7 @@ jobs:
         run: |
           cd artifacts
           # Find all release files and generate checksums
-          find . -type f \( -name "*.deb" -o -name "*.rpm" -o -name "*.AppImage" \
+          find . -type f \( -name "*.deb" -o -name "*.rpm" \
             -o -name "*.msi" -o -name "*.exe" -o -name "*.dmg" -o -name "*.zip" \
             -o -name "*.pkg.tar.zst" \) \
             -exec sha256sum {} \; | \
@@ -373,7 +372,6 @@ jobs:
           files: |
             artifacts/**/*.deb
             artifacts/**/*.rpm
-            artifacts/**/*.AppImage
             artifacts/**/*.pkg.tar.zst
             artifacts/**/*.msi
             artifacts/**/*.exe

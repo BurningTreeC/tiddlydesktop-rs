@@ -250,32 +250,96 @@ fn get_user_editions_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
 /// Extract a tiddler's text content from TiddlyWiki HTML
 /// Supports both JSON format (TW 5.2+) and div format (older)
 fn extract_tiddler_from_html(html: &str, tiddler_title: &str) -> Option<String> {
-    // First try JSON format (TiddlyWiki 5.2+)
-    // The JSON is embedded and escaped: \"$:/Title\":{\"title\":\"...\",\"text\":\"value\",...}
-    // We search for the escaped title pattern and extract the text field
+    // TiddlyWiki stores tiddlers in multiple formats. Saved/modified tiddlers appear at the
+    // END of the tiddler store as single-escaped JSON. Plugin-embedded tiddlers appear
+    // earlier as double-escaped JSON. We need to find the LAST occurrence (most recent save).
 
-    // Build the search pattern for the escaped title (JSON embedded in JS string)
+    // First try single-escaped JSON format (saved tiddlers at end of file)
+    // Format: {"title":"$:/TiddlyDesktop/WikiList","type":"application/json","text":"[...]"}
+    let single_escaped_search = format!(r#"{{"title":"{}""#, tiddler_title);
+
+    // Find the LAST occurrence (most recently saved version)
+    if let Some(start_idx) = html.rfind(&single_escaped_search) {
+        let after_title = &html[start_idx..std::cmp::min(start_idx + 2_000_000, html.len())];
+        // Look for "text":" pattern (single-escaped)
+        let text_pattern = r#""text":""#;
+        if let Some(text_start) = after_title.find(text_pattern) {
+            let text_content_start = text_start + 8; // length of "text":" (8 chars)
+            if text_content_start < after_title.len() {
+                let remaining = &after_title[text_content_start..];
+                // Find closing " that's not escaped with backslash
+                let mut end_pos = 0;
+                let bytes = remaining.as_bytes();
+                while end_pos < bytes.len() {
+                    if bytes[end_pos] == b'"' {
+                        // Check if escaped
+                        let mut backslash_count = 0;
+                        let mut check_pos = end_pos;
+                        while check_pos > 0 && bytes[check_pos - 1] == b'\\' {
+                            backslash_count += 1;
+                            check_pos -= 1;
+                        }
+                        // If even number of backslashes, quote is not escaped
+                        if backslash_count % 2 == 0 {
+                            break;
+                        }
+                    }
+                    end_pos += 1;
+                }
+                if end_pos < remaining.len() {
+                    let text = &remaining[..end_pos];
+                    // Unescape single-escaped JSON
+                    let unescaped = text
+                        .replace("\\n", "\n")
+                        .replace("\\t", "\t")
+                        .replace("\\r", "\r")
+                        .replace("\\\"", "\"")
+                        .replace("\\\\", "\\");
+                    return Some(unescaped);
+                }
+            }
+        }
+    }
+
+    // Try double-escaped JSON format (inside plugin bundles)
+    // Format: \"$:/Title\":{\"title\":\"...\",\"text\":\"value\",...}
     let escaped_search = format!(r#"\"{}\":{{"#, tiddler_title);
 
-    if let Some(start_idx) = html.find(&escaped_search) {
-        // Found the title, now find the "text" field after it
-        let after_title = &html[start_idx..std::cmp::min(start_idx + 500, html.len())];
-        // Look for \"text\":\" and capture until the next \"
+    // Search from end to find the last (most recent) occurrence
+    if let Some(start_idx) = html.rfind(&escaped_search) {
+        let after_title = &html[start_idx..std::cmp::min(start_idx + 2_000_000, html.len())];
         let text_pattern = r#"\"text\":\""#;
         if let Some(text_start) = after_title.find(text_pattern) {
             let text_content_start = text_start + 11; // length of \"text\":\" (11 chars)
             if text_content_start < after_title.len() {
                 let remaining = &after_title[text_content_start..];
-                // Find the closing \" (backslash followed by quote)
-                if let Some(end_pos) = remaining.find(r#"\""#) {
+                // Find the closing \" - need to skip escaped backslashes
+                let mut end_pos = 0;
+                let bytes = remaining.as_bytes();
+                while end_pos < bytes.len().saturating_sub(1) {
+                    if bytes[end_pos] == b'\\' && bytes[end_pos + 1] == b'"' {
+                        // Check if this backslash is escaped (preceded by \\)
+                        if end_pos >= 2 && bytes[end_pos - 1] == b'\\' && bytes[end_pos - 2] == b'\\' {
+                            // This is \\\\" - the backslash is escaped, so \" is the real end
+                            break;
+                        } else if end_pos >= 1 && bytes[end_pos - 1] == b'\\' {
+                            // This is \\" - skip it (escaped quote inside string)
+                            end_pos += 2;
+                            continue;
+                        }
+                        // Found unescaped \"
+                        break;
+                    }
+                    end_pos += 1;
+                }
+                if end_pos < remaining.len() {
                     let text = &remaining[..end_pos];
                     // Unescape double-escaped JSON (embedded in JS string)
-                    // The source has: \\n (backslash backslash n) which means newline
                     let unescaped = text
-                        .replace("\\\\n", "\n")   // \\n → newline
-                        .replace("\\\\t", "\t")   // \\t → tab
-                        .replace("\\\\r", "\r")   // \\r → carriage return
-                        .replace("\\\\\\\\", "\\"); // \\\\ → single backslash
+                        .replace("\\\\n", "\n")
+                        .replace("\\\\t", "\t")
+                        .replace("\\\\r", "\r")
+                        .replace("\\\\\\\\", "\\");
                     return Some(unescaped);
                 }
             }
@@ -313,28 +377,46 @@ fn html_encode(s: &str) -> String {
 }
 
 /// Inject or replace a tiddler in TiddlyWiki HTML
+/// Works with modern TiddlyWiki JSON store format
 fn inject_tiddler_into_html(html: &str, tiddler_title: &str, tiddler_type: &str, content: &str) -> String {
-    let escaped_title = regex::escape(tiddler_title);
-    let pattern = format!(
-        r#"<div[^>]*\stitle="{}"[^>]*>[\s\S]*?</div>"#,
-        escaped_title
+    // Modern TiddlyWiki (5.2+) uses JSON store in a script tag
+    // Format: <script class="tiddlywiki-tiddler-store" type="application/json">[{...}]</script>
+
+    // Escape content for JSON string
+    let json_escaped_content = content
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('\n', "\\n")
+        .replace('\r', "\\r")
+        .replace('\t', "\\t");
+
+    // Create the new tiddler JSON object
+    let new_tiddler = format!(
+        r#"{{"title":"{}","type":"{}","text":"{}"}}"#,
+        tiddler_title, tiddler_type, json_escaped_content
     );
 
+    // Find the tiddler store - look for the LAST one (TW can have multiple stores)
+    // The store ends with ]</script>
+    let store_end = r#"]</script>"#;
+
+    if let Some(end_pos) = html.rfind(store_end) {
+        // Insert the new tiddler before the closing ]
+        let mut result = String::with_capacity(html.len() + new_tiddler.len() + 10);
+        result.push_str(&html[..end_pos]);
+        result.push(',');
+        result.push_str(&new_tiddler);
+        result.push_str(&html[end_pos..]);
+        return result;
+    }
+
+    // Fallback to div format for older TiddlyWiki
     let encoded_content = html_encode(content);
     let new_div = format!(
         r#"<div title="{}" type="{}">{}</div>"#,
         tiddler_title, tiddler_type, encoded_content
     );
 
-    if let Ok(re) = regex::Regex::new(&pattern) {
-        if re.is_match(html) {
-            // Replace existing tiddler
-            return re.replace(html, new_div.as_str()).to_string();
-        }
-    }
-
-    // Tiddler doesn't exist, insert before </div><!--~~ Library modules ~~-->
-    // or before the closing store area
     let store_end_markers = [
         "</div><!--~~ Library modules ~~-->",
         r#"</div><script"#,
@@ -351,7 +433,7 @@ fn inject_tiddler_into_html(html: &str, tiddler_title: &str, tiddler_type: &str,
         }
     }
 
-    // Fallback: return unchanged (shouldn't happen with valid TiddlyWiki HTML)
+    // Fallback: return unchanged
     html.to_string()
 }
 
@@ -460,13 +542,125 @@ struct AppState {
     main_wiki_path: PathBuf,
 }
 
+/// Extract favicon from the $:/favicon.ico tiddler in TiddlyWiki HTML
+/// The tiddler contains base64-encoded image data with a type field
+fn extract_favicon_from_tiddler(html: &str) -> Option<String> {
+    // Try single-escaped format first (saved tiddlers at end of store)
+    // Format: "$:/favicon.ico","text":"base64data"
+    let single_pattern = r#""$:/favicon.ico","#;
+    if let Some(start_idx) = html.rfind(single_pattern) {
+        let after_start = &html[start_idx..std::cmp::min(start_idx + 500_000, html.len())];
+
+        // Extract the text field (base64 content)
+        if let Some(text_start) = after_start.find(r#""text":""#) {
+            let after_text = &after_start[text_start + 8..];
+            // Find closing quote (not escaped)
+            let mut end_pos = 0;
+            let bytes = after_text.as_bytes();
+            while end_pos < bytes.len() {
+                if bytes[end_pos] == b'"' {
+                    let mut backslash_count = 0;
+                    let mut check_pos = end_pos;
+                    while check_pos > 0 && bytes[check_pos - 1] == b'\\' {
+                        backslash_count += 1;
+                        check_pos -= 1;
+                    }
+                    if backslash_count % 2 == 0 {
+                        break;
+                    }
+                }
+                end_pos += 1;
+            }
+            if end_pos > 0 && end_pos < after_text.len() {
+                let base64_content = &after_text[..end_pos];
+                if !base64_content.is_empty() && !base64_content.starts_with('[') {
+                    // Try to extract type field
+                    let mime_type = if let Some(type_start) = after_start.find(r#""type":""#) {
+                        let after_type = &after_start[type_start + 8..];
+                        if let Some(type_end) = after_type.find('"') {
+                            &after_type[..type_end]
+                        } else {
+                            "image/png"
+                        }
+                    } else {
+                        "image/png"
+                    };
+                    return Some(format!("data:{};base64,{}", mime_type, base64_content));
+                }
+            }
+        }
+    }
+
+    // Try double-escaped format (inside plugin bundles)
+    // Pattern: \"$:/favicon.ico\":{\"title\":\"$:/favicon.ico\",\"type\":\"image/...\",\"text\":\"base64data\",...}
+    let tiddler_pattern = r#"\"$:/favicon.ico\":{"#;
+
+    if let Some(start_idx) = html.rfind(tiddler_pattern) {
+        // Find the end of this tiddler object - need to track brace depth
+        let after_start = &html[start_idx + tiddler_pattern.len()..];
+        let mut brace_depth = 1;
+        let mut end_idx = 0;
+        for (i, c) in after_start.char_indices() {
+            match c {
+                '{' => brace_depth += 1,
+                '}' => {
+                    brace_depth -= 1;
+                    if brace_depth == 0 {
+                        end_idx = i;
+                        break;
+                    }
+                }
+                _ => {}
+            }
+            // Safety limit - favicon tiddlers shouldn't be huge
+            if i > 1_000_000 {
+                break;
+            }
+        }
+
+        if end_idx > 0 {
+            let tiddler_content = &after_start[..end_idx];
+
+            // Extract the type field
+            let mime_type = if let Some(type_start) = tiddler_content.find(r#"\"type\":\""#) {
+                let after_type = &tiddler_content[type_start + 10..];
+                if let Some(type_end) = after_type.find(r#"\""#) {
+                    Some(&after_type[..type_end])
+                } else {
+                    None
+                }
+            } else {
+                // Default to image/png if no type specified
+                Some("image/png")
+            };
+
+            // Extract the text field (base64 content)
+            if let Some(text_start) = tiddler_content.find(r#"\"text\":\""#) {
+                let after_text = &tiddler_content[text_start + 10..];
+                if let Some(text_end) = after_text.find(r#"\""#) {
+                    let base64_content = &after_text[..text_end];
+                    if !base64_content.is_empty() {
+                        // Construct data URI
+                        let mime = mime_type.unwrap_or("image/png");
+                        return Some(format!("data:{};base64,{}", mime, base64_content));
+                    }
+                }
+            }
+        }
+    }
+
+    None
+}
+
 /// Extract favicon from wiki HTML content
-/// Only searches the first 64KB since favicon is always in <head>
+/// First tries the <link> tag in <head>, then falls back to $:/favicon.ico tiddler
 fn extract_favicon(content: &str) -> Option<String> {
-    // Only search the head section - favicon is always there
-    // Limit search to first 64KB to avoid scanning large files
-    let search_limit = content.len().min(65536);
-    let search_content = &content[..search_limit];
+    // First try: Look for favicon link with data URI in the head section
+    // Search up to </head> since large <style> sections can push it past 64KB
+    let head_end = content.find("</head>")
+        .or_else(|| content.find("</HEAD>"))
+        .unwrap_or(content.len().min(500_000)); // Fallback to 500KB max
+    let search_content = &content[..head_end];
 
     // Look for favicon link with data URI
     // Common patterns:
@@ -509,7 +703,127 @@ fn extract_favicon(content: &str) -> Option<String> {
         }
     }
 
+    // Second try: Extract from $:/favicon.ico tiddler
+    // This requires searching the full content since tiddlers are later in the file
+    extract_favicon_from_tiddler(content)
+}
+
+/// Extract favicon from a wiki folder by reading the favicon file
+async fn extract_favicon_from_folder(wiki_path: &PathBuf) -> Option<String> {
+    use base64::{engine::general_purpose::STANDARD, Engine};
+
+    let tiddlers_path = wiki_path.join("tiddlers");
+
+    // TiddlyWiki stores $:/favicon.ico as $__favicon.ico.EXT ($ and : and / escaped)
+    // Common patterns: $__favicon.ico.png, $__favicon.ico.ico, $__favicon.ico
+    let favicon_patterns = [
+        ("$__favicon.ico.png", "image/png"),
+        ("$__favicon.ico.jpg", "image/jpeg"),
+        ("$__favicon.ico.jpeg", "image/jpeg"),
+        ("$__favicon.ico.gif", "image/gif"),
+        ("$__favicon.ico.ico", "image/x-icon"),
+        ("$__favicon.ico", "image/x-icon"),
+        ("favicon.ico", "image/x-icon"),
+        ("favicon.png", "image/png"),
+    ];
+
+    for (filename, mime_type) in &favicon_patterns {
+        let favicon_path = tiddlers_path.join(filename);
+        if let Ok(data) = tokio::fs::read(&favicon_path).await {
+            // Convert to base64 data URI
+            let base64_data = STANDARD.encode(&data);
+            return Some(format!("data:{};base64,{}", mime_type, base64_data));
+        }
+    }
+
+    // Also check for .tid file format (base64 content in text field)
+    let tid_patterns = [
+        "$__favicon.ico.png.tid",
+        "$__favicon.ico.tid",
+    ];
+
+    for tid_filename in &tid_patterns {
+        let tid_path = tiddlers_path.join(tid_filename);
+        if let Ok(content) = tokio::fs::read_to_string(&tid_path).await {
+            // Parse .tid file - look for text field after blank line
+            if let Some(blank_pos) = content.find("\n\n") {
+                let text_content = content[blank_pos + 2..].trim();
+                if !text_content.is_empty() {
+                    // Get type from header
+                    let mime_type = if content.contains("type: image/png") {
+                        "image/png"
+                    } else if content.contains("type: image/jpeg") {
+                        "image/jpeg"
+                    } else {
+                        "image/png"
+                    };
+                    return Some(format!("data:{};base64,{}", mime_type, text_content));
+                }
+            }
+        }
+    }
+
     None
+}
+
+/// Get MIME type from file extension
+fn get_mime_type(path: &std::path::Path) -> &'static str {
+    match path.extension().and_then(|e| e.to_str()).map(|e| e.to_lowercase()).as_deref() {
+        // Images
+        Some("png") => "image/png",
+        Some("jpg") | Some("jpeg") => "image/jpeg",
+        Some("gif") => "image/gif",
+        Some("webp") => "image/webp",
+        Some("svg") => "image/svg+xml",
+        Some("ico") => "image/x-icon",
+        Some("bmp") => "image/bmp",
+        Some("tiff") | Some("tif") => "image/tiff",
+        // Audio
+        Some("mp3") => "audio/mpeg",
+        Some("wav") => "audio/wav",
+        Some("ogg") => "audio/ogg",
+        Some("m4a") => "audio/mp4",
+        Some("flac") => "audio/flac",
+        // Video
+        Some("mp4") => "video/mp4",
+        Some("webm") => "video/webm",
+        Some("ogv") => "video/ogg",
+        Some("avi") => "video/x-msvideo",
+        Some("mov") => "video/quicktime",
+        // Documents
+        Some("pdf") => "application/pdf",
+        Some("json") => "application/json",
+        Some("xml") => "application/xml",
+        // Text
+        Some("txt") => "text/plain",
+        Some("html") | Some("htm") => "text/html",
+        Some("css") => "text/css",
+        Some("js") => "application/javascript",
+        Some("csv") => "text/csv",
+        // Fonts
+        Some("woff") => "font/woff",
+        Some("woff2") => "font/woff2",
+        Some("ttf") => "font/ttf",
+        Some("otf") => "font/otf",
+        // Default
+        _ => "application/octet-stream",
+    }
+}
+
+/// Check if a path string looks like an absolute filesystem path
+fn is_absolute_filesystem_path(path: &str) -> bool {
+    // Unix absolute path
+    if path.starts_with('/') {
+        return true;
+    }
+    // Windows absolute path (e.g., C:\, D:\, etc.)
+    if path.len() >= 3 {
+        let bytes = path.as_bytes();
+        if bytes[0].is_ascii_alphabetic() && bytes[1] == b':' && (bytes[2] == b'\\' || bytes[2] == b'/') {
+            return true;
+        }
+    }
+    false
 }
 
 /// Create a backup of the wiki file before saving
@@ -670,6 +984,12 @@ fn close_window(window: tauri::Window) {
 // TiddlyWiki-based modal dialog for text input.
 
 /// JavaScript initialization script - provides confirm modal and close handling for wiki windows
+fn get_init_script_with_path(wiki_path: &str) -> String {
+    format!(r#"
+    window.__WIKI_PATH__ = "{}";
+    "#, wiki_path.replace('\\', "\\\\").replace('"', "\\\"")) + get_dialog_init_script()
+}
+
 fn get_dialog_init_script() -> &'static str {
     r#"
     (function() {
@@ -828,6 +1148,180 @@ fn get_dialog_init_script() -> &'static str {
         }
 
         setupCloseHandler();
+
+        // Handle absolute filesystem paths via Tauri IPC
+        function setupFilesystemSupport() {
+            if(typeof window.__TAURI__ === 'undefined' || !window.__TAURI__.core) {
+                setTimeout(setupFilesystemSupport, 100);
+                return;
+            }
+
+            function waitForTiddlyWiki() {
+                if(typeof $tw === 'undefined' || !$tw.wiki || !$tw.utils || !$tw.utils.httpRequest) {
+                    setTimeout(waitForTiddlyWiki, 100);
+                    return;
+                }
+
+                var invoke = window.__TAURI__.core.invoke;
+                var loadingTiddlers = {};
+                var wikiPath = window.__WIKI_PATH__ || '';
+
+                function isUrl(path) {
+                    if(!path || typeof path !== 'string') return false;
+                    return path.startsWith('http:') || path.startsWith('https:') ||
+                           path.startsWith('data:') || path.startsWith('blob:') ||
+                           path.startsWith('file:');
+                }
+
+                function isAbsolutePath(path) {
+                    if(!path || typeof path !== 'string') return false;
+                    // Unix absolute path
+                    if(path.startsWith('/')) return true;
+                    // Windows absolute path (C:\, D:\, etc.)
+                    if(path.length >= 3 && path[1] === ':' && (path[2] === '\\' || path[2] === '/')) return true;
+                    return false;
+                }
+
+                function isFilesystemPath(path) {
+                    if(!path || typeof path !== 'string') return false;
+                    if(isUrl(path)) return false;
+                    return true; // Either absolute or relative filesystem path
+                }
+
+                function resolveFilesystemPath(path) {
+                    if(isAbsolutePath(path)) {
+                        return path;
+                    }
+                    // Relative path - resolve against wiki path
+                    if(!wikiPath) {
+                        console.warn('[TiddlyDesktop] Cannot resolve relative path without __WIKI_PATH__:', path);
+                        return null;
+                    }
+                    // Get the directory containing the wiki (for single-file wikis) or the wiki folder itself
+                    var basePath = wikiPath;
+                    // For single-file wikis, get the parent directory
+                    if(basePath.endsWith('.html') || basePath.endsWith('.htm')) {
+                        var lastSlash = Math.max(basePath.lastIndexOf('/'), basePath.lastIndexOf('\\'));
+                        if(lastSlash > 0) {
+                            basePath = basePath.substring(0, lastSlash);
+                        }
+                    }
+                    // Join paths (handle both / and \ separators)
+                    var separator = basePath.indexOf('\\') >= 0 ? '\\' : '/';
+                    return basePath + separator + path.replace(/[/\\]/g, separator);
+                }
+
+                // Override httpRequest to support filesystem paths
+                var originalHttpRequest = $tw.utils.httpRequest;
+                $tw.utils.httpRequest = function(options) {
+                    var url = options.url;
+
+                    if(isFilesystemPath(url)) {
+                        var resolvedPath = resolveFilesystemPath(url);
+                        if(!resolvedPath) {
+                            if(options.callback) {
+                                options.callback('Cannot resolve path: ' + url, null, {
+                                    status: 400, statusText: 'Bad Request',
+                                    responseText: '', response: '',
+                                    getAllResponseHeaders: function() { return ''; }
+                                });
+                            }
+                            return { abort: function() {} };
+                        }
+
+                        console.log('[TiddlyDesktop] httpRequest for filesystem path:', resolvedPath);
+                        invoke('read_file_as_data_uri', { path: resolvedPath })
+                            .then(function(dataUri) {
+                                var mockXhr = {
+                                    status: 200,
+                                    statusText: 'OK',
+                                    responseText: dataUri,
+                                    response: dataUri,
+                                    getAllResponseHeaders: function() { return ''; }
+                                };
+                                if(options.callback) {
+                                    options.callback(null, dataUri, mockXhr);
+                                }
+                            })
+                            .catch(function(err) {
+                                var mockXhr = {
+                                    status: 404,
+                                    statusText: 'Not Found',
+                                    responseText: '',
+                                    response: '',
+                                    getAllResponseHeaders: function() { return ''; }
+                                };
+                                if(options.callback) {
+                                    options.callback(err, null, mockXhr);
+                                }
+                            });
+                        return { abort: function() {} };
+                    }
+
+                    return originalHttpRequest.call($tw.utils, options);
+                };
+                console.log('[TiddlyDesktop] httpRequest override installed');
+
+                // Handle _canonical_uri with filesystem paths (absolute or relative)
+                function loadTiddlerContent(title) {
+                    var tiddler = $tw.wiki.getTiddler(title);
+                    if(!tiddler) return;
+
+                    var uri = tiddler.fields._canonical_uri;
+                    if(!uri || !isFilesystemPath(uri)) return;
+                    if(loadingTiddlers[title]) return;
+
+                    var resolvedPath = resolveFilesystemPath(uri);
+                    if(!resolvedPath) return;
+
+                    loadingTiddlers[title] = true;
+                    console.log('[TiddlyDesktop] Loading _canonical_uri:', resolvedPath, 'for:', title);
+
+                    invoke('read_file_as_data_uri', { path: resolvedPath })
+                        .then(function(dataUri) {
+                            var match = dataUri.match(/^data:([^;]+);base64,(.+)$/);
+                            if(match) {
+                                var newFields = Object.assign({}, tiddler.fields, {
+                                    text: match[2]
+                                });
+                                delete newFields._canonical_uri;
+                                // Use syncer.storeTiddler to avoid marking wiki as dirty
+                                if($tw.syncer && $tw.syncer.storeTiddler) {
+                                    $tw.syncer.storeTiddler(newFields);
+                                } else {
+                                    $tw.wiki.addTiddler(new $tw.Tiddler(newFields));
+                                }
+                                console.log('[TiddlyDesktop] Loaded content for:', title);
+                            }
+                            delete loadingTiddlers[title];
+                        })
+                        .catch(function(err) {
+                            console.error('[TiddlyDesktop] Failed to load:', uri, err);
+                            delete loadingTiddlers[title];
+                        });
+                }
+
+                // Process existing tiddlers with absolute _canonical_uri
+                $tw.wiki.each(function(tiddler, title) {
+                    loadTiddlerContent(title);
+                });
+
+                // Listen for new/changed tiddlers
+                $tw.wiki.addEventListener('change', function(changes) {
+                    $tw.utils.each(changes, function(change, title) {
+                        if(!change.deleted) {
+                            loadTiddlerContent(title);
+                        }
+                    });
+                });
+
+                console.log('[TiddlyDesktop] Filesystem support installed');
+            }
+
+            waitForTiddlyWiki();
+        }
+
+        setupFilesystemSupport();
 
     })();
     "#
@@ -1096,6 +1590,9 @@ async fn open_wiki_folder(app: tauri::AppHandle, path: String) -> Result<WikiEnt
     // Ensure required plugins and autosave are enabled
     ensure_wiki_folder_config(&path_buf);
 
+    // Extract favicon from the wiki folder
+    let favicon = extract_favicon_from_folder(&path_buf).await;
+
     // Allocate a port for this server
     let port = allocate_port(&state);
 
@@ -1172,7 +1669,7 @@ async fn open_wiki_folder(app: tauri::AppHandle, path: String) -> Result<WikiEnt
         .icon(icon)
         .map_err(|e| format!("Failed to set icon: {}", e))?
         .window_classname("tiddlydesktop-rs")
-        .initialization_script(get_dialog_init_script())
+        .initialization_script(&get_init_script_with_path(&path))
         .disable_drag_drop_handler() // Enable HTML5 drag & drop in webview
         .build()
         .map_err(|e| format!("Failed to create window: {}", e))?;
@@ -1196,7 +1693,7 @@ async fn open_wiki_folder(app: tauri::AppHandle, path: String) -> Result<WikiEnt
     let entry = WikiEntry {
         path,
         filename: folder_name,
-        favicon: None,
+        favicon,
         is_folder: true,
         backups_enabled: false, // Not applicable for folder wikis (they use autosave)
     };
@@ -1773,6 +2270,26 @@ async fn reveal_in_folder(path: String) -> Result<(), String> {
     Ok(())
 }
 
+/// Read a file and return it as a base64 data URI
+/// Used by wiki folders to support _canonical_uri with absolute paths
+#[tauri::command]
+async fn read_file_as_data_uri(path: String) -> Result<String, String> {
+    let path_buf = PathBuf::from(&path);
+
+    // Read the file
+    let data = tokio::fs::read(&path_buf)
+        .await
+        .map_err(|e| format!("Failed to read file {}: {}", path, e))?;
+
+    // Get MIME type and encode as base64
+    let mime_type = get_mime_type(&path_buf);
+
+    use base64::{engine::general_purpose::STANDARD, Engine};
+    let base64_data = STANDARD.encode(&data);
+
+    Ok(format!("data:{};base64,{}", mime_type, base64_data))
+}
+
 /// Open a wiki file in a new window
 /// Returns WikiEntry so frontend can update its wiki list
 #[tauri::command]
@@ -1808,17 +2325,10 @@ async fn open_wiki_window(app: tauri::AppHandle, path: String) -> Result<WikiEnt
         }
     }
 
-    // Read only the first 64KB to extract favicon (it's always in <head>)
+    // Extract favicon - first try <head> link, then fall back to $:/favicon.ico tiddler
     let favicon = {
-        use tokio::io::AsyncReadExt;
-        let mut buffer = vec![0u8; 65536];
-        if let Ok(mut file) = tokio::fs::File::open(&path_buf).await {
-            if let Ok(bytes_read) = file.read(&mut buffer).await {
-                buffer.truncate(bytes_read);
-                String::from_utf8(buffer).ok().and_then(|s| extract_favicon(&s))
-            } else {
-                None
-            }
+        if let Ok(content) = tokio::fs::read_to_string(&path_buf).await {
+            extract_favicon(&content)
         } else {
             None
         }
@@ -2045,10 +2555,67 @@ fn wiki_protocol_handler(app: &tauri::AppHandle, request: Request<Vec<u8>>) -> R
             match base64_url_decode(path) {
                 Some(decoded) => PathBuf::from(decoded),
                 None => {
-                    return Response::builder()
-                        .status(404)
-                        .body("Wiki not found".as_bytes().to_vec())
-                        .unwrap();
+                    // Not a base64-encoded wiki path - this might be a _canonical_uri file request
+                    // Get the wiki directory from the Referer header
+                    drop(paths); // Release lock before handling file request
+
+                    let referer = request.headers()
+                        .get("referer")
+                        .and_then(|v| v.to_str().ok())
+                        .unwrap_or("");
+
+                    // Extract wiki path from referer: wikifile://localhost/{base64_wiki_path}
+                    let wiki_dir = if let Some(ref_path) = referer.strip_prefix("wikifile://localhost/") {
+                        // The referer path might have query params or fragments, strip them
+                        let ref_path = ref_path.split('?').next().unwrap_or(ref_path);
+                        let ref_path = ref_path.split('#').next().unwrap_or(ref_path);
+
+                        if let Some(decoded_wiki_path) = base64_url_decode(ref_path) {
+                            PathBuf::from(&decoded_wiki_path)
+                                .parent()
+                                .map(|p| p.to_path_buf())
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    };
+
+                    // Resolve the file path
+                    let resolved_path = if is_absolute_filesystem_path(path) {
+                        // Absolute path - use directly
+                        PathBuf::from(path)
+                    } else if let Some(wiki_dir) = wiki_dir {
+                        // Relative path - resolve relative to wiki directory
+                        wiki_dir.join(path)
+                    } else {
+                        // No wiki context and not absolute - can't resolve
+                        return Response::builder()
+                            .status(404)
+                            .header("Access-Control-Allow-Origin", "*")
+                            .body("File not found: no wiki context for relative path".as_bytes().to_vec())
+                            .unwrap();
+                    };
+
+                    // Serve the file
+                    match std::fs::read(&resolved_path) {
+                        Ok(content) => {
+                            let mime_type = get_mime_type(&resolved_path);
+                            return Response::builder()
+                                .status(200)
+                                .header("Content-Type", mime_type)
+                                .header("Access-Control-Allow-Origin", "*")
+                                .body(content)
+                                .unwrap();
+                        }
+                        Err(e) => {
+                            return Response::builder()
+                                .status(404)
+                                .header("Access-Control-Allow-Origin", "*")
+                                .body(format!("File not found: {} ({})", resolved_path.display(), e).as_bytes().to_vec())
+                                .unwrap();
+                        }
+                    }
                 }
             }
         }
@@ -2371,7 +2938,8 @@ pub fn run() {
             close_window,
             get_recent_files,
             remove_recent_file,
-            set_wiki_backups
+            set_wiki_backups,
+            read_file_as_data_uri
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

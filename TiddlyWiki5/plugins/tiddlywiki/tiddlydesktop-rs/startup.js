@@ -99,6 +99,17 @@ exports.startup = function(callback) {
 	// Add an entry to the wiki list
 	function addToWikiList(entry) {
 		var entries = getWikiListEntries();
+		// Find existing entry to preserve backups_enabled setting
+		var existingEntry = null;
+		for (var i = 0; i < entries.length; i++) {
+			if (entries[i].path === entry.path) {
+				existingEntry = entries[i];
+				break;
+			}
+		}
+		if (existingEntry && existingEntry.backups_enabled !== undefined) {
+			entry.backups_enabled = existingEntry.backups_enabled;
+		}
 		// Remove if already exists
 		entries = entries.filter(function(e) { return e.path !== entry.path; });
 		// Add to front
@@ -454,6 +465,35 @@ exports.startup = function(callback) {
 		if (path) {
 			removeFromWikiList(path);
 			refreshWikiList();
+		}
+	});
+
+	// Message handler: toggle backups for a wiki
+	$tw.rootWidget.addEventListener("tm-tiddlydesktop-rs-set-backups", function(event) {
+		var path = event.paramObject && event.paramObject.path;
+		var enabled = event.paramObject && event.paramObject.enabled === "true";
+		console.log("set-backups handler called:", path, "enabled:", enabled);
+		if (path) {
+			// Update the Rust backend
+			invoke("set_wiki_backups", { path: path, enabled: enabled }).then(function() {
+				console.log("set_wiki_backups invoke succeeded");
+				// Update the local wiki list entry
+				var entries = getWikiListEntries();
+				for (var i = 0; i < entries.length; i++) {
+					if (entries[i].path === path) {
+						entries[i].backups_enabled = enabled;
+						// Directly update the temp tiddler field for immediate UI update
+						var tempTitle = "$:/temp/tiddlydesktop-rs/wikis/" + i;
+						$tw.wiki.setText(tempTitle, "backups_enabled", null, enabled ? "true" : "false");
+						console.log("Updated temp tiddler", tempTitle, "backups_enabled to", enabled ? "true" : "false");
+						break;
+					}
+				}
+				saveWikiList(entries);
+				console.log("saveWikiList completed");
+			}).catch(function(err) {
+				console.error("Failed to set backups:", err);
+			});
 		}
 	});
 

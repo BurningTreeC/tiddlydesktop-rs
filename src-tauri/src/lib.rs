@@ -229,11 +229,16 @@ fn save_recent_files_to_disk(app: &tauri::AppHandle, entries: &[WikiEntry]) -> R
 }
 
 /// Add or update a wiki in the recent files list
-fn add_to_recent_files(app: &tauri::AppHandle, entry: WikiEntry) -> Result<(), String> {
+fn add_to_recent_files(app: &tauri::AppHandle, mut entry: WikiEntry) -> Result<(), String> {
     let mut entries = load_recent_files_from_disk(app);
 
+    // Preserve backups_enabled setting from existing entry (if any)
+    if let Some(existing) = entries.iter().find(|e| paths_equal(&e.path, &entry.path)) {
+        entry.backups_enabled = existing.backups_enabled;
+    }
+
     // Remove existing entry with same path (if any)
-    entries.retain(|e| e.path != entry.path);
+    entries.retain(|e| !paths_equal(&e.path, &entry.path));
 
     // Add new entry at the beginning
     entries.insert(0, entry);
@@ -254,7 +259,7 @@ fn get_recent_files(app: tauri::AppHandle) -> Vec<WikiEntry> {
 #[tauri::command]
 fn remove_recent_file(app: tauri::AppHandle, path: String) -> Result<(), String> {
     let mut entries = load_recent_files_from_disk(&app);
-    entries.retain(|e| e.path != path);
+    entries.retain(|e| !paths_equal(&e.path, &path));
     save_recent_files_to_disk(&app, &entries)
 }
 
@@ -264,7 +269,7 @@ fn set_wiki_backups(app: tauri::AppHandle, path: String, enabled: bool) -> Resul
     let mut entries = load_recent_files_from_disk(&app);
 
     for entry in entries.iter_mut() {
-        if entry.path == path {
+        if paths_equal(&entry.path, &path) {
             entry.backups_enabled = enabled;
             break;
         }
@@ -949,11 +954,14 @@ async fn load_wiki(_app: tauri::AppHandle, path: String) -> Result<String, Strin
 
 /// Save wiki content to disk with backup
 #[tauri::command]
-async fn save_wiki(_app: tauri::AppHandle, path: String, content: String) -> Result<(), String> {
+async fn save_wiki(app: tauri::AppHandle, path: String, content: String) -> Result<(), String> {
     let path_buf = PathBuf::from(&path);
 
-    // Create backup first
-    create_backup(&path_buf).await?;
+    // Check if backups are enabled for this wiki
+    let state = app.state::<AppState>();
+    if should_create_backup(&app, &state, &path) {
+        create_backup(&path_buf).await?;
+    }
 
     // Write to a temp file first, then rename for atomic operation
     let temp_path = path_buf.with_extension("tmp");
@@ -988,15 +996,34 @@ fn get_window_label(window: tauri::Window) -> String {
     window.label().to_string()
 }
 
+/// Compare two paths for equality (case-insensitive on Windows)
+fn paths_equal(path1: &str, path2: &str) -> bool {
+    #[cfg(target_os = "windows")]
+    {
+        path1.eq_ignore_ascii_case(path2)
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        path1 == path2
+    }
+}
+
 /// Check if backups should be created for a wiki path
-/// Backups are enabled for all user wikis, but not for the main TiddlyDesktop wiki
-fn should_create_backup(state: &AppState, path: &str) -> bool {
+/// Checks both if it's the main wiki (always no backup) and the user's backups_enabled setting
+fn should_create_backup(app: &tauri::AppHandle, state: &AppState, path: &str) -> bool {
     // Don't backup the main TiddlyDesktop wiki
     let main_wiki = state.main_wiki_path.to_string_lossy();
-    if path == main_wiki {
+    if paths_equal(path, &main_wiki) {
         return false;
     }
-    // Enable backups for all other wikis
+    // Check if backups are enabled for this wiki in the recent files list
+    let entries = load_recent_files_from_disk(app);
+    for entry in entries {
+        if paths_equal(&entry.path, path) {
+            return entry.backups_enabled;
+        }
+    }
+    // Default to enabled for wikis not in the list
     true
 }
 
@@ -3675,7 +3702,7 @@ fn wiki_protocol_handler(app: &tauri::AppHandle, request: Request<Vec<u8>>) -> R
 
         // Check if backups should be created for this wiki
         let state = app.state::<AppState>();
-        let should_backup = should_create_backup(&state, wiki_path.to_string_lossy().as_ref());
+        let should_backup = should_create_backup(app, &state, wiki_path.to_string_lossy().as_ref());
 
         // Create backup if appropriate (synchronous since protocol handlers can't be async)
         if should_backup && wiki_path.exists() {

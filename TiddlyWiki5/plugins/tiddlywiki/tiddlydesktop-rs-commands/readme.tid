@@ -1,0 +1,67 @@
+title: $:/plugins/tiddlywiki/tiddlydesktop-rs-commands/readme
+
+! TiddlyDesktop-RS Commands Plugin
+
+This plugin provides action widgets for executing shell commands when running in [[TiddlyDesktop-RS|https://github.com/BurningTreeC/tiddlydesktop-rs]].
+
+!! Requirements
+
+This plugin only works when your wiki is opened in TiddlyDesktop-RS. It has no effect in browsers or other TiddlyWiki hosts.
+
+!! Action Widget: `<$action-run-command>`
+
+Executes a shell command or script.
+
+!!! Attributes
+
+|!Attribute |!Description |!Default |
+|`$command` |Command or script path to run (required) |- |
+|`$args` |Arguments (space-separated, supports quoted strings) |- |
+|`$workingDir` |Working directory for the command |- |
+|`$wait` |Wait for completion and capture output (`yes`/`no`) |`no` |
+|`$confirm` |Show confirmation dialog before running (`yes`/`no`) |`yes` |
+|`$outputTiddler` |Tiddler to store command output (requires `$wait="yes"`) |- |
+|`$outputField` |Field for stdout |`text` |
+|`$exitCodeField` |Field for exit code |- |
+|`$stderrField` |Field for stderr |- |
+
+!!! Examples
+
+!!!! Simple command (with confirmation)
+
+```
+<$button>
+  Open File Manager
+  <$action-run-command $command="xdg-open" $args="."/>
+</$button>
+```
+
+!!!! Run without confirmation
+
+Use `$confirm="no"` only for trusted commands:
+
+```
+<$action-run-command $command="notify-send" $args="'Hello World'" $confirm="no"/>
+```
+
+!!!! Capture output
+
+```
+<$button>
+  Get Date
+  <$action-run-command
+    $command="date"
+    $wait="yes"
+    $outputTiddler="$:/temp/date-output"
+    $exitCodeField="exit_code"
+  />
+</$button>
+
+Output: {{$:/temp/date-output}}
+```
+
+!! Security
+
+* ''Confirmation dialog'': By default, a native dialog asks the user to approve each command
+* Set `$confirm="no"` only for trusted commands you control
+* Commands run with your user permissions

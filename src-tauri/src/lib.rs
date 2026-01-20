@@ -981,7 +981,7 @@ async fn save_wiki(app: tauri::AppHandle, path: String, content: String) -> Resu
     Ok(())
 }
 
-/// Set window title
+/// Set window title (works on Windows/macOS, not Linux due to WebKitGTK limitations)
 #[tauri::command]
 async fn set_window_title(app: tauri::AppHandle, label: String, title: String) -> Result<(), String> {
     if let Some(window) = app.get_webview_window(&label) {
@@ -1063,6 +1063,97 @@ async fn show_confirm(app: tauri::AppHandle, message: String) -> Result<bool, St
 #[tauri::command]
 fn close_window(window: tauri::Window) {
     let _ = window.destroy();
+}
+
+/// Result of running a command
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CommandResult {
+    pub success: bool,
+    pub exit_code: Option<i32>,
+    pub stdout: String,
+    pub stderr: String,
+}
+
+/// Run a shell command with optional confirmation dialog
+/// Security: Shows a confirmation dialog by default to prevent unauthorized execution
+#[tauri::command]
+async fn run_command(
+    app: tauri::AppHandle,
+    command: String,
+    args: Option<Vec<String>>,
+    working_dir: Option<String>,
+    wait: Option<bool>,
+    confirm: Option<bool>,
+) -> Result<Option<CommandResult>, String> {
+    use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
+
+    let should_confirm = confirm.unwrap_or(true); // Default to confirming
+    let should_wait = wait.unwrap_or(false);
+    let args_vec = args.unwrap_or_default();
+
+    // Build the command string for display
+    let display_cmd = if args_vec.is_empty() {
+        command.clone()
+    } else {
+        format!("{} {}", command, args_vec.join(" "))
+    };
+
+    // Show confirmation dialog if required
+    if should_confirm {
+        let message = format!(
+            "A wiki wants to run the following command:\n\n{}\n\nDo you want to allow this?",
+            display_cmd
+        );
+
+        let confirmed = app.dialog()
+            .message(message)
+            .kind(MessageDialogKind::Warning)
+            .title("Execute Command")
+            .buttons(MessageDialogButtons::OkCancel)
+            .blocking_show();
+
+        if !confirmed {
+            return Err("Command execution cancelled by user".to_string());
+        }
+    }
+
+    // Build the command
+    let mut cmd = std::process::Command::new(&command);
+
+    if !args_vec.is_empty() {
+        cmd.args(&args_vec);
+    }
+
+    if let Some(dir) = working_dir {
+        cmd.current_dir(dir);
+    }
+
+    // On Windows, hide the console window
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+
+    if should_wait {
+        // Run and wait for output
+        let output = cmd.output()
+            .map_err(|e| format!("Failed to execute command: {}", e))?;
+
+        Ok(Some(CommandResult {
+            success: output.status.success(),
+            exit_code: output.status.code(),
+            stdout: String::from_utf8_lossy(&output.stdout).to_string(),
+            stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+        }))
+    } else {
+        // Fire and forget
+        cmd.spawn()
+            .map_err(|e| format!("Failed to spawn command: {}", e))?;
+
+        Ok(None)
+    }
 }
 
 // Note: show_prompt is not implemented as a Tauri command because Tauri's dialog plugin
@@ -3055,7 +3146,7 @@ async fn get_available_plugins(app: tauri::AppHandle) -> Result<Vec<PluginInfo>,
     let editor_plugins = ["codemirror", "codemirror-autocomplete", "codemirror-closebrackets",
         "codemirror-closetag", "codemirror-mode-css", "codemirror-mode-javascript",
         "codemirror-mode-markdown", "codemirror-mode-xml", "codemirror-search-replace"];
-    let utility_plugins = ["markdown", "highlight", "katex", "jszip", "xlsx-utils", "qrcode", "innerwiki"];
+    let utility_plugins = ["markdown", "highlight", "katex", "jszip", "xlsx-utils", "qrcode", "innerwiki", "tiddlydesktop-rs-commands"];
     let storage_plugins = ["browser-storage", "filesystem", "tiddlyweb"];
 
     if let Ok(entries) = std::fs::read_dir(&plugins_dir) {
@@ -3072,7 +3163,7 @@ async fn get_available_plugins(app: tauri::AppHandle) -> Result<Vec<PluginInfo>,
                                 .to_string();
 
                             // Skip internal/core plugins
-                            if id == "tiddlyweb" || id == "filesystem" || id.starts_with("test") {
+                            if id == "tiddlyweb" || id == "filesystem" || id == "tiddlydesktop-rs" || id.starts_with("test") {
                                 continue;
                             }
 
@@ -3982,6 +4073,46 @@ window.__IS_MAIN_WIKI__ = {};
     }}
 
     registerWithTiddlyWiki();
+
+    // Title sync - update window title when document title changes
+    (function() {{
+        var windowLabel = window.__WINDOW_LABEL__;
+        var lastTitle = '';
+
+        function syncTitle() {{
+            var title = document.title;
+            if (title && title !== lastTitle && window.__TAURI__ && window.__TAURI__.core) {{
+                lastTitle = title;
+                window.__TAURI__.core.invoke('set_window_title', {{
+                    label: windowLabel,
+                    title: title
+                }}).catch(function() {{}});
+            }}
+        }}
+
+        // Sync when DOM is ready
+        if (document.readyState === 'loading') {{
+            document.addEventListener('DOMContentLoaded', syncTitle);
+        }} else {{
+            syncTitle();
+        }}
+
+        // Hook into TiddlyWiki's change system when available
+        function hookTiddlyWiki() {{
+            if (typeof $tw !== 'undefined' && $tw.wiki) {{
+                $tw.wiki.addEventListener('change', function() {{
+                    setTimeout(syncTitle, 10);
+                }});
+            }} else {{
+                setTimeout(hookTiddlyWiki, 100);
+            }}
+        }}
+        hookTiddlyWiki();
+
+        // Fallback: periodic sync
+        setInterval(syncTitle, 2000);
+    }})();
+
     // External attachments support is provided by the initialization script (get_dialog_init_script)
 }})();
 </script>"##,
@@ -4159,7 +4290,8 @@ pub fn run() {
             read_file_as_data_uri,
             read_file_as_binary,
             get_external_attachments_config,
-            set_external_attachments_config
+            set_external_attachments_config,
+            run_command
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

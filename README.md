@@ -99,8 +99,9 @@ cd tiddlydesktop-rs
 # Clone TiddlyWiki5 (required for building)
 git clone https://github.com/TiddlyWiki/TiddlyWiki5.git ../TiddlyWiki5
 
-# Copy plugins
+# Copy plugins and editions
 cp -r TiddlyWiki5/plugins/tiddlywiki/tiddlydesktop-rs ../TiddlyWiki5/plugins/tiddlywiki/
+cp -r TiddlyWiki5/plugins/tiddlywiki/tiddlydesktop-rs-commands ../TiddlyWiki5/plugins/tiddlywiki/
 cp -r TiddlyWiki5/editions/tiddlydesktop-rs ../TiddlyWiki5/editions/
 
 # Install dependencies
@@ -158,7 +159,73 @@ Each edition must be a directory containing a valid `tiddlywiki.info` file. Cust
 | Plugins | Embedded in file | External plugin folders |
 | Node.js required | No | Yes |
 
+### Running Shell Commands
+
+TiddlyDesktop-RS supports running shell commands from within your wikis via the **TiddlyDesktop-RS Commands** plugin.
+
+#### Installing the Plugin
+
+1. Locate the plugin in `TiddlyWiki5/plugins/tiddlywiki/tiddlydesktop-rs-commands/`
+2. Drag and drop the plugin folder into your wiki, or install it via TiddlyWiki's plugin library
+3. Save and reload your wiki
+
+The plugin provides the `<$action-run-command>` widget for executing shell commands.
+
+#### Basic Usage
+
+```html
+<$button>
+  Open File Manager
+  <$action-run-command $command="xdg-open" $args="."/>
+</$button>
+```
+
+#### Widget Attributes
+
+| Attribute | Description | Default |
+|-----------|-------------|---------|
+| `$command` | Command or script path to run (required) | - |
+| `$args` | Arguments (space-separated, supports quotes) | - |
+| `$workingDir` | Working directory | - |
+| `$wait` | Wait for completion (`yes`/`no`) | `no` |
+| `$confirm` | Show confirmation dialog (`yes`/`no`) | `yes` |
+| `$outputTiddler` | Tiddler to store output (needs `$wait="yes"`) | - |
+| `$outputField` | Field for stdout | `text` |
+| `$exitCodeField` | Field for exit code | - |
+| `$stderrField` | Field for stderr | - |
+
+#### Capturing Output
+
+```html
+<$button>
+  Get Current Date
+  <$action-run-command
+    $command="date"
+    $wait="yes"
+    $outputTiddler="$:/temp/command-output"
+    $exitCodeField="exit_code"
+  />
+</$button>
+
+<$list filter="[[$:/temp/command-output]has[text]]">
+  Output: {{$:/temp/command-output}}
+</$list>
+```
+
+#### Security
+
+- **Confirmation dialog**: By default, a native dialog asks the user to approve each command before execution
+- Use `$confirm="no"` only for trusted commands you control
+- Commands run with your user permissions
+- This widget only works when the plugin is installed and the wiki is opened in TiddlyDesktop-RS (has no effect in browsers)
+
 ## Known Limitations
+
+### Linux: Window Title Not Updated
+
+On **Linux**, the window title does not automatically update to reflect the wiki name. This is due to a limitation in WebKitGTK (the web rendering engine used by Tauri on Linux) where dynamically setting the window title from JavaScript or the Tauri API doesn't work reliably.
+
+The window title works correctly on **Windows** and **macOS**.
 
 ### macOS: Orphaned Node.js Processes
 

@@ -26,21 +26,22 @@ else
 fi
 
 # Create tarball directory structure
+# Tauri looks for resources in ../lib/<app-name>/ relative to binary
 echo "Creating tarball structure..."
 rm -rf "target/tarball"
 mkdir -p "${BUILD_DIR}/bin"
+mkdir -p "${BUILD_DIR}/lib/${NAME}"
 mkdir -p "${BUILD_DIR}/share/applications"
 mkdir -p "${BUILD_DIR}/share/icons/hicolor/32x32/apps"
 mkdir -p "${BUILD_DIR}/share/icons/hicolor/128x128/apps"
 mkdir -p "${BUILD_DIR}/share/icons/hicolor/256x256/apps"
-mkdir -p "${BUILD_DIR}/resources"
 
 # Copy binary
 cp "src-tauri/target/release/${NAME}" "${BUILD_DIR}/bin/"
 
-# Copy resources
-cp -r src-tauri/resources/tiddlywiki "${BUILD_DIR}/resources/"
-cp src/index.html "${BUILD_DIR}/resources/"
+# Copy resources to lib/<app-name>/ (where Tauri expects them)
+cp -r src-tauri/resources/tiddlywiki "${BUILD_DIR}/lib/${NAME}/"
+cp src/index.html "${BUILD_DIR}/lib/${NAME}/"
 
 # Copy icons
 cp src-tauri/icons/32x32.png "${BUILD_DIR}/share/icons/hicolor/32x32/apps/${NAME}.png"
@@ -76,9 +77,9 @@ echo "Installing TiddlyDesktop to ${PREFIX}..."
 # Install binary
 install -Dm755 "${SCRIPT_DIR}/bin/tiddlydesktop-rs" "${PREFIX}/bin/tiddlydesktop-rs"
 
-# Install resources
-mkdir -p "${PREFIX}/share/tiddlydesktop-rs"
-cp -r "${SCRIPT_DIR}/resources/"* "${PREFIX}/share/tiddlydesktop-rs/"
+# Install resources (Tauri looks in ../lib/<app-name>/ relative to binary)
+mkdir -p "${PREFIX}/lib/tiddlydesktop-rs"
+cp -r "${SCRIPT_DIR}/lib/tiddlydesktop-rs/"* "${PREFIX}/lib/tiddlydesktop-rs/"
 
 # Install icons
 for size in 32x32 128x128 256x256; do
@@ -114,7 +115,7 @@ PREFIX="${1:-/usr/local}"
 echo "Uninstalling TiddlyDesktop from ${PREFIX}..."
 
 rm -f "${PREFIX}/bin/tiddlydesktop-rs"
-rm -rf "${PREFIX}/share/tiddlydesktop-rs"
+rm -rf "${PREFIX}/lib/tiddlydesktop-rs"
 rm -f "${PREFIX}/share/applications/tiddlydesktop-rs.desktop"
 for size in 32x32 128x128 256x256; do
     rm -f "${PREFIX}/share/icons/hicolor/${size}/apps/tiddlydesktop-rs.png"

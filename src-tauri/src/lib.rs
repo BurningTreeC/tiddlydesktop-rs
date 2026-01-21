@@ -410,7 +410,17 @@ mod linux_drag {
     }
 }
 
-/// Windows drag-drop handling - captures content from external drags via OLE/COM
+/// Windows drag-drop handling using WebView2's native APIs
+///
+/// This approach works WITH WebView2 rather than against it, similar to how
+/// the Linux implementation works with GTK's drag_dest_set.
+///
+/// On Windows:
+/// 1. We use Tauri's with_webview to access the WebView2 controller
+/// 2. We ensure AllowExternalDrop is enabled
+/// 3. We register an IDropTarget on the PARENT window (not Chrome_WidgetWin_1)
+///    to intercept drags before they reach WebView2's internal handler
+/// 4. We emit events to JavaScript which handles the actual drop processing
 #[cfg(target_os = "windows")]
 mod windows_drag {
     use std::cell::RefCell;
@@ -419,43 +429,30 @@ mod windows_drag {
     use std::os::windows::ffi::OsStringExt;
     use std::sync::Mutex;
     use tauri::{Emitter, WebviewWindow};
-    use windows::core::implement;
-    use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINTL, WPARAM};
+    use webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2Controller4;
+    use windows::core::{implement, Interface};
+    use windows::Win32::Foundation::{HWND, POINTL};
     use windows::Win32::System::Com::{
         CoInitializeEx, IDataObject, COINIT_APARTMENTTHREADED, TYMED_HGLOBAL,
         FORMATETC, DVASPECT_CONTENT,
     };
     use windows::Win32::System::Ole::{
         IDropTarget, IDropTarget_Impl, RegisterDragDrop, RevokeDragDrop,
-        DROPEFFECT, DROPEFFECT_COPY, DROPEFFECT_NONE,
+        DROPEFFECT, DROPEFFECT_COPY, DROPEFFECT_MOVE, DROPEFFECT_LINK, DROPEFFECT_NONE,
     };
     use windows::Win32::System::SystemServices::MODIFIERKEYS_FLAGS;
     use windows::Win32::System::Memory::{GlobalLock, GlobalUnlock, GlobalSize};
-    use windows::Win32::UI::Shell::{
-        DragQueryFileW, HDROP, SetWindowSubclass, DefSubclassProc, RemoveWindowSubclass,
-    };
-    use windows::Win32::UI::WindowsAndMessaging::{
-        SetTimer, KillTimer, WM_TIMER, EnumChildWindows, GetClassNameW, WNDENUMPROC,
-    };
-
-    // Subclass ID for our window subclass
-    const SUBCLASS_ID: usize = 0x5401;
-    // Timer ID for periodic re-registration check
-    const REREGISTER_TIMER_ID: usize = 0x5402;
+    use windows::Win32::UI::Shell::DragQueryFileW;
+    use windows::Win32::UI::Shell::HDROP;
 
     /// Thread-safe wrapper for IDropTarget (COM pointers are ref-counted)
     struct SendDropTarget(IDropTarget);
     unsafe impl Send for SendDropTarget {}
     unsafe impl Sync for SendDropTarget {}
 
-    /// State for managing drop target registration
-    struct DropTargetState {
-        drop_target: SendDropTarget,
-    }
-
     // Global state for registered drop targets (keyed by HWND as isize)
     lazy_static::lazy_static! {
-        static ref DROP_TARGET_MAP: Mutex<HashMap<isize, DropTargetState>> = Mutex::new(HashMap::new());
+        static ref DROP_TARGET_MAP: Mutex<HashMap<isize, SendDropTarget>> = Mutex::new(HashMap::new());
     }
 
     /// Clipboard format constants
@@ -491,7 +488,7 @@ mod windows_drag {
         pub data: HashMap<String, String>,
     }
 
-    /// Our IDropTarget implementation
+    /// Our IDropTarget implementation - registered on the parent window
     #[implement(IDropTarget)]
     struct DropTarget {
         window: WebviewWindow,
@@ -524,7 +521,7 @@ mod windows_drag {
                 data.insert("text/uri-list".to_string(), uri_list);
             }
 
-            // Try to get Unicode text - prefer this over HTML for simple text drags
+            // Try to get Unicode text
             if let Some(text) = self.get_unicode_text(data_object) {
                 types.push("text/plain".to_string());
                 data.insert("text/plain".to_string(), text);
@@ -538,7 +535,7 @@ mod windows_drag {
                 }
             }
 
-            // Try to get HTML content - lower priority than plain text
+            // Try to get HTML content
             let cf_html = get_cf_html();
             if let Some(html) = self.get_string_data(data_object, cf_html) {
                 // HTML Format has headers, extract just the HTML
@@ -672,27 +669,65 @@ mod windows_drag {
             }
             paths
         }
+
+        /// Convert screen coordinates to client coordinates for the webview
+        fn screen_to_client(&self, x: i32, y: i32) -> (i32, i32) {
+            // Get the window's screen position
+            if let Ok(pos) = self.window.outer_position() {
+                // Account for window decorations (title bar)
+                // On Windows, the title bar is typically ~30-40 pixels
+                // We use inner_position to get the content area position
+                if let Ok(inner_pos) = self.window.inner_position() {
+                    let client_x = x - inner_pos.x;
+                    let client_y = y - inner_pos.y;
+                    return (client_x, client_y);
+                }
+                // Fallback: use outer position
+                let client_x = x - pos.x;
+                let client_y = y - pos.y;
+                return (client_x, client_y);
+            }
+            // If we can't get position, return as-is
+            (x, y)
+        }
+    }
+
+    /// Choose a drop effect that the source allows
+    fn choose_drop_effect(allowed: DROPEFFECT) -> DROPEFFECT {
+        if (allowed.0 & DROPEFFECT_COPY.0) != 0 {
+            DROPEFFECT_COPY
+        } else if (allowed.0 & DROPEFFECT_MOVE.0) != 0 {
+            DROPEFFECT_MOVE
+        } else if (allowed.0 & DROPEFFECT_LINK.0) != 0 {
+            DROPEFFECT_LINK
+        } else {
+            DROPEFFECT_COPY
+        }
     }
 
     impl IDropTarget_Impl for DropTarget_Impl {
         fn DragEnter(
             &self,
-            pdataobj: Option<&IDataObject>,
+            _pdataobj: Option<&IDataObject>,
             _grfkeystate: MODIFIERKEYS_FLAGS,
             pt: &POINTL,
             pdweffect: *mut DROPEFFECT,
         ) -> windows::core::Result<()> {
             *self.drag_active.borrow_mut() = true;
 
-            if pdataobj.is_some() {
-                // Emit screen coordinates - JavaScript will convert to client coords
-                let _ = self.window.emit("td-drag-motion", serde_json::json!({
-                    "x": pt.x,
-                    "y": pt.y,
-                    "screenCoords": true
-                }));
+            // Convert to client coordinates
+            let (x, y) = self.screen_to_client(pt.x, pt.y);
 
-                unsafe { *pdweffect = DROPEFFECT_COPY; }
+            // Emit event with client coordinates (not screen coordinates)
+            let _ = self.window.emit("td-drag-motion", serde_json::json!({
+                "x": x,
+                "y": y
+            }));
+
+            // Accept the drag
+            unsafe {
+                let allowed = *pdweffect;
+                *pdweffect = choose_drop_effect(allowed);
             }
 
             Ok(())
@@ -704,14 +739,23 @@ mod windows_drag {
             pt: &POINTL,
             pdweffect: *mut DROPEFFECT,
         ) -> windows::core::Result<()> {
-            if *self.drag_active.borrow() {
-                // Emit screen coordinates - JavaScript will convert to client coords
-                let _ = self.window.emit("td-drag-motion", serde_json::json!({
-                    "x": pt.x,
-                    "y": pt.y,
-                    "screenCoords": true
-                }));
-                unsafe { *pdweffect = DROPEFFECT_COPY; }
+            if !*self.drag_active.borrow() {
+                *self.drag_active.borrow_mut() = true;
+            }
+
+            // Convert to client coordinates
+            let (x, y) = self.screen_to_client(pt.x, pt.y);
+
+            // Emit continuous motion events
+            let _ = self.window.emit("td-drag-motion", serde_json::json!({
+                "x": x,
+                "y": y
+            }));
+
+            // Accept the drag
+            unsafe {
+                let allowed = *pdweffect;
+                *pdweffect = choose_drop_effect(allowed);
             }
             Ok(())
         }
@@ -734,17 +778,24 @@ mod windows_drag {
             *self.drag_active.borrow_mut() = false;
 
             if let Some(data_object) = pdataobj {
-                // Emit screen coordinates - JavaScript will convert to client coords
+                // Convert to client coordinates
+                let (x, y) = self.screen_to_client(pt.x, pt.y);
+
+                // Emit drop start
                 let _ = self.window.emit("td-drag-drop-start", serde_json::json!({
-                    "x": pt.x,
-                    "y": pt.y,
-                    "screenCoords": true
+                    "x": x,
+                    "y": y
                 }));
 
                 // Check for file paths first
                 let file_paths = self.get_file_paths(data_object);
                 if !file_paths.is_empty() {
-                    // File drop - emit file paths
+                    // Emit position
+                    let _ = self.window.emit("td-drag-drop-position", serde_json::json!({
+                        "x": x,
+                        "y": y
+                    }));
+                    // Emit file paths
                     let _ = self.window.emit("td-file-drop", serde_json::json!({
                         "paths": file_paths
                     }));
@@ -754,199 +805,79 @@ mod windows_drag {
 
                 // Content drop - extract and emit data
                 if let Some(content_data) = self.extract_data(data_object) {
+                    // Emit position
+                    let _ = self.window.emit("td-drag-drop-position", serde_json::json!({
+                        "x": x,
+                        "y": y
+                    }));
+                    // Emit content
                     let _ = self.window.emit("td-drag-content", &content_data);
                     unsafe { *pdweffect = DROPEFFECT_COPY; }
                 } else {
                     unsafe { *pdweffect = DROPEFFECT_NONE; }
                 }
+            } else {
+                unsafe { *pdweffect = DROPEFFECT_NONE; }
             }
 
             Ok(())
         }
     }
 
-    /// Find WebView2's content window (Chrome_WidgetWin_1) which handles drag-drop
-    unsafe fn find_webview2_content_hwnd(parent: HWND) -> Option<HWND> {
-        // WebView2 creates nested child windows. The drag-drop target is typically
-        // a Chrome_WidgetWin_1 or Chrome_RenderWidgetHostHWND window
-        use std::sync::atomic::{AtomicIsize, Ordering};
-
-        static FOUND_HWND: AtomicIsize = AtomicIsize::new(0);
-        FOUND_HWND.store(0, Ordering::SeqCst);
-
-        unsafe extern "system" fn enum_callback(hwnd: HWND, _lparam: LPARAM) -> windows::Win32::Foundation::BOOL {
-            let mut class_name = [0u16; 256];
-            let len = GetClassNameW(hwnd, &mut class_name);
-            if len > 0 {
-                let name = String::from_utf16_lossy(&class_name[..len as usize]);
-                // Look for Chrome/WebView2 content windows
-                if name.contains("Chrome_WidgetWin") || name.contains("Chrome_RenderWidgetHostHWND") {
-                    FOUND_HWND.store(hwnd.0 as isize, Ordering::SeqCst);
-                    return windows::Win32::Foundation::BOOL(0); // Stop enumeration
-                }
-            }
-            windows::Win32::Foundation::BOOL(1) // Continue enumeration
-        }
-
-        let callback: WNDENUMPROC = Some(enum_callback);
-        let _ = EnumChildWindows(parent, callback, LPARAM(0));
-
-        // If not found at first level, search deeper (WebView2 nests windows)
-        if FOUND_HWND.load(Ordering::SeqCst) == 0 {
-            unsafe extern "system" fn enum_recursive(hwnd: HWND, _lparam: LPARAM) -> windows::Win32::Foundation::BOOL {
-                // Check this window
-                let mut class_name = [0u16; 256];
-                let len = GetClassNameW(hwnd, &mut class_name);
-                if len > 0 {
-                    let name = String::from_utf16_lossy(&class_name[..len as usize]);
-                    if name.contains("Chrome_WidgetWin") || name.contains("Chrome_RenderWidgetHostHWND") {
-                        FOUND_HWND.store(hwnd.0 as isize, Ordering::SeqCst);
-                        return windows::Win32::Foundation::BOOL(0);
-                    }
-                }
-                // Recurse into children
-                let callback: WNDENUMPROC = Some(enum_recursive);
-                let _ = EnumChildWindows(hwnd, callback, LPARAM(0));
-                if FOUND_HWND.load(Ordering::SeqCst) != 0 {
-                    return windows::Win32::Foundation::BOOL(0);
-                }
-                windows::Win32::Foundation::BOOL(1)
-            }
-
-            let callback: WNDENUMPROC = Some(enum_recursive);
-            let _ = EnumChildWindows(parent, callback, LPARAM(0));
-        }
-
-        let found = FOUND_HWND.load(Ordering::SeqCst);
-        if found != 0 {
-            Some(HWND(found as *mut _))
-        } else {
-            None
-        }
-    }
-
-    /// Window subclass procedure - monitors and handles drag-drop registration
-    unsafe extern "system" fn subclass_proc(
-        hwnd: HWND,
-        msg: u32,
-        wparam: WPARAM,
-        lparam: LPARAM,
-        _uid_subclass: usize,
-        _dw_ref_data: usize,
-    ) -> LRESULT {
-        if msg == WM_TIMER && wparam.0 == REREGISTER_TIMER_ID {
-            // Periodic check - re-register our drop target
-            // This handles cases where WebView2 re-registers after navigation
-            reregister_drop_target(hwnd);
-            return LRESULT(0);
-        }
-        DefSubclassProc(hwnd, msg, wparam, lparam)
-    }
-
-    /// Re-register our drop target on the window
-    unsafe fn reregister_drop_target(hwnd: HWND) {
-        let map = DROP_TARGET_MAP.lock().unwrap();
-        if let Some(state) = map.get(&(hwnd.0 as isize)) {
-            // Revoke any existing handler and register ours
-            let _ = RevokeDragDrop(hwnd);
-            let _ = RegisterDragDrop(hwnd, &state.drop_target.0);
-        }
-    }
-
-    /// Register our drop target with retries and monitoring
-    unsafe fn register_with_monitoring(
-        window: WebviewWindow,
-        parent_hwnd: HWND,
-        target_hwnd: HWND,
-    ) {
-        // Create our drop target
-        let drop_target: IDropTarget = DropTarget::new(window).into();
-
-        // Store state for later re-registration
-        let state = DropTargetState {
-            drop_target: SendDropTarget(drop_target.clone()),
-        };
-        DROP_TARGET_MAP.lock().unwrap().insert(target_hwnd.0 as isize, state);
-
-        // Revoke any existing drop target
-        let _ = RevokeDragDrop(target_hwnd);
-
-        // Register our drop target
-        match RegisterDragDrop(target_hwnd, &drop_target) {
-            Ok(()) => {
-                eprintln!("[TiddlyDesktop] Registered drop target on WebView2 content window {:?}", target_hwnd);
-            }
-            Err(e) => {
-                eprintln!("[TiddlyDesktop] Failed to register drop target: {:?}", e);
-            }
-        }
-
-        // Subclass the window to monitor for re-registration attempts
-        let subclass_result = SetWindowSubclass(
-            target_hwnd,
-            Some(subclass_proc),
-            SUBCLASS_ID,
-            0,
-        );
-        if subclass_result.as_bool() {
-            eprintln!("[TiddlyDesktop] Window subclass installed");
-
-            // Set up a periodic timer to check registration (every 2 seconds)
-            // This handles cases where WebView2 re-registers after navigation
-            let timer_result = SetTimer(target_hwnd, REREGISTER_TIMER_ID, 2000, None);
-            if timer_result == 0 {
-                eprintln!("[TiddlyDesktop] Failed to set re-registration timer");
-            }
-        } else {
-            eprintln!("[TiddlyDesktop] Failed to install window subclass");
-        }
-
-        // Also subclass the parent window to catch navigation events
-        let _ = SetWindowSubclass(
-            parent_hwnd,
-            Some(subclass_proc),
-            SUBCLASS_ID + 1,
-            0,
-        );
-    }
-
     /// Set up drag-drop handling for a webview window
+    ///
+    /// This uses WebView2's native APIs and registers our IDropTarget on the
+    /// parent window to intercept content drags.
     pub fn setup_drag_handlers(window: &WebviewWindow) {
         let window_clone = window.clone();
 
-        // Get the HWND - use a small delay to ensure window is fully created
+        // First, configure WebView2 to allow external drops
+        // This is done via with_webview which gives us access to the controller
+        let _ = window.with_webview(move |webview| {
+            unsafe {
+                // Get the controller and query for ICoreWebView2Controller4
+                let controller = webview.controller();
+                let controller4: Result<ICoreWebView2Controller4, _> = controller.cast();
+
+                if let Ok(ctrl4) = controller4 {
+                    // Ensure external drops are allowed
+                    let _ = ctrl4.SetAllowExternalDrop(true);
+                }
+            }
+        });
+
+        // Now register our IDropTarget on the parent window
+        // We do this on a separate thread with a delay to ensure the window is ready
+        let window_for_drop = window.clone();
         std::thread::spawn(move || {
-            // Wait for WebView2 to create its child windows
-            // Use multiple attempts with increasing delays to handle late initialization
-            let delays = [500, 1000, 2000, 3000];
+            // Wait for window to be fully created
+            std::thread::sleep(std::time::Duration::from_millis(500));
 
-            for (attempt, delay) in delays.iter().enumerate() {
-                std::thread::sleep(std::time::Duration::from_millis(*delay));
+            unsafe {
+                // Initialize COM
+                let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
 
-                unsafe {
-                    // Initialize COM on this thread (idempotent)
-                    let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+                // Get the parent HWND
+                if let Ok(hwnd) = window_for_drop.hwnd() {
+                    let hwnd = HWND(hwnd.0 as *mut _);
 
-                    // Get the parent HWND from the window
-                    if let Ok(parent_hwnd) = window_clone.hwnd() {
-                        let parent_hwnd = HWND(parent_hwnd.0 as *mut _);
+                    // Create and register our drop target on the parent window
+                    let drop_target: IDropTarget = DropTarget::new(window_for_drop.clone()).into();
 
-                        // Find WebView2's content window - this is where drops actually land
-                        if let Some(target_hwnd) = find_webview2_content_hwnd(parent_hwnd) {
-                            eprintln!("[TiddlyDesktop] Found WebView2 content window on attempt {}", attempt + 1);
+                    // Store for later cleanup
+                    DROP_TARGET_MAP.lock().unwrap().insert(
+                        hwnd.0 as isize,
+                        SendDropTarget(drop_target.clone())
+                    );
 
-                            // Register with monitoring (only on first successful find)
-                            if attempt == 0 || !DROP_TARGET_MAP.lock().unwrap().contains_key(&(target_hwnd.0 as isize)) {
-                                register_with_monitoring(window_clone.clone(), parent_hwnd, target_hwnd);
-                            } else {
-                                // Re-register on subsequent attempts
-                                reregister_drop_target(target_hwnd);
-                            }
-                            return;
-                        } else if attempt == delays.len() - 1 {
-                            // Last attempt - fall back to parent window
-                            eprintln!("[TiddlyDesktop] WebView2 content window not found, using parent window");
-                            register_with_monitoring(window_clone.clone(), parent_hwnd, parent_hwnd);
+                    // Revoke any existing and register ours
+                    let _ = RevokeDragDrop(hwnd);
+                    match RegisterDragDrop(hwnd, &drop_target) {
+                        Ok(()) => {
+                            eprintln!("[TiddlyDesktop] Windows: Registered IDropTarget on parent window");
+                        }
+                        Err(e) => {
+                            eprintln!("[TiddlyDesktop] Windows: Failed to register IDropTarget: {:?}", e);
                         }
                     }
                 }
@@ -954,28 +885,12 @@ mod windows_drag {
         });
     }
 
-    /// Clean up drop target for a window (call when window closes)
+    /// Clean up drop target for a window
     #[allow(dead_code)]
     pub fn cleanup_drag_handlers(window: &WebviewWindow) {
         if let Ok(hwnd) = window.hwnd() {
             let hwnd = HWND(hwnd.0 as *mut _);
             unsafe {
-                // Remove subclass
-                let _ = RemoveWindowSubclass(hwnd, Some(subclass_proc), SUBCLASS_ID);
-                let _ = RemoveWindowSubclass(hwnd, Some(subclass_proc), SUBCLASS_ID + 1);
-
-                // Kill timer
-                let _ = KillTimer(hwnd, REREGISTER_TIMER_ID);
-
-                // Find and clean up the content window too
-                if let Some(target_hwnd) = find_webview2_content_hwnd(hwnd) {
-                    let _ = KillTimer(target_hwnd, REREGISTER_TIMER_ID);
-                    let _ = RemoveWindowSubclass(target_hwnd, Some(subclass_proc), SUBCLASS_ID);
-                    let _ = RevokeDragDrop(target_hwnd);
-                    DROP_TARGET_MAP.lock().unwrap().remove(&(target_hwnd.0 as isize));
-                }
-
-                // Revoke parent window handler
                 let _ = RevokeDragDrop(hwnd);
                 DROP_TARGET_MAP.lock().unwrap().remove(&(hwnd.0 as isize));
             }
@@ -3260,11 +3175,14 @@ fn get_dialog_init_script() -> &'static str {
                 }
             });
 
-            // Helper to convert screen coordinates to client coordinates (for Windows IDropTarget)
+            // Helper to convert screen coordinates to client coordinates
+            // Used when native handlers send screen coordinates (with screenCoords: true)
             function screenToClient(x, y) {
+                // On Windows with DPI scaling, coordinates need adjustment
+                var dpr = window.devicePixelRatio || 1;
                 return {
-                    x: x - window.screenX,
-                    y: y - window.screenY
+                    x: x / dpr - window.screenX,
+                    y: y / dpr - window.screenY
                 };
             }
 
@@ -3395,10 +3313,14 @@ fn get_dialog_init_script() -> &'static str {
             // Note: Don't check contentDragActive - native events are authoritative
             listen("td-drag-drop-position", function(event) {
                 if (event.payload) {
-                    pendingContentDropPos = {
-                        x: event.payload.x,
-                        y: event.payload.y
-                    };
+                    var pos;
+                    if (event.payload.screenCoords) {
+                        // Windows IDropTarget sends screen coordinates - convert to client
+                        pos = screenToClient(event.payload.x, event.payload.y);
+                    } else {
+                        pos = { x: event.payload.x, y: event.payload.y };
+                    }
+                    pendingContentDropPos = pos;
                     // Process the content drop now that we have position
                     if (pendingContentDropData) {
                         processContentDrop();
@@ -4320,8 +4242,15 @@ fn get_dialog_init_script() -> &'static str {
 
                 var target = event.target;
 
+                // Handle text nodes (e.g., when dragging selected text)
+                // Text nodes don't have getAttribute/classList, so get the parent element
+                if (target && target.nodeType !== 1) {
+                    target = target.parentElement;
+                }
+                if (!target) return;
+
                 // Only handle draggable elements: explicit draggable="true", tc-draggable class, or tc-tiddlylink (tiddler links)
-                if (!target || (target.getAttribute("draggable") !== "true" && !target.classList.contains("tc-draggable") && !target.classList.contains("tc-tiddlylink"))) {
+                if (target.getAttribute("draggable") !== "true" && !target.classList.contains("tc-draggable") && !target.classList.contains("tc-tiddlylink")) {
                     // Check if any ancestor is draggable
                     target = target.closest("[draggable='true'], .tc-draggable, .tc-tiddlylink");
                     if (!target) return;

@@ -751,74 +751,67 @@ mod windows_drag {
         }
     }
 
-    // Store registered drop targets to keep them alive
-    use std::sync::{Mutex, OnceLock};
-    use windows::Win32::UI::WindowsAndMessaging::{EnumChildWindows, GetClassNameW};
-    use windows::Win32::Foundation::{BOOL, LPARAM};
-
-    fn registered_targets() -> &'static Mutex<HashMap<isize, IDropTarget>> {
-        static REGISTERED_TARGETS: OnceLock<Mutex<HashMap<isize, IDropTarget>>> = OnceLock::new();
-        REGISTERED_TARGETS.get_or_init(|| Mutex::new(HashMap::new()))
-    }
+    use windows::Win32::UI::WindowsAndMessaging::{EnumChildWindows, GetClassNameW, WNDENUMPROC};
+    use windows::Win32::Foundation::LPARAM;
 
     /// Find WebView2's content window (Chrome_WidgetWin_1) which handles drag-drop
     unsafe fn find_webview2_content_hwnd(parent: HWND) -> Option<HWND> {
         // WebView2 creates nested child windows. The drag-drop target is typically
         // a Chrome_WidgetWin_1 or Chrome_RenderWidgetHostHWND window
-        use std::cell::RefCell;
+        use std::sync::atomic::{AtomicIsize, Ordering};
 
-        thread_local! {
-            static FOUND_HWND: RefCell<Option<HWND>> = RefCell::new(None);
-        }
+        static FOUND_HWND: AtomicIsize = AtomicIsize::new(0);
+        FOUND_HWND.store(0, Ordering::SeqCst);
 
-        FOUND_HWND.with(|f| *f.borrow_mut() = None);
-
-        unsafe extern "system" fn enum_callback(hwnd: HWND, _lparam: LPARAM) -> BOOL {
+        unsafe extern "system" fn enum_callback(hwnd: HWND, _lparam: LPARAM) -> windows::Win32::Foundation::BOOL {
             let mut class_name = [0u16; 256];
             let len = GetClassNameW(hwnd, &mut class_name);
             if len > 0 {
                 let name = String::from_utf16_lossy(&class_name[..len as usize]);
                 // Look for Chrome/WebView2 content windows
                 if name.contains("Chrome_WidgetWin") || name.contains("Chrome_RenderWidgetHostHWND") {
-                    FOUND_HWND.with(|f| *f.borrow_mut() = Some(hwnd));
-                    return BOOL(0); // Stop enumeration
+                    FOUND_HWND.store(hwnd.0 as isize, Ordering::SeqCst);
+                    return windows::Win32::Foundation::BOOL(0); // Stop enumeration
                 }
             }
-            BOOL(1) // Continue enumeration
+            windows::Win32::Foundation::BOOL(1) // Continue enumeration
         }
 
-        let _ = EnumChildWindows(Some(parent), Some(enum_callback), LPARAM(0));
+        let callback: WNDENUMPROC = Some(enum_callback);
+        let _ = EnumChildWindows(parent, callback, LPARAM(0));
 
         // If not found at first level, search deeper (WebView2 nests windows)
-        FOUND_HWND.with(|f| {
-            if f.borrow().is_none() {
-                // Search grandchildren
-                unsafe extern "system" fn enum_children(hwnd: HWND, _lparam: LPARAM) -> BOOL {
-                    let _ = EnumChildWindows(Some(hwnd), Some(enum_grandchild), LPARAM(0));
-                    if FOUND_HWND.with(|f| f.borrow().is_some()) {
-                        return BOOL(0);
+        if FOUND_HWND.load(Ordering::SeqCst) == 0 {
+            unsafe extern "system" fn enum_recursive(hwnd: HWND, _lparam: LPARAM) -> windows::Win32::Foundation::BOOL {
+                // Check this window
+                let mut class_name = [0u16; 256];
+                let len = GetClassNameW(hwnd, &mut class_name);
+                if len > 0 {
+                    let name = String::from_utf16_lossy(&class_name[..len as usize]);
+                    if name.contains("Chrome_WidgetWin") || name.contains("Chrome_RenderWidgetHostHWND") {
+                        FOUND_HWND.store(hwnd.0 as isize, Ordering::SeqCst);
+                        return windows::Win32::Foundation::BOOL(0);
                     }
-                    BOOL(1)
                 }
-
-                unsafe extern "system" fn enum_grandchild(hwnd: HWND, _lparam: LPARAM) -> BOOL {
-                    let mut class_name = [0u16; 256];
-                    let len = GetClassNameW(hwnd, &mut class_name);
-                    if len > 0 {
-                        let name = String::from_utf16_lossy(&class_name[..len as usize]);
-                        if name.contains("Chrome_WidgetWin") || name.contains("Chrome_RenderWidgetHostHWND") {
-                            FOUND_HWND.with(|f| *f.borrow_mut() = Some(hwnd));
-                            return BOOL(0);
-                        }
-                    }
-                    BOOL(1)
+                // Recurse into children
+                let callback: WNDENUMPROC = Some(enum_recursive);
+                let _ = EnumChildWindows(hwnd, callback, LPARAM(0));
+                if FOUND_HWND.load(Ordering::SeqCst) != 0 {
+                    return windows::Win32::Foundation::BOOL(0);
                 }
-
-                let _ = EnumChildWindows(Some(parent), Some(enum_children), LPARAM(0));
+                windows::Win32::Foundation::BOOL(1)
             }
-        });
 
-        FOUND_HWND.with(|f| *f.borrow())
+            let callback: WNDENUMPROC = Some(enum_recursive);
+            let _ = EnumChildWindows(parent, callback, LPARAM(0));
+        }
+
+        let found = FOUND_HWND.load(Ordering::SeqCst);
+        if found != 0 {
+            Some(HWND(found as *mut _))
+        } else {
+            None
+        }
     }
 
     /// Set up drag-drop handling for a webview window
@@ -840,26 +833,21 @@ mod windows_drag {
 
                     // Find WebView2's content window - this is where drops actually land
                     let target_hwnd = find_webview2_content_hwnd(parent_hwnd).unwrap_or(parent_hwnd);
-                    let hwnd_val = target_hwnd.0 as isize;
 
                     // Create our drop target
+                    // COM reference counting keeps it alive - RegisterDragDrop calls AddRef
                     let drop_target: IDropTarget = DropTarget::new(window_clone).into();
-
-                    // Store the drop target to keep it alive
-                    let drop_target_clone = drop_target.clone();
-                    registered_targets().lock().unwrap().insert(hwnd_val, drop_target_clone);
 
                     // Revoke any existing drop target (WebView2/Tauri registers one)
                     let _ = RevokeDragDrop(target_hwnd);
 
                     // Register our drop target on the WebView2 content window
+                    // OLE holds a reference, so it stays alive until RevokeDragDrop is called
                     match RegisterDragDrop(target_hwnd, &drop_target) {
                         Ok(()) => {
                             eprintln!("[TiddlyDesktop] Registered drop target on WebView2 content window");
                         }
                         Err(e) => {
-                            // Registration failed - remove from our storage
-                            registered_targets().lock().unwrap().remove(&hwnd_val);
                             eprintln!("[TiddlyDesktop] Failed to register drop target: {:?}", e);
                         }
                     }
@@ -871,8 +859,6 @@ mod windows_drag {
     /// Clean up drop target for a window (call when window closes)
     pub fn cleanup_drag_handlers(window: &WebviewWindow) {
         if let Ok(hwnd) = window.hwnd() {
-            let hwnd_val = hwnd.0 as isize;
-            registered_targets().lock().unwrap().remove(&hwnd_val);
             unsafe {
                 let _ = RevokeDragDrop(HWND(hwnd.0 as *mut _));
             }

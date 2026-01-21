@@ -425,7 +425,7 @@ mod windows_drag {
         FORMATETC, STGMEDIUM, DVASPECT_CONTENT,
     };
     use windows::Win32::System::Ole::{
-        IDropTarget, RegisterDragDrop, RevokeDragDrop,
+        IDropTarget, IDropTarget_Impl, RegisterDragDrop, RevokeDragDrop,
         DROPEFFECT, DROPEFFECT_COPY, DROPEFFECT_NONE,
     };
     use windows::Win32::System::Memory::{GlobalLock, GlobalUnlock, GlobalSize};
@@ -788,12 +788,10 @@ mod macos_drag {
     use std::collections::HashMap;
     use std::ffi::CStr;
     use std::sync::Mutex;
-    use std::ptr::NonNull;
     use objc2::rc::Retained;
     use objc2::runtime::{AnyClass, AnyObject, Bool, ClassBuilder, Sel};
     use objc2::{class, msg_send, sel, ClassType};
-    use objc2_foundation::{NSArray, NSDictionary, NSPoint, NSString, NSURL};
-    use objc2_app_kit::{NSPasteboard, NSDraggingInfo, NSView};
+    use objc2_foundation::{NSArray, NSPoint, NSString, NSURL};
     use tauri::{Emitter, WebviewWindow};
 
     // Store window references for drag callbacks

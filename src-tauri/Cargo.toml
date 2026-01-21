@@ -55,12 +55,13 @@ windows = { version = "0.58", features = [
     "Win32_Graphics_Gdi",
 ] }
 windows-core = "0.58"
+windows-implement = "0.58"
 
-# macOS drag-drop handling via objc2
+# macOS drag-drop handling via objc2 (versions must match Tauri's objc2 dependency)
 [target.'cfg(target_os = "macos")'.dependencies]
-objc2 = "0.5"
-objc2-foundation = { version = "0.2", features = ["NSArray", "NSString", "NSDictionary", "NSObject", "NSURL", "NSGeometry"] }
-objc2-app-kit = { version = "0.2", features = ["NSView", "NSWindow", "NSPasteboard", "NSDragging", "NSResponder"] }
-block2 = "0.5"
+objc2 = "0.6"
+objc2-foundation = { version = "0.3", features = ["NSArray", "NSString", "NSDictionary", "NSObject", "NSURL", "NSGeometry"] }
+objc2-app-kit = { version = "0.3", features = ["NSView", "NSWindow", "NSPasteboard", "NSDragging", "NSResponder"] }
+block2 = "0.6"
 lazy_static = "1.5"
 

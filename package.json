@@ -4,7 +4,8 @@
   "version": "0.0.28",
   "type": "module",
   "scripts": {
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "licenses": "cd src-tauri && cargo about generate about.hbs > ../THIRD_PARTY_LICENSES.txt && echo 'Generated THIRD_PARTY_LICENSES.txt'"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.9.6"

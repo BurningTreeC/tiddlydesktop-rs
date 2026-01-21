@@ -50,6 +50,12 @@ jobs:
           echo "new_version=$NEW_VERSION" >> $GITHUB_OUTPUT
           echo "new_tag=$NEW_TAG" >> $GITHUB_OUTPUT
 
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install cargo-about
+        run: cargo install cargo-about
+
       - name: Update version in all files
         run: |
           NEW_VERSION="${{ steps.bump.outputs.new_version }}"
@@ -71,11 +77,17 @@ jobs:
           echo "=== package.json ==="
           grep '"version"' package.json
 
-      - name: Commit version bump
+      - name: Generate third-party licenses
+        run: |
+          cd src-tauri
+          cargo about generate about.hbs > ../THIRD_PARTY_LICENSES.txt
+          echo "Generated THIRD_PARTY_LICENSES.txt"
+
+      - name: Commit version bump and licenses
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add src-tauri/Cargo.toml src-tauri/tauri.conf.json package.json
+          git add src-tauri/Cargo.toml src-tauri/tauri.conf.json package.json THIRD_PARTY_LICENSES.txt
           git commit -m "Bump version to ${{ steps.bump.outputs.new_version }}"
           git push
 
@@ -343,6 +355,11 @@ jobs:
     permissions:
       contents: write
     steps:
+      - name: Checkout (for license file)
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.increment-version.outputs.new_tag }}
+
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
@@ -378,5 +395,6 @@ jobs:
             artifacts/**/*.dmg
             artifacts/**/*.zip
             CHECKSUMS-SHA256.txt
+            THIRD_PARTY_LICENSES.txt
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -751,34 +751,132 @@ mod windows_drag {
         }
     }
 
+    // Store registered drop targets to keep them alive
+    use std::sync::Mutex;
+    use lazy_static::lazy_static;
+    use windows::Win32::UI::WindowsAndMessaging::{EnumChildWindows, GetClassNameW};
+    use windows::Win32::Foundation::{BOOL, LPARAM};
+
+    lazy_static! {
+        static ref REGISTERED_TARGETS: Mutex<HashMap<isize, IDropTarget>> = Mutex::new(HashMap::new());
+    }
+
+    /// Find WebView2's content window (Chrome_WidgetWin_1) which handles drag-drop
+    unsafe fn find_webview2_content_hwnd(parent: HWND) -> Option<HWND> {
+        // WebView2 creates nested child windows. The drag-drop target is typically
+        // a Chrome_WidgetWin_1 or Chrome_RenderWidgetHostHWND window
+        use std::cell::RefCell;
+
+        thread_local! {
+            static FOUND_HWND: RefCell<Option<HWND>> = RefCell::new(None);
+        }
+
+        FOUND_HWND.with(|f| *f.borrow_mut() = None);
+
+        unsafe extern "system" fn enum_callback(hwnd: HWND, _lparam: LPARAM) -> BOOL {
+            let mut class_name = [0u16; 256];
+            let len = GetClassNameW(hwnd, &mut class_name);
+            if len > 0 {
+                let name = String::from_utf16_lossy(&class_name[..len as usize]);
+                // Look for Chrome/WebView2 content windows
+                if name.contains("Chrome_WidgetWin") || name.contains("Chrome_RenderWidgetHostHWND") {
+                    FOUND_HWND.with(|f| *f.borrow_mut() = Some(hwnd));
+                    return BOOL(0); // Stop enumeration
+                }
+            }
+            BOOL(1) // Continue enumeration
+        }
+
+        let _ = EnumChildWindows(Some(parent), Some(enum_callback), LPARAM(0));
+
+        // If not found at first level, search deeper (WebView2 nests windows)
+        FOUND_HWND.with(|f| {
+            if f.borrow().is_none() {
+                // Search grandchildren
+                unsafe extern "system" fn enum_children(hwnd: HWND, _lparam: LPARAM) -> BOOL {
+                    let _ = EnumChildWindows(Some(hwnd), Some(enum_grandchild), LPARAM(0));
+                    if FOUND_HWND.with(|f| f.borrow().is_some()) {
+                        return BOOL(0);
+                    }
+                    BOOL(1)
+                }
+
+                unsafe extern "system" fn enum_grandchild(hwnd: HWND, _lparam: LPARAM) -> BOOL {
+                    let mut class_name = [0u16; 256];
+                    let len = GetClassNameW(hwnd, &mut class_name);
+                    if len > 0 {
+                        let name = String::from_utf16_lossy(&class_name[..len as usize]);
+                        if name.contains("Chrome_WidgetWin") || name.contains("Chrome_RenderWidgetHostHWND") {
+                            FOUND_HWND.with(|f| *f.borrow_mut() = Some(hwnd));
+                            return BOOL(0);
+                        }
+                    }
+                    BOOL(1)
+                }
+
+                let _ = EnumChildWindows(Some(parent), Some(enum_children), LPARAM(0));
+            }
+        });
+
+        FOUND_HWND.with(|f| *f.borrow())
+    }
+
     /// Set up drag-drop handling for a webview window
     pub fn setup_drag_handlers(window: &WebviewWindow) {
         let window_clone = window.clone();
 
-        // Run on main thread
+        // Get the HWND - use a small delay to ensure window is fully created
         std::thread::spawn(move || {
+            // Wait for WebView2 to create its child windows
+            std::thread::sleep(std::time::Duration::from_millis(500));
+
             unsafe {
-                // Initialize COM
+                // Initialize COM on this thread
                 let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
 
-                // Get the HWND from the window
-                if let Ok(hwnd) = window_clone.hwnd() {
-                    let hwnd = HWND(hwnd.0 as *mut _);
+                // Get the parent HWND from the window
+                if let Ok(parent_hwnd) = window_clone.hwnd() {
+                    let parent_hwnd = HWND(parent_hwnd.0 as *mut _);
+
+                    // Find WebView2's content window - this is where drops actually land
+                    let target_hwnd = find_webview2_content_hwnd(parent_hwnd).unwrap_or(parent_hwnd);
+                    let hwnd_val = target_hwnd.0 as isize;
 
                     // Create our drop target
                     let drop_target: IDropTarget = DropTarget::new(window_clone).into();
 
-                    // Register as drop target
-                    // Note: This may conflict with WebView2's drop handling
-                    // We first revoke any existing registration
-                    let _ = RevokeDragDrop(hwnd);
+                    // Store the drop target to keep it alive
+                    let drop_target_clone = drop_target.clone();
+                    REGISTERED_TARGETS.lock().unwrap().insert(hwnd_val, drop_target_clone);
 
-                    if let Err(e) = RegisterDragDrop(hwnd, &drop_target) {
-                        eprintln!("[TiddlyDesktop] Failed to register drop target: {:?}", e);
+                    // Revoke any existing drop target (WebView2/Tauri registers one)
+                    let _ = RevokeDragDrop(target_hwnd);
+
+                    // Register our drop target on the WebView2 content window
+                    match RegisterDragDrop(target_hwnd, &drop_target) {
+                        Ok(()) => {
+                            eprintln!("[TiddlyDesktop] Registered drop target on WebView2 content window");
+                        }
+                        Err(e) => {
+                            // Registration failed - remove from our storage
+                            REGISTERED_TARGETS.lock().unwrap().remove(&hwnd_val);
+                            eprintln!("[TiddlyDesktop] Failed to register drop target: {:?}", e);
+                        }
                     }
                 }
             }
         });
+    }
+
+    /// Clean up drop target for a window (call when window closes)
+    pub fn cleanup_drag_handlers(window: &WebviewWindow) {
+        if let Ok(hwnd) = window.hwnd() {
+            let hwnd_val = hwnd.0 as isize;
+            REGISTERED_TARGETS.lock().unwrap().remove(&hwnd_val);
+            unsafe {
+                let _ = RevokeDragDrop(HWND(hwnd.0 as *mut _));
+            }
+        }
     }
 }
 
@@ -2648,24 +2746,56 @@ fn get_dialog_init_script() -> &'static str {
         // External Attachments Support
         // ========================================
 
-        function pathToFileUrl(filepath) {
+        // Detect if running on Windows by checking path format
+        function isWindowsPath(path) {
+            // Windows path patterns: C:\, D:/, \\share
+            return /^[A-Za-z]:[\\\/]/.test(path) || path.startsWith("\\\\");
+        }
+
+        // Get the native path separator
+        function getNativeSeparator(originalPath) {
+            // Use the separator from the original path, defaulting to what looks native
+            if (originalPath.indexOf("\\") >= 0) return "\\";
+            if (isWindowsPath(originalPath)) return "\\";
+            return "/";
+        }
+
+        // Normalize path to forward slashes for comparison
+        function normalizeForComparison(filepath) {
             var path = filepath.replace(/\\/g, "/");
-            if (path.charAt(0) !== "/") {
+            // For Windows paths like C:/..., don't add leading slash
+            // Only add leading slash for Unix paths
+            if (path.charAt(0) !== "/" && !isWindowsPath(filepath)) {
                 path = "/" + path;
             }
+            // Handle network shares (\\share -> /share after backslash conversion)
             if (path.substring(0, 2) === "//") {
                 path = path.substring(1);
             }
             return path;
         }
 
+        // Convert normalized path back to native format
+        function toNativePath(normalizedPath, useBackslashes) {
+            if (useBackslashes) {
+                return normalizedPath.replace(/\//g, "\\");
+            }
+            return normalizedPath;
+        }
+
         function makePathRelative(sourcepath, rootpath, options) {
             options = options || {};
-            sourcepath = pathToFileUrl(sourcepath);
-            rootpath = pathToFileUrl(rootpath);
 
-            var sourceParts = sourcepath.split("/");
-            var rootParts = rootpath.split("/");
+            // Detect if we're dealing with Windows paths
+            var isWindows = isWindowsPath(sourcepath) || isWindowsPath(rootpath);
+            var nativeSep = isWindows ? "\\" : "/";
+
+            // Normalize paths for comparison (using forward slashes)
+            var normalizedSource = normalizeForComparison(sourcepath);
+            var normalizedRoot = normalizeForComparison(rootpath);
+
+            var sourceParts = normalizedSource.split("/");
+            var rootParts = normalizedRoot.split("/");
 
             // Don't URL-encode paths - we're dealing with local filesystem paths
             // that our filesystem support handles directly
@@ -2678,10 +2808,11 @@ fn get_dialog_init_script() -> &'static str {
             if (c === 1 ||
                 (options.useAbsoluteForNonDescendents && c < rootParts.length) ||
                 (options.useAbsoluteForDescendents && c === rootParts.length)) {
-                // Return absolute path without file:// prefix for our filesystem support
-                return sourcepath;
+                // Return absolute path in native format
+                return toNativePath(normalizedSource, isWindows);
             }
 
+            // Build relative path
             var outputParts = [];
             for (var p = c; p < rootParts.length - 1; p++) {
                 outputParts.push("..");
@@ -2689,7 +2820,8 @@ fn get_dialog_init_script() -> &'static str {
             for (p = c; p < sourceParts.length; p++) {
                 outputParts.push(sourceParts[p]);
             }
-            return outputParts.join("/");
+            // Return relative path with native separators
+            return outputParts.join(nativeSep);
         }
 
         function getMimeType(filename) {

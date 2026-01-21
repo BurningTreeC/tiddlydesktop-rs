@@ -426,10 +426,10 @@ mod windows_drag {
     use std::collections::HashMap;
     use std::ffi::OsString;
     use std::os::windows::ffi::OsStringExt;
-    use std::sync::{Arc, Mutex};
+    use std::sync::Mutex;
     use std::sync::atomic::{AtomicU32, Ordering};
     use tauri::{Emitter, WebviewWindow};
-    use windows::core::{GUID, HRESULT, IUnknown};
+    use windows::core::{GUID, HRESULT};
     use windows::Win32::Foundation::{HWND, POINTL, S_OK, E_NOINTERFACE, E_POINTER};
     use windows::Win32::System::Com::{
         CoInitializeEx, IDataObject, COINIT_APARTMENTTHREADED, TYMED_HGLOBAL,
@@ -439,7 +439,6 @@ mod windows_drag {
         IDropTarget, RegisterDragDrop, RevokeDragDrop,
         DROPEFFECT, DROPEFFECT_COPY, DROPEFFECT_MOVE, DROPEFFECT_LINK, DROPEFFECT_NONE,
     };
-    use windows::Win32::System::SystemServices::MODIFIERKEYS_FLAGS;
     use windows::Win32::System::Memory::{GlobalLock, GlobalUnlock, GlobalSize};
     use windows::Win32::UI::Shell::DragQueryFileW;
     use windows::Win32::UI::Shell::HDROP;
@@ -624,7 +623,7 @@ mod windows_drag {
 
             // Accept the drag
             if !pdw_effect.is_null() {
-                let allowed = DROPEFFECT(*pdw_effect as i32);
+                let allowed = DROPEFFECT(*pdw_effect);
                 *pdw_effect = choose_drop_effect(allowed).0 as u32;
             }
 
@@ -657,7 +656,7 @@ mod windows_drag {
 
             // Accept the drag
             if !pdw_effect.is_null() {
-                let allowed = DROPEFFECT(*pdw_effect as i32);
+                let allowed = DROPEFFECT(*pdw_effect);
                 *pdw_effect = choose_drop_effect(allowed).0 as u32;
             }
 

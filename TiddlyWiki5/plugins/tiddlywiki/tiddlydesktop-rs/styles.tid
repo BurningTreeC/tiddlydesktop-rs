@@ -94,6 +94,7 @@ tags: $:/tags/Stylesheet
 	padding: 16px;
 	flex: 1;
 	overflow-y: auto;
+	min-height: 0;
 }
 
 .td-wikilist-item {
@@ -334,6 +335,7 @@ body {
 	overflow: hidden;
 	width: 100%;
 	max-width: none !important;
+	min-height: 0;
 }
 
 .tc-story-river {
@@ -345,6 +347,7 @@ body {
 	overflow: hidden;
 	width: 100% !important;
 	max-width: none !important;
+	min-height: 0;
 }
 
 .tc-tiddler-frame {
@@ -358,13 +361,15 @@ body {
 	overflow: hidden;
 	width: 100% !important;
 	max-width: none !important;
+	min-height: 0;
 }
 
 .tc-tiddler-body {
 	flex: 1;
 	display: flex;
 	flex-direction: column;
-	overflow: hidden;
+	overflow: auto;
+	min-height: 0;
 }
 
 .tc-tiddler-title {

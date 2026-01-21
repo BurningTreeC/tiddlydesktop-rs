@@ -419,7 +419,7 @@ mod windows_drag {
     use std::os::windows::ffi::OsStringExt;
     use tauri::{Emitter, WebviewWindow};
     use windows::core::implement;
-    use windows::Win32::Foundation::{HWND, POINTL, POINT};
+    use windows::Win32::Foundation::{HWND, POINTL};
     use windows::Win32::System::Com::{
         CoInitializeEx, IDataObject, COINIT_APARTMENTTHREADED, TYMED_HGLOBAL,
         FORMATETC, DVASPECT_CONTENT,
@@ -431,7 +431,6 @@ mod windows_drag {
     use windows::Win32::System::SystemServices::MODIFIERKEYS_FLAGS;
     use windows::Win32::System::Memory::{GlobalLock, GlobalUnlock, GlobalSize};
     use windows::Win32::UI::Shell::{DragQueryFileW, HDROP};
-    use windows::Win32::UI::WindowsAndMessaging::ScreenToClient;
 
     /// Clipboard format constants
     const CF_TEXT: u16 = 1;
@@ -479,21 +478,6 @@ mod windows_drag {
                 window,
                 drag_active: RefCell::new(false),
             }
-        }
-
-        /// Convert screen coordinates (from POINTL) to client coordinates for the webview
-        fn screen_to_client(&self, pt: &POINTL) -> (i32, i32) {
-            if let Ok(hwnd) = self.window.hwnd() {
-                let hwnd = HWND(hwnd.0 as *mut _);
-                let mut point = POINT { x: pt.x, y: pt.y };
-                unsafe {
-                    if ScreenToClient(hwnd, &mut point).as_bool() {
-                        return (point.x, point.y);
-                    }
-                }
-            }
-            // Fallback: return original coordinates (will be wrong but better than nothing)
-            (pt.x, pt.y)
         }
 
         fn extract_data(&self, data_object: &IDataObject) -> Option<DragContentData> {
@@ -687,14 +671,11 @@ mod windows_drag {
             *self.drag_active.borrow_mut() = true;
 
             if pdataobj.is_some() {
-                // Convert screen coordinates to client coordinates
-                let (x, y) = self.screen_to_client(pt);
-
-                // Accept all drags and emit motion event
-                // Both file and content drags are handled in Drop
+                // Emit screen coordinates - JavaScript will convert to client coords
                 let _ = self.window.emit("td-drag-motion", serde_json::json!({
-                    "x": x,
-                    "y": y
+                    "x": pt.x,
+                    "y": pt.y,
+                    "screenCoords": true
                 }));
 
                 unsafe { *pdweffect = DROPEFFECT_COPY; }
@@ -710,12 +691,11 @@ mod windows_drag {
             pdweffect: *mut DROPEFFECT,
         ) -> windows::core::Result<()> {
             if *self.drag_active.borrow() {
-                // Convert screen coordinates to client coordinates
-                let (x, y) = self.screen_to_client(pt);
-
+                // Emit screen coordinates - JavaScript will convert to client coords
                 let _ = self.window.emit("td-drag-motion", serde_json::json!({
-                    "x": x,
-                    "y": y
+                    "x": pt.x,
+                    "y": pt.y,
+                    "screenCoords": true
                 }));
                 unsafe { *pdweffect = DROPEFFECT_COPY; }
             }
@@ -740,13 +720,11 @@ mod windows_drag {
             *self.drag_active.borrow_mut() = false;
 
             if let Some(data_object) = pdataobj {
-                // Convert screen coordinates to client coordinates
-                let (x, y) = self.screen_to_client(pt);
-
-                // Emit drop-start
+                // Emit screen coordinates - JavaScript will convert to client coords
                 let _ = self.window.emit("td-drag-drop-start", serde_json::json!({
-                    "x": x,
-                    "y": y
+                    "x": pt.x,
+                    "y": pt.y,
+                    "screenCoords": true
                 }));
 
                 // Check for file paths first
@@ -2106,9 +2084,21 @@ fn paths_equal(path1: &str, path2: &str) -> bool {
 /// Checks both if it's the main wiki (always no backup) and the user's backups_enabled setting
 fn should_create_backup(app: &tauri::AppHandle, state: &AppState, path: &str) -> bool {
     // Don't backup the main TiddlyDesktop wiki
-    let main_wiki = state.main_wiki_path.to_string_lossy();
-    if paths_equal(path, &main_wiki) {
-        return false;
+    // Use canonicalized paths for robust comparison (handles symlinks, relative paths, etc.)
+    let path_buf = PathBuf::from(path);
+    if let (Ok(canonical_path), Ok(canonical_main)) = (
+        dunce::canonicalize(&path_buf),
+        dunce::canonicalize(&state.main_wiki_path)
+    ) {
+        if canonical_path == canonical_main {
+            return false;
+        }
+    } else {
+        // Fallback to string comparison if canonicalization fails
+        let main_wiki = state.main_wiki_path.to_string_lossy();
+        if paths_equal(path, &main_wiki) {
+            return false;
+        }
     }
     // Check if backups are enabled for this wiki in the recent files list
     let entries = load_recent_files_from_disk(app);
@@ -2948,13 +2938,26 @@ fn get_dialog_init_script() -> &'static str {
                 }
             });
 
+            // Helper to convert screen coordinates to client coordinates (for Windows IDropTarget)
+            function screenToClient(x, y) {
+                return {
+                    x: x - window.screenX,
+                    y: y - window.screenY
+                };
+            }
+
             // Native drag-motion event (Linux GTK, Windows IDropTarget)
             // Fires continuously during drag - use to dispatch synthetic dragenter/dragover
             // Handles both file and content drags
             listen("td-drag-motion", function(event) {
                 if (!event.payload) return;
 
-                var pos = { x: event.payload.x, y: event.payload.y };
+                var pos;
+                if (event.payload.screenCoords) {
+                    pos = screenToClient(event.payload.x, event.payload.y);
+                } else {
+                    pos = { x: event.payload.x, y: event.payload.y };
+                }
                 var target = getTargetElement(pos);
 
                 // Create DataTransfer with content types (empty values - actual data comes at drop time)
@@ -3000,10 +3003,14 @@ fn get_dialog_init_script() -> &'static str {
             listen("td-drag-drop-start", function(event) {
                 nativeDropInProgress = true;
                 if (event.payload) {
-                    pendingContentDropPos = {
-                        x: event.payload.x,
-                        y: event.payload.y
-                    };
+                    if (event.payload.screenCoords) {
+                        pendingContentDropPos = screenToClient(event.payload.x, event.payload.y);
+                    } else {
+                        pendingContentDropPos = {
+                            x: event.payload.x,
+                            y: event.payload.y
+                        };
+                    }
                 }
             });
 

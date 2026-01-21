@@ -443,16 +443,6 @@ mod windows_drag {
     // Timer ID for periodic re-registration check
     const REREGISTER_TIMER_ID: usize = 0x5402;
 
-    /// Thread-safe wrapper for HWND (Windows handles are safe to use across threads)
-    #[derive(Clone, Copy)]
-    struct SendHwnd(isize);
-    unsafe impl Send for SendHwnd {}
-    unsafe impl Sync for SendHwnd {}
-    impl SendHwnd {
-        fn new(hwnd: HWND) -> Self { Self(hwnd.0 as isize) }
-        fn get(&self) -> HWND { HWND(self.0 as *mut _) }
-    }
-
     /// Thread-safe wrapper for IDropTarget (COM pointers are ref-counted)
     struct SendDropTarget(IDropTarget);
     unsafe impl Send for SendDropTarget {}
@@ -460,7 +450,6 @@ mod windows_drag {
 
     /// State for managing drop target registration
     struct DropTargetState {
-        target_hwnd: SendHwnd,
         drop_target: SendDropTarget,
     }
 
@@ -683,18 +672,6 @@ mod windows_drag {
             }
             paths
         }
-
-        fn has_files(&self, data_object: &IDataObject) -> bool {
-            let format = FORMATETC {
-                cfFormat: CF_HDROP,
-                ptd: std::ptr::null_mut(),
-                dwAspect: DVASPECT_CONTENT.0 as u32,
-                lindex: -1,
-                tymed: TYMED_HGLOBAL.0 as u32,
-            };
-
-            unsafe { data_object.QueryGetData(&format).is_ok() }
-        }
     }
 
     impl IDropTarget_Impl for DropTarget_Impl {
@@ -887,7 +864,6 @@ mod windows_drag {
 
         // Store state for later re-registration
         let state = DropTargetState {
-            target_hwnd: SendHwnd::new(target_hwnd),
             drop_target: SendDropTarget(drop_target.clone()),
         };
         DROP_TARGET_MAP.lock().unwrap().insert(target_hwnd.0 as isize, state);
@@ -979,6 +955,7 @@ mod windows_drag {
     }
 
     /// Clean up drop target for a window (call when window closes)
+    #[allow(dead_code)]
     pub fn cleanup_drag_handlers(window: &WebviewWindow) {
         if let Ok(hwnd) = window.hwnd() {
             let hwnd = HWND(hwnd.0 as *mut _);
@@ -1397,7 +1374,7 @@ use tauri::{
     http::{Request, Response},
     menu::{MenuBuilder, MenuItemBuilder},
     tray::TrayIconBuilder,
-    Manager, WebviewUrl, WebviewWindowBuilder,
+    Emitter, Manager, WebviewUrl, WebviewWindowBuilder,
 };
 
 /// A wiki entry in the recent files list
@@ -1413,6 +1390,8 @@ pub struct WikiEntry {
     pub backups_enabled: bool, // whether to create backups on save (single-file only)
     #[serde(default)]
     pub backup_dir: Option<String>, // custom backup directory (if None, uses .backups folder next to wiki)
+    #[serde(default)]
+    pub group: Option<String>, // group name for organizing wikis (None = "Ungrouped")
 }
 
 fn default_backups_enabled() -> bool {
@@ -1575,6 +1554,62 @@ fn set_wiki_backup_dir(app: tauri::AppHandle, path: String, backup_dir: Option<S
         if paths_equal(&entry.path, &path) {
             entry.backup_dir = backup_dir;
             break;
+        }
+    }
+
+    save_recent_files_to_disk(&app, &entries)
+}
+
+/// Set group for a wiki (None to move to "Ungrouped")
+#[tauri::command]
+fn set_wiki_group(app: tauri::AppHandle, path: String, group: Option<String>) -> Result<(), String> {
+    let mut entries = load_recent_files_from_disk(&app);
+
+    for entry in entries.iter_mut() {
+        if paths_equal(&entry.path, &path) {
+            entry.group = group;
+            break;
+        }
+    }
+
+    save_recent_files_to_disk(&app, &entries)
+}
+
+/// Get all unique group names from the wiki list
+#[tauri::command]
+fn get_wiki_groups(app: tauri::AppHandle) -> Vec<String> {
+    let entries = load_recent_files_from_disk(&app);
+    let mut groups: Vec<String> = entries
+        .iter()
+        .filter_map(|e| e.group.clone())
+        .collect();
+    groups.sort();
+    groups.dedup();
+    groups
+}
+
+/// Rename a group (updates all wikis in that group)
+#[tauri::command]
+fn rename_wiki_group(app: tauri::AppHandle, old_name: String, new_name: String) -> Result<(), String> {
+    let mut entries = load_recent_files_from_disk(&app);
+
+    for entry in entries.iter_mut() {
+        if entry.group.as_ref() == Some(&old_name) {
+            entry.group = Some(new_name.clone());
+        }
+    }
+
+    save_recent_files_to_disk(&app, &entries)
+}
+
+/// Delete a group (moves all wikis to Ungrouped)
+#[tauri::command]
+fn delete_wiki_group(app: tauri::AppHandle, group_name: String) -> Result<(), String> {
+    let mut entries = load_recent_files_from_disk(&app);
+
+    for entry in entries.iter_mut() {
+        if entry.group.as_ref() == Some(&group_name) {
+            entry.group = None;
         }
     }
 
@@ -5126,6 +5161,7 @@ async fn open_wiki_folder(app: tauri::AppHandle, path: String) -> Result<WikiEnt
                         is_folder: true,
                         backups_enabled: false,
                         backup_dir: None,
+                        group: None,
                     });
                 }
             }
@@ -5251,6 +5287,7 @@ async fn open_wiki_folder(app: tauri::AppHandle, path: String) -> Result<WikiEnt
         is_folder: true,
         backups_enabled: false, // Not applicable for folder wikis (they use autosave)
         backup_dir: None,
+        group: None,
     };
 
     // Add to recent files list
@@ -5901,6 +5938,7 @@ async fn open_wiki_window(app: tauri::AppHandle, path: String) -> Result<WikiEnt
                         is_folder: false,
                         backups_enabled: true,
                         backup_dir: None,
+                        group: None,
                     });
                 }
             }
@@ -5996,6 +6034,7 @@ async fn open_wiki_window(app: tauri::AppHandle, path: String) -> Result<WikiEnt
         is_folder: false,
         backups_enabled: true,
         backup_dir: None,
+        group: None,
     };
 
     // Add to recent files list
@@ -6798,7 +6837,10 @@ pub fn run() {
                             let app_handle = app.handle().clone();
                             let path_str = arg.clone();
                             tauri::async_runtime::spawn(async move {
-                                let _ = open_wiki_window(app_handle, path_str).await;
+                                if let Ok(entry) = open_wiki_window(app_handle.clone(), path_str).await {
+                                    // Emit event to refresh wiki list in main window
+                                    let _ = app_handle.emit("wiki-list-changed", entry);
+                                }
                             });
                         }
                     }
@@ -6838,6 +6880,10 @@ pub fn run() {
             set_wiki_backups,
             set_wiki_backup_dir,
             get_wiki_backup_dir_setting,
+            set_wiki_group,
+            get_wiki_groups,
+            rename_wiki_group,
+            delete_wiki_group,
             read_file_as_data_uri,
             read_file_as_binary,
             get_external_attachments_config,
@@ -6858,7 +6904,10 @@ pub fn run() {
                                 let app_handle = app.clone();
                                 let path_str = path.to_string_lossy().to_string();
                                 tauri::async_runtime::spawn(async move {
-                                    let _ = open_wiki_window(app_handle, path_str).await;
+                                    if let Ok(entry) = open_wiki_window(app_handle.clone(), path_str).await {
+                                        // Emit event to refresh wiki list in main window
+                                        let _ = app_handle.emit("wiki-list-changed", entry);
+                                    }
                                 });
                             }
                         }

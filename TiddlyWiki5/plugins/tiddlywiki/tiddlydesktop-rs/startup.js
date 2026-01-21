@@ -186,7 +186,7 @@ exports.startup = function(callback) {
 	// Add an entry to the wiki list
 	function addToWikiList(entry) {
 		var entries = getWikiListEntries();
-		// Find existing entry to preserve backup settings
+		// Find existing entry to preserve backup settings and group
 		var existingEntry = null;
 		for (var i = 0; i < entries.length; i++) {
 			if (entries[i].path === entry.path) {
@@ -200,6 +200,9 @@ exports.startup = function(callback) {
 			}
 			if (existingEntry.backup_dir) {
 				entry.backup_dir = existingEntry.backup_dir;
+			}
+			if (existingEntry.group) {
+				entry.group = existingEntry.group;
 			}
 		}
 		// Remove if already exists
@@ -229,6 +232,20 @@ exports.startup = function(callback) {
 			$tw.wiki.deleteTiddler(title);
 		});
 
+		// Collect unique groups and update the groups tiddler
+		var groups = [];
+		entries.forEach(function(entry) {
+			if (entry.group && groups.indexOf(entry.group) === -1) {
+				groups.push(entry.group);
+			}
+		});
+		groups.sort();
+		$tw.wiki.addTiddler({
+			title: "$:/temp/tiddlydesktop-rs/groups",
+			list: groups.join(" "),
+			text: groups.join("\n")
+		});
+
 		// Populate temp tiddlers for UI
 		entries.forEach(function(entry, index) {
 			$tw.wiki.addTiddler({
@@ -239,6 +256,7 @@ exports.startup = function(callback) {
 				is_folder: entry.is_folder ? "true" : "false",
 				backups_enabled: entry.backups_enabled ? "true" : "false",
 				backup_dir: entry.backup_dir || "",
+				group: entry.group || "",
 				text: ""
 			});
 		});
@@ -628,6 +646,94 @@ exports.startup = function(callback) {
 		}
 	});
 
+	// Message handler: set group for a wiki
+	$tw.rootWidget.addEventListener("tm-tiddlydesktop-rs-set-group", function(event) {
+		var path = event.paramObject && event.paramObject.path;
+		var group = event.paramObject && event.paramObject.group;
+		if (path) {
+			// Treat empty string as null (ungrouped)
+			var groupValue = group && group.trim() ? group.trim() : null;
+			// Update the Rust backend
+			invoke("set_wiki_group", { path: path, group: groupValue }).then(function() {
+				// Update the local wiki list entry
+				var entries = getWikiListEntries();
+				for (var i = 0; i < entries.length; i++) {
+					if (entries[i].path === path) {
+						if (groupValue) {
+							entries[i].group = groupValue;
+						} else {
+							delete entries[i].group;
+						}
+						break;
+					}
+				}
+				saveWikiList(entries);
+				refreshWikiList();
+			}).catch(function(err) {
+				console.error("Failed to set wiki group:", err);
+			});
+		}
+	});
+
+	// Message handler: rename a group
+	$tw.rootWidget.addEventListener("tm-tiddlydesktop-rs-rename-group", function(event) {
+		var oldName = event.paramObject && event.paramObject.oldName;
+		var newName = event.paramObject && event.paramObject.newName;
+		if (oldName && newName && newName.trim()) {
+			invoke("rename_wiki_group", { oldName: oldName, newName: newName.trim() }).then(function() {
+				// Update local entries
+				var entries = getWikiListEntries();
+				for (var i = 0; i < entries.length; i++) {
+					if (entries[i].group === oldName) {
+						entries[i].group = newName.trim();
+					}
+				}
+				saveWikiList(entries);
+				refreshWikiList();
+			}).catch(function(err) {
+				console.error("Failed to rename group:", err);
+			});
+		}
+	});
+
+	// Message handler: delete a group (moves wikis to ungrouped)
+	$tw.rootWidget.addEventListener("tm-tiddlydesktop-rs-delete-group", function(event) {
+		var groupName = event.param || (event.paramObject && event.paramObject.group);
+		if (groupName) {
+			invoke("delete_wiki_group", { groupName: groupName }).then(function() {
+				// Update local entries
+				var entries = getWikiListEntries();
+				for (var i = 0; i < entries.length; i++) {
+					if (entries[i].group === groupName) {
+						delete entries[i].group;
+					}
+				}
+				saveWikiList(entries);
+				refreshWikiList();
+			}).catch(function(err) {
+				console.error("Failed to delete group:", err);
+			});
+		}
+	});
+
+	// Message handler: toggle group collapse state
+	$tw.rootWidget.addEventListener("tm-tiddlydesktop-rs-toggle-group", function(event) {
+		var groupName = event.param || (event.paramObject && event.paramObject.group);
+		var stateTitle = "$:/state/tiddlydesktop-rs/group-collapsed/" + (groupName || "Ungrouped");
+		var currentState = $tw.wiki.getTiddlerText(stateTitle);
+		$tw.wiki.setText(stateTitle, "text", null, currentState === "yes" ? "no" : "yes");
+	});
+
+	// Message handler: show group manager modal
+	$tw.rootWidget.addEventListener("tm-tiddlydesktop-rs-manage-groups", function(event) {
+		$tw.wiki.setText("$:/temp/tiddlydesktop-rs/show-group-manager", "text", null, "yes");
+	});
+
+	// Message handler: close group manager modal
+	$tw.rootWidget.addEventListener("tm-tiddlydesktop-rs-close-group-manager", function(event) {
+		$tw.wiki.setText("$:/temp/tiddlydesktop-rs/show-group-manager", "text", null, "no");
+	});
+
 	// Set up drag-drop listeners
 	listen("tauri://drag-drop", function(event) {
 		var paths = event.payload.paths;
@@ -675,6 +781,14 @@ exports.startup = function(callback) {
 				elements[i].classList.remove("tc-dragover");
 			}
 		}
+	});
+
+	// Listen for wiki list changes (e.g., when a wiki is opened from file explorer)
+	listen("wiki-list-changed", function(event) {
+		if(event.payload) {
+			addToWikiList(event.payload);
+		}
+		refreshWikiList();
 	});
 
 	// Initial load of wiki list from tiddler

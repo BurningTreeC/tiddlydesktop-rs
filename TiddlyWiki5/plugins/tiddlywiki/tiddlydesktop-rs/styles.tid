@@ -663,11 +663,235 @@ body {
 	height: 48px;
 }
 
+/* Toolbar right section */
+.td-toolbar-right {
+	margin-left: auto;
+	margin-right: 0;
+}
+
+.td-button-manage-groups {
+	background: #f0f0f8;
+	border-color: #c0c0d0;
+	color: #5a5a7a;
+}
+
+.td-button-manage-groups:hover {
+	background: #e0e0f0;
+	border-color: #a0a0c0;
+}
+
+/* Group sections */
+.td-group-section {
+	margin-bottom: 16px;
+}
+
+.td-group-header {
+	margin-bottom: 8px;
+}
+
+.td-group-toggle {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	padding: 8px 12px;
+	background: #f8f8f8;
+	border: 1px solid #e0e0e0;
+	border-radius: 6px;
+	cursor: pointer;
+	width: 100%;
+	text-align: left;
+	transition: all 0.15s;
+}
+
+.td-group-toggle:hover {
+	background: #f0f0f0;
+	border-color: #ccc;
+}
+
+.td-group-toggle svg {
+	width: 16px;
+	height: 16px;
+	fill: #666;
+	flex-shrink: 0;
+}
+
+.td-group-name {
+	font-weight: 600;
+	font-size: 14px;
+	color: #333;
+}
+
+.td-group-count {
+	font-size: 12px;
+	color: #888;
+	margin-left: 4px;
+}
+
+.td-group-wikis {
+	padding-left: 8px;
+	margin-top: 8px;
+}
+
+/* Group button in wiki toolbar */
+.td-button-group {
+	background: #f8f4f0;
+	border-color: #d8d0c8;
+	color: #6a5a4a;
+}
+
+.td-button-group:hover {
+	background: #f0ece4;
+	border-color: #c8c0b8;
+}
+
+/* Group dropdown */
+.td-group-dropdown {
+	min-width: 180px;
+	max-width: 250px;
+}
+
+.td-group-dropdown-content {
+	padding: 4px 0;
+}
+
+.td-group-option {
+	display: block;
+	width: 100%;
+	padding: 8px 12px;
+	text-align: left;
+	background: none;
+	border: none;
+	cursor: pointer;
+	font-size: 13px;
+	color: #333;
+	transition: background 0.1s;
+}
+
+.td-group-option:hover {
+	background: #f0f0f0;
+}
+
+.td-group-new {
+	display: flex;
+	gap: 6px;
+	padding: 8px 12px;
+	border-top: 1px solid #e0e0e0;
+	margin-top: 4px;
+}
+
+.td-group-input {
+	flex: 1;
+	padding: 6px 10px;
+	border: 1px solid #ccc;
+	border-radius: 4px;
+	font-size: 13px;
+}
+
+.td-group-input:focus {
+	outline: none;
+	border-color: #4a90d9;
+	box-shadow: 0 0 0 2px rgba(74, 144, 217, 0.2);
+}
+
+/* Group manager modal */
+.td-group-manager-modal {
+	max-width: 500px;
+}
+
+.td-group-manager-modal .td-modal-header {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+}
+
+.td-group-manager-modal .td-modal-header h2 {
+	margin: 0;
+}
+
+.td-modal-close {
+	padding: 4px;
+	background: none;
+	border: none;
+	cursor: pointer;
+	color: #666;
+	border-radius: 4px;
+	transition: all 0.15s;
+}
+
+.td-modal-close:hover {
+	background: #e0e0e0;
+	color: #333;
+}
+
+.td-modal-close svg {
+	width: 20px;
+	height: 20px;
+	fill: currentColor;
+}
+
+.td-modal-content {
+	padding: 16px 20px;
+	max-height: 400px;
+	overflow-y: auto;
+}
+
+.td-group-manager-item {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	padding: 10px 12px;
+	background: #f8f8f8;
+	border: 1px solid #e0e0e0;
+	border-radius: 6px;
+	margin-bottom: 8px;
+}
+
+.td-group-manager-item:last-child {
+	margin-bottom: 0;
+}
+
+.td-group-manager-name {
+	font-weight: 500;
+	font-size: 14px;
+	color: #333;
+	flex: 1;
+}
+
+.td-group-manager-count {
+	font-size: 12px;
+	color: #888;
+	margin-left: auto;
+	margin-right: 8px;
+}
+
+.td-group-manager-item .td-button {
+	padding: 4px 8px;
+	font-size: 12px;
+}
+
+.td-group-manager-item .td-group-input {
+	flex: 1;
+	min-width: 0;
+}
+
+.td-no-groups {
+	text-align: center;
+	color: #888;
+	padding: 24px;
+	font-style: italic;
+}
+
 /* Small window responsive styles */
 @media screen and (max-width: 600px) {
 	.td-toolbar {
 		flex-wrap: wrap;
 		gap: 8px;
+	}
+
+	.td-toolbar-right {
+		width: 100%;
+		margin-left: 0;
+		margin-top: 8px;
 	}
 
 	.td-edition-grid {
@@ -682,5 +906,17 @@ body {
 	.td-wiki-url {
 		word-break: break-all;
 		white-space: normal;
+	}
+
+	.td-wiki-toolbar {
+		flex-wrap: wrap;
+	}
+
+	.td-group-toggle {
+		padding: 6px 10px;
+	}
+
+	.td-group-name {
+		font-size: 13px;
 	}
 }

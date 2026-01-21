@@ -1,65 +1,7 @@
 title: $:/plugins/tiddlywiki/tiddlydesktop-rs/WikiList
 
-\define wiki-item(path, filename)
-<div class="td-wikilist-item">
-<div class="td-wikilist-thumbnail">
-<$button message="tm-tiddlydesktop-rs-open-path" param="$path$" class="tc-btn-invisible">
-{{$:/plugins/tiddlywiki/tiddlydesktop-rs/images/file-icon}}
-</$button>
-</div>
-<div class="td-wikilist-info">
-<div class="td-wiki-title">
-{{$:/core/images/file}} $filename$
-</div>
-<div class="td-wiki-url">$path$</div>
-<div class="td-wiki-toolbar">
-<$button message="tm-tiddlydesktop-rs-open-path" param="$path$" class="tc-btn-invisible td-button td-button-open">open</$button>
-<$button message="tm-tiddlydesktop-rs-reveal" param="$path$" class="tc-btn-invisible td-button td-button-reveal">reveal</$button>
-<$button message="tm-tiddlydesktop-rs-remove" param="$path$" class="tc-btn-invisible td-button td-button-remove">remove</$button>
-</div>
-</div>
-</div>
-\end
-
-<div class="td-toolbar">
-<div class="td-toolbar-item">
-{{$:/plugins/tiddlywiki/tiddlydesktop-rs/images/logo}}
-</div>
-<div class="td-toolbar-item">
-<$button message="tm-tiddlydesktop-rs-open-wiki" class="td-button">
-{{$:/core/images/file}} Open wiki file
-</$button>
-</div>
-<div class="td-toolbar-item">
-<$button message="tm-tiddlydesktop-rs-open-folder" class="td-button">
-{{$:/core/images/folder}} Open wiki folder
-</$button>
-</div>
-<div class="td-toolbar-item">
-<$button message="tm-tiddlydesktop-rs-create-wiki" class="td-button td-button-create-new">
-{{$:/core/images/new-button}} Create wiki file
-</$button>
-</div>
-</div>
-
-<$list filter="[{$:/temp/tiddlydesktop-rs/is-mobile}!match[yes]]" variable="ignore">
-<div class="td-drop-zone">
-<$reveal state="$:/temp/tiddlydesktop-rs/drag-over" type="match" text="yes">
-<div class="td-drop-active">
-Drop wiki file or folder here
-</div>
-</$reveal>
-<$reveal state="$:/temp/tiddlydesktop-rs/drag-over" type="nomatch" text="yes">
-<div class="td-drop-hint">
-{{$:/core/images/file}} Drop TiddlyWiki files or folders here
-</div>
-</$reveal>
-</div>
-</$list>
-
-<div class="td-wikilist">
-<$list filter="[prefix[$:/temp/tiddlydesktop-rs/wikis/]sort[title]]" emptyMessage={{$:/plugins/tiddlywiki/tiddlydesktop-rs/EmptyMessage}}>
-<$let path={{!!path}} filename={{!!filename}} favicon={{!!favicon}} isFolder={{!!is_folder}} backupsEnabled={{!!backups_enabled}} backupDir={{!!backup_dir}}>
+\define render-wiki-item()
+<$let path={{!!path}} filename={{!!filename}} favicon={{!!favicon}} isFolder={{!!is_folder}} backupsEnabled={{!!backups_enabled}} backupDir={{!!backup_dir}} wikiGroup={{!!group}}>
 <div class="td-wikilist-item">
 <div class="td-wikilist-thumbnail">
 <$button class="tc-btn-invisible">
@@ -118,6 +60,40 @@ open
 </$list>
 </$let>
 </$list>
+<!-- Group selector dropdown -->
+<$let newGroupTiddler=<<qualify "$:/temp/new-group-name">> groupPopupState=<<qualify "$:/state/group-popup">>>
+<$button popup=<<groupPopupState>> class="tc-btn-invisible td-button td-button-group" tooltip="Assign to group">
+{{$:/core/images/tag-button}} <$list filter="[<wikiGroup>!is[blank]]" variable="ignore"><$text text=<<wikiGroup>>/></$list><$list filter="[<wikiGroup>is[blank]]" variable="ignore">group</$list>
+</$button>
+<$reveal state=<<groupPopupState>> type="popup" position="below" animate="yes" class="tc-drop-down td-group-dropdown tc-popup-keep">
+<div class="td-group-dropdown-content">
+<$button class="tc-btn-invisible td-group-option">
+<$action-sendmessage $message="tm-tiddlydesktop-rs-set-group" path=<<path>> group=""/>
+<$action-deletetiddler $tiddler=<<groupPopupState>>/>
+<em>Ungrouped</em>
+</$button>
+<$list filter="[{$:/temp/tiddlydesktop-rs/groups}splitregexp[\n]!is[blank]]" variable="groupOption">
+<$button class="tc-btn-invisible td-group-option">
+<$action-sendmessage $message="tm-tiddlydesktop-rs-set-group" path=<<path>> group=<<groupOption>>/>
+<$action-deletetiddler $tiddler=<<groupPopupState>>/>
+<$text text=<<groupOption>>/>
+</$button>
+</$list>
+<hr/>
+<div class="td-group-new">
+<$keyboard key="enter" actions="""<$action-sendmessage $message="tm-tiddlydesktop-rs-set-group" path=<<path>> group={{{ [<newGroupTiddler>get[text]] }}}/><$action-deletetiddler $tiddler=<<newGroupTiddler>>/><$action-deletetiddler $tiddler=<<groupPopupState>>/>""">
+<$edit-text tiddler=<<newGroupTiddler>> tag="input" placeholder="New group name..." class="td-group-input"/>
+</$keyboard>
+<$button class="tc-btn-invisible td-button">
+<$action-sendmessage $message="tm-tiddlydesktop-rs-set-group" path=<<path>> group={{{ [<newGroupTiddler>get[text]] }}}/>
+<$action-deletetiddler $tiddler=<<newGroupTiddler>>/>
+<$action-deletetiddler $tiddler=<<groupPopupState>>/>
+add
+</$button>
+</div>
+</div>
+</$reveal>
+</$let>
 </div>
 <$list filter="[<isFolder>!match[true]]" variable="ignore">
 <div class="td-wiki-backup-dir">
@@ -145,5 +121,169 @@ change
 </div>
 </div>
 </$let>
+\end
+
+\procedure render-group-section(groupName, isUngrouped:"no")
+<$let
+  collapsedState={{{ [<groupName>addprefix[$:/state/tiddlydesktop-rs/group-collapsed/]] }}}
+>
+<$list filter="[<isUngrouped>match[yes]]" variable="ignore">
+<!-- Ungrouped wikis -->
+<$let groupCount={{{ [prefix[$:/temp/tiddlydesktop-rs/wikis/]!has[group]count[]] }}}>
+<$list filter="[<groupCount>!match[0]]" variable="ignore">
+<div class="td-group-section">
+<div class="td-group-header">
+<$button class="tc-btn-invisible td-group-toggle">
+<$action-sendmessage $message="tm-tiddlydesktop-rs-toggle-group" group=<<groupName>>/>
+<$reveal state=<<collapsedState>> type="match" text="yes" tag="span">
+{{$:/core/images/right-arrow}}
+</$reveal>
+<$reveal state=<<collapsedState>> type="nomatch" text="yes" tag="span">
+{{$:/core/images/down-arrow}}
+</$reveal>
+<span class="td-group-name"><$text text=<<groupName>>/></span>
+<span class="td-group-count">(<$text text=<<groupCount>>/>)</span>
+</$button>
+</div>
+<$reveal state=<<collapsedState>> type="nomatch" text="yes" animate="yes">
+<div class="td-group-wikis">
+<$list filter="[prefix[$:/temp/tiddlydesktop-rs/wikis/]!has[group]sort[title]]">
+<<render-wiki-item>>
 </$list>
 </div>
+</$reveal>
+</div>
+</$list>
+</$let>
+</$list>
+<$list filter="[<isUngrouped>!match[yes]]" variable="ignore">
+<!-- Named group wikis -->
+<$let groupCount={{{ [prefix[$:/temp/tiddlydesktop-rs/wikis/]group<groupName>count[]] }}}>
+<$list filter="[<groupCount>!match[0]]" variable="ignore">
+<div class="td-group-section">
+<div class="td-group-header">
+<$button class="tc-btn-invisible td-group-toggle">
+<$action-sendmessage $message="tm-tiddlydesktop-rs-toggle-group" group=<<groupName>>/>
+<$reveal state=<<collapsedState>> type="match" text="yes" tag="span">
+{{$:/core/images/right-arrow}}
+</$reveal>
+<$reveal state=<<collapsedState>> type="nomatch" text="yes" tag="span">
+{{$:/core/images/down-arrow}}
+</$reveal>
+<span class="td-group-name"><$text text=<<groupName>>/></span>
+<span class="td-group-count">(<$text text=<<groupCount>>/>)</span>
+</$button>
+</div>
+<$reveal state=<<collapsedState>> type="nomatch" text="yes" animate="yes">
+<div class="td-group-wikis">
+<$list filter="[prefix[$:/temp/tiddlydesktop-rs/wikis/]group<groupName>sort[title]]">
+<<render-wiki-item>>
+</$list>
+</div>
+</$reveal>
+</div>
+</$list>
+</$let>
+</$list>
+</$let>
+\end
+
+<div class="td-toolbar">
+<div class="td-toolbar-item">
+{{$:/plugins/tiddlywiki/tiddlydesktop-rs/images/logo}}
+</div>
+<div class="td-toolbar-item">
+<$button message="tm-tiddlydesktop-rs-open-wiki" class="td-button">
+{{$:/core/images/file}} Open wiki file
+</$button>
+</div>
+<div class="td-toolbar-item">
+<$button message="tm-tiddlydesktop-rs-open-folder" class="td-button">
+{{$:/core/images/folder}} Open wiki folder
+</$button>
+</div>
+<div class="td-toolbar-item">
+<$button message="tm-tiddlydesktop-rs-create-wiki" class="td-button td-button-create-new">
+{{$:/core/images/new-button}} Create wiki file
+</$button>
+</div>
+<div class="td-toolbar-item td-toolbar-right">
+<$button message="tm-tiddlydesktop-rs-manage-groups" class="td-button td-button-manage-groups" tooltip="Manage groups">
+{{$:/core/images/tag-button}} Groups
+</$button>
+</div>
+</div>
+
+<$list filter="[{$:/temp/tiddlydesktop-rs/is-mobile}!match[yes]]" variable="ignore">
+<div class="td-drop-zone">
+<$reveal state="$:/temp/tiddlydesktop-rs/drag-over" type="match" text="yes">
+<div class="td-drop-active">
+Drop wiki file or folder here
+</div>
+</$reveal>
+<$reveal state="$:/temp/tiddlydesktop-rs/drag-over" type="nomatch" text="yes">
+<div class="td-drop-hint">
+{{$:/core/images/file}} Drop TiddlyWiki files or folders here
+</div>
+</$reveal>
+</div>
+</$list>
+
+<div class="td-wikilist">
+<$list filter="[prefix[$:/temp/tiddlydesktop-rs/wikis/]]" emptyMessage={{$:/plugins/tiddlywiki/tiddlydesktop-rs/EmptyMessage}} variable="ignore">
+<!-- Render named groups first -->
+<$list filter="[{$:/temp/tiddlydesktop-rs/groups}splitregexp[\n]!is[blank]sort[]]" variable="currentGroup">
+<$transclude $variable="render-group-section" groupName=<<currentGroup>>/>
+</$list>
+<!-- Then render Ungrouped -->
+<$transclude $variable="render-group-section" groupName="Ungrouped" isUngrouped="yes"/>
+</$list>
+</div>
+
+<!-- Group Manager Modal -->
+<$reveal state="$:/temp/tiddlydesktop-rs/show-group-manager" type="match" text="yes" animate="yes">
+<div class="td-modal-overlay">
+<div class="td-modal td-group-manager-modal">
+<div class="td-modal-header">
+<h2>Manage Groups</h2>
+<$button class="tc-btn-invisible td-modal-close" message="tm-tiddlydesktop-rs-close-group-manager">{{$:/core/images/close-button}}</$button>
+</div>
+<div class="td-modal-content">
+<$list filter="[{$:/temp/tiddlydesktop-rs/groups}splitregexp[\n]!is[blank]sort[]]" emptyMessage="<p class='td-no-groups'>No groups created yet. Assign a wiki to a group to create one.</p>" variable="groupToManage">
+<div class="td-group-manager-item">
+<$reveal state=<<qualify "$:/state/editing-group">> type="nomatch" text=<<groupToManage>> tag="span">
+<span class="td-group-manager-name"><$text text=<<groupToManage>>/></span>
+<span class="td-group-manager-count">(<$count filter="[prefix[$:/temp/tiddlydesktop-rs/wikis/]group<groupToManage>]"/> wikis)</span>
+<$button class="tc-btn-invisible td-button" tooltip="Rename group">
+<$action-setfield $tiddler=<<qualify "$:/state/editing-group">> text=<<groupToManage>>/>
+<$action-setfield $tiddler=<<qualify "$:/temp/rename-group-value">> text=<<groupToManage>>/>
+{{$:/core/images/edit-button}}
+</$button>
+<$button class="tc-btn-invisible td-button td-button-remove" tooltip="Delete group (wikis move to Ungrouped)">
+<$action-sendmessage $message="tm-tiddlydesktop-rs-delete-group" group=<<groupToManage>>/>
+{{$:/core/images/delete-button}}
+</$button>
+</$reveal>
+<$reveal state=<<qualify "$:/state/editing-group">> type="match" text=<<groupToManage>> tag="span">
+<$edit-text tiddler=<<qualify "$:/temp/rename-group-value">> tag="input" class="td-group-input"/>
+<$button class="tc-btn-invisible td-button">
+<$action-sendmessage $message="tm-tiddlydesktop-rs-rename-group" oldName=<<groupToManage>> newName={{$(qualify "$:/temp/rename-group-value")$}}/>
+<$action-deletetiddler $tiddler=<<qualify "$:/state/editing-group">>/>
+<$action-deletetiddler $tiddler=<<qualify "$:/temp/rename-group-value">>/>
+{{$:/core/images/done-button}}
+</$button>
+<$button class="tc-btn-invisible td-button">
+<$action-deletetiddler $tiddler=<<qualify "$:/state/editing-group">>/>
+<$action-deletetiddler $tiddler=<<qualify "$:/temp/rename-group-value">>/>
+{{$:/core/images/close-button}}
+</$button>
+</$reveal>
+</div>
+</$list>
+</div>
+<div class="td-modal-footer">
+<$button message="tm-tiddlydesktop-rs-close-group-manager" class="td-button">Close</$button>
+</div>
+</div>
+</div>
+</$reveal>

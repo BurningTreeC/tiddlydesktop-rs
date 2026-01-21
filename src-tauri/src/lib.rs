@@ -6372,9 +6372,28 @@ window.__IS_MAIN_WIKI__ = {};
 {}
 {}
 
-// TiddlyDesktop custom saver - registers as a proper TiddlyWiki module before boot
+// TiddlyDesktop initialization - handles both normal and encrypted wikis
 (function() {{
     var SAVE_URL = "{}";
+
+    // Check if this is an encrypted wiki
+    function isEncryptedWiki() {{
+        return !!document.getElementById('encryptedStoreArea');
+    }}
+
+    // Wait for TiddlyWiki to be fully ready (including decryption if needed)
+    function waitForTiddlyWiki(callback) {{
+        // For encrypted wikis, we must wait for $tw.wiki to exist
+        // This means decryption has completed and boot has finished
+        if (typeof $tw !== 'undefined' && $tw.wiki) {{
+            callback();
+        }} else {{
+            setTimeout(function() {{ waitForTiddlyWiki(callback); }}, 50);
+        }}
+    }}
+
+    // Main initialization that runs after TiddlyWiki is ready
+    function initializeTiddlyDesktop() {{
 
     // Define the saver module globally so TiddlyWiki can find it during boot
     window.$TiddlyDesktopSaver = {{
@@ -6614,6 +6633,31 @@ window.__IS_MAIN_WIKI__ = {};
 
             renderSingleTiddler();
         }})();
+    }}
+
+    }} // End of initializeTiddlyDesktop
+
+    // Start initialization based on whether wiki is encrypted
+    // We need to wait for DOM to check for encryptedStoreArea
+    function startInit() {{
+        if (isEncryptedWiki()) {{
+            // Encrypted wiki: wait for TiddlyWiki to fully boot (including decryption)
+            console.log('TiddlyDesktop: Encrypted wiki detected, waiting for decryption...');
+            waitForTiddlyWiki(function() {{
+                console.log('TiddlyDesktop: Decryption complete, initializing...');
+                initializeTiddlyDesktop();
+            }});
+        }} else {{
+            // Normal wiki: initialize immediately (our code waits for $tw internally)
+            initializeTiddlyDesktop();
+        }}
+    }}
+
+    // Check DOM readiness before looking for encryptedStoreArea
+    if (document.readyState === 'loading') {{
+        document.addEventListener('DOMContentLoaded', startInit);
+    }} else {{
+        startInit();
     }}
 
     // External attachments support is provided by the initialization script (get_dialog_init_script)

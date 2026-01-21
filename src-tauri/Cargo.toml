@@ -44,7 +44,7 @@ webkit2gtk = "2.0.1"
 
 # Windows drag-drop handling via WebView2 native APIs
 [target.'cfg(target_os = "windows")'.dependencies]
-webview2-com = "0.35"
+webview2-com = "0.33"
 windows = { version = "0.58", features = [
     "implement",
     "Win32_Foundation",

@@ -42,9 +42,8 @@ gdk = "0.18"
 glib = "0.18"
 webkit2gtk = "2.0.1"
 
-# Windows drag-drop handling via WebView2 native APIs
+# Windows drag-drop handling via native OLE APIs
 [target.'cfg(target_os = "windows")'.dependencies]
-webview2-com = "0.35"
 windows = { version = "0.61", features = [
     "Win32_Foundation",
     "Win32_System_Ole",
@@ -58,7 +57,6 @@ windows = { version = "0.61", features = [
     "Win32_Graphics_Gdi",
 ] }
 windows-core = "0.61"
-windows-implement = "0.60"
 lazy_static = "1.5"
 
 # macOS drag-drop handling via objc2 (versions must match Tauri's objc2 dependency)

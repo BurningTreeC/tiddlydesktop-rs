@@ -423,22 +423,20 @@ mod linux_drag {
 /// 4. We emit events to JavaScript which handles the actual drop processing
 #[cfg(target_os = "windows")]
 mod windows_drag {
-    use std::cell::RefCell;
     use std::collections::HashMap;
     use std::ffi::OsString;
     use std::os::windows::ffi::OsStringExt;
-    use std::sync::Mutex;
+    use std::sync::{Arc, Mutex};
+    use std::sync::atomic::{AtomicU32, Ordering};
     use tauri::{Emitter, WebviewWindow};
-    use webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2Controller4;
-    use windows::core::Interface;
-    use windows_implement::implement;
-    use windows::Win32::Foundation::{HWND, POINTL};
+    use windows::core::{GUID, HRESULT, IUnknown};
+    use windows::Win32::Foundation::{HWND, POINTL, S_OK, E_NOINTERFACE, E_POINTER};
     use windows::Win32::System::Com::{
         CoInitializeEx, IDataObject, COINIT_APARTMENTTHREADED, TYMED_HGLOBAL,
         FORMATETC, DVASPECT_CONTENT,
     };
     use windows::Win32::System::Ole::{
-        IDropTarget, IDropTarget_Impl, RegisterDragDrop, RevokeDragDrop,
+        IDropTarget, RegisterDragDrop, RevokeDragDrop,
         DROPEFFECT, DROPEFFECT_COPY, DROPEFFECT_MOVE, DROPEFFECT_LINK, DROPEFFECT_NONE,
     };
     use windows::Win32::System::SystemServices::MODIFIERKEYS_FLAGS;
@@ -446,8 +444,8 @@ mod windows_drag {
     use windows::Win32::UI::Shell::DragQueryFileW;
     use windows::Win32::UI::Shell::HDROP;
 
-    /// Thread-safe wrapper for IDropTarget (COM pointers are ref-counted)
-    struct SendDropTarget(IDropTarget);
+    /// Thread-safe wrapper for our drop target
+    struct SendDropTarget(*mut DropTargetImpl);
     unsafe impl Send for SendDropTarget {}
     unsafe impl Sync for SendDropTarget {}
 
@@ -460,6 +458,10 @@ mod windows_drag {
     const CF_TEXT: u16 = 1;
     const CF_UNICODETEXT: u16 = 13;
     const CF_HDROP: u16 = 15;
+
+    /// IDropTarget interface GUID
+    const IID_IDROPTARGET: GUID = GUID::from_u128(0x00000122_0000_0000_c000_000000000046);
+    const IID_IUNKNOWN: GUID = GUID::from_u128(0x00000000_0000_0000_c000_000000000046);
 
     /// Custom clipboard format for HTML
     fn get_cf_html() -> u16 {
@@ -489,46 +491,282 @@ mod windows_drag {
         pub data: HashMap<String, String>,
     }
 
-    /// Our IDropTarget implementation - registered on the parent window
-    #[implement(IDropTarget)]
-    struct DropTarget {
-        window: WebviewWindow,
-        drag_active: RefCell<bool>,
+    /// IDropTarget vtable - must match COM layout exactly
+    #[repr(C)]
+    struct IDropTargetVtbl {
+        // IUnknown methods
+        QueryInterface: unsafe extern "system" fn(
+            this: *mut DropTargetImpl,
+            riid: *const GUID,
+            ppv_object: *mut *mut std::ffi::c_void,
+        ) -> HRESULT,
+        AddRef: unsafe extern "system" fn(this: *mut DropTargetImpl) -> u32,
+        Release: unsafe extern "system" fn(this: *mut DropTargetImpl) -> u32,
+        // IDropTarget methods
+        DragEnter: unsafe extern "system" fn(
+            this: *mut DropTargetImpl,
+            pDataObj: *mut std::ffi::c_void, // IDataObject*
+            grfKeyState: u32,
+            pt: POINTL,
+            pdwEffect: *mut u32,
+        ) -> HRESULT,
+        DragOver: unsafe extern "system" fn(
+            this: *mut DropTargetImpl,
+            grfKeyState: u32,
+            pt: POINTL,
+            pdwEffect: *mut u32,
+        ) -> HRESULT,
+        DragLeave: unsafe extern "system" fn(this: *mut DropTargetImpl) -> HRESULT,
+        Drop: unsafe extern "system" fn(
+            this: *mut DropTargetImpl,
+            pDataObj: *mut std::ffi::c_void, // IDataObject*
+            grfKeyState: u32,
+            pt: POINTL,
+            pdwEffect: *mut u32,
+        ) -> HRESULT,
     }
 
-    impl DropTarget {
-        fn new(window: WebviewWindow) -> Self {
-            Self {
+    /// Our IDropTarget implementation struct
+    /// The vtable pointer MUST be the first field for COM compatibility
+    #[repr(C)]
+    struct DropTargetImpl {
+        vtbl: *const IDropTargetVtbl,
+        ref_count: AtomicU32,
+        window: WebviewWindow,
+        drag_active: Mutex<bool>,
+    }
+
+    /// Static vtable instance
+    static DROPTARGET_VTBL: IDropTargetVtbl = IDropTargetVtbl {
+        QueryInterface: DropTargetImpl::query_interface,
+        AddRef: DropTargetImpl::add_ref,
+        Release: DropTargetImpl::release,
+        DragEnter: DropTargetImpl::drag_enter,
+        DragOver: DropTargetImpl::drag_over,
+        DragLeave: DropTargetImpl::drag_leave,
+        Drop: DropTargetImpl::drop_impl,
+    };
+
+    impl DropTargetImpl {
+        /// Create a new DropTarget and return a raw pointer (caller owns the reference)
+        fn new(window: WebviewWindow) -> *mut Self {
+            let obj = Box::new(Self {
+                vtbl: &DROPTARGET_VTBL,
+                ref_count: AtomicU32::new(1),
                 window,
-                drag_active: RefCell::new(false),
+                drag_active: Mutex::new(false),
+            });
+            Box::into_raw(obj)
+        }
+
+        /// Convert to IDropTarget interface
+        unsafe fn as_idroptarget(ptr: *mut Self) -> IDropTarget {
+            std::mem::transmute(ptr)
+        }
+
+        // IUnknown::QueryInterface
+        unsafe extern "system" fn query_interface(
+            this: *mut Self,
+            riid: *const GUID,
+            ppv_object: *mut *mut std::ffi::c_void,
+        ) -> HRESULT {
+            if ppv_object.is_null() {
+                return E_POINTER;
+            }
+
+            let iid = &*riid;
+            if *iid == IID_IUNKNOWN || *iid == IID_IDROPTARGET {
+                Self::add_ref(this);
+                *ppv_object = this as *mut std::ffi::c_void;
+                S_OK
+            } else {
+                *ppv_object = std::ptr::null_mut();
+                E_NOINTERFACE
             }
         }
 
+        // IUnknown::AddRef
+        unsafe extern "system" fn add_ref(this: *mut Self) -> u32 {
+            let obj = &*this;
+            obj.ref_count.fetch_add(1, Ordering::SeqCst) + 1
+        }
+
+        // IUnknown::Release
+        unsafe extern "system" fn release(this: *mut Self) -> u32 {
+            let obj = &*this;
+            let count = obj.ref_count.fetch_sub(1, Ordering::SeqCst) - 1;
+            if count == 0 {
+                // Drop the box
+                drop(Box::from_raw(this));
+            }
+            count
+        }
+
+        // IDropTarget::DragEnter
+        unsafe extern "system" fn drag_enter(
+            this: *mut Self,
+            p_data_obj: *mut std::ffi::c_void,
+            _grf_key_state: u32,
+            pt: POINTL,
+            pdw_effect: *mut u32,
+        ) -> HRESULT {
+            let obj = &*this;
+            *obj.drag_active.lock().unwrap() = true;
+
+            // Convert to client coordinates
+            let (x, y) = obj.screen_to_client(pt.x, pt.y);
+
+            // Emit event with client coordinates
+            let _ = obj.window.emit("td-drag-motion", serde_json::json!({
+                "x": x,
+                "y": y
+            }));
+
+            // Accept the drag
+            if !pdw_effect.is_null() {
+                let allowed = DROPEFFECT(*pdw_effect as i32);
+                *pdw_effect = choose_drop_effect(allowed).0 as u32;
+            }
+
+            S_OK
+        }
+
+        // IDropTarget::DragOver
+        unsafe extern "system" fn drag_over(
+            this: *mut Self,
+            _grf_key_state: u32,
+            pt: POINTL,
+            pdw_effect: *mut u32,
+        ) -> HRESULT {
+            let obj = &*this;
+            {
+                let mut active = obj.drag_active.lock().unwrap();
+                if !*active {
+                    *active = true;
+                }
+            }
+
+            // Convert to client coordinates
+            let (x, y) = obj.screen_to_client(pt.x, pt.y);
+
+            // Emit continuous motion events
+            let _ = obj.window.emit("td-drag-motion", serde_json::json!({
+                "x": x,
+                "y": y
+            }));
+
+            // Accept the drag
+            if !pdw_effect.is_null() {
+                let allowed = DROPEFFECT(*pdw_effect as i32);
+                *pdw_effect = choose_drop_effect(allowed).0 as u32;
+            }
+
+            S_OK
+        }
+
+        // IDropTarget::DragLeave
+        unsafe extern "system" fn drag_leave(this: *mut Self) -> HRESULT {
+            let obj = &*this;
+            let was_active = {
+                let mut active = obj.drag_active.lock().unwrap();
+                let was = *active;
+                *active = false;
+                was
+            };
+
+            if was_active {
+                let _ = obj.window.emit("td-drag-leave", ());
+            }
+
+            S_OK
+        }
+
+        // IDropTarget::Drop
+        unsafe extern "system" fn drop_impl(
+            this: *mut Self,
+            p_data_obj: *mut std::ffi::c_void,
+            _grf_key_state: u32,
+            pt: POINTL,
+            pdw_effect: *mut u32,
+        ) -> HRESULT {
+            let obj = &*this;
+            *obj.drag_active.lock().unwrap() = false;
+
+            if !p_data_obj.is_null() {
+                // Convert raw pointer to IDataObject reference
+                let data_object: &IDataObject = std::mem::transmute(&p_data_obj);
+
+                // Convert to client coordinates
+                let (x, y) = obj.screen_to_client(pt.x, pt.y);
+
+                // Emit drop start
+                let _ = obj.window.emit("td-drag-drop-start", serde_json::json!({
+                    "x": x,
+                    "y": y
+                }));
+
+                // Check for file paths first
+                let file_paths = obj.get_file_paths(data_object);
+                if !file_paths.is_empty() {
+                    let _ = obj.window.emit("td-drag-drop-position", serde_json::json!({
+                        "x": x,
+                        "y": y
+                    }));
+                    let _ = obj.window.emit("td-file-drop", serde_json::json!({
+                        "paths": file_paths
+                    }));
+                    if !pdw_effect.is_null() {
+                        *pdw_effect = DROPEFFECT_COPY.0 as u32;
+                    }
+                    return S_OK;
+                }
+
+                // Content drop - extract and emit data
+                if let Some(content_data) = obj.extract_data(data_object) {
+                    let _ = obj.window.emit("td-drag-drop-position", serde_json::json!({
+                        "x": x,
+                        "y": y
+                    }));
+                    let _ = obj.window.emit("td-drag-content", &content_data);
+                    if !pdw_effect.is_null() {
+                        *pdw_effect = DROPEFFECT_COPY.0 as u32;
+                    }
+                } else {
+                    if !pdw_effect.is_null() {
+                        *pdw_effect = DROPEFFECT_NONE.0 as u32;
+                    }
+                }
+            } else {
+                if !pdw_effect.is_null() {
+                    *pdw_effect = DROPEFFECT_NONE.0 as u32;
+                }
+            }
+
+            S_OK
+        }
+
+        // Helper methods (same as before)
         fn extract_data(&self, data_object: &IDataObject) -> Option<DragContentData> {
             let mut types = Vec::new();
             let mut data = HashMap::new();
 
-            // Try to get text/vnd.tiddler (TiddlyWiki native format) - highest priority
             let cf_tiddler = get_cf_tiddler();
             if let Some(tiddler) = self.get_string_data(data_object, cf_tiddler) {
                 types.push("text/vnd.tiddler".to_string());
                 data.insert("text/vnd.tiddler".to_string(), tiddler);
             }
 
-            // Try to get URI list (for plugin drags with data: URIs)
             let cf_uri = get_cf_uri_list();
             if let Some(uri_list) = self.get_string_data(data_object, cf_uri) {
                 types.push("text/uri-list".to_string());
                 data.insert("text/uri-list".to_string(), uri_list);
             }
 
-            // Try to get Unicode text
             if let Some(text) = self.get_unicode_text(data_object) {
                 types.push("text/plain".to_string());
                 data.insert("text/plain".to_string(), text);
             }
 
-            // Try to get ANSI text as fallback
             if !data.contains_key("text/plain") {
                 if let Some(text) = self.get_ansi_text(data_object) {
                     types.push("text/plain".to_string());
@@ -536,10 +774,8 @@ mod windows_drag {
                 }
             }
 
-            // Try to get HTML content
             let cf_html = get_cf_html();
             if let Some(html) = self.get_string_data(data_object, cf_html) {
-                // HTML Format has headers, extract just the HTML
                 if let Some(start) = html.find("<!--StartFragment-->") {
                     if let Some(end) = html.find("<!--EndFragment-->") {
                         let content = &html[start + 20..end];
@@ -552,11 +788,7 @@ mod windows_drag {
                 }
             }
 
-            if types.is_empty() {
-                None
-            } else {
-                Some(DragContentData { types, data })
-            }
+            if types.is_empty() { None } else { Some(DragContentData { types, data }) }
         }
 
         fn get_unicode_text(&self, data_object: &IDataObject) -> Option<String> {
@@ -576,9 +808,7 @@ mod windows_drag {
                             let size = GlobalSize(medium.u.hGlobal) / 2;
                             let slice = std::slice::from_raw_parts(ptr, size);
                             let len = slice.iter().position(|&c| c == 0).unwrap_or(slice.len());
-                            let text = OsString::from_wide(&slice[..len])
-                                .to_string_lossy()
-                                .to_string();
+                            let text = OsString::from_wide(&slice[..len]).to_string_lossy().to_string();
                             let _ = GlobalUnlock(medium.u.hGlobal);
                             return Some(text);
                         }
@@ -656,14 +886,11 @@ mod windows_drag {
                 if let Ok(medium) = data_object.GetData(&format) {
                     let hdrop = HDROP(medium.u.hGlobal.0 as *mut _);
                     let count = DragQueryFileW(hdrop, 0xFFFFFFFF, None);
-
                     for i in 0..count {
                         let len = DragQueryFileW(hdrop, i, None);
                         let mut buffer = vec![0u16; (len + 1) as usize];
                         DragQueryFileW(hdrop, i, Some(&mut buffer));
-                        let path = OsString::from_wide(&buffer[..len as usize])
-                            .to_string_lossy()
-                            .to_string();
+                        let path = OsString::from_wide(&buffer[..len as usize]).to_string_lossy().to_string();
                         paths.push(path);
                     }
                 }
@@ -671,24 +898,12 @@ mod windows_drag {
             paths
         }
 
-        /// Convert screen coordinates to client coordinates for the webview
         fn screen_to_client(&self, x: i32, y: i32) -> (i32, i32) {
-            // Get the window's screen position
-            if let Ok(pos) = self.window.outer_position() {
-                // Account for window decorations (title bar)
-                // On Windows, the title bar is typically ~30-40 pixels
-                // We use inner_position to get the content area position
+            if let Ok(_pos) = self.window.outer_position() {
                 if let Ok(inner_pos) = self.window.inner_position() {
-                    let client_x = x - inner_pos.x;
-                    let client_y = y - inner_pos.y;
-                    return (client_x, client_y);
+                    return (x - inner_pos.x, y - inner_pos.y);
                 }
-                // Fallback: use outer position
-                let client_x = x - pos.x;
-                let client_y = y - pos.y;
-                return (client_x, client_y);
             }
-            // If we can't get position, return as-is
             (x, y)
         }
     }
@@ -706,169 +921,26 @@ mod windows_drag {
         }
     }
 
-    impl IDropTarget_Impl for DropTarget_Impl {
-        fn DragEnter(
-            &self,
-            _pdataobj: Option<&IDataObject>,
-            _grfkeystate: MODIFIERKEYS_FLAGS,
-            pt: &POINTL,
-            pdweffect: *mut DROPEFFECT,
-        ) -> windows::core::Result<()> {
-            *self.drag_active.borrow_mut() = true;
-
-            // Convert to client coordinates
-            let (x, y) = self.screen_to_client(pt.x, pt.y);
-
-            // Emit event with client coordinates (not screen coordinates)
-            let _ = self.window.emit("td-drag-motion", serde_json::json!({
-                "x": x,
-                "y": y
-            }));
-
-            // Accept the drag
-            unsafe {
-                let allowed = *pdweffect;
-                *pdweffect = choose_drop_effect(allowed);
-            }
-
-            Ok(())
-        }
-
-        fn DragOver(
-            &self,
-            _grfkeystate: MODIFIERKEYS_FLAGS,
-            pt: &POINTL,
-            pdweffect: *mut DROPEFFECT,
-        ) -> windows::core::Result<()> {
-            if !*self.drag_active.borrow() {
-                *self.drag_active.borrow_mut() = true;
-            }
-
-            // Convert to client coordinates
-            let (x, y) = self.screen_to_client(pt.x, pt.y);
-
-            // Emit continuous motion events
-            let _ = self.window.emit("td-drag-motion", serde_json::json!({
-                "x": x,
-                "y": y
-            }));
-
-            // Accept the drag
-            unsafe {
-                let allowed = *pdweffect;
-                *pdweffect = choose_drop_effect(allowed);
-            }
-            Ok(())
-        }
-
-        fn DragLeave(&self) -> windows::core::Result<()> {
-            if *self.drag_active.borrow() {
-                *self.drag_active.borrow_mut() = false;
-                let _ = self.window.emit("td-drag-leave", ());
-            }
-            Ok(())
-        }
-
-        fn Drop(
-            &self,
-            pdataobj: Option<&IDataObject>,
-            _grfkeystate: MODIFIERKEYS_FLAGS,
-            pt: &POINTL,
-            pdweffect: *mut DROPEFFECT,
-        ) -> windows::core::Result<()> {
-            *self.drag_active.borrow_mut() = false;
-
-            if let Some(data_object) = pdataobj {
-                // Convert to client coordinates
-                let (x, y) = self.screen_to_client(pt.x, pt.y);
-
-                // Emit drop start
-                let _ = self.window.emit("td-drag-drop-start", serde_json::json!({
-                    "x": x,
-                    "y": y
-                }));
-
-                // Check for file paths first
-                let file_paths = self.get_file_paths(data_object);
-                if !file_paths.is_empty() {
-                    // Emit position
-                    let _ = self.window.emit("td-drag-drop-position", serde_json::json!({
-                        "x": x,
-                        "y": y
-                    }));
-                    // Emit file paths
-                    let _ = self.window.emit("td-file-drop", serde_json::json!({
-                        "paths": file_paths
-                    }));
-                    unsafe { *pdweffect = DROPEFFECT_COPY; }
-                    return Ok(());
-                }
-
-                // Content drop - extract and emit data
-                if let Some(content_data) = self.extract_data(data_object) {
-                    // Emit position
-                    let _ = self.window.emit("td-drag-drop-position", serde_json::json!({
-                        "x": x,
-                        "y": y
-                    }));
-                    // Emit content
-                    let _ = self.window.emit("td-drag-content", &content_data);
-                    unsafe { *pdweffect = DROPEFFECT_COPY; }
-                } else {
-                    unsafe { *pdweffect = DROPEFFECT_NONE; }
-                }
-            } else {
-                unsafe { *pdweffect = DROPEFFECT_NONE; }
-            }
-
-            Ok(())
-        }
-    }
-
     /// Set up drag-drop handling for a webview window
-    ///
-    /// This uses WebView2's native APIs and registers our IDropTarget on the
-    /// parent window to intercept content drags.
     pub fn setup_drag_handlers(window: &WebviewWindow) {
-        let window_clone = window.clone();
-
-        // First, configure WebView2 to allow external drops
-        // This is done via with_webview which gives us access to the controller
-        let _ = window.with_webview(move |webview| {
-            unsafe {
-                // Get the controller and query for ICoreWebView2Controller4
-                let controller = webview.controller();
-                let controller4: Result<ICoreWebView2Controller4, _> = controller.cast();
-
-                if let Ok(ctrl4) = controller4 {
-                    // Ensure external drops are allowed
-                    let _ = ctrl4.SetAllowExternalDrop(true);
-                }
-            }
-        });
-
-        // Now register our IDropTarget on the parent window
-        // We do this on a separate thread with a delay to ensure the window is ready
         let window_for_drop = window.clone();
         std::thread::spawn(move || {
-            // Wait for window to be fully created
             std::thread::sleep(std::time::Duration::from_millis(500));
 
             unsafe {
-                // Initialize COM
                 let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
 
-                // Get the parent HWND
                 if let Ok(hwnd) = window_for_drop.hwnd() {
                     let hwnd = HWND(hwnd.0 as *mut _);
 
-                    // Create and register our drop target on the parent window
-                    let drop_target: IDropTarget = DropTarget::new(window_for_drop.clone()).into();
+                    // Create our drop target
+                    let drop_target_ptr = DropTargetImpl::new(window_for_drop.clone());
+                    let drop_target = DropTargetImpl::as_idroptarget(drop_target_ptr);
 
                     // Store for later cleanup
                     DROP_TARGET_MAP.lock().unwrap().insert(
                         hwnd.0 as isize,
-                        SendDropTarget(drop_target.clone())
+                        SendDropTarget(drop_target_ptr)
                     );
 
                     // Revoke any existing and register ours

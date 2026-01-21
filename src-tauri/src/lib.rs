@@ -1133,7 +1133,7 @@ mod macos_drag {
     unsafe fn convert_to_view_coords(view: *mut AnyObject, window_point: NSPoint) -> (i32, i32) {
         // Convert from window coordinates to view coordinates
         // nil as fromView means "from window coordinates"
-        let view_point: NSPoint = msg_send![view, convertPoint:window_point fromView:std::ptr::null::<AnyObject>()];
+        let view_point: NSPoint = msg_send![view, convertPoint: window_point, fromView: std::ptr::null::<AnyObject>()];
 
         // The view uses flipped coordinates (origin at top-left for WebKit)
         // But convertPoint handles this automatically for flipped views

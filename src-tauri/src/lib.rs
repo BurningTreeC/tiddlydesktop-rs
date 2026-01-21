@@ -419,7 +419,7 @@ mod windows_drag {
     use std::os::windows::ffi::OsStringExt;
     use tauri::{Emitter, WebviewWindow};
     use windows::core::implement;
-    use windows::Win32::Foundation::{HWND, POINTL};
+    use windows::Win32::Foundation::{HWND, POINTL, POINT};
     use windows::Win32::System::Com::{
         CoInitializeEx, IDataObject, COINIT_APARTMENTTHREADED, TYMED_HGLOBAL,
         FORMATETC, DVASPECT_CONTENT,
@@ -431,6 +431,7 @@ mod windows_drag {
     use windows::Win32::System::SystemServices::MODIFIERKEYS_FLAGS;
     use windows::Win32::System::Memory::{GlobalLock, GlobalUnlock, GlobalSize};
     use windows::Win32::UI::Shell::{DragQueryFileW, HDROP};
+    use windows::Win32::UI::WindowsAndMessaging::ScreenToClient;
 
     /// Clipboard format constants
     const CF_TEXT: u16 = 1;
@@ -478,6 +479,21 @@ mod windows_drag {
                 window,
                 drag_active: RefCell::new(false),
             }
+        }
+
+        /// Convert screen coordinates (from POINTL) to client coordinates for the webview
+        fn screen_to_client(&self, pt: &POINTL) -> (i32, i32) {
+            if let Ok(hwnd) = self.window.hwnd() {
+                let hwnd = HWND(hwnd.0 as *mut _);
+                let mut point = POINT { x: pt.x, y: pt.y };
+                unsafe {
+                    if ScreenToClient(hwnd, &mut point).as_bool() {
+                        return (point.x, point.y);
+                    }
+                }
+            }
+            // Fallback: return original coordinates (will be wrong but better than nothing)
+            (pt.x, pt.y)
         }
 
         fn extract_data(&self, data_object: &IDataObject) -> Option<DragContentData> {
@@ -671,11 +687,14 @@ mod windows_drag {
             *self.drag_active.borrow_mut() = true;
 
             if pdataobj.is_some() {
+                // Convert screen coordinates to client coordinates
+                let (x, y) = self.screen_to_client(pt);
+
                 // Accept all drags and emit motion event
                 // Both file and content drags are handled in Drop
                 let _ = self.window.emit("td-drag-motion", serde_json::json!({
-                    "x": pt.x,
-                    "y": pt.y
+                    "x": x,
+                    "y": y
                 }));
 
                 unsafe { *pdweffect = DROPEFFECT_COPY; }
@@ -691,9 +710,12 @@ mod windows_drag {
             pdweffect: *mut DROPEFFECT,
         ) -> windows::core::Result<()> {
             if *self.drag_active.borrow() {
+                // Convert screen coordinates to client coordinates
+                let (x, y) = self.screen_to_client(pt);
+
                 let _ = self.window.emit("td-drag-motion", serde_json::json!({
-                    "x": pt.x,
-                    "y": pt.y
+                    "x": x,
+                    "y": y
                 }));
                 unsafe { *pdweffect = DROPEFFECT_COPY; }
             }
@@ -718,10 +740,13 @@ mod windows_drag {
             *self.drag_active.borrow_mut() = false;
 
             if let Some(data_object) = pdataobj {
+                // Convert screen coordinates to client coordinates
+                let (x, y) = self.screen_to_client(pt);
+
                 // Emit drop-start
                 let _ = self.window.emit("td-drag-drop-start", serde_json::json!({
-                    "x": pt.x,
-                    "y": pt.y
+                    "x": x,
+                    "y": y
                 }));
 
                 // Check for file paths first
@@ -923,15 +948,30 @@ mod macos_drag {
         WINDOW_MAP.lock().ok()?.get(&window_id).cloned()
     }
 
+    /// Convert window coordinates to view (client) coordinates
+    /// draggingLocation returns coordinates in window's coordinate system (origin at bottom-left)
+    /// We need to convert to the view's coordinate system for elementFromPoint()
+    unsafe fn convert_to_view_coords(view: *mut AnyObject, window_point: NSPoint) -> (i32, i32) {
+        // Convert from window coordinates to view coordinates
+        // nil as fromView means "from window coordinates"
+        let view_point: NSPoint = msg_send![view, convertPoint:window_point fromView:std::ptr::null::<AnyObject>()];
+
+        // The view uses flipped coordinates (origin at top-left for WebKit)
+        // But convertPoint handles this automatically for flipped views
+        // Just cast to integers for JS
+        (view_point.x as i32, view_point.y as i32)
+    }
+
     /// draggingEntered: callback - called when drag enters the view
     extern "C" fn dragging_entered(this: *mut AnyObject, _sel: Sel, dragging_info: *mut AnyObject) -> usize {
         unsafe {
             if let Some(window) = get_window_for_view(this) {
                 // Accept all drags and emit motion event
                 let point: NSPoint = msg_send![dragging_info, draggingLocation];
+                let (x, y) = convert_to_view_coords(this, point);
                 let _ = window.emit("td-drag-motion", serde_json::json!({
-                    "x": point.x as i32,
-                    "y": point.y as i32
+                    "x": x,
+                    "y": y
                 }));
                 return NS_DRAG_OPERATION_COPY;
             }
@@ -944,9 +984,10 @@ mod macos_drag {
         unsafe {
             if let Some(window) = get_window_for_view(this) {
                 let point: NSPoint = msg_send![dragging_info, draggingLocation];
+                let (x, y) = convert_to_view_coords(this, point);
                 let _ = window.emit("td-drag-motion", serde_json::json!({
-                    "x": point.x as i32,
-                    "y": point.y as i32
+                    "x": x,
+                    "y": y
                 }));
                 return NS_DRAG_OPERATION_COPY;
             }
@@ -968,11 +1009,12 @@ mod macos_drag {
         unsafe {
             if let Some(window) = get_window_for_view(this) {
                 let point: NSPoint = msg_send![dragging_info, draggingLocation];
+                let (x, y) = convert_to_view_coords(this, point);
 
                 // Emit drop-start
                 let _ = window.emit("td-drag-drop-start", serde_json::json!({
-                    "x": point.x as i32,
-                    "y": point.y as i32
+                    "x": x,
+                    "y": y
                 }));
 
                 // Check for file paths first
@@ -2685,12 +2727,19 @@ fn get_dialog_init_script() -> &'static str {
                 relatedTarget: relatedTarget !== undefined ? relatedTarget : null
             });
 
-            // Force dataTransfer if constructor didn't set it (WebKitGTK issue)
-            if (!event.dataTransfer && dataTransfer) {
-                Object.defineProperty(event, 'dataTransfer', {
-                    value: dataTransfer,
-                    writable: false
-                });
+            // Force dataTransfer if constructor didn't set it properly
+            // Some browsers (especially Chromium/WebView2) ignore the dataTransfer option
+            // or set it to a new protected DataTransfer instead of the one we passed
+            if (dataTransfer && event.dataTransfer !== dataTransfer) {
+                try {
+                    Object.defineProperty(event, 'dataTransfer', {
+                        value: dataTransfer,
+                        writable: false,
+                        configurable: true
+                    });
+                } catch (e) {
+                    console.log("[TiddlyDesktop] Could not override dataTransfer:", e);
+                }
             }
 
             // Mark as synthetic so native handlers can skip it
@@ -2949,14 +2998,12 @@ fn get_dialog_init_script() -> &'static str {
             // Fires immediately when user releases mouse to drop, BEFORE drag-leave
             // This allows us to distinguish "leaving window" from "dropping"
             listen("td-drag-drop-start", function(event) {
-                console.log("[TiddlyDesktop] td-drag-drop-start received:", event.payload);
                 nativeDropInProgress = true;
                 if (event.payload) {
                     pendingContentDropPos = {
                         x: event.payload.x,
                         y: event.payload.y
                     };
-                    console.log("[TiddlyDesktop] Set pendingContentDropPos:", pendingContentDropPos);
                 }
             });
 
@@ -3000,7 +3047,6 @@ fn get_dialog_init_script() -> &'static str {
             // Native drag content received (Linux GTK, Windows IDropTarget)
             // This provides the actual content data from the drag
             listen("td-drag-content", function(event) {
-                console.log("[TiddlyDesktop] td-drag-content received:", event.payload);
                 if (event.payload) {
                     // Store the content data for processing
                     pendingContentDropData = {
@@ -3008,14 +3054,10 @@ fn get_dialog_init_script() -> &'static str {
                         data: event.payload.data || {},
                         files: []
                     };
-                    console.log("[TiddlyDesktop] pendingContentDropPos:", pendingContentDropPos);
 
                     // If we already have position, process the drop now
                     if (pendingContentDropPos) {
-                        console.log("[TiddlyDesktop] Calling processContentDrop");
                         processContentDrop();
-                    } else {
-                        console.log("[TiddlyDesktop] No position yet, waiting");
                     }
                 }
             });
@@ -3380,19 +3422,15 @@ fn get_dialog_init_script() -> &'static str {
 
             // Function to process content drop data (mirrors tauri://drag-drop handling)
             function processContentDrop() {
-                console.log("[TiddlyDesktop] processContentDrop called");
                 if (!pendingContentDropData) {
-                    console.log("[TiddlyDesktop] No pendingContentDropData, returning");
                     return;
                 }
 
                 var capturedData = pendingContentDropData;
                 var pos = pendingContentDropPos;
-                console.log("[TiddlyDesktop] Processing content drop, types:", capturedData.types, "pos:", pos);
 
                 // Get drop target using same method as file drops
                 var dropTarget = getTargetElement(pos);
-                console.log("[TiddlyDesktop] Drop target:", dropTarget.tagName, dropTarget.className);
 
                 // Clear pending data
                 pendingContentDropData = null;

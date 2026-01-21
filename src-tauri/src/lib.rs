@@ -430,7 +430,8 @@ mod windows_drag {
     use std::sync::Mutex;
     use tauri::{Emitter, WebviewWindow};
     use webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2Controller4;
-    use windows::core::{implement, Interface};
+    use windows::core::Interface;
+    use windows_implement::implement;
     use windows::Win32::Foundation::{HWND, POINTL};
     use windows::Win32::System::Com::{
         CoInitializeEx, IDataObject, COINIT_APARTMENTTHREADED, TYMED_HGLOBAL,

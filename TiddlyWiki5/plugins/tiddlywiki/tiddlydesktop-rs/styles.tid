@@ -313,6 +313,11 @@ body.td-main-wiki .tc-notification {
 	display: none !important;
 }
 
+/* Enable scrolling on the main wiki (landing page) */
+.tc-body.td-main-wiki {
+	overflow: auto;
+}
+
 /* Full-height layout for maximized window */
 html, body {
 	height: 100%;

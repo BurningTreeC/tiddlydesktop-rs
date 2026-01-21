@@ -891,7 +891,7 @@ mod macos_drag {
                 let url_class = NSURL::class();
                 let classes: *mut AnyObject = msg_send![class!(NSArray), arrayWithObject: url_class];
                 let options: *mut AnyObject = msg_send![class!(NSDictionary), dictionary];
-                let urls: *mut AnyObject = msg_send![pasteboard, readObjectsForClasses: classes options: options];
+                let urls: *mut AnyObject = msg_send![pasteboard, readObjectsForClasses: classes, options: options];
 
                 if !urls.is_null() {
                     let count: usize = msg_send![urls, count];
@@ -1028,7 +1028,7 @@ mod macos_drag {
         } else {
             // Create new subclass
             let superclass = &*view_class;
-            if let Some(mut builder) = ClassBuilder::new(&subclass_name, superclass) {
+            if let Some(mut builder) = ClassBuilder::new(&subclass_cstr, superclass) {
                 builder.add_method(
                     sel!(draggingEntered:),
                     dragging_entered as extern "C" fn(*mut AnyObject, Sel, *mut AnyObject) -> usize,

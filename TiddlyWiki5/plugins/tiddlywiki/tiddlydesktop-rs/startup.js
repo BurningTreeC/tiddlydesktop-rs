@@ -186,7 +186,7 @@ exports.startup = function(callback) {
 	// Add an entry to the wiki list
 	function addToWikiList(entry) {
 		var entries = getWikiListEntries();
-		// Find existing entry to preserve backups_enabled setting
+		// Find existing entry to preserve backup settings
 		var existingEntry = null;
 		for (var i = 0; i < entries.length; i++) {
 			if (entries[i].path === entry.path) {
@@ -194,8 +194,13 @@ exports.startup = function(callback) {
 				break;
 			}
 		}
-		if (existingEntry && existingEntry.backups_enabled !== undefined) {
-			entry.backups_enabled = existingEntry.backups_enabled;
+		if (existingEntry) {
+			if (existingEntry.backups_enabled !== undefined) {
+				entry.backups_enabled = existingEntry.backups_enabled;
+			}
+			if (existingEntry.backup_dir) {
+				entry.backup_dir = existingEntry.backup_dir;
+			}
 		}
 		// Remove if already exists
 		entries = entries.filter(function(e) { return e.path !== entry.path; });
@@ -233,6 +238,7 @@ exports.startup = function(callback) {
 				favicon: entry.favicon || "",
 				is_folder: entry.is_folder ? "true" : "false",
 				backups_enabled: entry.backups_enabled ? "true" : "false",
+				backup_dir: entry.backup_dir || "",
 				text: ""
 			});
 		});
@@ -559,6 +565,65 @@ exports.startup = function(callback) {
 				saveWikiList(entries);
 			}).catch(function(err) {
 				console.error("Failed to set backups:", err);
+			});
+		}
+	});
+
+	// Message handler: set custom backup directory for a wiki
+	$tw.rootWidget.addEventListener("tm-tiddlydesktop-rs-set-backup-dir", function(event) {
+		var path = event.paramObject && event.paramObject.path;
+		if (path) {
+			// Open folder picker dialog
+			openDialog({
+				directory: true,
+				multiple: false,
+				title: "Select Backup Directory"
+			}).then(function(folder) {
+				if (folder) {
+					// Update the Rust backend
+					invoke("set_wiki_backup_dir", { path: path, backupDir: folder }).then(function() {
+						// Update the local wiki list entry
+						var entries = getWikiListEntries();
+						for (var i = 0; i < entries.length; i++) {
+							if (entries[i].path === path) {
+								entries[i].backup_dir = folder;
+								// Directly update the temp tiddler field for immediate UI update
+								var tempTitle = "$:/temp/tiddlydesktop-rs/wikis/" + i;
+								$tw.wiki.setText(tempTitle, "backup_dir", null, folder);
+								break;
+							}
+						}
+						saveWikiList(entries);
+					}).catch(function(err) {
+						console.error("Failed to set backup directory:", err);
+					});
+				}
+			}).catch(function(err) {
+				console.error("openDialog error:", err);
+			});
+		}
+	});
+
+	// Message handler: clear/reset backup directory to default
+	$tw.rootWidget.addEventListener("tm-tiddlydesktop-rs-clear-backup-dir", function(event) {
+		var path = event.paramObject && event.paramObject.path;
+		if (path) {
+			// Update the Rust backend with null to reset to default
+			invoke("set_wiki_backup_dir", { path: path, backupDir: null }).then(function() {
+				// Update the local wiki list entry
+				var entries = getWikiListEntries();
+				for (var i = 0; i < entries.length; i++) {
+					if (entries[i].path === path) {
+						delete entries[i].backup_dir;
+						// Directly update the temp tiddler field for immediate UI update
+						var tempTitle = "$:/temp/tiddlydesktop-rs/wikis/" + i;
+						$tw.wiki.setText(tempTitle, "backup_dir", null, "");
+						break;
+					}
+				}
+				saveWikiList(entries);
+			}).catch(function(err) {
+				console.error("Failed to clear backup directory:", err);
 			});
 		}
 	});

@@ -1141,6 +1141,8 @@ pub struct WikiEntry {
     pub is_folder: bool, // true if this is a wiki folder
     #[serde(default = "default_backups_enabled")]
     pub backups_enabled: bool, // whether to create backups on save (single-file only)
+    #[serde(default)]
+    pub backup_dir: Option<String>, // custom backup directory (if None, uses .backups folder next to wiki)
 }
 
 fn default_backups_enabled() -> bool {
@@ -1247,9 +1249,10 @@ fn save_recent_files_to_disk(app: &tauri::AppHandle, entries: &[WikiEntry]) -> R
 fn add_to_recent_files(app: &tauri::AppHandle, mut entry: WikiEntry) -> Result<(), String> {
     let mut entries = load_recent_files_from_disk(app);
 
-    // Preserve backups_enabled setting from existing entry (if any)
+    // Preserve backup settings from existing entry (if any)
     if let Some(existing) = entries.iter().find(|e| paths_equal(&e.path, &entry.path)) {
         entry.backups_enabled = existing.backups_enabled;
+        entry.backup_dir = existing.backup_dir.clone();
     }
 
     // Remove existing entry with same path (if any)
@@ -1291,6 +1294,35 @@ fn set_wiki_backups(app: tauri::AppHandle, path: String, enabled: bool) -> Resul
     }
 
     save_recent_files_to_disk(&app, &entries)
+}
+
+/// Set custom backup directory for a wiki (None to use default .backups folder)
+#[tauri::command]
+fn set_wiki_backup_dir(app: tauri::AppHandle, path: String, backup_dir: Option<String>) -> Result<(), String> {
+    let mut entries = load_recent_files_from_disk(&app);
+
+    for entry in entries.iter_mut() {
+        if paths_equal(&entry.path, &path) {
+            entry.backup_dir = backup_dir;
+            break;
+        }
+    }
+
+    save_recent_files_to_disk(&app, &entries)
+}
+
+/// Get current backup directory setting for a wiki (None means default .backups folder)
+#[tauri::command]
+fn get_wiki_backup_dir_setting(app: tauri::AppHandle, path: String) -> Option<String> {
+    let entries = load_recent_files_from_disk(&app);
+
+    for entry in entries {
+        if paths_equal(&entry.path, &path) {
+            return entry.backup_dir;
+        }
+    }
+
+    None
 }
 
 /// Determine storage mode for macOS/Linux
@@ -1907,7 +1939,8 @@ fn is_absolute_filesystem_path(path: &str) -> bool {
 }
 
 /// Create a backup of the wiki file before saving
-async fn create_backup(path: &PathBuf) -> Result<(), String> {
+/// If custom_backup_dir is Some, backups go there; otherwise to .backups folder next to wiki
+async fn create_backup(path: &PathBuf, custom_backup_dir: Option<&str>) -> Result<(), String> {
     if !path.exists() {
         return Ok(()); // No backup needed for new files
     }
@@ -1915,8 +1948,14 @@ async fn create_backup(path: &PathBuf) -> Result<(), String> {
     let parent = path.parent().ok_or("No parent directory")?;
     let filename = path.file_stem().and_then(|s| s.to_str()).unwrap_or("wiki");
 
-    // Create .backups folder next to the wiki
-    let backup_dir = parent.join(format!("{}.backups", filename));
+    // Determine backup directory
+    let backup_dir = if let Some(custom_dir) = custom_backup_dir {
+        PathBuf::from(custom_dir)
+    } else {
+        // Default: .backups folder next to the wiki
+        parent.join(format!("{}.backups", filename))
+    };
+
     tokio::fs::create_dir_all(&backup_dir)
         .await
         .map_err(|e| format!("Failed to create backup dir: {}", e))?;
@@ -1975,7 +2014,8 @@ async fn save_wiki(app: tauri::AppHandle, path: String, content: String) -> Resu
     // Check if backups are enabled for this wiki
     let state = app.state::<AppState>();
     if should_create_backup(&app, &state, &path) {
-        create_backup(&path_buf).await?;
+        let backup_dir = get_wiki_backup_dir(&app, &path);
+        create_backup(&path_buf, backup_dir.as_deref()).await?;
     }
 
     // Write to a temp file first, then rename for atomic operation
@@ -2040,6 +2080,17 @@ fn should_create_backup(app: &tauri::AppHandle, state: &AppState, path: &str) ->
     }
     // Default to enabled for wikis not in the list
     true
+}
+
+/// Get custom backup directory for a wiki path (if set)
+fn get_wiki_backup_dir(app: &tauri::AppHandle, path: &str) -> Option<String> {
+    let entries = load_recent_files_from_disk(app);
+    for entry in entries {
+        if paths_equal(&entry.path, path) {
+            return entry.backup_dir.clone();
+        }
+    }
+    None
 }
 
 /// Get path to main wiki file
@@ -4691,6 +4742,7 @@ async fn open_wiki_folder(app: tauri::AppHandle, path: String) -> Result<WikiEnt
                         favicon: None,
                         is_folder: true,
                         backups_enabled: false,
+                        backup_dir: None,
                     });
                 }
             }
@@ -4815,6 +4867,7 @@ async fn open_wiki_folder(app: tauri::AppHandle, path: String) -> Result<WikiEnt
         favicon,
         is_folder: true,
         backups_enabled: false, // Not applicable for folder wikis (they use autosave)
+        backup_dir: None,
     };
 
     // Add to recent files list
@@ -5464,6 +5517,7 @@ async fn open_wiki_window(app: tauri::AppHandle, path: String) -> Result<WikiEnt
                         favicon: None,
                         is_folder: false,
                         backups_enabled: true,
+                        backup_dir: None,
                     });
                 }
             }
@@ -5558,6 +5612,7 @@ async fn open_wiki_window(app: tauri::AppHandle, path: String) -> Result<WikiEnt
         favicon,
         is_folder: false,
         backups_enabled: true,
+        backup_dir: None,
     };
 
     // Add to recent files list
@@ -5780,13 +5835,19 @@ fn wiki_protocol_handler(app: &tauri::AppHandle, request: Request<Vec<u8>>) -> R
 
         // Check if backups should be created for this wiki
         let state = app.state::<AppState>();
-        let should_backup = should_create_backup(app, &state, wiki_path.to_string_lossy().as_ref());
+        let wiki_path_str = wiki_path.to_string_lossy();
+        let should_backup = should_create_backup(app, &state, wiki_path_str.as_ref());
 
         // Create backup if appropriate (synchronous since protocol handlers can't be async)
         if should_backup && wiki_path.exists() {
             if let Some(parent) = wiki_path.parent() {
                 let filename = wiki_path.file_stem().and_then(|s| s.to_str()).unwrap_or("wiki");
-                let backup_dir = parent.join(format!("{}.backups", filename));
+
+                // Get custom backup directory if set, otherwise use default
+                let backup_dir = match get_wiki_backup_dir(app, wiki_path_str.as_ref()) {
+                    Some(custom_dir) => PathBuf::from(custom_dir),
+                    None => parent.join(format!("{}.backups", filename)),
+                };
                 let _ = std::fs::create_dir_all(&backup_dir);
 
                 let timestamp = Local::now().format("%Y%m%d-%H%M%S");
@@ -6392,6 +6453,8 @@ pub fn run() {
             get_recent_files,
             remove_recent_file,
             set_wiki_backups,
+            set_wiki_backup_dir,
+            get_wiki_backup_dir_setting,
             read_file_as_data_uri,
             read_file_as_binary,
             get_external_attachments_config,

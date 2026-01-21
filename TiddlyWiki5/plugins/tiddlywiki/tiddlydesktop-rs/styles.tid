@@ -235,6 +235,60 @@ tags: $:/tags/Stylesheet
 	background: #f0e8d8;
 }
 
+/* Backup directory row */
+.td-wiki-backup-dir {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	margin-top: 8px;
+	padding-top: 8px;
+	border-top: 1px solid #eee;
+	font-size: 12px;
+}
+
+.td-backup-dir-label {
+	color: #666;
+	white-space: nowrap;
+}
+
+.td-backup-dir-path {
+	color: #444;
+	flex: 1;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.td-backup-dir-path.td-backup-dir-default {
+	color: #888;
+	font-style: italic;
+}
+
+.td-button-backup-dir {
+	background: #f0f4f8;
+	border-color: #c0d0e0;
+	color: #4a6a8a;
+	padding: 2px 8px !important;
+	font-size: 11px !important;
+}
+
+.td-button-backup-dir:hover {
+	background: #e0ecf4;
+}
+
+.td-button-backup-dir-clear {
+	background: #f8f4f0;
+	border-color: #e0d0c0;
+	color: #8a6a4a;
+	padding: 2px 8px !important;
+	font-size: 11px !important;
+}
+
+.td-button-backup-dir-clear:hover {
+	background: #f0ece4;
+}
+
 /* Empty message */
 .td-empty-message {
 	text-align: center;

@@ -752,13 +752,13 @@ mod windows_drag {
     }
 
     // Store registered drop targets to keep them alive
-    use std::sync::Mutex;
-    use lazy_static::lazy_static;
+    use std::sync::{Mutex, OnceLock};
     use windows::Win32::UI::WindowsAndMessaging::{EnumChildWindows, GetClassNameW};
     use windows::Win32::Foundation::{BOOL, LPARAM};
 
-    lazy_static! {
-        static ref REGISTERED_TARGETS: Mutex<HashMap<isize, IDropTarget>> = Mutex::new(HashMap::new());
+    fn registered_targets() -> &'static Mutex<HashMap<isize, IDropTarget>> {
+        static REGISTERED_TARGETS: OnceLock<Mutex<HashMap<isize, IDropTarget>>> = OnceLock::new();
+        REGISTERED_TARGETS.get_or_init(|| Mutex::new(HashMap::new()))
     }
 
     /// Find WebView2's content window (Chrome_WidgetWin_1) which handles drag-drop
@@ -847,7 +847,7 @@ mod windows_drag {
 
                     // Store the drop target to keep it alive
                     let drop_target_clone = drop_target.clone();
-                    REGISTERED_TARGETS.lock().unwrap().insert(hwnd_val, drop_target_clone);
+                    registered_targets().lock().unwrap().insert(hwnd_val, drop_target_clone);
 
                     // Revoke any existing drop target (WebView2/Tauri registers one)
                     let _ = RevokeDragDrop(target_hwnd);
@@ -859,7 +859,7 @@ mod windows_drag {
                         }
                         Err(e) => {
                             // Registration failed - remove from our storage
-                            REGISTERED_TARGETS.lock().unwrap().remove(&hwnd_val);
+                            registered_targets().lock().unwrap().remove(&hwnd_val);
                             eprintln!("[TiddlyDesktop] Failed to register drop target: {:?}", e);
                         }
                     }
@@ -872,7 +872,7 @@ mod windows_drag {
     pub fn cleanup_drag_handlers(window: &WebviewWindow) {
         if let Ok(hwnd) = window.hwnd() {
             let hwnd_val = hwnd.0 as isize;
-            REGISTERED_TARGETS.lock().unwrap().remove(&hwnd_val);
+            registered_targets().lock().unwrap().remove(&hwnd_val);
             unsafe {
                 let _ = RevokeDragDrop(HWND(hwnd.0 as *mut _));
             }

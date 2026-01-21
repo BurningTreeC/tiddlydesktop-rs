@@ -154,12 +154,13 @@ mod linux_drag {
 
         // Set up drag destination with common content types
         let targets = vec![
-            gtk::TargetEntry::new("text/plain", gtk::TargetFlags::OTHER_APP, 0),
-            gtk::TargetEntry::new("text/html", gtk::TargetFlags::OTHER_APP, 1),
-            gtk::TargetEntry::new("text/uri-list", gtk::TargetFlags::OTHER_APP, 2),
-            gtk::TargetEntry::new("TEXT", gtk::TargetFlags::OTHER_APP, 3),
-            gtk::TargetEntry::new("STRING", gtk::TargetFlags::OTHER_APP, 4),
-            gtk::TargetEntry::new("UTF8_STRING", gtk::TargetFlags::OTHER_APP, 5),
+            gtk::TargetEntry::new("text/vnd.tiddler", gtk::TargetFlags::OTHER_APP, 0),
+            gtk::TargetEntry::new("text/plain", gtk::TargetFlags::OTHER_APP, 1),
+            gtk::TargetEntry::new("text/html", gtk::TargetFlags::OTHER_APP, 2),
+            gtk::TargetEntry::new("text/uri-list", gtk::TargetFlags::OTHER_APP, 3),
+            gtk::TargetEntry::new("TEXT", gtk::TargetFlags::OTHER_APP, 4),
+            gtk::TargetEntry::new("STRING", gtk::TargetFlags::OTHER_APP, 5),
+            gtk::TargetEntry::new("UTF8_STRING", gtk::TargetFlags::OTHER_APP, 6),
         ];
 
         webview.drag_dest_set(
@@ -203,9 +204,11 @@ mod linux_drag {
             }));
 
             // Find a suitable content target (skip DELETE and other non-data targets)
-            // Prioritize text/uri-list for TiddlyWiki plugin drags (contains data: URI with full content)
+            // Prioritize text/vnd.tiddler for TiddlyWiki tiddler drags
+            // Then text/uri-list for plugin drags (contains data: URI with full content)
+            // Then text/plain over text/html (plain text is cleaner for simple drags)
             let targets = context.list_targets();
-            let preferred_targets = ["text/uri-list", "text/html", "text/plain", "UTF8_STRING", "STRING"];
+            let preferred_targets = ["text/vnd.tiddler", "text/uri-list", "text/plain", "text/html", "UTF8_STRING", "STRING"];
             let mut selected_target = None;
 
             for preferred in &preferred_targets {
@@ -416,19 +419,18 @@ mod windows_drag {
     use std::os::windows::ffi::OsStringExt;
     use std::sync::Arc;
     use tauri::{Emitter, WebviewWindow};
-    use windows::core::{implement, Interface, PCWSTR};
-    use windows::Win32::Foundation::{HWND, POINTL, S_OK, E_UNEXPECTED};
+    use windows::core::{implement, Interface};
+    use windows::Win32::Foundation::{HWND, POINTL};
     use windows::Win32::System::Com::{
         CoInitializeEx, IDataObject, COINIT_APARTMENTTHREADED, TYMED_HGLOBAL,
         FORMATETC, STGMEDIUM, DVASPECT_CONTENT,
     };
     use windows::Win32::System::Ole::{
-        IDropTarget, IDropTarget_Impl, RegisterDragDrop, RevokeDragDrop,
+        IDropTarget, RegisterDragDrop, RevokeDragDrop,
         DROPEFFECT, DROPEFFECT_COPY, DROPEFFECT_NONE,
     };
     use windows::Win32::System::Memory::{GlobalLock, GlobalUnlock, GlobalSize};
     use windows::Win32::UI::Shell::{DragQueryFileW, HDROP};
-    use windows::Win32::Globalization::{MultiByteToWideChar, CP_UTF8};
 
     /// Clipboard format constants
     const CF_TEXT: u16 = 1;
@@ -437,16 +439,23 @@ mod windows_drag {
 
     /// Custom clipboard format for HTML
     fn get_cf_html() -> u16 {
-        use windows::Win32::System::Ole::RegisterClipboardFormatW;
+        use windows::Win32::System::DataExchange::RegisterClipboardFormatW;
         use windows::core::w;
         unsafe { RegisterClipboardFormatW(w!("HTML Format")) as u16 }
     }
 
     /// Custom clipboard format for URI list
     fn get_cf_uri_list() -> u16 {
-        use windows::Win32::System::Ole::RegisterClipboardFormatW;
+        use windows::Win32::System::DataExchange::RegisterClipboardFormatW;
         use windows::core::w;
         unsafe { RegisterClipboardFormatW(w!("text/uri-list")) as u16 }
+    }
+
+    /// Custom clipboard format for TiddlyWiki tiddler
+    fn get_cf_tiddler() -> u16 {
+        use windows::Win32::System::DataExchange::RegisterClipboardFormatW;
+        use windows::core::w;
+        unsafe { RegisterClipboardFormatW(w!("text/vnd.tiddler")) as u16 }
     }
 
     /// Data captured from a drag operation
@@ -475,7 +484,35 @@ mod windows_drag {
             let mut types = Vec::new();
             let mut data = HashMap::new();
 
-            // Try to get HTML content
+            // Try to get text/vnd.tiddler (TiddlyWiki native format) - highest priority
+            let cf_tiddler = get_cf_tiddler();
+            if let Some(tiddler) = self.get_string_data(data_object, cf_tiddler) {
+                types.push("text/vnd.tiddler".to_string());
+                data.insert("text/vnd.tiddler".to_string(), tiddler);
+            }
+
+            // Try to get URI list (for plugin drags with data: URIs)
+            let cf_uri = get_cf_uri_list();
+            if let Some(uri_list) = self.get_string_data(data_object, cf_uri) {
+                types.push("text/uri-list".to_string());
+                data.insert("text/uri-list".to_string(), uri_list);
+            }
+
+            // Try to get Unicode text - prefer this over HTML for simple text drags
+            if let Some(text) = self.get_unicode_text(data_object) {
+                types.push("text/plain".to_string());
+                data.insert("text/plain".to_string(), text);
+            }
+
+            // Try to get ANSI text as fallback
+            if !data.contains_key("text/plain") {
+                if let Some(text) = self.get_ansi_text(data_object) {
+                    types.push("text/plain".to_string());
+                    data.insert("text/plain".to_string(), text);
+                }
+            }
+
+            // Try to get HTML content - lower priority than plain text
             let cf_html = get_cf_html();
             if let Some(html) = self.get_string_data(data_object, cf_html) {
                 // HTML Format has headers, extract just the HTML
@@ -489,29 +526,6 @@ mod windows_drag {
                     types.push("text/html".to_string());
                     data.insert("text/html".to_string(), html);
                 }
-            }
-
-            // Try to get Unicode text
-            if let Some(text) = self.get_unicode_text(data_object) {
-                if !types.contains(&"text/plain".to_string()) {
-                    types.push("text/plain".to_string());
-                }
-                data.insert("text/plain".to_string(), text);
-            }
-
-            // Try to get ANSI text as fallback
-            if !data.contains_key("text/plain") {
-                if let Some(text) = self.get_ansi_text(data_object) {
-                    types.push("text/plain".to_string());
-                    data.insert("text/plain".to_string(), text);
-                }
-            }
-
-            // Try to get URI list
-            let cf_uri = get_cf_uri_list();
-            if let Some(uri_list) = self.get_string_data(data_object, cf_uri) {
-                types.push("text/uri-list".to_string());
-                data.insert("text/uri-list".to_string(), uri_list);
             }
 
             if types.is_empty() {
@@ -776,7 +790,7 @@ mod macos_drag {
     use std::ffi::CStr;
     use std::sync::Mutex;
     use cocoa::base::{id, nil, YES, NO};
-    use cocoa::foundation::{NSArray, NSString, NSPoint};
+    use cocoa::foundation::{NSArray, NSPoint};
     use objc::declare::ClassDecl;
     use objc::runtime::{Class, Object, Sel, BOOL, class_getName};
     use objc::{class, msg_send, sel, sel_impl};
@@ -798,6 +812,12 @@ mod macos_drag {
     /// NSDragOperation constants
     const NS_DRAG_OPERATION_NONE: usize = 0;
     const NS_DRAG_OPERATION_COPY: usize = 1;
+
+    /// Create an NSString from a Rust string slice (non-deprecated method)
+    unsafe fn nsstring_from_str(s: &str) -> id {
+        let c_str = std::ffi::CString::new(s).unwrap();
+        msg_send![class!(NSString), stringWithUTF8String: c_str.as_ptr()]
+    }
 
     /// Get string from NSString
     unsafe fn nsstring_to_string(ns_string: id) -> Option<String> {
@@ -821,31 +841,28 @@ mod macos_drag {
         let mut types = Vec::new();
         let mut data = HashMap::new();
 
-        let pb_types: id = msg_send![pasteboard, types];
-        if pb_types == nil {
-            return None;
-        }
+        // Request types in order of preference:
+        // 1. text/vnd.tiddler (TiddlyWiki native format)
+        // 2. text/uri-list (for plugin drags)
+        // 3. text/plain (preferred over HTML for simple text)
+        // 4. text/html
+        let type_mappings: &[(&str, &str)] = &[
+            ("text/vnd.tiddler", "text/vnd.tiddler"),
+            ("public.url", "text/uri-list"),
+            ("public.utf8-plain-text", "text/plain"),
+            ("NSStringPboardType", "text/plain"),
+            ("public.html", "text/html"),
+            ("Apple HTML pasteboard type", "text/html"),
+        ];
 
-        let count: usize = msg_send![pb_types, count];
-        for i in 0..count {
-            let pb_type: id = msg_send![pb_types, objectAtIndex: i];
-            if let Some(type_str) = nsstring_to_string(pb_type) {
-                let mime_type = match type_str.as_str() {
-                    "public.html" | "Apple HTML pasteboard type" => Some("text/html"),
-                    "public.utf8-plain-text" | "NSStringPboardType" => Some("text/plain"),
-                    "public.url" => Some("text/uri-list"),
-                    _ => None,
-                };
-
-                if let Some(mime) = mime_type {
-                    let value: id = msg_send![pasteboard, stringForType: pb_type];
-                    if let Some(value_str) = nsstring_to_string(value) {
-                        if !types.contains(&mime.to_string()) {
-                            types.push(mime.to_string());
-                        }
-                        data.insert(mime.to_string(), value_str);
-                    }
+        for (pb_type_name, mime_type) in type_mappings {
+            let pb_type = nsstring_from_str(pb_type_name);
+            let value: id = msg_send![pasteboard, stringForType: pb_type];
+            if let Some(value_str) = nsstring_to_string(value) {
+                if !types.contains(&mime_type.to_string()) {
+                    types.push(mime_type.to_string());
                 }
+                data.insert(mime_type.to_string(), value_str);
             }
         }
 
@@ -864,7 +881,7 @@ mod macos_drag {
             return paths;
         }
 
-        let file_url_type = NSString::alloc(nil).init_str("public.file-url");
+        let file_url_type = nsstring_from_str("public.file-url");
         let pb_types: id = msg_send![pasteboard, types];
 
         if pb_types != nil {
@@ -899,7 +916,7 @@ mod macos_drag {
         if pasteboard == nil {
             return false;
         }
-        let file_url_type = NSString::alloc(nil).init_str("public.file-url");
+        let file_url_type = nsstring_from_str("public.file-url");
         let pb_types: id = msg_send![pasteboard, types];
         if pb_types != nil {
             let contains: BOOL = msg_send![pb_types, containsObject: file_url_type];
@@ -990,9 +1007,13 @@ mod macos_drag {
         NO
     }
 
+    // Declare object_setClass from Objective-C runtime (not exported by objc crate)
+    extern "C" {
+        fn object_setClass(obj: *mut Object, cls: *const Class) -> *const Class;
+    }
+
     /// Add drag handling methods to a specific view instance using method swizzling
     unsafe fn setup_drag_methods_on_view(view: id) {
-        use objc::runtime::{class_addMethod, method_getImplementation, class_getInstanceMethod, object_setClass};
 
         // Get the view's class
         let view_class = (*view).class();
@@ -1007,8 +1028,8 @@ mod macos_drag {
 
         // Check if subclass already exists
         let existing_class = objc::runtime::objc_getClass(subclass_cstr.as_ptr());
-        let subclass = if !existing_class.is_null() {
-            existing_class as *mut Class
+        let subclass: *const Class = if !existing_class.is_null() {
+            existing_class as *const Class
         } else {
             // Create new subclass
             if let Some(mut decl) = ClassDecl::new(&subclass_name, view_class) {
@@ -1028,7 +1049,7 @@ mod macos_drag {
                     sel!(performDragOperation:),
                     perform_drag_operation as extern "C" fn(&Object, Sel, id) -> BOOL,
                 );
-                decl.register() as *mut Class
+                decl.register() as *const Class
             } else {
                 return;
             }
@@ -1044,20 +1065,21 @@ mod macos_drag {
 
         // Get the NSWindow
         if let Ok(ns_window) = window.ns_window() {
-            let ns_window_id = ns_window.0 as id;
+            let ns_window_id = ns_window as id;
 
             unsafe {
                 // Store window reference for callbacks
                 let window_id = ns_window_id as usize;
                 WINDOW_MAP.lock().unwrap().insert(window_id, window_clone);
 
-                // Register for drag types
+                // Register for drag types (in order of preference)
                 let types = NSArray::arrayWithObjects(nil, &[
-                    NSString::alloc(nil).init_str("public.html"),
-                    NSString::alloc(nil).init_str("public.utf8-plain-text"),
-                    NSString::alloc(nil).init_str("public.url"),
-                    NSString::alloc(nil).init_str("public.file-url"),
-                    NSString::alloc(nil).init_str("NSStringPboardType"),
+                    nsstring_from_str("text/vnd.tiddler"),
+                    nsstring_from_str("public.url"),
+                    nsstring_from_str("public.utf8-plain-text"),
+                    nsstring_from_str("NSStringPboardType"),
+                    nsstring_from_str("public.html"),
+                    nsstring_from_str("public.file-url"),
                 ]);
 
                 let content_view: id = msg_send![ns_window_id, contentView];
@@ -2837,10 +2859,10 @@ fn get_dialog_init_script() -> &'static str {
                 var pos = { x: event.payload.x, y: event.payload.y };
                 var target = getTargetElement(pos);
 
-                // Create DataTransfer with placeholder content types
+                // Create DataTransfer with content types (empty values - actual data comes at drop time)
                 var dt = new DataTransfer();
-                ["text/plain", "text/html", "text/uri-list"].forEach(function(type) {
-                    try { dt.setData(type, "placeholder"); } catch(e) {}
+                ["text/plain", "text/html", "text/uri-list", "text/vnd.tiddler"].forEach(function(type) {
+                    try { dt.setData(type, ""); } catch(e) {}
                 });
 
                 if (!nativeDragActive) {
@@ -3230,20 +3252,21 @@ fn get_dialog_init_script() -> &'static str {
             var contentDragTypes = [];
             var contentDragEnterCount = 0;
 
-            // Create DataTransfer with content drag types (placeholder data until drop)
+            // Create DataTransfer with content drag types (empty values until drop)
             function createContentDataTransfer() {
                 var dt = new DataTransfer();
-                // Use known types if available, otherwise use common placeholder types
+                // Use known types if available, otherwise use common types
                 // so that TiddlyWiki's dropzone lights up during content drags
                 var types = contentDragTypes.length > 0 ? contentDragTypes : [
                     "text/plain",
                     "text/html",
-                    "text/uri-list"
+                    "text/uri-list",
+                    "text/vnd.tiddler"
                 ];
                 types.forEach(function(type) {
                     if (type !== "Files") {
                         try {
-                            dt.setData(type, "placeholder");
+                            dt.setData(type, "");
                         } catch(e) {}
                     }
                 });

@@ -448,7 +448,8 @@ mod windows_drag {
     use windows::Win32::UI::Shell::HDROP;
     use webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2Controller4;
 
-    /// Thread-safe wrapper for our drop target
+    /// Thread-safe wrapper for our drop target (stored for cleanup, pointer kept alive)
+    #[allow(dead_code)]
     struct SendDropTarget(*mut DropTargetImpl);
     unsafe impl Send for SendDropTarget {}
     unsafe impl Sync for SendDropTarget {}
@@ -496,7 +497,9 @@ mod windows_drag {
     }
 
     /// IDropTarget vtable - must match COM layout exactly
+    /// Field names use PascalCase to match Windows COM conventions
     #[repr(C)]
+    #[allow(non_snake_case)]
     struct IDropTargetVtbl {
         // IUnknown methods
         QueryInterface: unsafe extern "system" fn(
@@ -609,7 +612,7 @@ mod windows_drag {
         // IDropTarget::DragEnter
         unsafe extern "system" fn drag_enter(
             this: *mut Self,
-            p_data_obj: *mut std::ffi::c_void,
+            _p_data_obj: *mut std::ffi::c_void,
             _grf_key_state: u32,
             pt: POINTL,
             pdw_effect: *mut u32,

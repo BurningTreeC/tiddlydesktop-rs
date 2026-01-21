@@ -1,0 +1,105 @@
+title: $:/plugins/tiddlywiki/tiddlydesktop-rs/EditionSelector
+tags: $:/tags/PageTemplate
+
+\define edition-button(id)
+<$button class={{{ [[$:/temp/tiddlydesktop-rs/selected-edition]get[text]match[$id$]then[td-edition-btn td-edition-selected]else[td-edition-btn]] }}}>
+<$action-setfield $tiddler="$:/temp/tiddlydesktop-rs/selected-edition" text="$id$"/>
+<$list filter="[prefix[$:/temp/tiddlydesktop-rs/editions/]id[$id$]]">
+<div class="td-edition-name">{{!!name}}</div>
+<div class="td-edition-desc">{{!!description}}</div>
+</$list>
+</$button>
+\end
+
+\define plugin-checkbox(id)
+<$list filter="[[$:/temp/tiddlydesktop-rs/plugins/$id$]]">
+<$checkbox tiddler="$:/temp/tiddlydesktop-rs/plugins/$id$" field="selected" checked="yes" unchecked="no" class="td-plugin-checkbox">
+<span class="td-plugin-name">{{!!name}}</span>
+<span class="td-plugin-desc">{{!!description}}</span>
+</$checkbox>
+</$list>
+\end
+
+<$reveal state="$:/temp/tiddlydesktop-rs/show-edition-selector" type="match" text="yes" animate="yes">
+<div class="td-modal-overlay">
+<div class="td-modal">
+<div class="td-modal-header">
+<$reveal state="$:/temp/tiddlydesktop-rs/create-mode" type="match" text="file">
+<h2>Create New Wiki File</h2>
+<div class="td-modal-subtitle">
+save to: <strong>{{$:/temp/tiddlydesktop-rs/init-file-path}}</strong>
+</div>
+</$reveal>
+<$reveal state="$:/temp/tiddlydesktop-rs/create-mode" type="nomatch" text="file">
+<h2>Create New Wiki Folder</h2>
+<div class="td-modal-subtitle">
+in folder: <strong>{{$:/temp/tiddlydesktop-rs/init-folder-name}}</strong>
+</div>
+</$reveal>
+</div>
+
+<div class="td-modal-body">
+<div class="td-section">
+<h3>Select Edition</h3>
+<div class="td-edition-grid">
+<$list filter="[prefix[$:/temp/tiddlydesktop-rs/editions/]]">
+<$button class={{{ [[$:/temp/tiddlydesktop-rs/selected-edition]get[text]match{!!id}then[td-edition-btn td-edition-selected]else[td-edition-btn]] }}}>
+<$action-setfield $tiddler="$:/temp/tiddlydesktop-rs/selected-edition" text={{!!id}}/>
+<div class="td-edition-name">{{!!name}}</div>
+<div class="td-edition-desc">{{!!description}}</div>
+</$button>
+</$list>
+</div>
+</div>
+
+<div class="td-section">
+<h3>Additional Plugins <span class="td-optional">(optional)</span></h3>
+<div class="td-plugin-categories">
+<div class="td-plugin-list">
+<$list filter="[prefix[$:/temp/tiddlydesktop-rs/plugins/]sort[name]]" variable="pluginTitle">
+<$button class={{{ [<pluginTitle>get[selected]match[yes]then[td-plugin-item td-plugin-selected]else[td-plugin-item]] }}} actions="""<$action-setfield $tiddler=<<pluginTitle>> selected={{{ [<pluginTitle>get[selected]match[yes]then[no]else[yes]] }}}/>""">
+<$reveal stateTitle=<<pluginTitle>> stateField="selected" type="match" text="yes" default="no">
+<span class="td-check">{{$:/core/images/done-button}}</span>
+</$reveal>
+<$reveal stateTitle=<<pluginTitle>> stateField="selected" type="nomatch" text="yes" default="no">
+<span class="td-check td-unchecked"></span>
+</$reveal>
+<span class="td-plugin-name"><$transclude tiddler=<<pluginTitle>> field="name"/></span>
+<span class="td-plugin-desc"> - <$transclude tiddler=<<pluginTitle>> field="description"/></span>
+</$button>
+</$list>
+</div>
+</div>
+</div>
+</div>
+
+<div class="td-modal-footer">
+<$button message="tm-tiddlydesktop-rs-cancel-init" class="td-button td-button-cancel">Cancel</$button>
+<$reveal state="$:/temp/tiddlydesktop-rs/create-mode" type="match" text="file">
+<$button message="tm-tiddlydesktop-rs-create-file" class="td-button td-button-create">
+Create Wiki File
+</$button>
+</$reveal>
+<$reveal state="$:/temp/tiddlydesktop-rs/create-mode" type="nomatch" text="file">
+<$button message="tm-tiddlydesktop-rs-init-folder" class="td-button td-button-create">
+Create Wiki Folder
+</$button>
+</$reveal>
+</div>
+</div>
+</div>
+</$reveal>
+
+<$reveal state="$:/temp/tiddlydesktop-rs/init-loading" type="match" text="yes" animate="yes">
+<div class="td-modal-overlay">
+<div class="td-modal td-modal-loading">
+<div class="td-loading-spinner"></div>
+<$reveal state="$:/temp/tiddlydesktop-rs/create-mode" type="match" text="file">
+<div class="td-loading-text">Creating wiki file...</div>
+</$reveal>
+<$reveal state="$:/temp/tiddlydesktop-rs/create-mode" type="nomatch" text="file">
+<div class="td-loading-text">Initializing wiki folder...</div>
+</$reveal>
+</div>
+</div>
+</$reveal>

@@ -1,0 +1,7 @@
+title: $:/plugins/tiddlywiki/tiddlydesktop-rs/images/file-icon
+tags: $:/tags/Image
+type: text/vnd.tiddlywiki
+
+<svg class="td-file-icon" viewBox="0 0 128 128" width="48" height="48">
+<path fill="#4a90d9" d="M111.968 30.5H112V120a8 8 0 01-8 8H24a8 8 0 01-8-8V8a8 8 0 018-8h57v.02a7.978 7.978 0 015.998 2.337l22.626 22.627a7.975 7.975 0 012.344 5.516zM81 8H24v112h80V30.5H89a8 8 0 01-8-8z"/>
+</svg>

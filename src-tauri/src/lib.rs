@@ -418,16 +418,17 @@ mod windows_drag {
     use std::ffi::OsString;
     use std::os::windows::ffi::OsStringExt;
     use tauri::{Emitter, WebviewWindow};
-    use windows::core::{implement, Interface};
+    use windows::core::implement;
     use windows::Win32::Foundation::{HWND, POINTL};
     use windows::Win32::System::Com::{
         CoInitializeEx, IDataObject, COINIT_APARTMENTTHREADED, TYMED_HGLOBAL,
-        FORMATETC, STGMEDIUM, DVASPECT_CONTENT,
+        FORMATETC, DVASPECT_CONTENT,
     };
     use windows::Win32::System::Ole::{
         IDropTarget, IDropTarget_Impl, RegisterDragDrop, RevokeDragDrop,
         DROPEFFECT, DROPEFFECT_COPY, DROPEFFECT_NONE,
     };
+    use windows::Win32::System::SystemServices::MODIFIERKEYS_FLAGS;
     use windows::Win32::System::Memory::{GlobalLock, GlobalUnlock, GlobalSize};
     use windows::Win32::UI::Shell::{DragQueryFileW, HDROP};
 
@@ -544,9 +545,8 @@ mod windows_drag {
             };
 
             unsafe {
-                let mut medium = std::mem::zeroed::<STGMEDIUM>();
-                if data_object.GetData(&format, &mut medium).is_ok() {
-                    if !medium.u.hGlobal.is_null() {
+                if let Ok(medium) = data_object.GetData(&format) {
+                    if !medium.u.hGlobal.0.is_null() {
                         let ptr = GlobalLock(medium.u.hGlobal) as *const u16;
                         if !ptr.is_null() {
                             let size = GlobalSize(medium.u.hGlobal) / 2;
@@ -555,7 +555,7 @@ mod windows_drag {
                             let text = OsString::from_wide(&slice[..len])
                                 .to_string_lossy()
                                 .to_string();
-                            GlobalUnlock(medium.u.hGlobal);
+                            let _ = GlobalUnlock(medium.u.hGlobal);
                             return Some(text);
                         }
                     }
@@ -574,16 +574,15 @@ mod windows_drag {
             };
 
             unsafe {
-                let mut medium = std::mem::zeroed::<STGMEDIUM>();
-                if data_object.GetData(&format, &mut medium).is_ok() {
-                    if !medium.u.hGlobal.is_null() {
+                if let Ok(medium) = data_object.GetData(&format) {
+                    if !medium.u.hGlobal.0.is_null() {
                         let ptr = GlobalLock(medium.u.hGlobal) as *const u8;
                         if !ptr.is_null() {
                             let size = GlobalSize(medium.u.hGlobal);
                             let slice = std::slice::from_raw_parts(ptr, size);
                             let len = slice.iter().position(|&c| c == 0).unwrap_or(slice.len());
                             let text = String::from_utf8_lossy(&slice[..len]).to_string();
-                            GlobalUnlock(medium.u.hGlobal);
+                            let _ = GlobalUnlock(medium.u.hGlobal);
                             return Some(text);
                         }
                     }
@@ -602,16 +601,15 @@ mod windows_drag {
             };
 
             unsafe {
-                let mut medium = std::mem::zeroed::<STGMEDIUM>();
-                if data_object.GetData(&format, &mut medium).is_ok() {
-                    if !medium.u.hGlobal.is_null() {
+                if let Ok(medium) = data_object.GetData(&format) {
+                    if !medium.u.hGlobal.0.is_null() {
                         let ptr = GlobalLock(medium.u.hGlobal) as *const u8;
                         if !ptr.is_null() {
                             let size = GlobalSize(medium.u.hGlobal);
                             let slice = std::slice::from_raw_parts(ptr, size);
                             let len = slice.iter().position(|&c| c == 0).unwrap_or(slice.len());
                             let text = String::from_utf8_lossy(&slice[..len]).to_string();
-                            GlobalUnlock(medium.u.hGlobal);
+                            let _ = GlobalUnlock(medium.u.hGlobal);
                             return Some(text);
                         }
                     }
@@ -631,8 +629,7 @@ mod windows_drag {
             };
 
             unsafe {
-                let mut medium = std::mem::zeroed::<STGMEDIUM>();
-                if data_object.GetData(&format, &mut medium).is_ok() {
+                if let Ok(medium) = data_object.GetData(&format) {
                     let hdrop = HDROP(medium.u.hGlobal.0 as *mut _);
                     let count = DragQueryFileW(hdrop, 0xFFFFFFFF, None);
 
@@ -667,7 +664,7 @@ mod windows_drag {
         fn DragEnter(
             &self,
             pdataobj: Option<&IDataObject>,
-            _grfkeystate: u32,
+            _grfkeystate: MODIFIERKEYS_FLAGS,
             pt: &POINTL,
             pdweffect: *mut DROPEFFECT,
         ) -> windows::core::Result<()> {
@@ -689,7 +686,7 @@ mod windows_drag {
 
         fn DragOver(
             &self,
-            _grfkeystate: u32,
+            _grfkeystate: MODIFIERKEYS_FLAGS,
             pt: &POINTL,
             pdweffect: *mut DROPEFFECT,
         ) -> windows::core::Result<()> {
@@ -714,7 +711,7 @@ mod windows_drag {
         fn Drop(
             &self,
             pdataobj: Option<&IDataObject>,
-            _grfkeystate: u32,
+            _grfkeystate: MODIFIERKEYS_FLAGS,
             pt: &POINTL,
             pdweffect: *mut DROPEFFECT,
         ) -> windows::core::Result<()> {
@@ -3847,10 +3844,34 @@ fn get_dialog_init_script() -> &'static str {
             var dragImageOffsetY = 0;
 
             // Create a drag image element that follows the cursor
+            // Extract background color from element or its ancestors
+            function getBackgroundColor(element) {
+                var el = element;
+                while (el) {
+                    var style = window.getComputedStyle(el);
+                    var bg = style.backgroundColor;
+                    // Check if background is not transparent
+                    if (bg && bg !== "transparent" && bg !== "rgba(0, 0, 0, 0)") {
+                        return bg;
+                    }
+                    el = el.parentElement;
+                }
+                // Fallback to CSS variable or white
+                return "var(--tiddler-background, white)";
+            }
+
+            // Track if setDragImage was called with a blank/empty element
+            var dragImageIsBlank = false;
+
             function createDragImage(sourceElement, clientX, clientY) {
                 // Remove any existing drag image
                 if (internalDragImage && internalDragImage.parentNode) {
                     internalDragImage.parentNode.removeChild(internalDragImage);
+                }
+
+                // Check if TiddlyWiki requested a blank drag image via setDragImage
+                if (dragImageIsBlank) {
+                    return null;
                 }
 
                 // Clone the element for the drag image
@@ -3865,7 +3886,7 @@ fn get_dialog_init_script() -> &'static str {
                 clone.style.overflow = "hidden";
                 clone.style.whiteSpace = "nowrap";
                 clone.style.textOverflow = "ellipsis";
-                clone.style.background = "var(--tiddler-background, white)";
+                clone.style.background = getBackgroundColor(sourceElement);
                 clone.style.padding = "4px 8px";
                 clone.style.borderRadius = "4px";
                 clone.style.boxShadow = "0 2px 8px rgba(0,0,0,0.3)";
@@ -3954,7 +3975,22 @@ fn get_dialog_init_script() -> &'static str {
 
                 // Create and dispatch synthetic dragstart with fresh DataTransfer
                 window.__tiddlyDesktopDragData = {};
+                dragImageIsBlank = false;
                 mouseDragDataTransfer = new DataTransfer();
+
+                // Patch setDragImage to detect blank drag images
+                var originalSetDragImage = mouseDragDataTransfer.setDragImage;
+                mouseDragDataTransfer.setDragImage = function(element, x, y) {
+                    // Detect if TiddlyWiki is setting a blank drag image
+                    // TiddlyWiki uses an empty div (no children) for blank drag images
+                    if (element && (!element.firstChild || element.offsetWidth === 0 || element.offsetHeight === 0)) {
+                        dragImageIsBlank = true;
+                    }
+                    if (originalSetDragImage) {
+                        originalSetDragImage.call(this, element, x, y);
+                    }
+                };
+
                 var syntheticDragStart = createSyntheticDragEvent("dragstart", {
                     clientX: event.clientX,
                     clientY: event.clientY
@@ -3966,7 +4002,7 @@ fn get_dialog_init_script() -> &'static str {
                 // Capture effectAllowed that TiddlyWiki set during dragstart
                 window.__tiddlyDesktopEffectAllowed = mouseDragDataTransfer.effectAllowed || "all";
 
-                // Create drag image that follows cursor
+                // Create drag image that follows cursor (unless TiddlyWiki requested blank)
                 createDragImage(target, event.clientX, event.clientY);
 
                 // Fire initial dragenter on current element
@@ -4093,7 +4129,22 @@ fn get_dialog_init_script() -> &'static str {
 
                 // Create synthetic dragstart with a DataTransfer
                 window.__tiddlyDesktopDragData = {};
+                dragImageIsBlank = false;
                 mouseDragDataTransfer = new DataTransfer();
+
+                // Patch setDragImage to detect blank drag images
+                var originalSetDragImage = mouseDragDataTransfer.setDragImage;
+                mouseDragDataTransfer.setDragImage = function(element, x, y) {
+                    // Detect if TiddlyWiki is setting a blank drag image
+                    // TiddlyWiki uses an empty div (no children) for blank drag images
+                    if (element && (!element.firstChild || element.offsetWidth === 0 || element.offsetHeight === 0)) {
+                        dragImageIsBlank = true;
+                    }
+                    if (originalSetDragImage) {
+                        originalSetDragImage.call(this, element, x, y);
+                    }
+                };
+
                 var dragStartEvent = createSyntheticDragEvent("dragstart", {
                     clientX: mouseDownPos.x,
                     clientY: mouseDownPos.y
@@ -4105,7 +4156,7 @@ fn get_dialog_init_script() -> &'static str {
                 // Capture effectAllowed that TiddlyWiki set during dragstart
                 window.__tiddlyDesktopEffectAllowed = mouseDragDataTransfer.effectAllowed || "all";
 
-                // Create drag image that follows cursor
+                // Create drag image that follows cursor (unless TiddlyWiki requested blank)
                 createDragImage(mouseDownTarget, event.clientX, event.clientY);
 
                 // Initial dragenter on current element

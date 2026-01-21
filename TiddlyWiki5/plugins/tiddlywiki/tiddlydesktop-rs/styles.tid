@@ -92,6 +92,8 @@ tags: $:/tags/Stylesheet
 /* Wiki list */
 .td-wikilist {
 	padding: 16px;
+	flex: 1;
+	overflow-y: auto;
 }
 
 .td-wikilist-item {
@@ -256,9 +258,39 @@ body.td-main-wiki .tc-notification {
 	display: none !important;
 }
 
+/* Full-height layout for maximized window */
+html, body {
+	height: 100%;
+	width: 100%;
+	margin: 0;
+	padding: 0;
+	overflow: hidden;
+}
+
+body {
+	background: #f5f5f5;
+	display: flex;
+	flex-direction: column;
+}
+
+.tc-page-container {
+	flex: 1;
+	display: flex;
+	flex-direction: column;
+	overflow: hidden;
+	width: 100%;
+	max-width: none !important;
+}
+
 .tc-story-river {
 	margin: 0 !important;
 	padding: 0 !important;
+	flex: 1;
+	display: flex;
+	flex-direction: column;
+	overflow: hidden;
+	width: 100% !important;
+	max-width: none !important;
 }
 
 .tc-tiddler-frame {
@@ -266,14 +298,23 @@ body.td-main-wiki .tc-notification {
 	padding: 0 !important;
 	border: none !important;
 	box-shadow: none !important;
+	flex: 1;
+	display: flex;
+	flex-direction: column;
+	overflow: hidden;
+	width: 100% !important;
+	max-width: none !important;
+}
+
+.tc-tiddler-body {
+	flex: 1;
+	display: flex;
+	flex-direction: column;
+	overflow: hidden;
 }
 
 .tc-tiddler-title {
 	display: none !important;
-}
-
-body {
-	background: #f5f5f5;
 }
 
 /* Modal overlay */

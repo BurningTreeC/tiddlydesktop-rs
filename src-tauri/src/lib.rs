@@ -105,6 +105,998 @@ mod windows_job {
         }
     }
 }
+
+/// Linux drag-drop handling - captures content from external drags
+#[cfg(target_os = "linux")]
+mod linux_drag {
+    use gtk::prelude::*;
+    use gdk::DragAction;
+    use glib;
+    use tauri::{Emitter, WebviewWindow};
+
+    /// Data captured from a drag operation
+    #[derive(Clone, Debug, serde::Serialize)]
+    pub struct DragContentData {
+        pub types: Vec<String>,
+        pub data: std::collections::HashMap<String, String>,
+    }
+
+    /// Set up drag-drop handling for a webview window
+    /// This schedules the GTK setup on the main thread since GTK is not thread-safe
+    pub fn setup_drag_handlers(window: &WebviewWindow) {
+        let window_clone = window.clone();
+
+        // Schedule GTK work on the main thread
+        glib::MainContext::default().invoke(move || {
+            setup_drag_handlers_impl(&window_clone);
+        });
+    }
+
+    /// Internal implementation that must run on the main GTK thread
+    fn setup_drag_handlers_impl(window: &WebviewWindow) {
+        // gtk_window() is available directly on WebviewWindow on Linux
+        let gtk_window = match window.gtk_window() {
+            Ok(w) => w,
+            Err(e) => {
+                eprintln!("[TiddlyDesktop] Failed to get GTK window: {}", e);
+                return;
+            }
+        };
+
+        // We need to find the WebKitWebView widget inside the GTK window
+        // It's usually nested inside containers
+        let webview = find_webview_widget(&gtk_window);
+        if webview.is_none() {
+            eprintln!("[TiddlyDesktop] Could not find WebKitWebView widget");
+            return;
+        }
+        let webview = webview.unwrap();
+
+        // Set up drag destination with common content types
+        let targets = vec![
+            gtk::TargetEntry::new("text/plain", gtk::TargetFlags::OTHER_APP, 0),
+            gtk::TargetEntry::new("text/html", gtk::TargetFlags::OTHER_APP, 1),
+            gtk::TargetEntry::new("text/uri-list", gtk::TargetFlags::OTHER_APP, 2),
+            gtk::TargetEntry::new("TEXT", gtk::TargetFlags::OTHER_APP, 3),
+            gtk::TargetEntry::new("STRING", gtk::TargetFlags::OTHER_APP, 4),
+            gtk::TargetEntry::new("UTF8_STRING", gtk::TargetFlags::OTHER_APP, 5),
+        ];
+
+        webview.drag_dest_set(
+            gtk::DestDefaults::empty(), // We handle everything manually
+            &targets,
+            DragAction::COPY | DragAction::MOVE | DragAction::LINK,
+        );
+
+        // Clone window for closures
+        let window_clone = window.clone();
+
+        // Handle drag-motion - emit position so JS can show dropzone highlights
+        let window_for_motion = window_clone.clone();
+        webview.connect_drag_motion(move |_widget, context, x, y, time| {
+            // Accept the drag by setting the suggested action
+            context.drag_status(DragAction::COPY, time);
+
+            // Emit motion event so JavaScript can dispatch synthetic dragenter/dragover
+            let _ = window_for_motion.emit("td-drag-motion", serde_json::json!({
+                "x": x,
+                "y": y
+            }));
+
+            true // We can accept this drag
+        });
+
+        // Handle drag-leave at GTK level
+        let window_for_leave = window_clone.clone();
+        webview.connect_drag_leave(move |_widget, _context, _time| {
+            let _ = window_for_leave.emit("td-drag-leave", ());
+        });
+
+        // Handle drag-drop at GTK level - request the data
+        let window_for_drop = window_clone.clone();
+        webview.connect_drag_drop(move |widget, context, x, y, time| {
+            // Emit drop-start immediately so JS knows a drop is in progress
+            // This fires BEFORE drag-data-received, allowing td-drag-leave to check it
+            let _ = window_for_drop.emit("td-drag-drop-start", serde_json::json!({
+                "x": x,
+                "y": y
+            }));
+
+            // Find a suitable content target (skip DELETE and other non-data targets)
+            // Prioritize text/uri-list for TiddlyWiki plugin drags (contains data: URI with full content)
+            let targets = context.list_targets();
+            let preferred_targets = ["text/uri-list", "text/html", "text/plain", "UTF8_STRING", "STRING"];
+            let mut selected_target = None;
+
+            for preferred in &preferred_targets {
+                for target in &targets {
+                    if target.name() == *preferred {
+                        selected_target = Some(target.clone());
+                        break;
+                    }
+                }
+                if selected_target.is_some() {
+                    break;
+                }
+            }
+
+            // Fallback: use any target that's not DELETE
+            if selected_target.is_none() {
+                for target in &targets {
+                    if target.name() != "DELETE" {
+                        selected_target = Some(target.clone());
+                        break;
+                    }
+                }
+            }
+
+            if let Some(target) = selected_target {
+                widget.drag_get_data(context, &target, time);
+            }
+
+            // Emit position info
+            let _ = window_for_drop.emit("td-drag-drop-position", serde_json::json!({
+                "x": x,
+                "y": y
+            }));
+
+            true // We handled it
+        });
+
+        // Handle receiving the actual data
+        let window_for_data = window_clone.clone();
+        webview.connect_drag_data_received(move |_widget, context, _x, _y, selection_data, _info, time| {
+            // Get the data type
+            let data_type = selection_data.data_type();
+            let type_name = data_type.name().to_string();
+
+            // Helper to decode text with proper encoding detection
+            fn decode_text(raw_data: &[u8]) -> Option<String> {
+                if raw_data.is_empty() {
+                    return None;
+                }
+
+                // Check for BOM (Byte Order Mark)
+                if raw_data.len() >= 3 && raw_data[0] == 0xEF && raw_data[1] == 0xBB && raw_data[2] == 0xBF {
+                    // UTF-8 with BOM
+                    return String::from_utf8(raw_data[3..].to_vec()).ok();
+                }
+                if raw_data.len() >= 2 && raw_data[0] == 0xFF && raw_data[1] == 0xFE {
+                    // UTF-16LE with BOM
+                    if raw_data.len() % 2 == 0 {
+                        let u16_data: Vec<u16> = raw_data[2..]
+                            .chunks_exact(2)
+                            .map(|chunk| u16::from_le_bytes([chunk[0], chunk[1]]))
+                            .collect();
+                        return String::from_utf16(&u16_data).ok();
+                    }
+                }
+                if raw_data.len() >= 2 && raw_data[0] == 0xFE && raw_data[1] == 0xFF {
+                    // UTF-16BE with BOM
+                    if raw_data.len() % 2 == 0 {
+                        let u16_data: Vec<u16> = raw_data[2..]
+                            .chunks_exact(2)
+                            .map(|chunk| u16::from_be_bytes([chunk[0], chunk[1]]))
+                            .collect();
+                        return String::from_utf16(&u16_data).ok();
+                    }
+                }
+
+                // Try UTF-8 first
+                if let Ok(s) = String::from_utf8(raw_data.to_vec()) {
+                    return Some(s);
+                }
+
+                // Detect UTF-16LE by pattern: ASCII chars have null as second byte
+                // Check first few bytes for this pattern
+                if raw_data.len() >= 4 && raw_data.len() % 2 == 0 {
+                    let looks_like_utf16le = raw_data[1] == 0 && raw_data[3] == 0
+                        && raw_data[0] != 0 && raw_data[2] != 0;
+                    if looks_like_utf16le {
+                        let u16_data: Vec<u16> = raw_data
+                            .chunks_exact(2)
+                            .map(|chunk| u16::from_le_bytes([chunk[0], chunk[1]]))
+                            .collect();
+                        if let Ok(s) = String::from_utf16(&u16_data) {
+                            return Some(s);
+                        }
+                    }
+
+                    // Check for UTF-16BE pattern
+                    let looks_like_utf16be = raw_data[0] == 0 && raw_data[2] == 0
+                        && raw_data[1] != 0 && raw_data[3] != 0;
+                    if looks_like_utf16be {
+                        let u16_data: Vec<u16> = raw_data
+                            .chunks_exact(2)
+                            .map(|chunk| u16::from_be_bytes([chunk[0], chunk[1]]))
+                            .collect();
+                        if let Ok(s) = String::from_utf16(&u16_data) {
+                            return Some(s);
+                        }
+                    }
+                }
+
+                None
+            }
+
+            // Try selection_data.text() first - it handles encoding conversion
+            // Fall back to raw data with our encoding detection
+            let text_data = selection_data.text().map(|s| s.to_string()).or_else(|| {
+                decode_text(&selection_data.data())
+            });
+
+            let success = text_data.is_some();
+
+            if let Some(text) = text_data {
+                // Check if this is a file drag (text/uri-list with file:// URIs)
+                if type_name == "text/uri-list" {
+                    let lines: Vec<&str> = text.lines().collect();
+                    let file_paths: Vec<String> = lines.iter()
+                        .filter(|line| !line.starts_with('#') && !line.is_empty())
+                        .filter_map(|line| {
+                            let trimmed = line.trim();
+                            if trimmed.starts_with("file://") {
+                                // Decode percent-encoding and remove file:// prefix
+                                let path = trimmed.strip_prefix("file://").unwrap_or(trimmed);
+                                // URL decode the path
+                                urlencoding::decode(path).ok().map(|s| s.into_owned())
+                            } else {
+                                None
+                            }
+                        })
+                        .collect();
+
+                    if !file_paths.is_empty() {
+                        // This is a file drag - emit file paths
+                        let _ = window_for_data.emit("td-file-drop", serde_json::json!({
+                            "paths": file_paths
+                        }));
+                    } else {
+                        // URI list but no file:// URIs - treat as content (e.g., data: URIs)
+                        let mut drag_data = DragContentData {
+                            types: vec![type_name.clone()],
+                            data: std::collections::HashMap::new(),
+                        };
+                        drag_data.data.insert(type_name, text);
+                        let _ = window_for_data.emit("td-drag-content", &drag_data);
+                    }
+                } else {
+                    // Not a URI list - treat as content drag
+                    let mut drag_data = DragContentData {
+                        types: vec![type_name.clone()],
+                        data: std::collections::HashMap::new(),
+                    };
+                    drag_data.data.insert(type_name, text);
+                    let _ = window_for_data.emit("td-drag-content", &drag_data);
+                }
+            }
+
+            // Finish the drag operation
+            context.drag_finish(success, false, time);
+        });
+    }
+
+    /// Find the WebKitWebView widget inside a GTK ApplicationWindow
+    fn find_webview_widget(window: &gtk::ApplicationWindow) -> Option<gtk::Widget> {
+        // The webview is usually inside a container hierarchy
+        // Let's traverse the widget tree to find it
+        fn find_webkit_recursive(widget: &gtk::Widget) -> Option<gtk::Widget> {
+            // Check if this widget's type name contains "WebKit"
+            let type_name = widget.type_().name();
+            if type_name.contains("WebKit") || type_name.contains("webview") {
+                return Some(widget.clone());
+            }
+
+            // If it's a container, check children
+            if let Some(container) = widget.downcast_ref::<gtk::Container>() {
+                for child in container.children() {
+                    if let Some(found) = find_webkit_recursive(&child) {
+                        return Some(found);
+                    }
+                }
+            }
+
+            None
+        }
+
+        if let Some(child) = window.child() {
+            find_webkit_recursive(&child)
+        } else {
+            None
+        }
+    }
+}
+
+/// Windows drag-drop handling - captures content from external drags via OLE/COM
+#[cfg(target_os = "windows")]
+mod windows_drag {
+    use std::cell::RefCell;
+    use std::collections::HashMap;
+    use std::ffi::OsString;
+    use std::os::windows::ffi::OsStringExt;
+    use std::sync::Arc;
+    use tauri::{Emitter, WebviewWindow};
+    use windows::core::{implement, Interface, PCWSTR};
+    use windows::Win32::Foundation::{HWND, POINTL, S_OK, E_UNEXPECTED};
+    use windows::Win32::System::Com::{
+        CoInitializeEx, IDataObject, COINIT_APARTMENTTHREADED, TYMED_HGLOBAL,
+        FORMATETC, STGMEDIUM, DVASPECT_CONTENT,
+    };
+    use windows::Win32::System::Ole::{
+        IDropTarget, IDropTarget_Impl, RegisterDragDrop, RevokeDragDrop,
+        DROPEFFECT, DROPEFFECT_COPY, DROPEFFECT_NONE,
+    };
+    use windows::Win32::System::Memory::{GlobalLock, GlobalUnlock, GlobalSize};
+    use windows::Win32::UI::Shell::{DragQueryFileW, HDROP};
+    use windows::Win32::Globalization::{MultiByteToWideChar, CP_UTF8};
+
+    /// Clipboard format constants
+    const CF_TEXT: u16 = 1;
+    const CF_UNICODETEXT: u16 = 13;
+    const CF_HDROP: u16 = 15;
+
+    /// Custom clipboard format for HTML
+    fn get_cf_html() -> u16 {
+        use windows::Win32::System::Ole::RegisterClipboardFormatW;
+        use windows::core::w;
+        unsafe { RegisterClipboardFormatW(w!("HTML Format")) as u16 }
+    }
+
+    /// Custom clipboard format for URI list
+    fn get_cf_uri_list() -> u16 {
+        use windows::Win32::System::Ole::RegisterClipboardFormatW;
+        use windows::core::w;
+        unsafe { RegisterClipboardFormatW(w!("text/uri-list")) as u16 }
+    }
+
+    /// Data captured from a drag operation
+    #[derive(Clone, Debug, serde::Serialize)]
+    pub struct DragContentData {
+        pub types: Vec<String>,
+        pub data: HashMap<String, String>,
+    }
+
+    /// Our IDropTarget implementation
+    #[implement(IDropTarget)]
+    struct DropTarget {
+        window: WebviewWindow,
+        drag_active: RefCell<bool>,
+    }
+
+    impl DropTarget {
+        fn new(window: WebviewWindow) -> Self {
+            Self {
+                window,
+                drag_active: RefCell::new(false),
+            }
+        }
+
+        fn extract_data(&self, data_object: &IDataObject) -> Option<DragContentData> {
+            let mut types = Vec::new();
+            let mut data = HashMap::new();
+
+            // Try to get HTML content
+            let cf_html = get_cf_html();
+            if let Some(html) = self.get_string_data(data_object, cf_html) {
+                // HTML Format has headers, extract just the HTML
+                if let Some(start) = html.find("<!--StartFragment-->") {
+                    if let Some(end) = html.find("<!--EndFragment-->") {
+                        let content = &html[start + 20..end];
+                        types.push("text/html".to_string());
+                        data.insert("text/html".to_string(), content.to_string());
+                    }
+                } else {
+                    types.push("text/html".to_string());
+                    data.insert("text/html".to_string(), html);
+                }
+            }
+
+            // Try to get Unicode text
+            if let Some(text) = self.get_unicode_text(data_object) {
+                if !types.contains(&"text/plain".to_string()) {
+                    types.push("text/plain".to_string());
+                }
+                data.insert("text/plain".to_string(), text);
+            }
+
+            // Try to get ANSI text as fallback
+            if !data.contains_key("text/plain") {
+                if let Some(text) = self.get_ansi_text(data_object) {
+                    types.push("text/plain".to_string());
+                    data.insert("text/plain".to_string(), text);
+                }
+            }
+
+            // Try to get URI list
+            let cf_uri = get_cf_uri_list();
+            if let Some(uri_list) = self.get_string_data(data_object, cf_uri) {
+                types.push("text/uri-list".to_string());
+                data.insert("text/uri-list".to_string(), uri_list);
+            }
+
+            if types.is_empty() {
+                None
+            } else {
+                Some(DragContentData { types, data })
+            }
+        }
+
+        fn get_unicode_text(&self, data_object: &IDataObject) -> Option<String> {
+            let format = FORMATETC {
+                cfFormat: CF_UNICODETEXT,
+                ptd: std::ptr::null_mut(),
+                dwAspect: DVASPECT_CONTENT.0 as u32,
+                lindex: -1,
+                tymed: TYMED_HGLOBAL.0 as u32,
+            };
+
+            unsafe {
+                let mut medium = std::mem::zeroed::<STGMEDIUM>();
+                if data_object.GetData(&format, &mut medium).is_ok() {
+                    if !medium.u.hGlobal.is_null() {
+                        let ptr = GlobalLock(medium.u.hGlobal) as *const u16;
+                        if !ptr.is_null() {
+                            let size = GlobalSize(medium.u.hGlobal) / 2;
+                            let slice = std::slice::from_raw_parts(ptr, size);
+                            let len = slice.iter().position(|&c| c == 0).unwrap_or(slice.len());
+                            let text = OsString::from_wide(&slice[..len])
+                                .to_string_lossy()
+                                .to_string();
+                            GlobalUnlock(medium.u.hGlobal);
+                            return Some(text);
+                        }
+                    }
+                }
+            }
+            None
+        }
+
+        fn get_ansi_text(&self, data_object: &IDataObject) -> Option<String> {
+            let format = FORMATETC {
+                cfFormat: CF_TEXT,
+                ptd: std::ptr::null_mut(),
+                dwAspect: DVASPECT_CONTENT.0 as u32,
+                lindex: -1,
+                tymed: TYMED_HGLOBAL.0 as u32,
+            };
+
+            unsafe {
+                let mut medium = std::mem::zeroed::<STGMEDIUM>();
+                if data_object.GetData(&format, &mut medium).is_ok() {
+                    if !medium.u.hGlobal.is_null() {
+                        let ptr = GlobalLock(medium.u.hGlobal) as *const u8;
+                        if !ptr.is_null() {
+                            let size = GlobalSize(medium.u.hGlobal);
+                            let slice = std::slice::from_raw_parts(ptr, size);
+                            let len = slice.iter().position(|&c| c == 0).unwrap_or(slice.len());
+                            let text = String::from_utf8_lossy(&slice[..len]).to_string();
+                            GlobalUnlock(medium.u.hGlobal);
+                            return Some(text);
+                        }
+                    }
+                }
+            }
+            None
+        }
+
+        fn get_string_data(&self, data_object: &IDataObject, cf: u16) -> Option<String> {
+            let format = FORMATETC {
+                cfFormat: cf,
+                ptd: std::ptr::null_mut(),
+                dwAspect: DVASPECT_CONTENT.0 as u32,
+                lindex: -1,
+                tymed: TYMED_HGLOBAL.0 as u32,
+            };
+
+            unsafe {
+                let mut medium = std::mem::zeroed::<STGMEDIUM>();
+                if data_object.GetData(&format, &mut medium).is_ok() {
+                    if !medium.u.hGlobal.is_null() {
+                        let ptr = GlobalLock(medium.u.hGlobal) as *const u8;
+                        if !ptr.is_null() {
+                            let size = GlobalSize(medium.u.hGlobal);
+                            let slice = std::slice::from_raw_parts(ptr, size);
+                            let len = slice.iter().position(|&c| c == 0).unwrap_or(slice.len());
+                            let text = String::from_utf8_lossy(&slice[..len]).to_string();
+                            GlobalUnlock(medium.u.hGlobal);
+                            return Some(text);
+                        }
+                    }
+                }
+            }
+            None
+        }
+
+        fn get_file_paths(&self, data_object: &IDataObject) -> Vec<String> {
+            let mut paths = Vec::new();
+            let format = FORMATETC {
+                cfFormat: CF_HDROP,
+                ptd: std::ptr::null_mut(),
+                dwAspect: DVASPECT_CONTENT.0 as u32,
+                lindex: -1,
+                tymed: TYMED_HGLOBAL.0 as u32,
+            };
+
+            unsafe {
+                let mut medium = std::mem::zeroed::<STGMEDIUM>();
+                if data_object.GetData(&format, &mut medium).is_ok() {
+                    let hdrop = HDROP(medium.u.hGlobal.0 as *mut _);
+                    let count = DragQueryFileW(hdrop, 0xFFFFFFFF, None);
+
+                    for i in 0..count {
+                        let len = DragQueryFileW(hdrop, i, None);
+                        let mut buffer = vec![0u16; (len + 1) as usize];
+                        DragQueryFileW(hdrop, i, Some(&mut buffer));
+                        let path = OsString::from_wide(&buffer[..len as usize])
+                            .to_string_lossy()
+                            .to_string();
+                        paths.push(path);
+                    }
+                }
+            }
+            paths
+        }
+
+        fn has_files(&self, data_object: &IDataObject) -> bool {
+            let format = FORMATETC {
+                cfFormat: CF_HDROP,
+                ptd: std::ptr::null_mut(),
+                dwAspect: DVASPECT_CONTENT.0 as u32,
+                lindex: -1,
+                tymed: TYMED_HGLOBAL.0 as u32,
+            };
+
+            unsafe { data_object.QueryGetData(&format).is_ok() }
+        }
+    }
+
+    impl IDropTarget_Impl for DropTarget_Impl {
+        fn DragEnter(
+            &self,
+            pdataobj: Option<&IDataObject>,
+            _grfkeystate: u32,
+            pt: &POINTL,
+            pdweffect: *mut DROPEFFECT,
+        ) -> windows::core::Result<()> {
+            *self.drag_active.borrow_mut() = true;
+
+            if pdataobj.is_some() {
+                // Accept all drags and emit motion event
+                // Both file and content drags are handled in Drop
+                let _ = self.window.emit("td-drag-motion", serde_json::json!({
+                    "x": pt.x,
+                    "y": pt.y
+                }));
+
+                unsafe { *pdweffect = DROPEFFECT_COPY; }
+            }
+
+            Ok(())
+        }
+
+        fn DragOver(
+            &self,
+            _grfkeystate: u32,
+            pt: &POINTL,
+            pdweffect: *mut DROPEFFECT,
+        ) -> windows::core::Result<()> {
+            if *self.drag_active.borrow() {
+                let _ = self.window.emit("td-drag-motion", serde_json::json!({
+                    "x": pt.x,
+                    "y": pt.y
+                }));
+                unsafe { *pdweffect = DROPEFFECT_COPY; }
+            }
+            Ok(())
+        }
+
+        fn DragLeave(&self) -> windows::core::Result<()> {
+            if *self.drag_active.borrow() {
+                *self.drag_active.borrow_mut() = false;
+                let _ = self.window.emit("td-drag-leave", ());
+            }
+            Ok(())
+        }
+
+        fn Drop(
+            &self,
+            pdataobj: Option<&IDataObject>,
+            _grfkeystate: u32,
+            pt: &POINTL,
+            pdweffect: *mut DROPEFFECT,
+        ) -> windows::core::Result<()> {
+            *self.drag_active.borrow_mut() = false;
+
+            if let Some(data_object) = pdataobj {
+                // Emit drop-start
+                let _ = self.window.emit("td-drag-drop-start", serde_json::json!({
+                    "x": pt.x,
+                    "y": pt.y
+                }));
+
+                // Check for file paths first
+                let file_paths = self.get_file_paths(data_object);
+                if !file_paths.is_empty() {
+                    // File drop - emit file paths
+                    let _ = self.window.emit("td-file-drop", serde_json::json!({
+                        "paths": file_paths
+                    }));
+                    unsafe { *pdweffect = DROPEFFECT_COPY; }
+                    return Ok(());
+                }
+
+                // Content drop - extract and emit data
+                if let Some(content_data) = self.extract_data(data_object) {
+                    let _ = self.window.emit("td-drag-content", &content_data);
+                    unsafe { *pdweffect = DROPEFFECT_COPY; }
+                } else {
+                    unsafe { *pdweffect = DROPEFFECT_NONE; }
+                }
+            }
+
+            Ok(())
+        }
+    }
+
+    /// Set up drag-drop handling for a webview window
+    pub fn setup_drag_handlers(window: &WebviewWindow) {
+        let window_clone = window.clone();
+
+        // Run on main thread
+        std::thread::spawn(move || {
+            unsafe {
+                // Initialize COM
+                let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+
+                // Get the HWND from the window
+                if let Ok(hwnd) = window_clone.hwnd() {
+                    let hwnd = HWND(hwnd.0 as *mut _);
+
+                    // Create our drop target
+                    let drop_target: IDropTarget = DropTarget::new(window_clone).into();
+
+                    // Register as drop target
+                    // Note: This may conflict with WebView2's drop handling
+                    // We first revoke any existing registration
+                    let _ = RevokeDragDrop(hwnd);
+
+                    if let Err(e) = RegisterDragDrop(hwnd, &drop_target) {
+                        eprintln!("[TiddlyDesktop] Failed to register drop target: {:?}", e);
+                    }
+                }
+            }
+        });
+    }
+}
+
+/// macOS drag-drop handling - captures content from external drags via Cocoa
+#[cfg(target_os = "macos")]
+mod macos_drag {
+    use std::collections::HashMap;
+    use std::ffi::CStr;
+    use std::sync::Mutex;
+    use cocoa::base::{id, nil, YES, NO};
+    use cocoa::foundation::{NSArray, NSString, NSPoint};
+    use objc::declare::ClassDecl;
+    use objc::runtime::{Class, Object, Sel, BOOL, class_getName};
+    use objc::{class, msg_send, sel, sel_impl};
+    use tauri::{Emitter, WebviewWindow};
+
+    // Store window references for drag callbacks
+    use lazy_static::lazy_static;
+    lazy_static! {
+        static ref WINDOW_MAP: Mutex<HashMap<usize, WebviewWindow>> = Mutex::new(HashMap::new());
+    }
+
+    /// Data captured from a drag operation
+    #[derive(Clone, Debug, serde::Serialize)]
+    pub struct DragContentData {
+        pub types: Vec<String>,
+        pub data: HashMap<String, String>,
+    }
+
+    /// NSDragOperation constants
+    const NS_DRAG_OPERATION_NONE: usize = 0;
+    const NS_DRAG_OPERATION_COPY: usize = 1;
+
+    /// Get string from NSString
+    unsafe fn nsstring_to_string(ns_string: id) -> Option<String> {
+        if ns_string == nil {
+            return None;
+        }
+        let utf8: *const i8 = msg_send![ns_string, UTF8String];
+        if utf8.is_null() {
+            return None;
+        }
+        Some(CStr::from_ptr(utf8).to_string_lossy().to_string())
+    }
+
+    /// Extract drag data from dragging info pasteboard
+    unsafe fn extract_drag_data(dragging_info: id) -> Option<DragContentData> {
+        let pasteboard: id = msg_send![dragging_info, draggingPasteboard];
+        if pasteboard == nil {
+            return None;
+        }
+
+        let mut types = Vec::new();
+        let mut data = HashMap::new();
+
+        let pb_types: id = msg_send![pasteboard, types];
+        if pb_types == nil {
+            return None;
+        }
+
+        let count: usize = msg_send![pb_types, count];
+        for i in 0..count {
+            let pb_type: id = msg_send![pb_types, objectAtIndex: i];
+            if let Some(type_str) = nsstring_to_string(pb_type) {
+                let mime_type = match type_str.as_str() {
+                    "public.html" | "Apple HTML pasteboard type" => Some("text/html"),
+                    "public.utf8-plain-text" | "NSStringPboardType" => Some("text/plain"),
+                    "public.url" => Some("text/uri-list"),
+                    _ => None,
+                };
+
+                if let Some(mime) = mime_type {
+                    let value: id = msg_send![pasteboard, stringForType: pb_type];
+                    if let Some(value_str) = nsstring_to_string(value) {
+                        if !types.contains(&mime.to_string()) {
+                            types.push(mime.to_string());
+                        }
+                        data.insert(mime.to_string(), value_str);
+                    }
+                }
+            }
+        }
+
+        if types.is_empty() {
+            None
+        } else {
+            Some(DragContentData { types, data })
+        }
+    }
+
+    /// Extract file paths from dragging info
+    unsafe fn extract_file_paths(dragging_info: id) -> Vec<String> {
+        let mut paths = Vec::new();
+        let pasteboard: id = msg_send![dragging_info, draggingPasteboard];
+        if pasteboard == nil {
+            return paths;
+        }
+
+        let file_url_type = NSString::alloc(nil).init_str("public.file-url");
+        let pb_types: id = msg_send![pasteboard, types];
+
+        if pb_types != nil {
+            let contains: BOOL = msg_send![pb_types, containsObject: file_url_type];
+            if contains == YES {
+                let url_class = class!(NSURL);
+                let classes: id = msg_send![class!(NSArray), arrayWithObject: url_class];
+                let options: id = msg_send![class!(NSDictionary), dictionary];
+                let urls: id = msg_send![pasteboard, readObjectsForClasses: classes options: options];
+
+                if urls != nil {
+                    let count: usize = msg_send![urls, count];
+                    for i in 0..count {
+                        let url: id = msg_send![urls, objectAtIndex: i];
+                        let is_file: BOOL = msg_send![url, isFileURL];
+                        if is_file == YES {
+                            let path: id = msg_send![url, path];
+                            if let Some(path_str) = nsstring_to_string(path) {
+                                paths.push(path_str);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        paths
+    }
+
+    /// Check if drag contains file URLs
+    unsafe fn has_file_urls(dragging_info: id) -> bool {
+        let pasteboard: id = msg_send![dragging_info, draggingPasteboard];
+        if pasteboard == nil {
+            return false;
+        }
+        let file_url_type = NSString::alloc(nil).init_str("public.file-url");
+        let pb_types: id = msg_send![pasteboard, types];
+        if pb_types != nil {
+            let contains: BOOL = msg_send![pb_types, containsObject: file_url_type];
+            return contains == YES;
+        }
+        false
+    }
+
+    /// Get window from view
+    unsafe fn get_window_for_view(view: id) -> Option<WebviewWindow> {
+        let ns_window: id = msg_send![view, window];
+        if ns_window == nil {
+            return None;
+        }
+        let window_id = ns_window as usize;
+        WINDOW_MAP.lock().ok()?.get(&window_id).cloned()
+    }
+
+    /// draggingEntered: callback - called when drag enters the view
+    extern "C" fn dragging_entered(this: &Object, _sel: Sel, dragging_info: id) -> usize {
+        unsafe {
+            if let Some(window) = get_window_for_view(this as *const _ as id) {
+                // Accept all drags and emit motion event
+                // Both file and content drags are handled in performDragOperation
+                let point: NSPoint = msg_send![dragging_info, draggingLocation];
+                let _ = window.emit("td-drag-motion", serde_json::json!({
+                    "x": point.x as i32,
+                    "y": point.y as i32
+                }));
+                return NS_DRAG_OPERATION_COPY;
+            }
+        }
+        NS_DRAG_OPERATION_NONE
+    }
+
+    /// draggingUpdated: callback - called continuously during drag
+    extern "C" fn dragging_updated(this: &Object, _sel: Sel, dragging_info: id) -> usize {
+        unsafe {
+            if let Some(window) = get_window_for_view(this as *const _ as id) {
+                let point: NSPoint = msg_send![dragging_info, draggingLocation];
+                let _ = window.emit("td-drag-motion", serde_json::json!({
+                    "x": point.x as i32,
+                    "y": point.y as i32
+                }));
+                return NS_DRAG_OPERATION_COPY;
+            }
+        }
+        NS_DRAG_OPERATION_NONE
+    }
+
+    /// draggingExited: callback - called when drag leaves the view
+    extern "C" fn dragging_exited(this: &Object, _sel: Sel, _dragging_info: id) {
+        unsafe {
+            if let Some(window) = get_window_for_view(this as *const _ as id) {
+                let _ = window.emit("td-drag-leave", ());
+            }
+        }
+    }
+
+    /// performDragOperation: callback - called when drop occurs
+    extern "C" fn perform_drag_operation(this: &Object, _sel: Sel, dragging_info: id) -> BOOL {
+        unsafe {
+            if let Some(window) = get_window_for_view(this as *const _ as id) {
+                let point: NSPoint = msg_send![dragging_info, draggingLocation];
+
+                // Emit drop-start
+                let _ = window.emit("td-drag-drop-start", serde_json::json!({
+                    "x": point.x as i32,
+                    "y": point.y as i32
+                }));
+
+                // Check for file paths first
+                let file_paths = extract_file_paths(dragging_info);
+                if !file_paths.is_empty() {
+                    let _ = window.emit("td-file-drop", serde_json::json!({
+                        "paths": file_paths
+                    }));
+                    return YES;
+                }
+
+                // Content drop
+                if let Some(content_data) = extract_drag_data(dragging_info) {
+                    let _ = window.emit("td-drag-content", &content_data);
+                    return YES;
+                }
+            }
+        }
+        NO
+    }
+
+    /// Add drag handling methods to a specific view instance using method swizzling
+    unsafe fn setup_drag_methods_on_view(view: id) {
+        use objc::runtime::{class_addMethod, method_getImplementation, class_getInstanceMethod, object_setClass};
+
+        // Get the view's class
+        let view_class = (*view).class();
+
+        // Check if we've already added methods to this class
+        let class_name_ptr: *const i8 = class_getName(view_class);
+        let class_name = CStr::from_ptr(class_name_ptr).to_string_lossy();
+
+        // Create a dynamic subclass for this specific view
+        let subclass_name = format!("TD_{}", class_name);
+        let subclass_cstr = std::ffi::CString::new(subclass_name.clone()).unwrap();
+
+        // Check if subclass already exists
+        let existing_class = objc::runtime::objc_getClass(subclass_cstr.as_ptr());
+        let subclass = if !existing_class.is_null() {
+            existing_class as *mut Class
+        } else {
+            // Create new subclass
+            if let Some(mut decl) = ClassDecl::new(&subclass_name, view_class) {
+                decl.add_method(
+                    sel!(draggingEntered:),
+                    dragging_entered as extern "C" fn(&Object, Sel, id) -> usize,
+                );
+                decl.add_method(
+                    sel!(draggingUpdated:),
+                    dragging_updated as extern "C" fn(&Object, Sel, id) -> usize,
+                );
+                decl.add_method(
+                    sel!(draggingExited:),
+                    dragging_exited as extern "C" fn(&Object, Sel, id),
+                );
+                decl.add_method(
+                    sel!(performDragOperation:),
+                    perform_drag_operation as extern "C" fn(&Object, Sel, id) -> BOOL,
+                );
+                decl.register() as *mut Class
+            } else {
+                return;
+            }
+        };
+
+        // Change the view's class to our subclass (isa-swizzling)
+        object_setClass(view as *mut Object, subclass);
+    }
+
+    /// Set up drag-drop handling for a webview window
+    pub fn setup_drag_handlers(window: &WebviewWindow) {
+        let window_clone = window.clone();
+
+        // Get the NSWindow
+        if let Ok(ns_window) = window.ns_window() {
+            let ns_window_id = ns_window.0 as id;
+
+            unsafe {
+                // Store window reference for callbacks
+                let window_id = ns_window_id as usize;
+                WINDOW_MAP.lock().unwrap().insert(window_id, window_clone);
+
+                // Register for drag types
+                let types = NSArray::arrayWithObjects(nil, &[
+                    NSString::alloc(nil).init_str("public.html"),
+                    NSString::alloc(nil).init_str("public.utf8-plain-text"),
+                    NSString::alloc(nil).init_str("public.url"),
+                    NSString::alloc(nil).init_str("public.file-url"),
+                    NSString::alloc(nil).init_str("NSStringPboardType"),
+                ]);
+
+                let content_view: id = msg_send![ns_window_id, contentView];
+                if content_view != nil {
+                    // Find the WKWebView
+                    fn find_webview(view: id) -> Option<id> {
+                        unsafe {
+                            let class_name: *const i8 = class_getName((*view).class());
+                            let name = CStr::from_ptr(class_name).to_string_lossy();
+                            if name.contains("WKWebView") {
+                                return Some(view);
+                            }
+                            let subviews: id = msg_send![view, subviews];
+                            if subviews != nil {
+                                let count: usize = msg_send![subviews, count];
+                                for i in 0..count {
+                                    let subview: id = msg_send![subviews, objectAtIndex: i];
+                                    if let Some(wv) = find_webview(subview) {
+                                        return Some(wv);
+                                    }
+                                }
+                            }
+                        }
+                        None
+                    }
+
+                    if let Some(webview) = find_webview(content_view) {
+                        // Register drag types on the webview
+                        let _: () = msg_send![webview, registerForDraggedTypes: types];
+
+                        // Swizzle the webview's class to add our drag handlers
+                        setup_drag_methods_on_view(webview);
+                    }
+                }
+            }
+        }
+    }
+}
+
 use chrono::Local;
 use serde::{Deserialize, Serialize};
 use tauri::{
@@ -1439,7 +2431,6 @@ fn get_dialog_init_script() -> &'static str {
                             return { abort: function() {} };
                         }
 
-                        console.log('[TiddlyDesktop] httpRequest for filesystem path:', resolvedPath);
                         invoke('read_file_as_data_uri', { path: resolvedPath })
                             .then(function(dataUri) {
                                 var mockXhr = {
@@ -1499,7 +2490,6 @@ fn get_dialog_init_script() -> &'static str {
                         var resolvedPath = resolveFilesystemPath(src);
                         if (resolvedPath) {
                             var assetUrl = convertFileSrc(resolvedPath);
-                            console.log('[TiddlyDesktop] Converting src:', src, '->', assetUrl);
                             element.setAttribute('src', assetUrl);
                         }
                     }
@@ -1623,6 +2613,18 @@ fn get_dialog_init_script() -> &'static str {
                 dataTransfer: dataTransfer,
                 relatedTarget: relatedTarget !== undefined ? relatedTarget : null
             });
+
+            // Force dataTransfer if constructor didn't set it (WebKitGTK issue)
+            if (!event.dataTransfer && dataTransfer) {
+                Object.defineProperty(event, 'dataTransfer', {
+                    value: dataTransfer,
+                    writable: false
+                });
+            }
+
+            // Mark as synthetic so native handlers can skip it
+            event.__tiddlyDesktopSynthetic = true;
+
             return event;
         }
 
@@ -1674,6 +2676,12 @@ fn get_dialog_init_script() -> &'static str {
             var currentTarget = null;
             var isDragging = false;
 
+            // Native drag state tracking (Linux GTK, Windows IDropTarget) - declared early so Tauri handlers can check it
+            var nativeDragActive = false;
+            var nativeDragTarget = null;
+            var pendingGtkFileDrop = null;
+            var nativeDropInProgress = false;  // Set when drop starts, prevents drag-leave cancellation
+
             // Helper to create DataTransfer with pending files
             function createDataTransferWithFiles() {
                 var dt = new DataTransfer();
@@ -1686,6 +2694,9 @@ fn get_dialog_init_script() -> &'static str {
 
             // Listen to drag-enter events - start of drag over window
             listen("tauri://drag-enter", function(event) {
+                // Skip if native handler is active (Linux GTK, Windows IDropTarget)
+                if (nativeDragActive) return;
+
                 var paths = event.payload.paths || [];
 
                 // Skip if this is an internal drag (Tauri detects internal drags as external)
@@ -1694,36 +2705,47 @@ fn get_dialog_init_script() -> &'static str {
                     (paths.length > 0 && paths.every(function(p) { return p.startsWith("data:"); }));
 
                 if (isInternalDrag) {
-                    console.log("[TiddlyDesktop] tauri://drag-enter skipped (internal drag detected)");
                     return;
                 }
-
-                console.log("[TiddlyDesktop] tauri://drag-enter received");
-                pendingFilePaths = paths;
-                isDragging = true;
 
                 var target = getTargetElement(event.payload.position);
                 enteredTarget = target;
                 currentTarget = target;
 
-                var dt = createDataTransferWithFiles();
+                if (paths.length > 0) {
+                    // File drag - we have file paths
+                    pendingFilePaths = paths;
+                    isDragging = true;
 
-                // Fire dragenter on the target
-                var enterEvent = createSyntheticDragEvent("dragenter", event.payload.position, dt);
-                console.log("[TiddlyDesktop] dragenter ->", target.tagName, target.className);
-                target.dispatchEvent(enterEvent);
+                    var dt = createDataTransferWithFiles();
+                    var enterEvent = createSyntheticDragEvent("dragenter", event.payload.position, dt);
+                    target.dispatchEvent(enterEvent);
+                } else {
+                    // Content drag (text, HTML, etc.) - no paths, data captured on drop
+                    contentDragActive = true;
+                    contentDragTarget = target;
+                    contentDragEnterCount = 1; // Reset counter for native dragleave detection
+
+                    // Create DataTransfer with common types as placeholders
+                    var dt = createContentDataTransfer();
+                    var enterEvent = createSyntheticDragEvent("dragenter", event.payload.position, dt);
+                    target.dispatchEvent(enterEvent);
+                }
             });
 
             // Listen to drag-over events - continuous drag over window
             listen("tauri://drag-over", function(event) {
-                // Skip if not in external drag mode (internal drags handle their own events)
-                if (!isDragging) return;
+                // Skip if native handler is active (Linux GTK, Windows IDropTarget)
+                if (nativeDragActive) return;
+
+                // Skip if not in any external drag mode
+                if (!isDragging && !contentDragActive) return;
 
                 // Also skip if $tw.dragInProgress is set (internal drag took over)
                 if (typeof $tw !== "undefined" && $tw.dragInProgress) return;
 
                 var target = getTargetElement(event.payload.position);
-                var dt = createDataTransferWithFiles();
+                var dt = isDragging ? createDataTransferWithFiles() : createContentDataTransfer();
 
                 // If target changed, fire dragleave on old target and dragenter on new target
                 if (currentTarget && currentTarget !== target) {
@@ -1737,6 +2759,9 @@ fn get_dialog_init_script() -> &'static str {
                 }
 
                 currentTarget = target;
+                if (contentDragActive) {
+                    contentDragTarget = target;
+                }
 
                 // Fire dragover (must be fired continuously and preventDefault called to allow drop)
                 var overEvent = createSyntheticDragEvent("dragover", event.payload.position, dt);
@@ -1747,14 +2772,11 @@ fn get_dialog_init_script() -> &'static str {
             function cancelExternalDrag(reason) {
                 if (!isDragging) return;
 
-                console.log("[TiddlyDesktop] Canceling external drag:", reason);
-
                 var dt = createDataTransferWithFiles();
 
                 // Fire dragleave on current target with relatedTarget=null to signal leaving window
                 if (currentTarget) {
                     var leaveEvent = createSyntheticDragEvent("dragleave", null, dt, null);
-                    console.log("[TiddlyDesktop] dragleave ->", currentTarget.tagName, currentTarget.className);
                     currentTarget.dispatchEvent(leaveEvent);
                 }
 
@@ -1796,57 +2818,184 @@ fn get_dialog_init_script() -> &'static str {
 
             // Listen to drag-leave events - drag left the window without dropping
             listen("tauri://drag-leave", function(event) {
-                // Skip if not in external drag mode
-                if (!isDragging) {
-                    console.log("[TiddlyDesktop] tauri://drag-leave skipped (not in external drag)");
-                    return;
+                // Skip if native handler is active (Linux GTK, Windows IDropTarget)
+                if (nativeDragActive) return;
+
+                if (isDragging) {
+                    cancelExternalDrag("drag left window");
+                } else if (contentDragActive) {
+                    cancelContentDrag("drag left window");
                 }
-                console.log("[TiddlyDesktop] tauri://drag-leave received");
-                cancelExternalDrag("drag left window");
             });
 
-            // Handle Escape key during external drag
-            document.addEventListener("keydown", function(event) {
-                if (event.key === "Escape" && isDragging) {
-                    cancelExternalDrag("escape pressed");
+            // Native drag-motion event (Linux GTK, Windows IDropTarget)
+            // Fires continuously during drag - use to dispatch synthetic dragenter/dragover
+            // Handles both file and content drags
+            listen("td-drag-motion", function(event) {
+                if (!event.payload) return;
+
+                var pos = { x: event.payload.x, y: event.payload.y };
+                var target = getTargetElement(pos);
+
+                // Create DataTransfer with placeholder content types
+                var dt = new DataTransfer();
+                ["text/plain", "text/html", "text/uri-list"].forEach(function(type) {
+                    try { dt.setData(type, "placeholder"); } catch(e) {}
+                });
+
+                if (!nativeDragActive) {
+                    // First motion event - dispatch dragenter
+                    nativeDragActive = true;
+                    nativeDragTarget = target;
+                    currentTarget = target;
+
+                    var enterEvent = createSyntheticDragEvent("dragenter", pos, dt);
+                    enterEvent.__tiddlyDesktopSynthetic = true;
+                    target.dispatchEvent(enterEvent);
+                } else {
+                    // Subsequent motion - dispatch dragover, and dragenter/dragleave if target changed
+                    if (nativeDragTarget && nativeDragTarget !== target) {
+                        // Target changed - fire dragleave on old, dragenter on new
+                        var leaveEvent = createSyntheticDragEvent("dragleave", pos, dt, target);
+                        leaveEvent.__tiddlyDesktopSynthetic = true;
+                        nativeDragTarget.dispatchEvent(leaveEvent);
+
+                        var enterEvent = createSyntheticDragEvent("dragenter", pos, dt, nativeDragTarget);
+                        enterEvent.__tiddlyDesktopSynthetic = true;
+                        target.dispatchEvent(enterEvent);
+                    }
+                    nativeDragTarget = target;
+                    currentTarget = target;
                 }
-            }, true);
 
-            // Handle window blur during external drag
-            window.addEventListener("blur", function(event) {
-                if (isDragging) {
-                    cancelExternalDrag("window lost focus");
+                // Always dispatch dragover to allow drop
+                var overEvent = createSyntheticDragEvent("dragover", pos, dt);
+                overEvent.__tiddlyDesktopSynthetic = true;
+                target.dispatchEvent(overEvent);
+            });
+
+            // Native drag-drop-start event (Linux GTK, Windows IDropTarget)
+            // Fires immediately when user releases mouse to drop, BEFORE drag-leave
+            // This allows us to distinguish "leaving window" from "dropping"
+            listen("td-drag-drop-start", function(event) {
+                console.log("[TiddlyDesktop] td-drag-drop-start received:", event.payload);
+                nativeDropInProgress = true;
+                if (event.payload) {
+                    pendingContentDropPos = {
+                        x: event.payload.x,
+                        y: event.payload.y
+                    };
+                    console.log("[TiddlyDesktop] Set pendingContentDropPos:", pendingContentDropPos);
                 }
-            }, true);
+            });
 
-            // Global map to store pending file paths for the import hook
-            window.__pendingExternalFiles = window.__pendingExternalFiles || {};
+            // Native drag-leave event (Linux GTK, Windows IDropTarget)
+            // Note: Native handlers may fire drag-leave during drop operations too, so we check nativeDropInProgress
+            // to avoid canceling when a drop is actually happening.
+            listen("td-drag-leave", function(event) {
+                // Skip if a drop is in progress
+                if (nativeDropInProgress) return;
 
-            // Listen to drag-drop events - files dropped on window
-            listen("tauri://drag-drop", function(event) {
+                // Only cancel if we were tracking a native drag
+                if (nativeDragActive) {
+                    // Small delay to make sure no drop event is coming
+                    setTimeout(function() {
+                        // Double-check drop isn't in progress
+                        if (nativeDropInProgress) return;
+                        if (!nativeDragActive) return;
+
+                        // No drop came - cancel the drag
+                        var dt = new DataTransfer();
+                        if (nativeDragTarget) {
+                            var leaveEvent = createSyntheticDragEvent("dragleave", null, dt, null);
+                            leaveEvent.__tiddlyDesktopSynthetic = true;
+                            nativeDragTarget.dispatchEvent(leaveEvent);
+                        }
+                        // Clear dropzone highlights
+                        document.querySelectorAll(".tc-dragover").forEach(function(el) {
+                            el.classList.remove("tc-dragover");
+                            var endEvent = createSyntheticDragEvent("dragend", null, dt, null);
+                            endEvent.__tiddlyDesktopSynthetic = true;
+                            el.dispatchEvent(endEvent);
+                        });
+                        nativeDragActive = false;
+                        nativeDragTarget = null;
+                        nativeDropInProgress = false;
+                        currentTarget = null;
+                    }, 100);
+                }
+            });
+
+            // Native drag content received (Linux GTK, Windows IDropTarget)
+            // This provides the actual content data from the drag
+            listen("td-drag-content", function(event) {
+                console.log("[TiddlyDesktop] td-drag-content received:", event.payload);
+                if (event.payload) {
+                    // Store the content data for processing
+                    pendingContentDropData = {
+                        types: event.payload.types || [],
+                        data: event.payload.data || {},
+                        files: []
+                    };
+                    console.log("[TiddlyDesktop] pendingContentDropPos:", pendingContentDropPos);
+
+                    // If we already have position, process the drop now
+                    if (pendingContentDropPos) {
+                        console.log("[TiddlyDesktop] Calling processContentDrop");
+                        processContentDrop();
+                    } else {
+                        console.log("[TiddlyDesktop] No position yet, waiting");
+                    }
+                }
+            });
+
+            // Native drag drop position (Linux GTK, Windows IDropTarget)
+            // Note: Don't check contentDragActive - native events are authoritative
+            listen("td-drag-drop-position", function(event) {
+                if (event.payload) {
+                    pendingContentDropPos = {
+                        x: event.payload.x,
+                        y: event.payload.y
+                    };
+                    // Process the content drop now that we have position
+                    if (pendingContentDropData) {
+                        processContentDrop();
+                    }
+                }
+            });
+
+            // Native file drop (Linux GTK, Windows IDropTarget)
+            // This handles file drags from file managers
+            listen("td-file-drop", function(event) {
+                if (!event.payload || !event.payload.paths || event.payload.paths.length === 0) return;
+
                 var paths = event.payload.paths;
-                if (!paths || paths.length === 0) return;
+                pendingGtkFileDrop = paths;
 
-                // Skip if this is from an internal drag (internal drags handle their own drop)
-                var isInternalDrag = (typeof $tw !== "undefined" && $tw.dragInProgress) ||
-                    paths.every(function(p) { return p.startsWith("data:"); });
+                // Wait for position from td-drag-drop-position
+                // Use a small timeout in case position already arrived
+                setTimeout(function() {
+                    if (!pendingGtkFileDrop) return;
+                    processGtkFileDrop();
+                }, 10);
+            });
 
-                if (isInternalDrag) {
-                    console.log("[TiddlyDesktop] tauri://drag-drop skipped (internal drag)");
-                    isDragging = false;
-                    return;
-                }
+            // Process native file drop when we have both paths and position
+            function processGtkFileDrop() {
+                if (!pendingGtkFileDrop) return;
 
-                console.log("[TiddlyDesktop] tauri://drag-drop received, paths:", paths.length);
+                var paths = pendingGtkFileDrop;
+                var pos = pendingContentDropPos || { x: 100, y: 100 };
+                var dropTarget = nativeDragTarget || getTargetElement(pos);
 
-                var dropTarget = getTargetElement(event.payload.position);
-                var pos = event.payload.position;
+                // Clear pending state
+                pendingGtkFileDrop = null;
+                pendingContentDropPos = null;
 
                 // Read all files and create File objects for the drop event
                 var filePromises = paths.map(function(filepath) {
-                    // Skip data URLs and non-file paths (from internal TiddlyWiki drag operations)
+                    // Skip data URLs and non-file paths
                     if (filepath.startsWith("data:") || (!filepath.startsWith("/") && !filepath.match(/^[A-Za-z]:\\/))) {
-                        console.log("[TiddlyDesktop] Skipping non-file path:", filepath.substring(0, 50) + "...");
                         return Promise.resolve(null);
                     }
 
@@ -1861,7 +3010,529 @@ fn get_dialog_init_script() -> &'static str {
                     return invoke("read_file_as_binary", { path: filepath }).then(function(bytes) {
                         // Store the path in global map for the import hook to find
                         window.__pendingExternalFiles[filename] = filepath;
-                        console.log("[TiddlyDesktop] Stored pending file:", filename, "->", filepath);
+
+                        var file = new File([new Uint8Array(bytes)], filename, { type: mimeType });
+                        return file;
+                    }).catch(function(err) {
+                        console.error("[TiddlyDesktop] Failed to read file:", filepath, err);
+                        return null;
+                    });
+                });
+
+                Promise.all(filePromises).then(function(files) {
+                    var validFiles = files.filter(function(f) { return f !== null; });
+                    if (validFiles.length === 0) {
+                        resetGtkDragState();
+                        return;
+                    }
+
+                    // Create DataTransfer with actual file content
+                    var dt = new DataTransfer();
+                    validFiles.forEach(function(file) {
+                        dt.items.add(file);
+                    });
+
+                    // Fire dragleave on current target first (to unhighlight dropzone)
+                    if (nativeDragTarget) {
+                        var leaveEvent = createSyntheticDragEvent("dragleave", pos, dt, null);
+                        leaveEvent.__tiddlyDesktopSynthetic = true;
+                        nativeDragTarget.dispatchEvent(leaveEvent);
+                    }
+
+                    // Fire drop event
+                    var dropEvent = createSyntheticDragEvent("drop", pos, dt);
+                    dropEvent.__tiddlyDesktopSynthetic = true;
+                    dropTarget.dispatchEvent(dropEvent);
+
+                    // Fire dragend to signal drag operation completed
+                    var endEvent = createSyntheticDragEvent("dragend", pos, dt);
+                    endEvent.__tiddlyDesktopSynthetic = true;
+                    document.body.dispatchEvent(endEvent);
+
+                    // Clear pending files after a delay (import should be done by then)
+                    setTimeout(function() {
+                        window.__pendingExternalFiles = {};
+                    }, 5000);
+
+                    resetGtkDragState();
+                });
+            }
+
+            // Reset native drag state
+            function resetGtkDragState() {
+                nativeDragActive = false;
+                nativeDragTarget = null;
+                nativeDropInProgress = false;
+                currentTarget = null;
+                pendingContentDropPos = null;
+            }
+
+            // Handle Escape key during external drag (file or browser)
+            document.addEventListener("keydown", function(event) {
+                if (event.key === "Escape") {
+                    if (isDragging) {
+                        cancelExternalDrag("escape pressed");
+                    } else if (contentDragActive) {
+                        cancelContentDrag("escape pressed");
+                    }
+                }
+            }, true);
+
+            // Handle window blur during external drag (file or browser)
+            window.addEventListener("blur", function(event) {
+                if (isDragging) {
+                    cancelExternalDrag("window lost focus");
+                } else if (contentDragActive) {
+                    cancelContentDrag("window lost focus");
+                }
+            }, true);
+
+            // Native dragenter detection for content drags (Windows/macOS fallback)
+            // Tauri drag events may not fire for content drags on these platforms,
+            // so we detect content drags directly via native dragenter
+            document.addEventListener("dragenter", function(event) {
+                // Skip synthetic events and already tracked drags
+                if (event.__tiddlyDesktopSynthetic) return;
+                if (nativeDragActive || isDragging) return;
+
+                // Check if this is already being tracked
+                if (contentDragActive) {
+                    contentDragEnterCount++;
+                    return;
+                }
+
+                // Check if this is a content drag (not file drag)
+                var dt = event.dataTransfer;
+                if (!dt || !dt.types || dt.types.length === 0) return;
+
+                // Skip internal TiddlyWiki drags
+                if (typeof $tw !== "undefined" && $tw.dragInProgress) return;
+
+                // Detect if this is a file drag or content drag
+                // File drags have "Files" type, but we need to check if there are actual file items
+                var hasFiles = false;
+                var hasContent = false;
+                var types = [];
+
+                for (var i = 0; i < dt.types.length; i++) {
+                    var type = dt.types[i];
+                    types.push(type);
+                    if (type === "Files") {
+                        // Check if there are actual file items
+                        if (dt.items && dt.items.length > 0) {
+                            for (var j = 0; j < dt.items.length; j++) {
+                                if (dt.items[j].kind === "file") {
+                                    hasFiles = true;
+                                    break;
+                                }
+                            }
+                        }
+                    } else if (type === "text/plain" || type === "text/html" || type === "text/uri-list" ||
+                               type === "TEXT" || type === "STRING" || type === "UTF8_STRING") {
+                        hasContent = true;
+                    }
+                }
+
+                // If this is a file drag with actual files, let Tauri handle it
+                if (hasFiles && !hasContent) return;
+
+                // This is a content drag (or mixed content+file from external source)
+                // Start tracking it for Windows/macOS where Tauri events may not fire
+                contentDragActive = true;
+                contentDragTarget = document.elementFromPoint(event.clientX, event.clientY) || document.body;
+                contentDragTypes = types;
+                contentDragEnterCount = 1;
+                currentTarget = contentDragTarget;
+
+                // Dispatch synthetic dragenter to light up dropzone
+                var enterDt = createContentDataTransfer();
+                var enterEvent = createSyntheticDragEvent("dragenter", {
+                    x: event.clientX,
+                    y: event.clientY
+                }, enterDt, null);
+                enterEvent.__tiddlyDesktopSynthetic = true;
+                contentDragTarget.dispatchEvent(enterEvent);
+
+            }, true);
+
+            // Native dragover handler for content drags (Windows/macOS fallback)
+            // Dispatches synthetic dragover events to keep dropzone highlighted
+            document.addEventListener("dragover", function(event) {
+                // Skip synthetic events
+                if (event.__tiddlyDesktopSynthetic) return;
+
+                // Only handle for content drags we're tracking natively (not GTK or Tauri)
+                if (!contentDragActive || nativeDragActive || isDragging) return;
+
+                // Skip internal TiddlyWiki drags
+                if (typeof $tw !== "undefined" && $tw.dragInProgress) return;
+
+                // Prevent default to allow drop
+                event.preventDefault();
+
+                // Get the element under the cursor
+                var target = document.elementFromPoint(event.clientX, event.clientY) || document.body;
+
+                // Update content drag target
+                var oldTarget = contentDragTarget;
+                contentDragTarget = target;
+                currentTarget = target;
+
+                // Create synthetic dragover event with content types
+                var dt = createContentDataTransfer();
+                var overEvent = createSyntheticDragEvent("dragover", {
+                    x: event.clientX,
+                    y: event.clientY
+                }, dt, null);
+                overEvent.__tiddlyDesktopSynthetic = true;
+                target.dispatchEvent(overEvent);
+
+                // If target changed, fire dragleave on old and dragenter on new
+                if (oldTarget && oldTarget !== target) {
+                    var leaveEvent = createSyntheticDragEvent("dragleave", {
+                        x: event.clientX,
+                        y: event.clientY
+                    }, dt, target);
+                    leaveEvent.__tiddlyDesktopSynthetic = true;
+                    oldTarget.dispatchEvent(leaveEvent);
+
+                    var enterEvent = createSyntheticDragEvent("dragenter", {
+                        x: event.clientX,
+                        y: event.clientY
+                    }, dt, oldTarget);
+                    enterEvent.__tiddlyDesktopSynthetic = true;
+                    target.dispatchEvent(enterEvent);
+                }
+            }, true);
+
+            // Native dragleave detection for content drags
+            // Uses enter/leave counter since dragleave fires for every element boundary
+            document.addEventListener("dragleave", function(event) {
+                // Only track for content drags, skip synthetic events and file drags
+                if (!contentDragActive || event.__tiddlyDesktopSynthetic || isDragging) return;
+                contentDragEnterCount--;
+                if (contentDragEnterCount <= 0) {
+                    contentDragEnterCount = 0;
+                    cancelContentDrag("drag left window");
+                }
+            }, true);
+
+            // Global map to store pending file paths for the import hook
+            window.__pendingExternalFiles = window.__pendingExternalFiles || {};
+
+            // External content drag state (for drags from browsers, text editors, other apps)
+            // Content is captured from native drop event, but drag tracking uses Tauri events
+            var pendingContentDropData = null;
+            var pendingContentDropPos = null;
+            var contentDropTimeout = null;
+            var contentDragActive = false;
+            var contentDragTarget = null;
+            var contentDragTypes = [];
+            var contentDragEnterCount = 0;
+
+            // Create DataTransfer with content drag types (placeholder data until drop)
+            function createContentDataTransfer() {
+                var dt = new DataTransfer();
+                // Use known types if available, otherwise use common placeholder types
+                // so that TiddlyWiki's dropzone lights up during content drags
+                var types = contentDragTypes.length > 0 ? contentDragTypes : [
+                    "text/plain",
+                    "text/html",
+                    "text/uri-list"
+                ];
+                types.forEach(function(type) {
+                    if (type !== "Files") {
+                        try {
+                            dt.setData(type, "placeholder");
+                        } catch(e) {}
+                    }
+                });
+                return dt;
+            }
+
+            // Helper to cancel content drag and clear all dropzone highlights (mirrors cancelExternalDrag)
+            function cancelContentDrag(reason) {
+                if (!contentDragActive) return;
+
+                var dt = createContentDataTransfer();
+
+                // Fire dragleave on current target with relatedTarget=null to signal leaving window
+                if (currentTarget) {
+                    var leaveEvent = createSyntheticDragEvent("dragleave", null, dt, null);
+                    leaveEvent.__tiddlyDesktopSynthetic = true;
+                    currentTarget.dispatchEvent(leaveEvent);
+                }
+
+                // Fire dragleave and dragend on ALL elements with tc-dragover class
+                // The dragend triggers TiddlyWiki's dropzone resetState() method
+                document.querySelectorAll(".tc-dragover").forEach(function(el) {
+                    var droppableLeaveEvent = createSyntheticDragEvent("dragleave", null, dt, null);
+                    droppableLeaveEvent.__tiddlyDesktopSynthetic = true;
+                    el.dispatchEvent(droppableLeaveEvent);
+                    var dropzoneEndEvent = createSyntheticDragEvent("dragend", null, dt, null);
+                    dropzoneEndEvent.__tiddlyDesktopSynthetic = true;
+                    el.dispatchEvent(dropzoneEndEvent);
+                    el.classList.remove("tc-dragover");
+                });
+
+                // Also fire dragend on dropzone elements that might not have tc-dragover yet
+                document.querySelectorAll(".tc-dropzone").forEach(function(el) {
+                    var dropzoneEndEvent = createSyntheticDragEvent("dragend", null, dt, null);
+                    dropzoneEndEvent.__tiddlyDesktopSynthetic = true;
+                    el.dispatchEvent(dropzoneEndEvent);
+                });
+
+                // Remove tc-dragging class from any elements that have it
+                document.querySelectorAll(".tc-dragging").forEach(function(el) {
+                    el.classList.remove("tc-dragging");
+                });
+
+                // Fire dragend on body as well
+                var endEvent = createSyntheticDragEvent("dragend", null, dt, null);
+                endEvent.__tiddlyDesktopSynthetic = true;
+                document.body.dispatchEvent(endEvent);
+
+                // Reset TiddlyWiki's internal drag state
+                if (typeof $tw !== "undefined") {
+                    $tw.dragInProgress = null;
+                }
+
+                // Reset content drag state
+                contentDragActive = false;
+                contentDragTarget = null;
+                contentDragTypes = [];
+                contentDragEnterCount = 0;
+                enteredTarget = null;
+                currentTarget = null;
+            }
+
+            // Function to process content drop data (mirrors tauri://drag-drop handling)
+            function processContentDrop() {
+                console.log("[TiddlyDesktop] processContentDrop called");
+                if (!pendingContentDropData) {
+                    console.log("[TiddlyDesktop] No pendingContentDropData, returning");
+                    return;
+                }
+
+                var capturedData = pendingContentDropData;
+                var pos = pendingContentDropPos;
+                console.log("[TiddlyDesktop] Processing content drop, types:", capturedData.types, "pos:", pos);
+
+                // Get drop target using same method as file drops
+                var dropTarget = getTargetElement(pos);
+                console.log("[TiddlyDesktop] Drop target:", dropTarget.tagName, dropTarget.className);
+
+                // Clear pending data
+                pendingContentDropData = null;
+                pendingContentDropPos = null;
+                if (contentDropTimeout) {
+                    clearTimeout(contentDropTimeout);
+                    contentDropTimeout = null;
+                }
+
+                // Create DataTransfer with captured content
+                var dt = new DataTransfer();
+
+                // Add text/string data
+                for (var type in capturedData.data) {
+                    if (capturedData.data.hasOwnProperty(type)) {
+                        try {
+                            dt.setData(type, capturedData.data[type]);
+                        } catch(e) {
+                            // Ignore unsupported types
+                        }
+                    }
+                }
+
+                // Add captured files
+                capturedData.files.forEach(function(file) {
+                    dt.items.add(file);
+                });
+
+                // Fire dragleave on current target first (to unhighlight dropzone)
+                // Use relatedTarget=null to signal drag is ending, not moving to another element
+                if (currentTarget) {
+                    var leaveEvent = createSyntheticDragEvent("dragleave", pos, dt, null);
+                    leaveEvent.__tiddlyDesktopSynthetic = true;
+                    currentTarget.dispatchEvent(leaveEvent);
+                }
+
+                // Fire drop event
+                var dropEvent = createSyntheticDragEvent("drop", pos, dt);
+                dropEvent.__tiddlyDesktopSynthetic = true;
+                dropTarget.dispatchEvent(dropEvent);
+
+                // Fire dragend to signal drag operation completed
+                var endEvent = createSyntheticDragEvent("dragend", pos, dt);
+                endEvent.__tiddlyDesktopSynthetic = true;
+                document.body.dispatchEvent(endEvent);
+
+                // Reset drag state (mirrors tauri://drag-drop)
+                pendingFilePaths = [];
+                enteredTarget = null;
+                currentTarget = null;
+                isDragging = false;
+                contentDragActive = false;
+                contentDragTarget = null;
+                contentDragTypes = [];
+                // Reset native drag state
+                nativeDragActive = false;
+                nativeDragTarget = null;
+                nativeDropInProgress = false;
+            }
+
+            // Capture native drop event to get DataTransfer content for external content drags
+            // This runs in capture phase before any other handlers
+            document.addEventListener("drop", function(event) {
+                // Skip if this is an internal drag (handled separately)
+                // Check window.__tiddlyDesktopDragData which is set during internal drags
+                if (window.__tiddlyDesktopDragData || (typeof $tw !== "undefined" && $tw.dragInProgress)) {
+                    return;
+                }
+
+                // Skip synthetic events we created ourselves
+                if (event.__tiddlyDesktopSynthetic) {
+                    return;
+                }
+
+                // Skip if Tauri is tracking this drag (file system or any external drag)
+                // Tauri's tauri://drag-drop will handle it
+                if (isDragging) {
+                    return;
+                }
+
+                var dt = event.dataTransfer;
+                if (!dt) return;
+
+                // Capture all data from the DataTransfer before it becomes unavailable
+                var capturedData = {
+                    types: [],
+                    data: {},
+                    files: []
+                };
+
+                // Capture all data types
+                for (var i = 0; i < dt.types.length; i++) {
+                    var type = dt.types[i];
+                    capturedData.types.push(type);
+                    if (type !== "Files") {
+                        try {
+                            capturedData.data[type] = dt.getData(type);
+                        } catch(e) {
+                            // Ignore unsupported types
+                        }
+                    }
+                }
+
+                // Capture files
+                if (dt.files && dt.files.length > 0) {
+                    for (var j = 0; j < dt.files.length; j++) {
+                        capturedData.files.push(dt.files[j]);
+                    }
+                }
+
+                // Store captured content if we're tracking a content drag
+                if (contentDragActive && capturedData.types.length > 0 && (Object.keys(capturedData.data).length > 0 || capturedData.files.length > 0)) {
+                    pendingContentDropData = capturedData;
+                    pendingContentDropPos = { x: event.clientX, y: event.clientY };
+
+                    // Prevent default and stop propagation
+                    event.preventDefault();
+                    event.stopPropagation();
+
+                    // On Windows/macOS, tauri://drag-drop may not fire for content drags
+                    // Use a short timeout to process the drop directly if Tauri doesn't handle it
+                    // Skip this when native handler is active (Linux GTK, Windows IDropTarget)
+                    if (!nativeDragActive && !isDragging) {
+                        // Clear any existing timeout
+                        if (contentDropTimeout) {
+                            clearTimeout(contentDropTimeout);
+                        }
+                        // Set timeout to process drop if tauri://drag-drop doesn't fire
+                        contentDropTimeout = setTimeout(function() {
+                            if (pendingContentDropData) {
+                                processContentDrop();
+                            }
+                        }, 50);
+                    }
+                }
+            }, true);
+
+            // Listen to drag-drop events - files dropped on window
+            listen("tauri://drag-drop", function(event) {
+                // Skip if native handler is active (Linux GTK, Windows IDropTarget)
+                if (nativeDragActive) return;
+
+                var paths = event.payload.paths || [];
+
+                // Clear content drop timeout since tauri://drag-drop fired
+                if (contentDropTimeout) {
+                    clearTimeout(contentDropTimeout);
+                    contentDropTimeout = null;
+                }
+
+                // Skip if this is from an internal drag (internal drags handle their own drop)
+                var isInternalDrag = (typeof $tw !== "undefined" && $tw.dragInProgress) ||
+                    (paths.length > 0 && paths.every(function(p) { return p.startsWith("data:"); }));
+
+                if (isInternalDrag) {
+                    isDragging = false;
+                    pendingContentDropData = null;
+                    pendingContentDropPos = null;
+                    return;
+                }
+
+                // Check if we have external content (no file paths but captured data)
+                if (paths.length === 0 && pendingContentDropData) {
+                    // Use Tauri's position if we don't have one from native drop
+                    if (!pendingContentDropPos && event.payload.position) {
+                        pendingContentDropPos = event.payload.position;
+                    }
+                    processContentDrop();
+                    return;
+                }
+
+                // Content drag but no captured data - reset state
+                if (paths.length === 0 && contentDragActive) {
+                    contentDragActive = false;
+                    contentDragTarget = null;
+                    contentDragTypes = [];
+                }
+
+                // Clear any pending content data since we're handling file paths
+                pendingContentDropData = null;
+                pendingContentDropPos = null;
+
+                // No paths and no content data - nothing to do
+                if (paths.length === 0) {
+                    pendingFilePaths = [];
+                    enteredTarget = null;
+                    currentTarget = null;
+                    isDragging = false;
+                    return;
+                }
+
+                var dropTarget = getTargetElement(event.payload.position);
+                var pos = event.payload.position;
+
+                // Read all files and create File objects for the drop event
+                var filePromises = paths.map(function(filepath) {
+                    // Skip data URLs and non-file paths (from internal TiddlyWiki drag operations)
+                    if (filepath.startsWith("data:") || (!filepath.startsWith("/") && !filepath.match(/^[A-Za-z]:\\/))) {
+                        return Promise.resolve(null);
+                    }
+
+                    var filename = filepath.split(/[/\\]/).pop();
+                    var mimeType = getMimeType(filename);
+
+                    // Skip wiki files
+                    if (filename.toLowerCase().endsWith(".html") || filename.toLowerCase().endsWith(".htm")) {
+                        return Promise.resolve(null);
+                    }
+
+                    return invoke("read_file_as_binary", { path: filepath }).then(function(bytes) {
+                        // Store the path in global map for the import hook to find
+                        window.__pendingExternalFiles[filename] = filepath;
 
                         var file = new File([new Uint8Array(bytes)], filename, { type: mimeType });
                         return file;
@@ -1887,8 +3558,6 @@ fn get_dialog_init_script() -> &'static str {
                         var leaveEvent = createSyntheticDragEvent("dragleave", pos, dt, null);
                         currentTarget.dispatchEvent(leaveEvent);
                     }
-
-                    console.log("[TiddlyDesktop] Dispatching drop with", validFiles.length, "files to", dropTarget.tagName);
 
                     // Fire drop event
                     var dropEvent = createSyntheticDragEvent("drop", pos, dt);
@@ -1936,11 +3605,7 @@ fn get_dialog_init_script() -> &'static str {
                     // Check if this file is in our pending external files map
                     var originalPath = window.__pendingExternalFiles && window.__pendingExternalFiles[filename];
 
-                    console.log("[TiddlyDesktop] Import hook called for:", filename, "path:", originalPath, "binary:", info.isBinary, "external:", externalEnabled);
-
                     if (originalPath && externalEnabled && info.isBinary) {
-                        console.log("[TiddlyDesktop] Import hook - converting to external:", filename);
-
                         // Calculate the canonical URI
                         var canonicalUri = makePathRelative(originalPath, wikiPath, {
                             useAbsoluteForDescendents: useAbsDesc,
@@ -1958,8 +3623,6 @@ fn get_dialog_init_script() -> &'static str {
                                 "_canonical_uri": canonicalUri
                             }
                         ]);
-
-                        console.log("[TiddlyDesktop] Created external attachment:", filename, "->", canonicalUri);
 
                         // Return true to prevent default file reading
                         return true;
@@ -1983,9 +3646,6 @@ fn get_dialog_init_script() -> &'static str {
                 };
 
                 invoke("set_external_attachments_config", { wikiPath: wikiPath, config: config })
-                    .then(function() {
-                        console.log("[TiddlyDesktop] Saved external attachments config to Tauri");
-                    })
                     .catch(function(err) {
                         console.error("[TiddlyDesktop] Failed to save config:", err);
                     });
@@ -2000,7 +3660,6 @@ fn get_dialog_init_script() -> &'static str {
                 ALL_CONFIG_TIDDLERS.forEach(function(title) {
                     if ($tw.wiki.tiddlerExists(title)) {
                         $tw.wiki.deleteTiddler(title);
-                        console.log("[TiddlyDesktop] Deleted config tiddler:", title);
                     }
                 });
 
@@ -2054,7 +3713,6 @@ fn get_dialog_init_script() -> &'static str {
                 setTimeout(function() {
                     $tw.saverHandler.numChanges = originalNumChanges;
                     $tw.saverHandler.updateDirtyStatus();
-                    console.log("[TiddlyDesktop] Injected config tiddlers, reset dirty counter");
                 }, 0);
 
                 // Watch for changes to config tiddlers and save to Tauri
@@ -2082,13 +3740,11 @@ fn get_dialog_init_script() -> &'static str {
                     });
                 }
 
-                console.log("[TiddlyDesktop] Cleanup handlers installed");
             }
 
             // Load config from Tauri, then inject tiddlers
             invoke("get_external_attachments_config", { wikiPath: wikiPath })
                 .then(function(config) {
-                    console.log("[TiddlyDesktop] Loaded config from Tauri:", config);
                     injectConfigTiddlers(config);
                 })
                 .catch(function(err) {
@@ -2173,7 +3829,6 @@ fn get_dialog_init_script() -> &'static str {
             // This is needed because getData() is restricted during dragstart
             var originalSetData = DataTransfer.prototype.setData;
             DataTransfer.prototype.setData = function(type, data) {
-                console.log("[TiddlyDesktop] setData called - type:", type, "data length:", data ? data.length : 0);
                 // Store in our global cache
                 if (!window.__tiddlyDesktopDragData) {
                     window.__tiddlyDesktopDragData = {};
@@ -2188,9 +3843,7 @@ fn get_dialog_init_script() -> &'static str {
             DataTransfer.prototype.getData = function(type) {
                 var result = originalGetData.call(this, type);
                 if (!result && window.__tiddlyDesktopDragData && window.__tiddlyDesktopDragData[type]) {
-                    var cachedData = window.__tiddlyDesktopDragData[type];
-                    console.log("[TiddlyDesktop] getData using cache for type:", type, "data:", cachedData);
-                    return cachedData;
+                    return window.__tiddlyDesktopDragData[type];
                 }
                 return result;
             };
@@ -2199,7 +3852,6 @@ fn get_dialog_init_script() -> &'static str {
             document.addEventListener("dragstart", function(event) {
                 // Skip synthetic events that we dispatched ourselves
                 if (event.__tiddlyDesktopSynthetic) {
-                    console.log("[TiddlyDesktop] Allowing synthetic dragstart through");
                     return;
                 }
 
@@ -2213,7 +3865,6 @@ fn get_dialog_init_script() -> &'static str {
                 }
 
                 // Native drag in WebKitGTK is unreliable - cancel and use synthetic drag for all elements
-                console.log("[TiddlyDesktop] Native drag detected, switching to synthetic:", target.tagName);
                 event.preventDefault();
 
                 // Immediately start our synthetic drag (don't wait for mouse movement threshold)
@@ -2235,12 +3886,10 @@ fn get_dialog_init_script() -> &'static str {
                 }, mouseDragDataTransfer);
                 syntheticDragStart.__tiddlyDesktopSynthetic = true;
 
-                console.log("[TiddlyDesktop] Dispatching immediate synthetic dragstart");
                 target.dispatchEvent(syntheticDragStart);
 
                 // Capture effectAllowed that TiddlyWiki set during dragstart
                 window.__tiddlyDesktopEffectAllowed = mouseDragDataTransfer.effectAllowed || "all";
-                console.log("[TiddlyDesktop] Captured effectAllowed:", window.__tiddlyDesktopEffectAllowed);
 
                 // Create drag image that follows cursor
                 createDragImage(target, event.clientX, event.clientY);
@@ -2267,6 +3916,10 @@ fn get_dialog_init_script() -> &'static str {
 
             // Enhance dragover to ensure drop is allowed
             document.addEventListener("dragover", function(event) {
+                // Skip synthetic events (already handled)
+                if (event.__tiddlyDesktopSynthetic) {
+                    return;
+                }
                 if (internalDragActive) {
                     // Ensure drop is allowed for internal drags
                     event.preventDefault();
@@ -2286,24 +3939,11 @@ fn get_dialog_init_script() -> &'static str {
                         }
                     }
                 }
+                // Note: External browser drags are now handled by the contentDragActive handlers above
             }, true);
-
-            // Log drop events for debugging - getData is globally patched
-            document.addEventListener("drop", function(event) {
-                if (internalDragActive && window.__tiddlyDesktopDragData) {
-                    console.log("[TiddlyDesktop] Drop event (capture) - target:", event.target.tagName, event.target.className);
-                    console.log("[TiddlyDesktop] Drop event (capture) - cached data types:", Object.keys(window.__tiddlyDesktopDragData));
-                }
-            }, true);
-
-            // Bubble phase listener to trace event propagation
-            document.addEventListener("drop", function(event) {
-                console.log("[TiddlyDesktop] Drop event (bubble) - reached document, target was:", event.target.tagName);
-            }, false);
 
             // Clean up when drag ends
             document.addEventListener("dragend", function(event) {
-                console.log("[TiddlyDesktop] Internal dragend");
                 window.__tiddlyDesktopDragData = null;
                 window.__tiddlyDesktopEffectAllowed = null;
                 internalDragSource = null;
@@ -2346,7 +3986,6 @@ fn get_dialog_init_script() -> &'static str {
                 // Find draggable element - check attribute, tc-draggable class, or tc-tiddlylink
                 var target = event.target.closest("[draggable='true'], .tc-draggable, .tc-tiddlylink");
                 if (target && event.button === 0) {
-                    console.log("[TiddlyDesktop] mousedown on draggable:", target.tagName, target.className);
                     mouseDownTarget = target;
                     mouseDownPos = { x: event.clientX, y: event.clientY };
                     mouseDragStarted = false;
@@ -2369,7 +4008,6 @@ fn get_dialog_init_script() -> &'static str {
                 if (Math.abs(dx) < DRAG_THRESHOLD && Math.abs(dy) < DRAG_THRESHOLD) return;
 
                 // Native dragstart didn't fire - synthesize drag events as fallback
-                console.log("[TiddlyDesktop] Fallback: synthesizing drag events for:", mouseDownTarget.tagName);
                 mouseDragStarted = true;
                 internalDragActive = true;
                 internalDragSource = mouseDownTarget;
@@ -2387,12 +4025,10 @@ fn get_dialog_init_script() -> &'static str {
                 }, mouseDragDataTransfer);
                 dragStartEvent.__tiddlyDesktopSynthetic = true;
 
-                console.log("[TiddlyDesktop] Dispatching fallback synthetic dragstart");
                 mouseDownTarget.dispatchEvent(dragStartEvent);
 
                 // Capture effectAllowed that TiddlyWiki set during dragstart
                 window.__tiddlyDesktopEffectAllowed = mouseDragDataTransfer.effectAllowed || "all";
-                console.log("[TiddlyDesktop] Captured effectAllowed:", window.__tiddlyDesktopEffectAllowed);
 
                 // Create drag image that follows cursor
                 createDragImage(mouseDownTarget, event.clientX, event.clientY);
@@ -2486,8 +4122,6 @@ fn get_dialog_init_script() -> &'static str {
 
                     // Fire drop - getData is globally patched to use our cache
                     if (target) {
-                        console.log("[TiddlyDesktop] Synthesizing drop on:", target.tagName, "with data:", Object.keys(window.__tiddlyDesktopDragData || {}));
-
                         var dropDt = new DataTransfer();
                         var dropEvent = createSyntheticDragEvent("drop", {
                             clientX: event.clientX,
@@ -2518,8 +4152,6 @@ fn get_dialog_init_script() -> &'static str {
             // Helper to clear all dragover states and end drag
             function cancelDrag(reason) {
                 if (!internalDragActive && !mouseDragStarted) return;
-
-                console.log("[TiddlyDesktop] Canceling drag:", reason);
 
                 var dt = mouseDragDataTransfer || new DataTransfer();
 
@@ -2664,8 +4296,6 @@ fn get_dialog_init_script() -> &'static str {
                     extraVariables.currentTiddler = title;
                     extraVariables['tv-window-id'] = windowID;
 
-                    console.log('[TiddlyDesktop] tm-open-window:', title, 'template:', template);
-
                     // Call Tauri command to open tiddler window
                     invoke('open_tiddler_window', {
                         parentLabel: windowLabel,
@@ -2680,7 +4310,6 @@ fn get_dialog_init_script() -> &'static str {
                     }).then(function(newLabel) {
                         // Store reference in our own tracking (not $tw.windows)
                         window.__tiddlyDesktopWindows[windowID] = { label: newLabel, title: title };
-                        console.log('[TiddlyDesktop] Opened tiddler window:', newLabel);
                     }).catch(function(err) {
                         console.error('[TiddlyDesktop] Failed to open tiddler window:', err);
                     });
@@ -2741,7 +4370,6 @@ fn get_dialog_init_script() -> &'static str {
                     var payload = event.payload;
                     // Only process if it's for the same wiki and from a different window
                     if (payload.wikiPath === wikiPath && payload.sourceWindow !== currentWindowLabel) {
-                        console.log('[TiddlyDesktop] Received tiddler sync:', payload.title, 'from:', payload.sourceWindow);
                         isReceivingSync = true;
                         try {
                             if (payload.deleted) {
@@ -3132,6 +4760,14 @@ async fn open_wiki_folder(app: tauri::AppHandle, path: String) -> Result<WikiEnt
         // for external attachments support. File drops are handled via Tauri events.
         .build()
         .map_err(|e| format!("Failed to create window: {}", e))?;
+
+    // Set up platform-specific drag handlers
+    #[cfg(target_os = "linux")]
+    linux_drag::setup_drag_handlers(&window);
+    #[cfg(target_os = "windows")]
+    windows_drag::setup_drag_handlers(&window);
+    #[cfg(target_os = "macos")]
+    macos_drag::setup_drag_handlers(&window);
 
     // Handle window close - JS onCloseRequested handles unsaved changes confirmation
     let app_handle = app.clone();
@@ -3873,6 +5509,14 @@ async fn open_wiki_window(app: tauri::AppHandle, path: String) -> Result<WikiEnt
         .build()
         .map_err(|e| format!("Failed to create window: {}", e))?;
 
+    // Set up platform-specific drag handlers
+    #[cfg(target_os = "linux")]
+    linux_drag::setup_drag_handlers(&window);
+    #[cfg(target_os = "windows")]
+    windows_drag::setup_drag_handlers(&window);
+    #[cfg(target_os = "macos")]
+    macos_drag::setup_drag_handlers(&window);
+
     // Handle window close - JS onCloseRequested handles unsaved changes confirmation
     let app_handle = app.clone();
     let label_clone = label.clone();
@@ -3989,6 +5633,14 @@ async fn open_tiddler_window(
     let window = builder
         .build()
         .map_err(|e| format!("Failed to create tiddler window: {}", e))?;
+
+    // Set up platform-specific drag handlers
+    #[cfg(target_os = "linux")]
+    linux_drag::setup_drag_handlers(&window);
+    #[cfg(target_os = "windows")]
+    windows_drag::setup_drag_handlers(&window);
+    #[cfg(target_os = "macos")]
+    macos_drag::setup_drag_handlers(&window);
 
     // Handle window close
     let app_handle = app.clone();
@@ -4391,10 +6043,6 @@ window.__IS_MAIN_WIKI__ = {};
                     }}
                     return 0;
                 }});
-                console.log('TiddlyDesktop saver: added to saverHandler, total savers:', $tw.saverHandler.savers.length);
-                console.log('TiddlyDesktop saver: savers are (saveWiki checks from end):', $tw.saverHandler.savers.map(function(s) {{
-                    return s.info ? s.info.name + ' (pri:' + s.info.priority + ')' : 'unknown';
-                }}).join(', '));
             }}
         }}
 
@@ -4652,13 +6300,21 @@ pub fn run() {
 
             // Create the main window programmatically with initialization script
             let icon = Image::from_bytes(include_bytes!("../icons/icon.png"))?;
-            WebviewWindowBuilder::new(app, "main", WebviewUrl::External(wiki_url.parse().unwrap()))
+            let main_window = WebviewWindowBuilder::new(app, "main", WebviewUrl::External(wiki_url.parse().unwrap()))
                 .title("TiddlyDesktopRS")
                 .inner_size(800.0, 600.0)
                 .icon(icon)?
                 .window_classname("tiddlydesktop-rs")
                 .initialization_script(get_dialog_init_script())
                 .build()?;
+
+            // Set up platform-specific drag handlers
+            #[cfg(target_os = "linux")]
+            linux_drag::setup_drag_handlers(&main_window);
+            #[cfg(target_os = "windows")]
+            windows_drag::setup_drag_handlers(&main_window);
+            #[cfg(target_os = "macos")]
+            macos_drag::setup_drag_handlers(&main_window);
 
             setup_system_tray(app)?;
 

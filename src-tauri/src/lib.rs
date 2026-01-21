@@ -417,10 +417,14 @@ mod linux_drag {
 ///
 /// On Windows:
 /// 1. We use Tauri's with_webview to access the WebView2 controller
-/// 2. We ensure AllowExternalDrop is enabled
-/// 3. We register an IDropTarget on the PARENT window (not Chrome_WidgetWin_1)
-///    to intercept drags before they reach WebView2's internal handler
+/// 2. We DISABLE AllowExternalDrop so WebView2 doesn't intercept external drags
+/// 3. We register an IDropTarget on the PARENT window to handle all external drags
 /// 4. We emit events to JavaScript which handles the actual drop processing
+///
+/// The key insight is that WebView2's internal drag handling intercepts drags
+/// before they reach our IDropTarget on the parent window. By disabling
+/// AllowExternalDrop, we force WebView2 to ignore external drags, allowing
+/// them to be handled by our IDropTarget instead.
 #[cfg(target_os = "windows")]
 mod windows_drag {
     use std::collections::HashMap;
@@ -442,6 +446,7 @@ mod windows_drag {
     use windows::Win32::System::Memory::{GlobalLock, GlobalUnlock, GlobalSize};
     use windows::Win32::UI::Shell::DragQueryFileW;
     use windows::Win32::UI::Shell::HDROP;
+    use webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2Controller4;
 
     /// Thread-safe wrapper for our drop target
     struct SendDropTarget(*mut DropTargetImpl);
@@ -923,6 +928,36 @@ mod windows_drag {
     /// Set up drag-drop handling for a webview window
     pub fn setup_drag_handlers(window: &WebviewWindow) {
         let window_for_drop = window.clone();
+        let window_for_webview = window.clone();
+
+        // First, disable WebView2's AllowExternalDrop so our IDropTarget receives events
+        // This must be done via with_webview which runs on the webview's thread
+        let _ = window_for_webview.with_webview(move |webview| {
+            #[cfg(windows)]
+            unsafe {
+                use windows::core::Interface;
+
+                // Get the WebView2 controller and cast to ICoreWebView2Controller4
+                // which has the AllowExternalDrop property
+                let controller = webview.controller();
+                if let Ok(controller4) = controller.cast::<ICoreWebView2Controller4>() {
+                    // Disable external drop handling so drags pass through to our IDropTarget
+                    match controller4.SetAllowExternalDrop(false) {
+                        Ok(()) => {
+                            eprintln!("[TiddlyDesktop] Windows: Disabled WebView2 AllowExternalDrop");
+                        }
+                        Err(e) => {
+                            eprintln!("[TiddlyDesktop] Windows: Failed to disable AllowExternalDrop: {:?}", e);
+                        }
+                    }
+                } else {
+                    eprintln!("[TiddlyDesktop] Windows: Could not get ICoreWebView2Controller4 (older WebView2?)");
+                }
+            }
+        });
+
+        // Now register our IDropTarget on the parent window
+        // Use a thread with delay to ensure WebView2 is fully initialized
         std::thread::spawn(move || {
             std::thread::sleep(std::time::Duration::from_millis(500));
 
@@ -3580,6 +3615,10 @@ fn get_dialog_init_script() -> &'static str {
                 contentDragEnterCount = 1;
                 currentTarget = contentDragTarget;
 
+                // IMPORTANT: Call preventDefault on dragenter to indicate we accept the drop
+                // Without this, the browser shows "no drop allowed" cursor
+                event.preventDefault();
+
                 // Dispatch synthetic dragenter to light up dropzone
                 var enterDt = createContentDataTransfer();
                 var enterEvent = createSyntheticDragEvent("dragenter", {
@@ -3834,6 +3873,15 @@ fn get_dialog_init_script() -> &'static str {
                     return;
                 }
 
+                // When native handler (IDropTarget on Windows, GTK on Linux) is active,
+                // prevent default browser behavior but don't capture data - the native
+                // handler will provide real data via td-drag-content event.
+                if (nativeDragActive) {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    return;
+                }
+
                 var dt = event.dataTransfer;
                 if (!dt) return;
 
@@ -3865,7 +3913,18 @@ fn get_dialog_init_script() -> &'static str {
                 }
 
                 // Store captured content if we're tracking a content drag
-                if (contentDragActive && capturedData.types.length > 0 && (Object.keys(capturedData.data).length > 0 || capturedData.files.length > 0)) {
+                // Skip when nativeDragActive is true - the native handler (IDropTarget on Windows,
+                // GTK on Linux) will provide the real data via td-drag-content event.
+                // WebView2 cannot access external process clipboard data, so getData() returns empty.
+                if (!nativeDragActive && contentDragActive && capturedData.types.length > 0 && (Object.keys(capturedData.data).length > 0 || capturedData.files.length > 0)) {
+                    // Additional check: ensure we have actual non-empty content, not just empty strings
+                    var hasActualContent = capturedData.files.length > 0 || Object.keys(capturedData.data).some(function(key) {
+                        return capturedData.data[key] && capturedData.data[key].length > 0;
+                    });
+                    if (!hasActualContent) {
+                        return; // Don't store empty data
+                    }
+
                     pendingContentDropData = capturedData;
                     pendingContentDropPos = { x: event.clientX, y: event.clientY };
 
@@ -3876,7 +3935,7 @@ fn get_dialog_init_script() -> &'static str {
                     // On Windows/macOS, tauri://drag-drop may not fire for content drags
                     // Use a short timeout to process the drop directly if Tauri doesn't handle it
                     // Skip this when native handler is active (Linux GTK, Windows IDropTarget)
-                    if (!nativeDragActive && !isDragging) {
+                    if (!isDragging) {
                         // Clear any existing timeout
                         if (contentDropTimeout) {
                             clearTimeout(contentDropTimeout);

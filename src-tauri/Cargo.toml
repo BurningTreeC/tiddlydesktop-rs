@@ -58,6 +58,8 @@ windows = { version = "0.61", features = [
 ] }
 windows-core = "0.61"
 lazy_static = "1.5"
+# WebView2 COM bindings for accessing ICoreWebView2Controller4.AllowExternalDrop
+webview2-com = "0.38"
 
 # macOS drag-drop handling via objc2 (versions must match Tauri's objc2 dependency)
 [target.'cfg(target_os = "macos")'.dependencies]

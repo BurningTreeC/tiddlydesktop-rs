@@ -14,13 +14,3 @@ accepted = [
     "Unicode-3.0",
     "Unicode-DFS-2016",
 ]
-
-# Ignore dev dependencies
-ignore-dev-dependencies = true
-
-# Ignore build dependencies
-ignore-build-dependencies = true
-
-[output]
-# Group by license type
-format = "text"

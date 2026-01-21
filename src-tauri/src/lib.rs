@@ -417,7 +417,6 @@ mod windows_drag {
     use std::collections::HashMap;
     use std::ffi::OsString;
     use std::os::windows::ffi::OsStringExt;
-    use std::sync::Arc;
     use tauri::{Emitter, WebviewWindow};
     use windows::core::{implement, Interface};
     use windows::Win32::Foundation::{HWND, POINTL};
@@ -783,17 +782,18 @@ mod windows_drag {
     }
 }
 
-/// macOS drag-drop handling - captures content from external drags via Cocoa
+/// macOS drag-drop handling - captures content from external drags via objc2
 #[cfg(target_os = "macos")]
 mod macos_drag {
     use std::collections::HashMap;
     use std::ffi::CStr;
     use std::sync::Mutex;
-    use cocoa::base::{id, nil, YES, NO};
-    use cocoa::foundation::{NSArray, NSPoint};
-    use objc::declare::ClassDecl;
-    use objc::runtime::{Class, Object, Sel, BOOL, class_getName};
-    use objc::{class, msg_send, sel, sel_impl};
+    use std::ptr::NonNull;
+    use objc2::rc::Retained;
+    use objc2::runtime::{AnyClass, AnyObject, Bool, ClassBuilder, Sel};
+    use objc2::{class, msg_send, sel, ClassType};
+    use objc2_foundation::{NSArray, NSDictionary, NSPoint, NSString, NSURL};
+    use objc2_app_kit::{NSPasteboard, NSDraggingInfo, NSView};
     use tauri::{Emitter, WebviewWindow};
 
     // Store window references for drag callbacks
@@ -813,28 +813,24 @@ mod macos_drag {
     const NS_DRAG_OPERATION_NONE: usize = 0;
     const NS_DRAG_OPERATION_COPY: usize = 1;
 
-    /// Create an NSString from a Rust string slice (non-deprecated method)
-    unsafe fn nsstring_from_str(s: &str) -> id {
-        let c_str = std::ffi::CString::new(s).unwrap();
-        msg_send![class!(NSString), stringWithUTF8String: c_str.as_ptr()]
+    /// Create an NSString from a Rust string slice
+    fn nsstring_from_str(s: &str) -> Retained<NSString> {
+        NSString::from_str(s)
     }
 
     /// Get string from NSString
-    unsafe fn nsstring_to_string(ns_string: id) -> Option<String> {
-        if ns_string == nil {
-            return None;
-        }
-        let utf8: *const i8 = msg_send![ns_string, UTF8String];
-        if utf8.is_null() {
-            return None;
-        }
-        Some(CStr::from_ptr(utf8).to_string_lossy().to_string())
+    fn nsstring_to_string(ns_string: &NSString) -> String {
+        ns_string.to_string()
     }
 
     /// Extract drag data from dragging info pasteboard
-    unsafe fn extract_drag_data(dragging_info: id) -> Option<DragContentData> {
-        let pasteboard: id = msg_send![dragging_info, draggingPasteboard];
-        if pasteboard == nil {
+    unsafe fn extract_drag_data(dragging_info: *mut AnyObject) -> Option<DragContentData> {
+        if dragging_info.is_null() {
+            return None;
+        }
+
+        let pasteboard: *mut AnyObject = msg_send![dragging_info, draggingPasteboard];
+        if pasteboard.is_null() {
             return None;
         }
 
@@ -857,8 +853,11 @@ mod macos_drag {
 
         for (pb_type_name, mime_type) in type_mappings {
             let pb_type = nsstring_from_str(pb_type_name);
-            let value: id = msg_send![pasteboard, stringForType: pb_type];
-            if let Some(value_str) = nsstring_to_string(value) {
+            let value: *mut AnyObject = msg_send![pasteboard, stringForType: &*pb_type];
+            if !value.is_null() {
+                // Cast to NSString and get the value
+                let ns_str = value as *const NSString;
+                let value_str = nsstring_to_string(&*ns_str);
                 if !types.contains(&mime_type.to_string()) {
                     types.push(mime_type.to_string());
                 }
@@ -874,32 +873,38 @@ mod macos_drag {
     }
 
     /// Extract file paths from dragging info
-    unsafe fn extract_file_paths(dragging_info: id) -> Vec<String> {
+    unsafe fn extract_file_paths(dragging_info: *mut AnyObject) -> Vec<String> {
         let mut paths = Vec::new();
-        let pasteboard: id = msg_send![dragging_info, draggingPasteboard];
-        if pasteboard == nil {
+        if dragging_info.is_null() {
+            return paths;
+        }
+
+        let pasteboard: *mut AnyObject = msg_send![dragging_info, draggingPasteboard];
+        if pasteboard.is_null() {
             return paths;
         }
 
         let file_url_type = nsstring_from_str("public.file-url");
-        let pb_types: id = msg_send![pasteboard, types];
+        let pb_types: *mut AnyObject = msg_send![pasteboard, types];
 
-        if pb_types != nil {
-            let contains: BOOL = msg_send![pb_types, containsObject: file_url_type];
-            if contains == YES {
-                let url_class = class!(NSURL);
-                let classes: id = msg_send![class!(NSArray), arrayWithObject: url_class];
-                let options: id = msg_send![class!(NSDictionary), dictionary];
-                let urls: id = msg_send![pasteboard, readObjectsForClasses: classes options: options];
+        if !pb_types.is_null() {
+            let contains: Bool = msg_send![pb_types, containsObject: &*file_url_type];
+            if contains.as_bool() {
+                let url_class = NSURL::class();
+                let classes: *mut AnyObject = msg_send![class!(NSArray), arrayWithObject: url_class];
+                let options: *mut AnyObject = msg_send![class!(NSDictionary), dictionary];
+                let urls: *mut AnyObject = msg_send![pasteboard, readObjectsForClasses: classes options: options];
 
-                if urls != nil {
+                if !urls.is_null() {
                     let count: usize = msg_send![urls, count];
                     for i in 0..count {
-                        let url: id = msg_send![urls, objectAtIndex: i];
-                        let is_file: BOOL = msg_send![url, isFileURL];
-                        if is_file == YES {
-                            let path: id = msg_send![url, path];
-                            if let Some(path_str) = nsstring_to_string(path) {
+                        let url: *mut AnyObject = msg_send![urls, objectAtIndex: i];
+                        let is_file: Bool = msg_send![url, isFileURL];
+                        if is_file.as_bool() {
+                            let path: *mut AnyObject = msg_send![url, path];
+                            if !path.is_null() {
+                                let ns_str = path as *const NSString;
+                                let path_str = nsstring_to_string(&*ns_str);
                                 paths.push(path_str);
                             }
                         }
@@ -910,25 +915,13 @@ mod macos_drag {
         paths
     }
 
-    /// Check if drag contains file URLs
-    unsafe fn has_file_urls(dragging_info: id) -> bool {
-        let pasteboard: id = msg_send![dragging_info, draggingPasteboard];
-        if pasteboard == nil {
-            return false;
-        }
-        let file_url_type = nsstring_from_str("public.file-url");
-        let pb_types: id = msg_send![pasteboard, types];
-        if pb_types != nil {
-            let contains: BOOL = msg_send![pb_types, containsObject: file_url_type];
-            return contains == YES;
-        }
-        false
-    }
-
     /// Get window from view
-    unsafe fn get_window_for_view(view: id) -> Option<WebviewWindow> {
-        let ns_window: id = msg_send![view, window];
-        if ns_window == nil {
+    unsafe fn get_window_for_view(view: *mut AnyObject) -> Option<WebviewWindow> {
+        if view.is_null() {
+            return None;
+        }
+        let ns_window: *mut AnyObject = msg_send![view, window];
+        if ns_window.is_null() {
             return None;
         }
         let window_id = ns_window as usize;
@@ -936,11 +929,10 @@ mod macos_drag {
     }
 
     /// draggingEntered: callback - called when drag enters the view
-    extern "C" fn dragging_entered(this: &Object, _sel: Sel, dragging_info: id) -> usize {
+    extern "C" fn dragging_entered(this: *mut AnyObject, _sel: Sel, dragging_info: *mut AnyObject) -> usize {
         unsafe {
-            if let Some(window) = get_window_for_view(this as *const _ as id) {
+            if let Some(window) = get_window_for_view(this) {
                 // Accept all drags and emit motion event
-                // Both file and content drags are handled in performDragOperation
                 let point: NSPoint = msg_send![dragging_info, draggingLocation];
                 let _ = window.emit("td-drag-motion", serde_json::json!({
                     "x": point.x as i32,
@@ -953,9 +945,9 @@ mod macos_drag {
     }
 
     /// draggingUpdated: callback - called continuously during drag
-    extern "C" fn dragging_updated(this: &Object, _sel: Sel, dragging_info: id) -> usize {
+    extern "C" fn dragging_updated(this: *mut AnyObject, _sel: Sel, dragging_info: *mut AnyObject) -> usize {
         unsafe {
-            if let Some(window) = get_window_for_view(this as *const _ as id) {
+            if let Some(window) = get_window_for_view(this) {
                 let point: NSPoint = msg_send![dragging_info, draggingLocation];
                 let _ = window.emit("td-drag-motion", serde_json::json!({
                     "x": point.x as i32,
@@ -968,18 +960,18 @@ mod macos_drag {
     }
 
     /// draggingExited: callback - called when drag leaves the view
-    extern "C" fn dragging_exited(this: &Object, _sel: Sel, _dragging_info: id) {
+    extern "C" fn dragging_exited(this: *mut AnyObject, _sel: Sel, _dragging_info: *mut AnyObject) {
         unsafe {
-            if let Some(window) = get_window_for_view(this as *const _ as id) {
+            if let Some(window) = get_window_for_view(this) {
                 let _ = window.emit("td-drag-leave", ());
             }
         }
     }
 
     /// performDragOperation: callback - called when drop occurs
-    extern "C" fn perform_drag_operation(this: &Object, _sel: Sel, dragging_info: id) -> BOOL {
+    extern "C" fn perform_drag_operation(this: *mut AnyObject, _sel: Sel, dragging_info: *mut AnyObject) -> Bool {
         unsafe {
-            if let Some(window) = get_window_for_view(this as *const _ as id) {
+            if let Some(window) = get_window_for_view(this) {
                 let point: NSPoint = msg_send![dragging_info, draggingLocation];
 
                 // Emit drop-start
@@ -994,32 +986,37 @@ mod macos_drag {
                     let _ = window.emit("td-file-drop", serde_json::json!({
                         "paths": file_paths
                     }));
-                    return YES;
+                    return Bool::YES;
                 }
 
                 // Content drop
                 if let Some(content_data) = extract_drag_data(dragging_info) {
                     let _ = window.emit("td-drag-content", &content_data);
-                    return YES;
+                    return Bool::YES;
                 }
             }
         }
-        NO
+        Bool::NO
     }
 
-    // Declare object_setClass from Objective-C runtime (not exported by objc crate)
+    // Declare object_setClass from Objective-C runtime
     extern "C" {
-        fn object_setClass(obj: *mut Object, cls: *const Class) -> *const Class;
+        fn object_setClass(obj: *mut AnyObject, cls: *const AnyClass) -> *const AnyClass;
+        fn class_getName(cls: *const AnyClass) -> *const std::ffi::c_char;
+        fn objc_getClass(name: *const std::ffi::c_char) -> *const AnyClass;
     }
 
     /// Add drag handling methods to a specific view instance using method swizzling
-    unsafe fn setup_drag_methods_on_view(view: id) {
+    unsafe fn setup_drag_methods_on_view(view: *mut AnyObject) {
+        if view.is_null() {
+            return;
+        }
 
         // Get the view's class
-        let view_class = (*view).class();
+        let view_class: *const AnyClass = msg_send![view, class];
 
         // Check if we've already added methods to this class
-        let class_name_ptr: *const i8 = class_getName(view_class);
+        let class_name_ptr = class_getName(view_class);
         let class_name = CStr::from_ptr(class_name_ptr).to_string_lossy();
 
         // Create a dynamic subclass for this specific view
@@ -1027,36 +1024,38 @@ mod macos_drag {
         let subclass_cstr = std::ffi::CString::new(subclass_name.clone()).unwrap();
 
         // Check if subclass already exists
-        let existing_class = objc::runtime::objc_getClass(subclass_cstr.as_ptr());
-        let subclass: *const Class = if !existing_class.is_null() {
-            existing_class as *const Class
+        let existing_class = objc_getClass(subclass_cstr.as_ptr());
+        let subclass: *const AnyClass = if !existing_class.is_null() {
+            existing_class
         } else {
             // Create new subclass
-            if let Some(mut decl) = ClassDecl::new(&subclass_name, view_class) {
-                decl.add_method(
+            let superclass = &*view_class;
+            if let Some(mut builder) = ClassBuilder::new(&subclass_name, superclass) {
+                builder.add_method(
                     sel!(draggingEntered:),
-                    dragging_entered as extern "C" fn(&Object, Sel, id) -> usize,
+                    dragging_entered as extern "C" fn(*mut AnyObject, Sel, *mut AnyObject) -> usize,
                 );
-                decl.add_method(
+                builder.add_method(
                     sel!(draggingUpdated:),
-                    dragging_updated as extern "C" fn(&Object, Sel, id) -> usize,
+                    dragging_updated as extern "C" fn(*mut AnyObject, Sel, *mut AnyObject) -> usize,
                 );
-                decl.add_method(
+                builder.add_method(
                     sel!(draggingExited:),
-                    dragging_exited as extern "C" fn(&Object, Sel, id),
+                    dragging_exited as extern "C" fn(*mut AnyObject, Sel, *mut AnyObject),
                 );
-                decl.add_method(
+                builder.add_method(
                     sel!(performDragOperation:),
-                    perform_drag_operation as extern "C" fn(&Object, Sel, id) -> BOOL,
+                    perform_drag_operation as extern "C" fn(*mut AnyObject, Sel, *mut AnyObject) -> Bool,
                 );
-                decl.register() as *const Class
+                let registered = builder.register();
+                registered as *const AnyClass
             } else {
                 return;
             }
         };
 
         // Change the view's class to our subclass (isa-swizzling)
-        object_setClass(view as *mut Object, subclass);
+        object_setClass(view, subclass);
     }
 
     /// Set up drag-drop handling for a webview window
@@ -1065,41 +1064,45 @@ mod macos_drag {
 
         // Get the NSWindow
         if let Ok(ns_window) = window.ns_window() {
-            let ns_window_id = ns_window as id;
+            let ns_window_ptr = ns_window as *mut AnyObject;
 
             unsafe {
                 // Store window reference for callbacks
-                let window_id = ns_window_id as usize;
+                let window_id = ns_window_ptr as usize;
                 WINDOW_MAP.lock().unwrap().insert(window_id, window_clone);
 
-                // Register for drag types (in order of preference)
-                let types = NSArray::arrayWithObjects(nil, &[
+                // Build array of drag types (in order of preference)
+                let type_strings: Vec<Retained<NSString>> = vec![
                     nsstring_from_str("text/vnd.tiddler"),
                     nsstring_from_str("public.url"),
                     nsstring_from_str("public.utf8-plain-text"),
                     nsstring_from_str("NSStringPboardType"),
                     nsstring_from_str("public.html"),
                     nsstring_from_str("public.file-url"),
-                ]);
+                ];
+                let type_refs: Vec<&NSString> = type_strings.iter().map(|s| &**s).collect();
+                let types = NSArray::from_slice(&type_refs);
 
-                let content_view: id = msg_send![ns_window_id, contentView];
-                if content_view != nil {
+                let content_view: *mut AnyObject = msg_send![ns_window_ptr, contentView];
+                if !content_view.is_null() {
                     // Find the WKWebView
-                    fn find_webview(view: id) -> Option<id> {
-                        unsafe {
-                            let class_name: *const i8 = class_getName((*view).class());
-                            let name = CStr::from_ptr(class_name).to_string_lossy();
-                            if name.contains("WKWebView") {
-                                return Some(view);
-                            }
-                            let subviews: id = msg_send![view, subviews];
-                            if subviews != nil {
-                                let count: usize = msg_send![subviews, count];
-                                for i in 0..count {
-                                    let subview: id = msg_send![subviews, objectAtIndex: i];
-                                    if let Some(wv) = find_webview(subview) {
-                                        return Some(wv);
-                                    }
+                    unsafe fn find_webview(view: *mut AnyObject) -> Option<*mut AnyObject> {
+                        if view.is_null() {
+                            return None;
+                        }
+                        let view_class: *const AnyClass = msg_send![view, class];
+                        let class_name_ptr = class_getName(view_class);
+                        let name = CStr::from_ptr(class_name_ptr).to_string_lossy();
+                        if name.contains("WKWebView") {
+                            return Some(view);
+                        }
+                        let subviews: *mut AnyObject = msg_send![view, subviews];
+                        if !subviews.is_null() {
+                            let count: usize = msg_send![subviews, count];
+                            for i in 0..count {
+                                let subview: *mut AnyObject = msg_send![subviews, objectAtIndex: i];
+                                if let Some(wv) = find_webview(subview) {
+                                    return Some(wv);
                                 }
                             }
                         }
@@ -1108,7 +1111,7 @@ mod macos_drag {
 
                     if let Some(webview) = find_webview(content_view) {
                         // Register drag types on the webview
-                        let _: () = msg_send![webview, registerForDraggedTypes: types];
+                        let _: () = msg_send![webview, registerForDraggedTypes: &*types];
 
                         // Swizzle the webview's class to add our drag handlers
                         setup_drag_methods_on_view(webview);

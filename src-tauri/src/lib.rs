@@ -417,7 +417,7 @@ mod windows_drag {
     use std::collections::HashMap;
     use std::ffi::OsString;
     use std::os::windows::ffi::OsStringExt;
-    use std::sync::{Arc, Mutex};
+    use std::sync::Mutex;
     use tauri::{Emitter, WebviewWindow};
     use windows::core::implement;
     use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINTL, WPARAM};
@@ -435,26 +435,38 @@ mod windows_drag {
         DragQueryFileW, HDROP, SetWindowSubclass, DefSubclassProc, RemoveWindowSubclass,
     };
     use windows::Win32::UI::WindowsAndMessaging::{
-        SetTimer, KillTimer, WM_TIMER, PostMessageW, EnumChildWindows, GetClassNameW, WNDENUMPROC,
+        SetTimer, KillTimer, WM_TIMER, EnumChildWindows, GetClassNameW, WNDENUMPROC,
     };
 
     // Subclass ID for our window subclass
     const SUBCLASS_ID: usize = 0x5401;
     // Timer ID for periodic re-registration check
     const REREGISTER_TIMER_ID: usize = 0x5402;
-    // Custom message to trigger re-registration from main thread
-    const WM_TD_REREGISTER: u32 = 0x8000 + 1;
+
+    /// Thread-safe wrapper for HWND (Windows handles are safe to use across threads)
+    #[derive(Clone, Copy)]
+    struct SendHwnd(isize);
+    unsafe impl Send for SendHwnd {}
+    unsafe impl Sync for SendHwnd {}
+    impl SendHwnd {
+        fn new(hwnd: HWND) -> Self { Self(hwnd.0 as isize) }
+        fn get(&self) -> HWND { HWND(self.0 as *mut _) }
+    }
+
+    /// Thread-safe wrapper for IDropTarget (COM pointers are ref-counted)
+    struct SendDropTarget(IDropTarget);
+    unsafe impl Send for SendDropTarget {}
+    unsafe impl Sync for SendDropTarget {}
 
     /// State for managing drop target registration
     struct DropTargetState {
-        window: WebviewWindow,
-        target_hwnd: HWND,
-        drop_target: IDropTarget,
+        target_hwnd: SendHwnd,
+        drop_target: SendDropTarget,
     }
 
-    // Global state for registered drop targets (keyed by HWND)
+    // Global state for registered drop targets (keyed by HWND as isize)
     lazy_static::lazy_static! {
-        static ref DROP_TARGET_MAP: Mutex<HashMap<isize, Arc<DropTargetState>>> = Mutex::new(HashMap::new());
+        static ref DROP_TARGET_MAP: Mutex<HashMap<isize, DropTargetState>> = Mutex::new(HashMap::new());
     }
 
     /// Clipboard format constants
@@ -843,21 +855,13 @@ mod windows_drag {
         wparam: WPARAM,
         lparam: LPARAM,
         _uid_subclass: usize,
-        dw_ref_data: usize,
+        _dw_ref_data: usize,
     ) -> LRESULT {
-        match msg {
-            WM_TIMER if wparam.0 == REREGISTER_TIMER_ID => {
-                // Periodic check - re-register our drop target
-                // This handles cases where WebView2 re-registers after navigation
-                reregister_drop_target(hwnd);
-                return LRESULT(0);
-            }
-            WM_TD_REREGISTER => {
-                // Explicit re-registration request
-                reregister_drop_target(hwnd);
-                return LRESULT(0);
-            }
-            _ => {}
+        if msg == WM_TIMER && wparam.0 == REREGISTER_TIMER_ID {
+            // Periodic check - re-register our drop target
+            // This handles cases where WebView2 re-registers after navigation
+            reregister_drop_target(hwnd);
+            return LRESULT(0);
         }
         DefSubclassProc(hwnd, msg, wparam, lparam)
     }
@@ -868,11 +872,7 @@ mod windows_drag {
         if let Some(state) = map.get(&(hwnd.0 as isize)) {
             // Revoke any existing handler and register ours
             let _ = RevokeDragDrop(hwnd);
-            let result = RegisterDragDrop(hwnd, &state.drop_target);
-            if result.is_err() {
-                // Registration failed - might already be registered by us
-                // This is expected if we're the current handler
-            }
+            let _ = RegisterDragDrop(hwnd, &state.drop_target.0);
         }
     }
 
@@ -883,14 +883,13 @@ mod windows_drag {
         target_hwnd: HWND,
     ) {
         // Create our drop target
-        let drop_target: IDropTarget = DropTarget::new(window.clone()).into();
+        let drop_target: IDropTarget = DropTarget::new(window).into();
 
         // Store state for later re-registration
-        let state = Arc::new(DropTargetState {
-            window: window.clone(),
-            target_hwnd,
-            drop_target: drop_target.clone(),
-        });
+        let state = DropTargetState {
+            target_hwnd: SendHwnd::new(target_hwnd),
+            drop_target: SendDropTarget(drop_target.clone()),
+        };
         DROP_TARGET_MAP.lock().unwrap().insert(target_hwnd.0 as isize, state);
 
         // Revoke any existing drop target
@@ -927,21 +926,12 @@ mod windows_drag {
         }
 
         // Also subclass the parent window to catch navigation events
-        let parent_subclass_result = SetWindowSubclass(
+        let _ = SetWindowSubclass(
             parent_hwnd,
             Some(subclass_proc),
             SUBCLASS_ID + 1,
             0,
         );
-        if parent_subclass_result.as_bool() {
-            // Store state for parent window too
-            let parent_state = Arc::new(DropTargetState {
-                window,
-                target_hwnd,
-                drop_target,
-            });
-            DROP_TARGET_MAP.lock().unwrap().insert(parent_hwnd.0 as isize, parent_state);
-        }
     }
 
     /// Set up drag-drop handling for a webview window

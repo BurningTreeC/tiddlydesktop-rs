@@ -3,6 +3,7 @@ node_modules/
 
 # Rust/Cargo
 src-tauri/target/
+target/
 **/*.rs.bk
 Cargo.lock
 

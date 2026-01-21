@@ -1,7 +1,0 @@
-title: $:/plugins/tiddlywiki/tiddlydesktop-rs/images/folder-icon
-tags: $:/tags/Image
-type: text/vnd.tiddlywiki
-
-<svg class="td-folder-icon" viewBox="0 0 128 128" width="48" height="48">
-<path fill="#f5a623" d="M112 32H64l-8-16H16a8 8 0 00-8 8v80a8 8 0 008 8h96a8 8 0 008-8V40a8 8 0 00-8-8zM16 24h36l8 16h52v8H16V24zm0 80V56h96v48H16z"/>
-</svg>

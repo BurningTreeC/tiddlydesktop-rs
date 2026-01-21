@@ -417,9 +417,10 @@ mod windows_drag {
     use std::collections::HashMap;
     use std::ffi::OsString;
     use std::os::windows::ffi::OsStringExt;
+    use std::sync::{Arc, Mutex};
     use tauri::{Emitter, WebviewWindow};
     use windows::core::implement;
-    use windows::Win32::Foundation::{HWND, POINTL};
+    use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINTL, WPARAM};
     use windows::Win32::System::Com::{
         CoInitializeEx, IDataObject, COINIT_APARTMENTTHREADED, TYMED_HGLOBAL,
         FORMATETC, DVASPECT_CONTENT,
@@ -430,7 +431,31 @@ mod windows_drag {
     };
     use windows::Win32::System::SystemServices::MODIFIERKEYS_FLAGS;
     use windows::Win32::System::Memory::{GlobalLock, GlobalUnlock, GlobalSize};
-    use windows::Win32::UI::Shell::{DragQueryFileW, HDROP};
+    use windows::Win32::UI::Shell::{
+        DragQueryFileW, HDROP, SetWindowSubclass, DefSubclassProc, RemoveWindowSubclass,
+    };
+    use windows::Win32::UI::WindowsAndMessaging::{
+        SetTimer, KillTimer, WM_TIMER, PostMessageW, EnumChildWindows, GetClassNameW, WNDENUMPROC,
+    };
+
+    // Subclass ID for our window subclass
+    const SUBCLASS_ID: usize = 0x5401;
+    // Timer ID for periodic re-registration check
+    const REREGISTER_TIMER_ID: usize = 0x5402;
+    // Custom message to trigger re-registration from main thread
+    const WM_TD_REREGISTER: u32 = 0x8000 + 1;
+
+    /// State for managing drop target registration
+    struct DropTargetState {
+        window: WebviewWindow,
+        target_hwnd: HWND,
+        drop_target: IDropTarget,
+    }
+
+    // Global state for registered drop targets (keyed by HWND)
+    lazy_static::lazy_static! {
+        static ref DROP_TARGET_MAP: Mutex<HashMap<isize, Arc<DropTargetState>>> = Mutex::new(HashMap::new());
+    }
 
     /// Clipboard format constants
     const CF_TEXT: u16 = 1;
@@ -751,9 +776,6 @@ mod windows_drag {
         }
     }
 
-    use windows::Win32::UI::WindowsAndMessaging::{EnumChildWindows, GetClassNameW, WNDENUMPROC};
-    use windows::Win32::Foundation::LPARAM;
-
     /// Find WebView2's content window (Chrome_WidgetWin_1) which handles drag-drop
     unsafe fn find_webview2_content_hwnd(parent: HWND) -> Option<HWND> {
         // WebView2 creates nested child windows. The drag-drop target is typically
@@ -814,6 +836,114 @@ mod windows_drag {
         }
     }
 
+    /// Window subclass procedure - monitors and handles drag-drop registration
+    unsafe extern "system" fn subclass_proc(
+        hwnd: HWND,
+        msg: u32,
+        wparam: WPARAM,
+        lparam: LPARAM,
+        _uid_subclass: usize,
+        dw_ref_data: usize,
+    ) -> LRESULT {
+        match msg {
+            WM_TIMER if wparam.0 == REREGISTER_TIMER_ID => {
+                // Periodic check - re-register our drop target
+                // This handles cases where WebView2 re-registers after navigation
+                reregister_drop_target(hwnd);
+                return LRESULT(0);
+            }
+            WM_TD_REREGISTER => {
+                // Explicit re-registration request
+                reregister_drop_target(hwnd);
+                return LRESULT(0);
+            }
+            _ => {}
+        }
+        DefSubclassProc(hwnd, msg, wparam, lparam)
+    }
+
+    /// Re-register our drop target on the window
+    unsafe fn reregister_drop_target(hwnd: HWND) {
+        let map = DROP_TARGET_MAP.lock().unwrap();
+        if let Some(state) = map.get(&(hwnd.0 as isize)) {
+            // Revoke any existing handler and register ours
+            let _ = RevokeDragDrop(hwnd);
+            let result = RegisterDragDrop(hwnd, &state.drop_target);
+            if result.is_err() {
+                // Registration failed - might already be registered by us
+                // This is expected if we're the current handler
+            }
+        }
+    }
+
+    /// Register our drop target with retries and monitoring
+    unsafe fn register_with_monitoring(
+        window: WebviewWindow,
+        parent_hwnd: HWND,
+        target_hwnd: HWND,
+    ) {
+        // Create our drop target
+        let drop_target: IDropTarget = DropTarget::new(window.clone()).into();
+
+        // Store state for later re-registration
+        let state = Arc::new(DropTargetState {
+            window: window.clone(),
+            target_hwnd,
+            drop_target: drop_target.clone(),
+        });
+        DROP_TARGET_MAP.lock().unwrap().insert(target_hwnd.0 as isize, state);
+
+        // Revoke any existing drop target
+        let _ = RevokeDragDrop(target_hwnd);
+
+        // Register our drop target
+        match RegisterDragDrop(target_hwnd, &drop_target) {
+            Ok(()) => {
+                eprintln!("[TiddlyDesktop] Registered drop target on WebView2 content window {:?}", target_hwnd);
+            }
+            Err(e) => {
+                eprintln!("[TiddlyDesktop] Failed to register drop target: {:?}", e);
+            }
+        }
+
+        // Subclass the window to monitor for re-registration attempts
+        let subclass_result = SetWindowSubclass(
+            target_hwnd,
+            Some(subclass_proc),
+            SUBCLASS_ID,
+            0,
+        );
+        if subclass_result.as_bool() {
+            eprintln!("[TiddlyDesktop] Window subclass installed");
+
+            // Set up a periodic timer to check registration (every 2 seconds)
+            // This handles cases where WebView2 re-registers after navigation
+            let timer_result = SetTimer(target_hwnd, REREGISTER_TIMER_ID, 2000, None);
+            if timer_result == 0 {
+                eprintln!("[TiddlyDesktop] Failed to set re-registration timer");
+            }
+        } else {
+            eprintln!("[TiddlyDesktop] Failed to install window subclass");
+        }
+
+        // Also subclass the parent window to catch navigation events
+        let parent_subclass_result = SetWindowSubclass(
+            parent_hwnd,
+            Some(subclass_proc),
+            SUBCLASS_ID + 1,
+            0,
+        );
+        if parent_subclass_result.as_bool() {
+            // Store state for parent window too
+            let parent_state = Arc::new(DropTargetState {
+                window,
+                target_hwnd,
+                drop_target,
+            });
+            DROP_TARGET_MAP.lock().unwrap().insert(parent_hwnd.0 as isize, parent_state);
+        }
+    }
+
     /// Set up drag-drop handling for a webview window
     pub fn setup_drag_handlers(window: &WebviewWindow) {
         let window_clone = window.clone();
@@ -821,34 +951,36 @@ mod windows_drag {
         // Get the HWND - use a small delay to ensure window is fully created
         std::thread::spawn(move || {
             // Wait for WebView2 to create its child windows
-            std::thread::sleep(std::time::Duration::from_millis(500));
+            // Use multiple attempts with increasing delays to handle late initialization
+            let delays = [500, 1000, 2000, 3000];
 
-            unsafe {
-                // Initialize COM on this thread
-                let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+            for (attempt, delay) in delays.iter().enumerate() {
+                std::thread::sleep(std::time::Duration::from_millis(*delay));
 
-                // Get the parent HWND from the window
-                if let Ok(parent_hwnd) = window_clone.hwnd() {
-                    let parent_hwnd = HWND(parent_hwnd.0 as *mut _);
+                unsafe {
+                    // Initialize COM on this thread (idempotent)
+                    let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
 
-                    // Find WebView2's content window - this is where drops actually land
-                    let target_hwnd = find_webview2_content_hwnd(parent_hwnd).unwrap_or(parent_hwnd);
+                    // Get the parent HWND from the window
+                    if let Ok(parent_hwnd) = window_clone.hwnd() {
+                        let parent_hwnd = HWND(parent_hwnd.0 as *mut _);
 
-                    // Create our drop target
-                    // COM reference counting keeps it alive - RegisterDragDrop calls AddRef
-                    let drop_target: IDropTarget = DropTarget::new(window_clone).into();
+                        // Find WebView2's content window - this is where drops actually land
+                        if let Some(target_hwnd) = find_webview2_content_hwnd(parent_hwnd) {
+                            eprintln!("[TiddlyDesktop] Found WebView2 content window on attempt {}", attempt + 1);
 
-                    // Revoke any existing drop target (WebView2/Tauri registers one)
-                    let _ = RevokeDragDrop(target_hwnd);
-
-                    // Register our drop target on the WebView2 content window
-                    // OLE holds a reference, so it stays alive until RevokeDragDrop is called
-                    match RegisterDragDrop(target_hwnd, &drop_target) {
-                        Ok(()) => {
-                            eprintln!("[TiddlyDesktop] Registered drop target on WebView2 content window");
-                        }
-                        Err(e) => {
-                            eprintln!("[TiddlyDesktop] Failed to register drop target: {:?}", e);
+                            // Register with monitoring (only on first successful find)
+                            if attempt == 0 || !DROP_TARGET_MAP.lock().unwrap().contains_key(&(target_hwnd.0 as isize)) {
+                                register_with_monitoring(window_clone.clone(), parent_hwnd, target_hwnd);
+                            } else {
+                                // Re-register on subsequent attempts
+                                reregister_drop_target(target_hwnd);
+                            }
+                            return;
+                        } else if attempt == delays.len() - 1 {
+                            // Last attempt - fall back to parent window
+                            eprintln!("[TiddlyDesktop] WebView2 content window not found, using parent window");
+                            register_with_monitoring(window_clone.clone(), parent_hwnd, parent_hwnd);
                         }
                     }
                 }
@@ -859,8 +991,26 @@ mod windows_drag {
     /// Clean up drop target for a window (call when window closes)
     pub fn cleanup_drag_handlers(window: &WebviewWindow) {
         if let Ok(hwnd) = window.hwnd() {
+            let hwnd = HWND(hwnd.0 as *mut _);
             unsafe {
-                let _ = RevokeDragDrop(HWND(hwnd.0 as *mut _));
+                // Remove subclass
+                let _ = RemoveWindowSubclass(hwnd, Some(subclass_proc), SUBCLASS_ID);
+                let _ = RemoveWindowSubclass(hwnd, Some(subclass_proc), SUBCLASS_ID + 1);
+
+                // Kill timer
+                let _ = KillTimer(hwnd, REREGISTER_TIMER_ID);
+
+                // Find and clean up the content window too
+                if let Some(target_hwnd) = find_webview2_content_hwnd(hwnd) {
+                    let _ = KillTimer(target_hwnd, REREGISTER_TIMER_ID);
+                    let _ = RemoveWindowSubclass(target_hwnd, Some(subclass_proc), SUBCLASS_ID);
+                    let _ = RevokeDragDrop(target_hwnd);
+                    DROP_TARGET_MAP.lock().unwrap().remove(&(target_hwnd.0 as isize));
+                }
+
+                // Revoke parent window handler
+                let _ = RevokeDragDrop(hwnd);
+                DROP_TARGET_MAP.lock().unwrap().remove(&(hwnd.0 as isize));
             }
         }
     }
@@ -1066,6 +1216,12 @@ mod macos_drag {
         }
     }
 
+    /// prepareForDragOperation: callback - called before performDragOperation to confirm we'll handle it
+    extern "C" fn prepare_for_drag_operation(_this: *mut AnyObject, _sel: Sel, _dragging_info: *mut AnyObject) -> Bool {
+        // Always return YES to indicate we'll handle the drop
+        Bool::YES
+    }
+
     /// performDragOperation: callback - called when drop occurs
     extern "C" fn perform_drag_operation(this: *mut AnyObject, _sel: Sel, dragging_info: *mut AnyObject) -> Bool {
         unsafe {
@@ -1095,7 +1251,18 @@ mod macos_drag {
                 }
             }
         }
-        Bool::NO
+        // Return YES even if we didn't emit anything - we handled the drop, just had no content
+        Bool::YES
+    }
+
+    /// concludeDragOperation: callback - cleanup after drop
+    extern "C" fn conclude_drag_operation(_this: *mut AnyObject, _sel: Sel, _dragging_info: *mut AnyObject) {
+        // No cleanup needed, but implementing this prevents superclass from doing its own cleanup
+    }
+
+    /// wantsPeriodicDraggingUpdates - return YES for continuous draggingUpdated: calls
+    extern "C" fn wants_periodic_dragging_updates(_this: *mut AnyObject, _sel: Sel) -> Bool {
+        Bool::YES
     }
 
     // Declare object_setClass from Objective-C runtime
@@ -1143,8 +1310,20 @@ mod macos_drag {
                     dragging_exited as extern "C" fn(*mut AnyObject, Sel, *mut AnyObject),
                 );
                 builder.add_method(
+                    sel!(prepareForDragOperation:),
+                    prepare_for_drag_operation as extern "C" fn(*mut AnyObject, Sel, *mut AnyObject) -> Bool,
+                );
+                builder.add_method(
                     sel!(performDragOperation:),
                     perform_drag_operation as extern "C" fn(*mut AnyObject, Sel, *mut AnyObject) -> Bool,
+                );
+                builder.add_method(
+                    sel!(concludeDragOperation:),
+                    conclude_drag_operation as extern "C" fn(*mut AnyObject, Sel, *mut AnyObject),
+                );
+                builder.add_method(
+                    sel!(wantsPeriodicDraggingUpdates),
+                    wants_periodic_dragging_updates as extern "C" fn(*mut AnyObject, Sel) -> Bool,
                 );
                 let registered = builder.register();
                 registered as *const AnyClass

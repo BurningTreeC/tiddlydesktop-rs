@@ -59,6 +59,7 @@ windows = { version = "0.58", features = [
 ] }
 windows-core = "0.58"
 windows-implement = "0.58"
+lazy_static = "1.5"
 
 # macOS drag-drop handling via objc2 (versions must match Tauri's objc2 dependency)
 [target.'cfg(target_os = "macos")'.dependencies]

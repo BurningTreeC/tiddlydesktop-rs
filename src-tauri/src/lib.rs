@@ -433,8 +433,8 @@ mod windows_drag {
     use std::sync::Mutex;
     use std::sync::atomic::{AtomicU32, Ordering};
     use tauri::{Emitter, WebviewWindow};
-    use windows::core::{GUID, HRESULT};
-    use windows::Win32::Foundation::{BOOL, HWND, LPARAM, POINTL, S_OK, E_NOINTERFACE, E_POINTER};
+    use windows::core::{GUID, HRESULT, BOOL};
+    use windows::Win32::Foundation::{HWND, LPARAM, POINTL, S_OK, E_NOINTERFACE, E_POINTER};
     use windows::Win32::System::Com::{
         CoInitializeEx, IDataObject, COINIT_APARTMENTTHREADED, TYMED_HGLOBAL,
         FORMATETC, DVASPECT_CONTENT,
@@ -1565,11 +1565,27 @@ fn default_true() -> bool {
     true
 }
 
+/// A single authentication URL entry
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AuthUrlEntry {
+    pub name: String,
+    pub url: String,
+}
+
+/// Configuration for session authentication URLs per wiki
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+pub struct SessionAuthConfig {
+    #[serde(default)]
+    pub auth_urls: Vec<AuthUrlEntry>,
+}
+
 /// All wiki configs stored in a single file, keyed by wiki path
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
 struct WikiConfigs {
     #[serde(default)]
     external_attachments: HashMap<String, ExternalAttachmentsConfig>,
+    #[serde(default)]
+    session_auth: HashMap<String, SessionAuthConfig>,
 }
 
 /// Get the path to the wiki configs JSON
@@ -2875,33 +2891,33 @@ fn show_find_in_page_impl(window: &tauri::WebviewWindow) -> Result<(), String> {
 
     // Get the NSWindow from Tauri
     if let Ok(ns_window) = window.ns_window() {
-        let ns_window_ptr = ns_window.0 as *mut AnyObject;
+        let ns_window_ptr = ns_window as *mut AnyObject;
 
-        unsafe {
-            // Find the WKWebView in the view hierarchy
-            fn find_webview(view: *mut AnyObject) -> Option<*mut AnyObject> {
-                if view.is_null() {
-                    return None;
-                }
-                let view_class: *const AnyClass = msg_send![view, class];
-                let class_name_ptr = class_getName(view_class);
-                let name = CStr::from_ptr(class_name_ptr).to_string_lossy();
-                if name.contains("WKWebView") {
-                    return Some(view);
-                }
-                let subviews: *mut AnyObject = msg_send![view, subviews];
-                if !subviews.is_null() {
-                    let count: usize = msg_send![subviews, count];
-                    for i in 0..count {
-                        let subview: *mut AnyObject = msg_send![subviews, objectAtIndex: i];
-                        if let Some(wv) = find_webview(subview) {
-                            return Some(wv);
-                        }
+        // Find the WKWebView in the view hierarchy
+        unsafe fn find_webview(view: *mut AnyObject) -> Option<*mut AnyObject> {
+            if view.is_null() {
+                return None;
+            }
+            let view_class: *const AnyClass = msg_send![view, class];
+            let class_name_ptr = class_getName(view_class);
+            let name = CStr::from_ptr(class_name_ptr).to_string_lossy();
+            if name.contains("WKWebView") {
+                return Some(view);
+            }
+            let subviews: *mut AnyObject = msg_send![view, subviews];
+            if !subviews.is_null() {
+                let count: usize = msg_send![subviews, count];
+                for i in 0..count {
+                    let subview: *mut AnyObject = msg_send![subviews, objectAtIndex: i];
+                    if let Some(wv) = find_webview(subview) {
+                        return Some(wv);
                     }
                 }
-                None
             }
+            None
+        }
 
+        unsafe {
             let content_view: *mut AnyObject = msg_send![ns_window_ptr, contentView];
             if !content_view.is_null() {
                 if let Some(webview) = find_webview(content_view) {
@@ -4723,6 +4739,230 @@ fn get_dialog_init_script() -> &'static str {
 
         setupExternalAttachments();
 
+        // ========================================
+        // Session Authentication Support
+        // ========================================
+        // Allows users to authenticate with external services (SharePoint, etc.)
+        // and have the session cookies stored in the wiki's isolated session
+
+        function setupSessionAuthentication() {
+            if (window.__IS_MAIN_WIKI__) {
+                console.log('[TiddlyDesktop] Main wiki - session authentication disabled');
+                return;
+            }
+
+            var wikiPath = window.__WIKI_PATH__;
+            if (!wikiPath) {
+                console.log('[TiddlyDesktop] No wiki path - session authentication disabled');
+                return;
+            }
+
+            if (typeof $tw === "undefined" || !$tw.wiki) {
+                setTimeout(setupSessionAuthentication, 100);
+                return;
+            }
+
+            var CONFIG_SETTINGS_TAB = "$:/plugins/tiddlydesktop/session-auth/settings";
+            var CONFIG_AUTH_URLS = "$:/temp/tiddlydesktop-rs/session-auth/urls";
+
+            function saveConfigToTauri() {
+                // Collect all auth URL tiddlers
+                var authUrls = [];
+                $tw.wiki.filterTiddlers("[prefix[$:/temp/tiddlydesktop-rs/session-auth/url/]]").forEach(function(title) {
+                    var tiddler = $tw.wiki.getTiddler(title);
+                    if (tiddler) {
+                        authUrls.push({
+                            name: tiddler.fields.name || "",
+                            url: tiddler.fields.url || ""
+                        });
+                    }
+                });
+                invoke("set_session_auth_config", {
+                    wikiPath: wikiPath,
+                    config: { auth_urls: authUrls }
+                }).catch(function(err) {
+                    console.error("[TiddlyDesktop] Failed to save session auth config:", err);
+                });
+            }
+
+            function deleteConfigTiddlers() {
+                $tw.wiki.filterTiddlers("[prefix[$:/temp/tiddlydesktop-rs/session-auth/]]").forEach(function(title) {
+                    $tw.wiki.deleteTiddler(title);
+                });
+                $tw.wiki.deleteTiddler(CONFIG_SETTINGS_TAB);
+            }
+
+            function refreshUrlList() {
+                // Count existing URLs for display
+                var count = $tw.wiki.filterTiddlers("[prefix[$:/temp/tiddlydesktop-rs/session-auth/url/]]").length;
+                $tw.wiki.setText(CONFIG_AUTH_URLS, "text", null, String(count));
+            }
+
+            function injectConfigTiddlers(config) {
+                var originalNumChanges = $tw.saverHandler ? $tw.saverHandler.numChanges : 0;
+
+                // Add auth URL entries
+                if (config.auth_urls) {
+                    config.auth_urls.forEach(function(entry, index) {
+                        $tw.wiki.addTiddler(new $tw.Tiddler({
+                            title: "$:/temp/tiddlydesktop-rs/session-auth/url/" + index,
+                            name: entry.name,
+                            url: entry.url,
+                            text: ""
+                        }));
+                    });
+                }
+
+                // Inject settings tab with dynamic URL list
+                var tabText = "Authenticate with external services to access protected resources (like SharePoint profile images).\n\n" +
+                    "Session cookies will be stored in this wiki's isolated session data.\n\n" +
+                    "!! Authentication URLs\n\n" +
+                    "<$list filter=\"[prefix[$:/temp/tiddlydesktop-rs/session-auth/url/]]\" variable=\"urlTiddler\">\n" +
+                    "<div style=\"display:flex;align-items:center;gap:8px;margin-bottom:8px;padding:8px;background:#f8f8f8;border-radius:4px;\">\n" +
+                    "<div style=\"flex:1;\">\n" +
+                    "<strong><$text text={{$(urlTiddler)$!!name}}/></strong><br/>\n" +
+                    "<small><$text text={{$(urlTiddler)$!!url}}/></small>\n" +
+                    "</div>\n" +
+                    "<$button class=\"tc-btn-invisible tc-tiddlylink\" message=\"tm-tiddlydesktop-open-auth-url\" param=<<urlTiddler>> tooltip=\"Open login window\">\n" +
+                    "{{$:/core/images/external-link}} Login\n" +
+                    "</$button>\n" +
+                    "<$button class=\"tc-btn-invisible tc-tiddlylink\" message=\"tm-tiddlydesktop-remove-auth-url\" param=<<urlTiddler>> tooltip=\"Remove this URL\">\n" +
+                    "{{$:/core/images/delete-button}}\n" +
+                    "</$button>\n" +
+                    "</div>\n" +
+                    "</$list>\n\n" +
+                    "<$list filter=\"[prefix[$:/temp/tiddlydesktop-rs/session-auth/url/]count[]match[0]]\" variable=\"ignore\">\n" +
+                    "//No authentication URLs configured.//\n\n" +
+                    "</$list>\n" +
+                    "!! Add New URL\n\n" +
+                    "<$edit-text tiddler=\"$:/temp/tiddlydesktop-rs/session-auth/new-name\" tag=\"input\" placeholder=\"Name (e.g. SharePoint)\" default=\"\" class=\"tc-edit-texteditor\" style=\"width:100%;margin-bottom:4px;\"/>\n\n" +
+                    "<$edit-text tiddler=\"$:/temp/tiddlydesktop-rs/session-auth/new-url\" tag=\"input\" placeholder=\"URL (e.g. https://company.sharepoint.com)\" default=\"\" class=\"tc-edit-texteditor\" style=\"width:100%;margin-bottom:8px;\"/>\n\n" +
+                    "<$button message=\"tm-tiddlydesktop-add-auth-url\" class=\"tc-btn-big-green\">Add URL</$button>\n";
+
+                $tw.wiki.addTiddler(new $tw.Tiddler({
+                    title: CONFIG_SETTINGS_TAB,
+                    caption: "Session Auth",
+                    tags: "$:/tags/ControlPanel/SettingsTab",
+                    text: tabText
+                }));
+
+                // Restore dirty counter
+                setTimeout(function() {
+                    if ($tw.saverHandler) {
+                        $tw.saverHandler.numChanges = originalNumChanges;
+                        $tw.saverHandler.updateDirtyStatus();
+                    }
+                }, 0);
+
+                refreshUrlList();
+                console.log("[TiddlyDesktop] Session Authentication settings UI ready");
+            }
+
+            // Message handler: add new auth URL
+            $tw.rootWidget.addEventListener("tm-tiddlydesktop-add-auth-url", function(event) {
+                var name = $tw.wiki.getTiddlerText("$:/temp/tiddlydesktop-rs/session-auth/new-name", "").trim();
+                var url = $tw.wiki.getTiddlerText("$:/temp/tiddlydesktop-rs/session-auth/new-url", "").trim();
+
+                if (!name || !url) {
+                    alert("Please enter both a name and URL");
+                    return;
+                }
+
+                // Validate URL
+                var parsedUrl;
+                try {
+                    parsedUrl = new URL(url);
+                } catch (e) {
+                    alert("Please enter a valid URL");
+                    return;
+                }
+
+                // Security: Only allow HTTPS (except localhost for development)
+                var isHttps = parsedUrl.protocol === "https:";
+                var isLocalhost = parsedUrl.hostname === "localhost" ||
+                                  parsedUrl.hostname === "127.0.0.1" ||
+                                  parsedUrl.hostname === "::1";
+                var isLocalhostHttp = parsedUrl.protocol === "http:" && isLocalhost;
+
+                if (!isHttps && !isLocalhostHttp) {
+                    alert("Security: Only HTTPS URLs are allowed for authentication (except localhost)");
+                    return;
+                }
+
+                // Find next available index
+                var existingUrls = $tw.wiki.filterTiddlers("[prefix[$:/temp/tiddlydesktop-rs/session-auth/url/]]");
+                var nextIndex = existingUrls.length;
+
+                // Add the new URL tiddler
+                $tw.wiki.addTiddler(new $tw.Tiddler({
+                    title: "$:/temp/tiddlydesktop-rs/session-auth/url/" + nextIndex,
+                    name: name,
+                    url: url,
+                    text: ""
+                }));
+
+                // Clear input fields
+                $tw.wiki.deleteTiddler("$:/temp/tiddlydesktop-rs/session-auth/new-name");
+                $tw.wiki.deleteTiddler("$:/temp/tiddlydesktop-rs/session-auth/new-url");
+
+                // Save to Tauri
+                saveConfigToTauri();
+                refreshUrlList();
+            });
+
+            // Message handler: remove auth URL
+            $tw.rootWidget.addEventListener("tm-tiddlydesktop-remove-auth-url", function(event) {
+                var tiddlerTitle = event.param;
+                if (tiddlerTitle) {
+                    $tw.wiki.deleteTiddler(tiddlerTitle);
+                    saveConfigToTauri();
+                    refreshUrlList();
+                }
+            });
+
+            // Message handler: open auth URL in new window
+            $tw.rootWidget.addEventListener("tm-tiddlydesktop-open-auth-url", function(event) {
+                var tiddlerTitle = event.param;
+                if (tiddlerTitle) {
+                    var tiddler = $tw.wiki.getTiddler(tiddlerTitle);
+                    if (tiddler) {
+                        var name = tiddler.fields.name || "Authentication";
+                        var url = tiddler.fields.url;
+                        if (url) {
+                            invoke("open_auth_window", {
+                                wikiPath: wikiPath,
+                                url: url,
+                                name: name
+                            }).catch(function(err) {
+                                console.error("[TiddlyDesktop] Failed to open auth window:", err);
+                                alert("Failed to open authentication window: " + err);
+                            });
+                        }
+                    }
+                }
+            });
+
+            // Load config from Tauri
+            invoke("get_session_auth_config", { wikiPath: wikiPath })
+                .then(function(config) {
+                    injectConfigTiddlers(config);
+                })
+                .catch(function(err) {
+                    console.error("[TiddlyDesktop] Failed to load session auth config, using defaults:", err);
+                    injectConfigTiddlers({ auth_urls: [] });
+                });
+
+            // Cleanup on window close
+            window.addEventListener("beforeunload", function() {
+                saveConfigToTauri();
+                deleteConfigTiddlers();
+            });
+
+            console.log("[TiddlyDesktop] Session authentication ready for:", wikiPath);
+        }
+
+        setupSessionAuthentication();
+
         // Internal drag-and-drop polyfill for WebKitGTK
         // Native HTML5 drag-and-drop can have issues in Tauri's webview
         (function setupInternalDragPolyfill() {
@@ -5790,7 +6030,8 @@ async fn open_wiki_folder(app: tauri::AppHandle, path: String) -> Result<WikiEnt
         .icon(icon)
         .map_err(|e| format!("Failed to set icon: {}", e))?
         .window_classname("tiddlydesktop-rs")
-        .initialization_script(&get_init_script_with_path(&path));
+        .initialization_script(&get_init_script_with_path(&path))
+        .devtools(false);
 
     // Apply isolated session if available
     if let Some(dir) = session_dir {
@@ -6455,6 +6696,91 @@ fn set_external_attachments_config(app: tauri::AppHandle, wiki_path: String, con
     save_wiki_configs(&app, &configs)
 }
 
+/// Get session authentication URLs for a specific wiki
+#[tauri::command]
+fn get_session_auth_config(app: tauri::AppHandle, wiki_path: String) -> Result<SessionAuthConfig, String> {
+    let configs = load_wiki_configs(&app)?;
+    Ok(configs.session_auth.get(&wiki_path).cloned().unwrap_or_default())
+}
+
+/// Set session authentication URLs for a specific wiki
+#[tauri::command]
+fn set_session_auth_config(app: tauri::AppHandle, wiki_path: String, config: SessionAuthConfig) -> Result<(), String> {
+    let mut configs = load_wiki_configs(&app)?;
+    configs.session_auth.insert(wiki_path, config);
+    save_wiki_configs(&app, &configs)
+}
+
+/// Open an authentication URL in a new window that shares the wiki's session
+/// This allows users to log into external services and have cookies stored in the wiki's session
+///
+/// Security measures:
+/// - Only HTTPS URLs are allowed (except localhost for development)
+/// - DevTools are disabled to prevent credential inspection
+/// - No JavaScript injection - pure browser window
+/// - File protocol is blocked
+#[tauri::command]
+async fn open_auth_window(app: tauri::AppHandle, wiki_path: String, url: String, name: String) -> Result<(), String> {
+    use tauri::WebviewWindowBuilder;
+    use tauri::WebviewUrl;
+
+    // Security: Validate URL scheme
+    let url_lower = url.to_lowercase();
+
+    // Block dangerous protocols
+    if url_lower.starts_with("file:") {
+        return Err("Security: File URLs are not allowed for authentication".to_string());
+    }
+    if url_lower.starts_with("javascript:") {
+        return Err("Security: JavaScript URLs are not allowed".to_string());
+    }
+    if url_lower.starts_with("data:") {
+        return Err("Security: Data URLs are not allowed for authentication".to_string());
+    }
+
+    // Only allow HTTPS (and localhost HTTP for development)
+    let is_https = url_lower.starts_with("https://");
+    let is_localhost_http = url_lower.starts_with("http://localhost")
+        || url_lower.starts_with("http://127.0.0.1")
+        || url_lower.starts_with("http://[::1]");
+
+    if !is_https && !is_localhost_http {
+        return Err("Security: Only HTTPS URLs are allowed for authentication (except localhost)".to_string());
+    }
+
+    // Get the session directory for this wiki (same as the wiki window uses)
+    let session_dir = get_wiki_session_dir(&app, &wiki_path);
+
+    // Create a unique label for the auth window
+    let label = format!("auth-{}", std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis());
+
+    // Build the auth window with security settings
+    let mut builder = WebviewWindowBuilder::new(
+        &app,
+        &label,
+        WebviewUrl::External(url.parse().map_err(|e| format!("Invalid URL: {}", e))?)
+    )
+    .title(format!("Login: {}", name))
+    .inner_size(900.0, 700.0)
+    .resizable(true)
+    .center()
+    // Security: Disable devtools in auth windows to prevent credential inspection
+    .devtools(false);
+
+    // Use the same session directory as the wiki
+    if let Some(dir) = session_dir {
+        builder = builder.data_directory(dir);
+    }
+
+    builder.build()
+        .map_err(|e| format!("Failed to create auth window: {}", e))?;
+
+    Ok(())
+}
+
 /// Open a wiki file in a new window
 /// Returns WikiEntry so frontend can update its wiki list
 #[tauri::command]
@@ -6553,7 +6879,8 @@ async fn open_wiki_window(app: tauri::AppHandle, path: String) -> Result<WikiEnt
         .icon(icon)
         .map_err(|e| format!("Failed to set icon: {}", e))?
         .window_classname("tiddlydesktop-rs")
-        .initialization_script(get_dialog_init_script());
+        .initialization_script(get_dialog_init_script())
+        .devtools(false);
 
     // Apply isolated session if available
     if let Some(dir) = session_dir {
@@ -6686,7 +7013,8 @@ async fn open_tiddler_window(
         .icon(icon)
         .map_err(|e| format!("Failed to set icon: {}", e))?
         .window_classname("tiddlydesktop-rs")
-        .initialization_script(get_dialog_init_script());
+        .initialization_script(get_dialog_init_script())
+        .devtools(false);
 
     // Apply isolated session if available (shares with parent wiki)
     if let Some(dir) = session_dir {
@@ -7499,6 +7827,7 @@ pub fn run() {
                 .icon(icon)?
                 .window_classname("tiddlydesktop-rs")
                 .initialization_script(get_dialog_init_script())
+                .devtools(false)
                 .build()?;
 
             // Set up platform-specific drag handlers
@@ -7574,6 +7903,9 @@ pub fn run() {
             read_file_as_binary,
             get_external_attachments_config,
             set_external_attachments_config,
+            get_session_auth_config,
+            set_session_auth_config,
+            open_auth_window,
             run_command,
             show_find_in_page
         ])

@@ -2044,11 +2044,10 @@ fn get_clipboard_content_windows() -> Result<ClipboardContentData, String> {
     use std::collections::HashMap;
     use std::ffi::OsString;
     use std::os::windows::ffi::OsStringExt;
-    use windows::Win32::Foundation::HANDLE;
     use windows::Win32::System::DataExchange::{
         OpenClipboard, CloseClipboard, GetClipboardData, RegisterClipboardFormatA,
     };
-    use windows::Win32::System::Memory::{GlobalLock, GlobalUnlock, GlobalSize, HGLOBAL};
+    use windows::Win32::System::Memory::{GlobalLock, GlobalUnlock, GlobalSize};
     use windows::Win32::System::Ole::CF_UNICODETEXT;
 
     let mut types = Vec::new();
@@ -2059,17 +2058,15 @@ fn get_clipboard_content_windows() -> Result<ClipboardContentData, String> {
             return Err("Failed to open clipboard".to_string());
         }
 
-        // Get HTML format
-        let cf_html = RegisterClipboardFormatA(windows::core::s!("HTML Format"))
-            .map_err(|e| format!("Failed to register HTML format: {}", e))?;
+        // Get HTML format - RegisterClipboardFormatA returns 0 on failure, format ID on success
+        let cf_html = RegisterClipboardFormatA(windows::core::s!("HTML Format"));
 
         if cf_html != 0 {
             if let Ok(h) = GetClipboardData(cf_html) {
                 if !h.0.is_null() {
-                    let hglobal = HGLOBAL(h.0 as *mut std::ffi::c_void);
-                    let ptr = GlobalLock(hglobal) as *const u8;
+                    let ptr = GlobalLock(h.0) as *const u8;
                     if !ptr.is_null() {
-                        let size = GlobalSize(hglobal);
+                        let size = GlobalSize(h.0);
                         let slice = std::slice::from_raw_parts(ptr, size);
                         let len = slice.iter().position(|&c| c == 0).unwrap_or(slice.len());
                         let html = String::from_utf8_lossy(&slice[..len]).to_string();
@@ -2088,7 +2085,7 @@ fn get_clipboard_content_windows() -> Result<ClipboardContentData, String> {
                             eprintln!("[TiddlyDesktop] Clipboard: Got text/html ({} chars)", html.len());
                         }
 
-                        let _ = GlobalUnlock(hglobal);
+                        let _ = GlobalUnlock(h.0);
                     }
                 }
             }
@@ -2097,10 +2094,9 @@ fn get_clipboard_content_windows() -> Result<ClipboardContentData, String> {
         // Get Unicode text
         if let Ok(h) = GetClipboardData(CF_UNICODETEXT.0 as u32) {
             if !h.0.is_null() {
-                let hglobal = HGLOBAL(h.0 as *mut std::ffi::c_void);
-                let ptr = GlobalLock(hglobal) as *const u16;
+                let ptr = GlobalLock(h.0) as *const u16;
                 if !ptr.is_null() {
-                    let size = GlobalSize(hglobal) / 2;
+                    let size = GlobalSize(h.0) / 2;
                     let slice = std::slice::from_raw_parts(ptr, size);
                     let len = slice.iter().position(|&c| c == 0).unwrap_or(slice.len());
                     let text = OsString::from_wide(&slice[..len]).to_string_lossy().to_string();
@@ -2111,7 +2107,7 @@ fn get_clipboard_content_windows() -> Result<ClipboardContentData, String> {
                         eprintln!("[TiddlyDesktop] Clipboard: Got text/plain ({} chars)", text.len());
                     }
 
-                    let _ = GlobalUnlock(hglobal);
+                    let _ = GlobalUnlock(h.0);
                 }
             }
         }
@@ -2132,27 +2128,26 @@ fn get_clipboard_content_macos() -> Result<ClipboardContentData, String> {
     let mut types = Vec::new();
     let mut data = HashMap::new();
 
-    unsafe {
-        let pasteboard = NSPasteboard::generalPasteboard();
+    let pasteboard = unsafe { NSPasteboard::generalPasteboard() };
 
-        // Request types matching TiddlyWiki5's importDataTypes priority
-        let type_mappings: &[(&str, &str)] = &[
-            ("public.html", "text/html"),
-            ("Apple HTML pasteboard type", "text/html"),
-            ("public.utf8-plain-text", "text/plain"),
-            ("NSStringPboardType", "text/plain"),
-            ("public.plain-text", "text/plain"),
-        ];
+    // Request types matching TiddlyWiki5's importDataTypes priority
+    let type_mappings: &[(&str, &str)] = &[
+        ("public.html", "text/html"),
+        ("Apple HTML pasteboard type", "text/html"),
+        ("public.utf8-plain-text", "text/plain"),
+        ("NSStringPboardType", "text/plain"),
+        ("public.plain-text", "text/plain"),
+    ];
 
-        for (pb_type_name, mime_type) in type_mappings {
-            let pb_type = NSString::from_str(pb_type_name);
-            if let Some(ns_str) = pasteboard.stringForType(&pb_type) {
-                let value_str = ns_str.to_string();
-                if !value_str.is_empty() && !types.contains(&mime_type.to_string()) {
-                    types.push(mime_type.to_string());
-                    data.insert(mime_type.to_string(), value_str);
-                    eprintln!("[TiddlyDesktop] Clipboard: Got {} ({} chars)", mime_type, value_str.len());
-                }
+    for (pb_type_name, mime_type) in type_mappings {
+        let pb_type = NSString::from_str(pb_type_name);
+        if let Some(ns_str) = pasteboard.stringForType(&pb_type) {
+            let value_str = ns_str.to_string();
+            if !value_str.is_empty() && !types.contains(&mime_type.to_string()) {
+                let len = value_str.len();
+                types.push(mime_type.to_string());
+                data.insert(mime_type.to_string(), value_str);
+                eprintln!("[TiddlyDesktop] Clipboard: Got {} ({} chars)", mime_type, len);
             }
         }
     }

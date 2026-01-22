@@ -6824,6 +6824,133 @@ fn is_wiki_folder(path: &std::path::Path) -> bool {
     path.is_dir() && path.join("tiddlywiki.info").exists()
 }
 
+/// Check if a file is a valid TiddlyWiki HTML file
+/// Returns Ok(()) if valid, Err with reason if not
+fn validate_tiddlywiki_file(path: &std::path::Path) -> Result<(), String> {
+    // Check file exists and is a file
+    if !path.exists() {
+        return Err(format!("File does not exist: {}", path.display()));
+    }
+    if !path.is_file() {
+        return Err(format!("Path is not a file: {}", path.display()));
+    }
+
+    // Check extension
+    let ext = path.extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_lowercase())
+        .unwrap_or_default();
+    if ext != "html" && ext != "htm" {
+        return Err(format!("File must have .html or .htm extension, got: .{}", ext));
+    }
+
+    // Read the first 100KB of the file to check for TiddlyWiki markers
+    // TiddlyWiki headers and meta tags are always near the top
+    let mut file = std::fs::File::open(path)
+        .map_err(|e| format!("Failed to open file: {}", e))?;
+
+    let mut buffer = vec![0u8; 100_000]; // 100KB should be enough for headers
+    use std::io::Read;
+    let bytes_read = file.read(&mut buffer)
+        .map_err(|e| format!("Failed to read file: {}", e))?;
+    buffer.truncate(bytes_read);
+
+    let content = String::from_utf8_lossy(&buffer);
+
+    // Check for TiddlyWiki markers (must have at least one)
+    let markers = [
+        // TiddlyWiki5 meta tag (most reliable marker)
+        r#"<meta name="tiddlywiki-version""#,
+        r#"<meta name='tiddlywiki-version'"#,
+        // TiddlyWiki5 tiddler store
+        r#"class="tiddlywiki-tiddler-store""#,
+        r#"class='tiddlywiki-tiddler-store'"#,
+        // Legacy TiddlyWiki store area
+        r#"id="storeArea""#,
+        r#"id='storeArea'"#,
+        // TiddlyWiki application name
+        r#"name="application-name" content="TiddlyWiki"#,
+        // Boot kernel markers
+        r#"$:/boot/boot.js"#,
+        r#"$:/boot/bootprefix.js"#,
+    ];
+
+    let has_marker = markers.iter().any(|marker| content.contains(marker));
+
+    if !has_marker {
+        return Err("File does not appear to be a TiddlyWiki HTML file. Missing required TiddlyWiki markers.".to_string());
+    }
+
+    // Additional safety check: make sure it looks like HTML
+    let content_lower = content.to_lowercase();
+    if !content_lower.contains("<!doctype html") && !content_lower.contains("<html") {
+        return Err("File does not appear to be a valid HTML document.".to_string());
+    }
+
+    Ok(())
+}
+
+/// Async version of validate_tiddlywiki_file
+async fn validate_tiddlywiki_file_async(path: &std::path::Path) -> Result<(), String> {
+    // Read the first 100KB of the file to check for TiddlyWiki markers
+    let path_buf = path.to_path_buf();
+
+    // Check file exists and is a file
+    if !path_buf.exists() {
+        return Err(format!("File does not exist: {}", path_buf.display()));
+    }
+    if !path_buf.is_file() {
+        return Err(format!("Path is not a file: {}", path_buf.display()));
+    }
+
+    // Check extension
+    let ext = path_buf.extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_lowercase())
+        .unwrap_or_default();
+    if ext != "html" && ext != "htm" {
+        return Err(format!("File must have .html or .htm extension, got: .{}", ext));
+    }
+
+    // Read first 100KB
+    let mut file = tokio::fs::File::open(&path_buf).await
+        .map_err(|e| format!("Failed to open file: {}", e))?;
+
+    let mut buffer = vec![0u8; 100_000];
+    use tokio::io::AsyncReadExt;
+    let bytes_read = file.read(&mut buffer).await
+        .map_err(|e| format!("Failed to read file: {}", e))?;
+    buffer.truncate(bytes_read);
+
+    let content = String::from_utf8_lossy(&buffer);
+
+    // Check for TiddlyWiki markers
+    let markers = [
+        r#"<meta name="tiddlywiki-version""#,
+        r#"<meta name='tiddlywiki-version'"#,
+        r#"class="tiddlywiki-tiddler-store""#,
+        r#"class='tiddlywiki-tiddler-store'"#,
+        r#"id="storeArea""#,
+        r#"id='storeArea'"#,
+        r#"name="application-name" content="TiddlyWiki"#,
+        r#"$:/boot/boot.js"#,
+        r#"$:/boot/bootprefix.js"#,
+    ];
+
+    let has_marker = markers.iter().any(|marker| content.contains(marker));
+
+    if !has_marker {
+        return Err("File does not appear to be a TiddlyWiki HTML file. Missing required TiddlyWiki markers.".to_string());
+    }
+
+    let content_lower = content.to_lowercase();
+    if !content_lower.contains("<!doctype html") && !content_lower.contains("<html") {
+        return Err("File does not appear to be a valid HTML document.".to_string());
+    }
+
+    Ok(())
+}
+
 /// Get the next available port for a wiki folder server
 fn allocate_port(state: &AppState) -> u16 {
     let mut port = state.next_port.lock().unwrap();
@@ -7937,6 +8064,10 @@ async fn open_auth_window(app: tauri::AppHandle, wiki_path: String, url: String,
 #[tauri::command]
 async fn open_wiki_window(app: tauri::AppHandle, path: String) -> Result<WikiEntry, String> {
     let path_buf = PathBuf::from(&path);
+
+    // Validate that this is a TiddlyWiki file before opening
+    validate_tiddlywiki_file_async(&path_buf).await?;
+
     let state = app.state::<AppState>();
 
     // Extract filename
@@ -8546,6 +8677,16 @@ fn wiki_protocol_handler(app: &tauri::AppHandle, request: Request<Vec<u8>>) -> R
     let single_variables_js = single_variables.as_ref()
         .map(|v| format!(r#"window.__SINGLE_VARIABLES__ = {};"#, v)) // Already JSON
         .unwrap_or_default();
+
+    // Validate that this is a TiddlyWiki file before loading
+    if let Err(e) = validate_tiddlywiki_file(&file_path) {
+        eprintln!("[TiddlyDesktop] Refusing to load non-TiddlyWiki file: {} - {}", file_path.display(), e);
+        return Response::builder()
+            .status(403)
+            .header("Content-Type", "text/plain")
+            .body(format!("Security error: {}", e).into_bytes())
+            .unwrap();
+    }
 
     // Read file content
     let read_result = std::fs::read_to_string(&file_path);

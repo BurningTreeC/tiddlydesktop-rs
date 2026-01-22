@@ -962,7 +962,7 @@ mod windows_drag {
         /// The presence of "chromium/x-renderer-taint" format indicates the drag
         /// originated from within a Chromium renderer (could be our webview or another browser)
         fn is_chromium_renderer_drag(&self, data_object: &IDataObject) -> bool {
-            use windows::Win32::System::DataExchange::{GetClipboardFormatNameW, RegisterClipboardFormatW};
+            use windows::Win32::System::DataExchange::RegisterClipboardFormatW;
             use windows::core::w;
 
             unsafe {
@@ -1277,7 +1277,7 @@ mod windows_drag {
             // We need to convert to the WEBVIEW's coordinate system, not just the HWND that received the event
             // JavaScript's elementFromPoint() uses viewport coordinates, which is the webview content area
             use windows::Win32::Foundation::POINT;
-            use windows::Win32::UI::WindowsAndMessaging::ScreenToClient as WinScreenToClient;
+            use windows::Win32::Graphics::Gdi::ScreenToClient as WinScreenToClient;
 
             unsafe {
                 // Find the Chrome_WidgetWin_1 window (the actual webview content area)

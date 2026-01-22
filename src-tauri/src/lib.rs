@@ -652,6 +652,7 @@ mod windows_drag {
         window: WebviewWindow,
         drag_active: Mutex<bool>,
         hwnd: isize,  // Store HWND for logging which window receives events
+        is_renderer_drag: Mutex<bool>,  // Track if current drag is from Chromium renderer (internal drag)
     }
 
     /// Static vtable instance
@@ -674,6 +675,7 @@ mod windows_drag {
                 window,
                 drag_active: Mutex::new(false),
                 hwnd: hwnd.0 as isize,
+                is_renderer_drag: Mutex::new(false),
             });
             Box::into_raw(obj)
         }
@@ -746,6 +748,20 @@ mod windows_drag {
                 false
             };
 
+            // Store renderer drag state for DragOver to use
+            *obj.is_renderer_drag.lock().unwrap() = is_renderer_drag;
+
+            // For internal/renderer drags, decline handling by returning DROPEFFECT_NONE.
+            // This allows native HTML5 drag-drop within the webview to work properly.
+            // Internal drags are handled by TiddlyWiki5's HTML5 drag-drop handlers.
+            if is_renderer_drag {
+                eprintln!("[TiddlyDesktop] Windows IDropTarget::DragEnter declining renderer drag (DROPEFFECT_NONE)");
+                if !pdw_effect.is_null() {
+                    *pdw_effect = DROPEFFECT_NONE.0 as u32;
+                }
+                return S_OK;
+            }
+
             // Send raw screen coordinates - let JavaScript convert using its own window position
             // This is more reliable than trying to convert in Rust with HWND client areas
             eprintln!("[TiddlyDesktop] Windows IDropTarget::DragEnter screen coords: ({}, {})", pt.x, pt.y);
@@ -787,6 +803,15 @@ mod windows_drag {
                 }
             }
 
+            // For internal/renderer drags, continue declining handling
+            let is_renderer = *obj.is_renderer_drag.lock().unwrap();
+            if is_renderer {
+                if !pdw_effect.is_null() {
+                    *pdw_effect = DROPEFFECT_NONE.0 as u32;
+                }
+                return S_OK;
+            }
+
             // DIAGNOSTIC: Log DragOver calls (rate-limited)
             static LAST_LOG: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
             let now = std::time::SystemTime::now()
@@ -820,12 +845,26 @@ mod windows_drag {
             let obj = &*this;
             eprintln!("[TiddlyDesktop] Windows IDropTarget::DragLeave called on HWND(0x{:x})", obj.hwnd);
 
+            // Check and clear renderer drag flag
+            let was_renderer = {
+                let mut renderer = obj.is_renderer_drag.lock().unwrap();
+                let was = *renderer;
+                *renderer = false;
+                was
+            };
+
             let was_active = {
                 let mut active = obj.drag_active.lock().unwrap();
                 let was = *active;
                 *active = false;
                 was
             };
+
+            // Don't emit drag-leave for renderer drags (internal drags we declined)
+            if was_renderer {
+                eprintln!("[TiddlyDesktop] Windows IDropTarget::DragLeave skipped (was renderer drag)");
+                return S_OK;
+            }
 
             if was_active {
                 eprintln!("[TiddlyDesktop] Windows IDropTarget::DragLeave emitting td-drag-leave");
@@ -848,7 +887,24 @@ mod windows_drag {
             let obj = &*this;
             *obj.drag_active.lock().unwrap() = false;
 
+            // Clear and check renderer drag flag
+            let was_renderer = {
+                let mut renderer = obj.is_renderer_drag.lock().unwrap();
+                let was = *renderer;
+                *renderer = false;
+                was
+            };
+
             eprintln!("[TiddlyDesktop] Windows IDropTarget::Drop called on HWND(0x{:x}) at ({}, {})", obj.hwnd, pt.x, pt.y);
+
+            // Renderer drags should have been declined, but if drop is called anyway, ignore it
+            if was_renderer {
+                eprintln!("[TiddlyDesktop] Windows IDropTarget::Drop ignoring (was renderer drag)");
+                if !pdw_effect.is_null() {
+                    *pdw_effect = DROPEFFECT_NONE.0 as u32;
+                }
+                return S_OK;
+            }
 
             if !p_data_obj.is_null() {
                 // Convert raw pointer to IDataObject reference
@@ -1380,16 +1436,19 @@ mod windows_drag {
             unsafe {
                 use windows::core::Interface;
 
-                // Enable WebView2's AllowExternalDrop - with this enabled, WebView2 processes
-                // external drags. We register our own IDropTarget as well to see which receives events.
+                // DISABLE WebView2's AllowExternalDrop - with this disabled, WebView2 does NOT
+                // intercept external drags, allowing our IDropTarget to handle them properly.
+                // When enabled, WebView2 intercepts drags over its content area but doesn't properly
+                // pass file data to JavaScript (Files array is empty). Our IDropTarget only receives
+                // events at window borders/frame areas, not over the WebView content.
                 let controller = webview.controller();
                 if let Ok(controller4) = controller.cast::<ICoreWebView2Controller4>() {
-                    match controller4.SetAllowExternalDrop(true) {
+                    match controller4.SetAllowExternalDrop(false) {
                         Ok(()) => {
-                            eprintln!("[TiddlyDesktop] Windows: Enabled WebView2 AllowExternalDrop");
+                            eprintln!("[TiddlyDesktop] Windows: Disabled WebView2 AllowExternalDrop (using custom IDropTarget)");
                         }
                         Err(e) => {
-                            eprintln!("[TiddlyDesktop] Windows: Failed to enable AllowExternalDrop: {:?}", e);
+                            eprintln!("[TiddlyDesktop] Windows: Failed to disable AllowExternalDrop: {:?}", e);
                         }
                     }
                 } else {

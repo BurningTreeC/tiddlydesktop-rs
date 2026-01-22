@@ -8826,14 +8826,24 @@ fn setup_system_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>>
 }
 
 pub fn run() {
-    // Enable hardware acceleration on all platforms
-    // Linux: WebKitGTK environment variables
+    // Linux: Configure WebKitGTK hardware acceleration
+    // Users can set TIDDLYDESKTOP_DISABLE_GPU=1 to disable hardware acceleration
+    // (useful for older nvidia cards with nouveau driver, or other GPU issues)
     #[cfg(target_os = "linux")]
     {
-        // Ensure hardware-accelerated compositing is enabled
-        std::env::set_var("WEBKIT_DISABLE_COMPOSITING_MODE", "0");
-        // Enable DMA-BUF renderer for better hardware acceleration
-        std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "0");
+        if std::env::var("TIDDLYDESKTOP_DISABLE_GPU").map(|v| v == "1" || v.to_lowercase() == "true").unwrap_or(false) {
+            // Disable hardware acceleration for problematic GPU drivers
+            eprintln!("[TiddlyDesktop] GPU acceleration disabled via TIDDLYDESKTOP_DISABLE_GPU");
+            std::env::set_var("WEBKIT_DISABLE_COMPOSITING_MODE", "1");
+            std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
+            // Force software rendering
+            std::env::set_var("LIBGL_ALWAYS_SOFTWARE", "1");
+        } else {
+            // Enable hardware-accelerated compositing (default)
+            std::env::set_var("WEBKIT_DISABLE_COMPOSITING_MODE", "0");
+            // Enable DMA-BUF renderer for better hardware acceleration
+            std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "0");
+        }
     }
 
     tauri::Builder::default()

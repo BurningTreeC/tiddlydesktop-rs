@@ -19,7 +19,11 @@ Download the latest release for your platform from the [Releases page](../../rel
 |----------|----------|
 | Windows | `.msi` (installer) or `.exe` (NSIS installer) |
 | macOS | `.dmg` (disk image) or `.app.zip` |
-| Linux | `.deb` (Debian/Ubuntu), `.rpm` (Fedora/RHEL), or `.AppImage` |
+| Linux | `.deb` (Debian/Ubuntu), `.rpm` (Fedora/RHEL), `.pkg.tar.zst` (Arch), or `.tar.gz` (portable) |
+
+### Builds Without Bundled Node.js
+
+Files prefixed with `PROVIDE_YOUR_OWN_NODEJS_` are smaller builds that don't include a bundled Node.js binary. These require Node.js to be installed on your system for wiki folder support. Single-file wikis work without Node.js.
 
 ## Installation
 
@@ -57,10 +61,16 @@ sudo dpkg -i tiddlydesktop-rs_*.deb
 sudo rpm -i tiddlydesktop-rs-*.rpm
 ```
 
-**AppImage**:
+**Arch Linux (.pkg.tar.zst)**:
 ```bash
-chmod +x TiddlyDesktopRS-*.AppImage
-./TiddlyDesktopRS-*.AppImage
+sudo pacman -U tiddlydesktop-rs-*.pkg.tar.zst
+```
+
+**Portable tarball (.tar.gz)**:
+```bash
+tar -xzf tiddlydesktop-rs-*.tar.gz
+cd tiddlydesktop-rs
+./tiddlydesktop-rs
 ```
 
 ## Verifying Downloads
@@ -218,6 +228,24 @@ The plugin provides the `<$action-run-command>` widget for executing shell comma
 - Use `$confirm="no"` only for trusted commands you control
 - Commands run with your user permissions
 - This widget only works when the plugin is installed and the wiki is opened in TiddlyDesktop-RS (has no effect in browsers)
+
+## Troubleshooting
+
+### Linux: Disabling GPU Acceleration
+
+If you experience graphics issues on Linux (blank windows, rendering glitches, crashes), particularly with older Nvidia cards using the **nouveau driver**, you can disable hardware acceleration:
+
+```bash
+TIDDLYDESKTOP_DISABLE_GPU=1 ./tiddlydesktop-rs
+```
+
+For a permanent fix, create a wrapper script or add to your `.bashrc`:
+
+```bash
+export TIDDLYDESKTOP_DISABLE_GPU=1
+```
+
+This forces software rendering by setting `WEBKIT_DISABLE_COMPOSITING_MODE=1`, `WEBKIT_DISABLE_DMABUF_RENDERER=1`, and `LIBGL_ALWAYS_SOFTWARE=1`.
 
 ## Known Limitations
 

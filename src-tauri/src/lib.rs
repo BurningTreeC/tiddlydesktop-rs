@@ -2847,108 +2847,358 @@ struct AppState {
 /// Extract favicon from the $:/favicon.ico tiddler in TiddlyWiki HTML
 /// The tiddler contains base64-encoded image data with a type field
 fn extract_favicon_from_tiddler(html: &str) -> Option<String> {
-    // Try single-escaped format first (saved tiddlers at end of store)
-    // Format: "$:/favicon.ico","text":"base64data"
-    let single_pattern = r#""$:/favicon.ico","#;
-    if let Some(start_idx) = html.rfind(single_pattern) {
-        let after_start = &html[start_idx..std::cmp::min(start_idx + 500_000, html.len())];
-
-        // Extract the text field (base64 content)
-        if let Some(text_start) = after_start.find(r#""text":""#) {
-            let after_text = &after_start[text_start + 8..];
-            // Find closing quote (not escaped)
-            let mut end_pos = 0;
-            let bytes = after_text.as_bytes();
-            while end_pos < bytes.len() {
-                if bytes[end_pos] == b'"' {
-                    let mut backslash_count = 0;
-                    let mut check_pos = end_pos;
-                    while check_pos > 0 && bytes[check_pos - 1] == b'\\' {
-                        backslash_count += 1;
-                        check_pos -= 1;
+    // Helper to unescape JSON string content
+    fn unescape_json_string(s: &str) -> String {
+        let mut result = String::with_capacity(s.len());
+        let mut chars = s.chars().peekable();
+        while let Some(c) = chars.next() {
+            if c == '\\' {
+                match chars.next() {
+                    Some('n') => {} // Skip newlines in base64
+                    Some('r') => {} // Skip carriage returns
+                    Some('t') => {} // Skip tabs
+                    Some('/') => result.push('/'),
+                    Some('\\') => result.push('\\'),
+                    Some('"') => result.push('"'),
+                    Some(other) => {
+                        // Keep other escapes as-is (shouldn't happen in base64)
+                        result.push('\\');
+                        result.push(other);
                     }
-                    if backslash_count % 2 == 0 {
-                        break;
+                    None => result.push('\\'),
+                }
+            } else if c == '\n' || c == '\r' || c == '\t' || c == ' ' {
+                // Skip whitespace in base64 (some encoders add line breaks)
+                continue;
+            } else {
+                result.push(c);
+            }
+        }
+        result
+    }
+
+    // Helper to extract a JSON string field value (handles escaping)
+    fn extract_json_field(content: &str, field: &str, escaped: bool) -> Option<String> {
+        let patterns: Vec<String> = if escaped {
+            vec![
+                format!(r#"\"{}\":\""#, field),
+                format!(r#"\"{}\": \""#, field),
+            ]
+        } else {
+            vec![
+                format!(r#""{}":""#, field),
+                format!(r#""{}" : ""#, field),
+                format!(r#""{}\": \""#, field), // Mixed format sometimes seen
+            ]
+        };
+
+        for pattern in &patterns {
+            if let Some(start) = content.find(pattern.as_str()) {
+                let after = &content[start + pattern.len()..];
+                // Find closing quote (handle escaped quotes)
+                let mut pos = 0;
+                let bytes = after.as_bytes();
+                while pos < bytes.len() {
+                    if escaped {
+                        // Look for \"
+                        if pos + 1 < bytes.len() && bytes[pos] == b'\\' && bytes[pos + 1] == b'"' {
+                            // Check if this backslash is itself escaped
+                            let mut bs_count = 0;
+                            let mut check = pos;
+                            while check > 0 && bytes[check - 1] == b'\\' {
+                                bs_count += 1;
+                                check -= 1;
+                            }
+                            if bs_count % 2 == 0 {
+                                let raw = &after[..pos];
+                                return Some(unescape_json_string(raw));
+                            }
+                        }
+                        pos += 1;
+                    } else {
+                        if bytes[pos] == b'"' {
+                            // Check for escaped quote
+                            let mut bs_count = 0;
+                            let mut check = pos;
+                            while check > 0 && bytes[check - 1] == b'\\' {
+                                bs_count += 1;
+                                check -= 1;
+                            }
+                            if bs_count % 2 == 0 {
+                                let raw = &after[..pos];
+                                return Some(unescape_json_string(raw));
+                            }
+                        }
+                        pos += 1;
                     }
                 }
-                end_pos += 1;
             }
-            if end_pos > 0 && end_pos < after_text.len() {
-                let base64_content = &after_text[..end_pos];
-                if !base64_content.is_empty() && !base64_content.starts_with('[') {
-                    // Try to extract type field
-                    let mime_type = if let Some(type_start) = after_start.find(r#""type":""#) {
-                        let after_type = &after_start[type_start + 8..];
-                        if let Some(type_end) = after_type.find('"') {
-                            &after_type[..type_end]
-                        } else {
-                            "image/png"
+        }
+        None
+    }
+
+    // Strategy 1: Look for tiddler in JSON array format (modern TiddlyWiki 5.2+)
+    // Format: {"title":"$:/favicon.ico","type":"image/png","text":"base64..."}
+    // This can appear in <script class="tiddlywiki-tiddler-store"> or elsewhere
+    // We need to find ALL occurrences and check which one has actual base64 data
+    let title_patterns = [
+        r#""title":"$:/favicon.ico""#,
+        r#""title": "$:/favicon.ico""#,
+    ];
+
+    // Helper to check if content looks like base64 image data
+    fn looks_like_base64_image(s: &str) -> bool {
+        if s.len() < 20 { return false; }
+        // PNG starts with iVBOR, GIF with R0lGO, JPEG with /9j/, ICO varies
+        // Valid base64 chars only
+        let first_chars: String = s.chars().take(20).collect();
+        first_chars.chars().all(|c| c.is_ascii_alphanumeric() || c == '+' || c == '/' || c == '=')
+            && (s.starts_with("iVBOR")   // PNG
+                || s.starts_with("R0lGO") // GIF
+                || s.starts_with("/9j/")  // JPEG
+                || s.starts_with("AAAB")  // ICO often
+                || s.len() > 100)         // Or just long enough to be real data
+    }
+
+    for title_pattern in &title_patterns {
+        // Find ALL occurrences of this pattern
+        let mut search_pos = 0;
+        while let Some(rel_idx) = html[search_pos..].find(title_pattern) {
+            let title_idx = search_pos + rel_idx;
+            search_pos = title_idx + title_pattern.len(); // Move past for next iteration
+
+            eprintln!("[TiddlyDesktop] Favicon: Strategy 1 - checking pattern '{}' at index {}", title_pattern, title_idx);
+
+            // Find the END of this tiddler object first (scan forward for closing })
+            // We need to handle strings properly to not get confused by braces in content
+            let after_title = &html[title_idx..];
+            let mut obj_end_rel = 0;
+            let mut in_string = false;
+            let mut escape_next = false;
+            let mut brace_depth = 1; // We're inside the object already
+
+            for (i, c) in after_title.char_indices() {
+                if escape_next {
+                    escape_next = false;
+                    continue;
+                }
+                match c {
+                    '\\' if in_string => escape_next = true,
+                    '"' => in_string = !in_string,
+                    '{' if !in_string => brace_depth += 1,
+                    '}' if !in_string => {
+                        brace_depth -= 1;
+                        if brace_depth == 0 {
+                            obj_end_rel = i + 1;
+                            break;
                         }
-                    } else {
-                        "image/png"
-                    };
-                    return Some(format!("data:{};base64,{}", mime_type, base64_content));
+                    }
+                    _ => {}
+                }
+                if i > 500_000 { break; } // Safety limit
+            }
+
+            if obj_end_rel == 0 {
+                continue; // Couldn't find object end
+            }
+
+            let obj_end_abs = title_idx + obj_end_rel;
+
+            // Now scan BACKWARDS from title to find the opening {
+            // The text field can be very large (base64 data), so we need to go back far
+            let search_back_limit = title_idx.min(1_000_000); // Up to 1MB back
+            let search_back_start = title_idx.saturating_sub(search_back_limit);
+            let before_title = &html[search_back_start..title_idx];
+
+            // Scan backwards handling strings properly
+            let mut obj_start_rel: Option<usize> = None;
+            let bytes = before_title.as_bytes();
+            let mut i = bytes.len();
+            let mut brace_depth = 1; // We need to find the opening brace at depth 0
+            let mut in_string = false;
+
+            while i > 0 {
+                i -= 1;
+                let c = bytes[i];
+
+                // Check if this char is escaped (preceded by odd number of backslashes)
+                if in_string && i > 0 {
+                    let mut bs_count = 0;
+                    let mut j = i;
+                    while j > 0 && bytes[j - 1] == b'\\' {
+                        bs_count += 1;
+                        j -= 1;
+                    }
+                    if bs_count % 2 == 1 {
+                        continue; // This char is escaped
+                    }
+                }
+
+                match c {
+                    b'"' => in_string = !in_string,
+                    b'}' if !in_string => brace_depth += 1,
+                    b'{' if !in_string => {
+                        brace_depth -= 1;
+                        if brace_depth == 0 {
+                            obj_start_rel = Some(i);
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+
+            let obj_start = match obj_start_rel {
+                Some(rel) => search_back_start + rel,
+                None => continue, // Couldn't find opening brace
+            };
+
+            let tiddler_json = &html[obj_start..obj_end_abs];
+            eprintln!("[TiddlyDesktop] Favicon: extracted tiddler JSON ({} bytes), first 100: {}",
+                tiddler_json.len(),
+                tiddler_json.chars().take(100).collect::<String>().replace('\n', "\\n"));
+
+            // Extract text field (base64 content)
+            if let Some(text_content) = extract_json_field(tiddler_json, "text", false) {
+                eprintln!("[TiddlyDesktop] Favicon: found text field ({} bytes), first 30: '{}'",
+                    text_content.len(),
+                    text_content.chars().take(30).collect::<String>());
+
+                // Check if this looks like actual base64 image data
+                if looks_like_base64_image(&text_content) {
+                    // Extract type field
+                    let mime_type = extract_json_field(tiddler_json, "type", false)
+                        .unwrap_or_else(|| "image/x-icon".to_string());
+
+                    let data_uri = format!("data:{};base64,{}", mime_type, text_content);
+                    eprintln!("[TiddlyDesktop] Favicon: SUCCESS - type={}, base64_len={}",
+                        mime_type, text_content.len());
+                    return Some(data_uri);
+                } else {
+                    eprintln!("[TiddlyDesktop] Favicon: text field doesn't look like base64 image, skipping");
                 }
             }
         }
     }
 
-    // Try double-escaped format (inside plugin bundles)
-    // Pattern: \"$:/favicon.ico\":{\"title\":\"$:/favicon.ico\",\"type\":\"image/...\",\"text\":\"base64data\",...}
-    let tiddler_pattern = r#"\"$:/favicon.ico\":{"#;
+    // Strategy 2: Double-escaped format (inside plugin bundles or old wikis)
+    // Pattern: \"$:/favicon.ico\":{...} or with title field
+    let escaped_patterns = [
+        r#"\"$:/favicon.ico\":{"#,
+        r#"\"title\":\"$:/favicon.ico\""#,
+    ];
 
-    if let Some(start_idx) = html.rfind(tiddler_pattern) {
-        // Find the end of this tiddler object - need to track brace depth
-        let after_start = &html[start_idx + tiddler_pattern.len()..];
-        let mut brace_depth = 1;
-        let mut end_idx = 0;
-        for (i, c) in after_start.char_indices() {
-            match c {
-                '{' => brace_depth += 1,
-                '}' => {
-                    brace_depth -= 1;
-                    if brace_depth == 0 {
-                        end_idx = i;
-                        break;
+    for pattern in &escaped_patterns {
+        let mut search_pos = 0;
+        while let Some(rel_idx) = html[search_pos..].find(pattern) {
+            let title_idx = search_pos + rel_idx;
+            search_pos = title_idx + pattern.len();
+
+            eprintln!("[TiddlyDesktop] Favicon: Strategy 2 - checking pattern '{}' at index {}", pattern, title_idx);
+
+            // Find the END of this tiddler object first (scan forward for closing })
+            // Handle escaped strings properly (\" instead of just ")
+            let after_title = &html[title_idx..];
+            let mut obj_end_rel = 0;
+            let mut brace_depth = 1; // We're inside the object already
+            let bytes = after_title.as_bytes();
+            let mut i = 0;
+
+            while i < bytes.len() {
+                match bytes[i] {
+                    b'\\' => i += 2, // Skip escaped character
+                    b'{' => {
+                        brace_depth += 1;
+                        i += 1;
                     }
+                    b'}' => {
+                        brace_depth -= 1;
+                        if brace_depth == 0 {
+                            obj_end_rel = i + 1;
+                            break;
+                        }
+                        i += 1;
+                    }
+                    _ => i += 1,
                 }
-                _ => {}
+                if i > 500_000 { break; }
             }
-            // Safety limit - favicon tiddlers shouldn't be huge
-            if i > 1_000_000 {
-                break;
-            }
-        }
 
-        if end_idx > 0 {
-            let tiddler_content = &after_start[..end_idx];
+            if obj_end_rel == 0 { continue; }
 
-            // Extract the type field
-            let mime_type = if let Some(type_start) = tiddler_content.find(r#"\"type\":\""#) {
-                let after_type = &tiddler_content[type_start + 10..];
-                if let Some(type_end) = after_type.find(r#"\""#) {
-                    Some(&after_type[..type_end])
-                } else {
-                    None
+            let obj_end_abs = title_idx + obj_end_rel;
+
+            // Scan BACKWARDS from title to find the opening {
+            let search_back_limit = title_idx.min(1_000_000);
+            let search_back_start = title_idx.saturating_sub(search_back_limit);
+            let before_title = &html[search_back_start..title_idx];
+
+            let mut obj_start_rel: Option<usize> = None;
+            let bytes = before_title.as_bytes();
+            let mut i = bytes.len();
+            let mut brace_depth = 1;
+
+            while i > 0 {
+                i -= 1;
+                // Check if this char is escaped
+                if i > 0 && bytes[i - 1] == b'\\' {
+                    continue;
                 }
-            } else {
-                // Default to image/png if no type specified
-                Some("image/png")
+                match bytes[i] {
+                    b'}' => brace_depth += 1,
+                    b'{' => {
+                        brace_depth -= 1;
+                        if brace_depth == 0 {
+                            obj_start_rel = Some(i);
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+
+            let obj_start = match obj_start_rel {
+                Some(rel) => search_back_start + rel,
+                None => continue,
             };
 
-            // Extract the text field (base64 content)
-            if let Some(text_start) = tiddler_content.find(r#"\"text\":\""#) {
-                let after_text = &tiddler_content[text_start + 10..];
-                if let Some(text_end) = after_text.find(r#"\""#) {
-                    let base64_content = &after_text[..text_end];
-                    if !base64_content.is_empty() {
-                        // Construct data URI
-                        let mime = mime_type.unwrap_or("image/png");
-                        return Some(format!("data:{};base64,{}", mime, base64_content));
-                    }
+            let tiddler_content = &html[obj_start..obj_end_abs];
+
+            // Try escaped field extraction
+            if let Some(text_content) = extract_json_field(tiddler_content, "text", true) {
+                if looks_like_base64_image(&text_content) {
+                    let mime_type = extract_json_field(tiddler_content, "type", true)
+                        .unwrap_or_else(|| "image/x-icon".to_string());
+                    eprintln!("[TiddlyDesktop] Favicon: Strategy 2 SUCCESS - type={}, base64_len={}",
+                        mime_type, text_content.len());
+                    return Some(format!("data:{};base64,{}", mime_type, text_content));
                 }
             }
         }
+    }
+
+    // Strategy 3: Debug - show what we found
+    // Look for the favicon tiddler and log what format it's in
+    let has_unescaped = html.contains(r#""$:/favicon.ico""#);
+    let has_escaped = html.contains(r#"\"$:/favicon.ico\""#);
+
+    if has_unescaped || has_escaped {
+        eprintln!("[TiddlyDesktop] Favicon: tiddler reference found (unescaped={}, escaped={})", has_unescaped, has_escaped);
+
+        // Try to find and show a snippet around the favicon for debugging
+        if let Some(idx) = html.find(r#""$:/favicon.ico""#).or_else(|| html.find(r#"\"$:/favicon.ico\""#)) {
+            let start = idx.saturating_sub(50);
+            let end = (idx + 200).min(html.len());
+            let snippet = &html[start..end];
+            eprintln!("[TiddlyDesktop] Favicon: context snippet: {}...", snippet.replace('\n', "\\n").chars().take(300).collect::<String>());
+        }
+
+        // Check for _canonical_uri which means external reference
+        if html.contains(r#""_canonical_uri""#) || html.contains(r#"\"_canonical_uri\""#) {
+            eprintln!("[TiddlyDesktop] Favicon: has _canonical_uri field (external reference - cannot extract)");
+        }
+    } else {
+        eprintln!("[TiddlyDesktop] Favicon: no $:/favicon.ico tiddler found in HTML");
     }
 
     None
@@ -4192,11 +4442,33 @@ fn get_dialog_init_script() -> &'static str {
         function getMimeType(filename) {
             var ext = filename.split(".").pop().toLowerCase();
             var mimeTypes = {
+                // Images
                 "png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg",
                 "gif": "image/gif", "webp": "image/webp", "svg": "image/svg+xml",
-                "ico": "image/x-icon", "bmp": "image/bmp", "pdf": "application/pdf",
-                "mp3": "audio/mpeg", "mp4": "video/mp4", "webm": "video/webm",
-                "ogg": "audio/ogg", "wav": "audio/wav", "zip": "application/zip"
+                "ico": "image/x-icon", "bmp": "image/bmp", "tiff": "image/tiff",
+                // Documents
+                "pdf": "application/pdf",
+                // Audio
+                "mp3": "audio/mpeg", "ogg": "audio/ogg", "wav": "audio/wav",
+                "flac": "audio/flac", "m4a": "audio/mp4",
+                // Video
+                "mp4": "video/mp4", "webm": "video/webm", "ogv": "video/ogg",
+                "mov": "video/quicktime", "avi": "video/x-msvideo",
+                // Archives
+                "zip": "application/zip",
+                // TiddlyWiki deserializable types - these have dedicated deserializers
+                "json": "application/json",
+                "tid": "application/x-tiddler",
+                "tiddler": "application/x-tiddler-html-div",
+                "multids": "application/x-tiddlers",
+                "html": "text/html", "htm": "text/html",
+                "csv": "text/csv",
+                "txt": "text/plain",
+                // Code/text files
+                "css": "text/css",
+                "js": "application/javascript",
+                "xml": "application/xml",
+                "md": "text/x-markdown"
             };
             return mimeTypes[ext] || "application/octet-stream";
         }
@@ -4889,6 +5161,127 @@ fn get_dialog_init_script() -> &'static str {
                     cancelContentDrag("window lost focus");
                 }
             }, true);
+
+            // Handle paste events containing file:// URIs (e.g., files copied from file manager)
+            // Linux/GNOME file managers put file paths in clipboard as text/uri-list
+            document.addEventListener("paste", function(event) {
+                // Skip if not a wiki window
+                if (window.__IS_MAIN_WIKI__) return;
+
+                var clipboardData = event.clipboardData;
+                if (!clipboardData) return;
+
+                // Check for text/uri-list first (standard format)
+                var uriList = clipboardData.getData("text/uri-list");
+                // Fall back to text/plain which might contain file:// URIs
+                if (!uriList) {
+                    var plainText = clipboardData.getData("text/plain");
+                    if (plainText && plainText.trim().startsWith("file://")) {
+                        uriList = plainText;
+                    }
+                }
+
+                if (!uriList) return;
+
+                // Extract file:// URIs from the list
+                var filePaths = uriList.split(/[\r\n]+/)
+                    .filter(function(line) { return line.trim() && line.charAt(0) !== String.fromCharCode(35); })
+                    .map(function(line) {
+                        var trimmed = line.trim();
+                        if (trimmed.startsWith("file://")) {
+                            // Decode URL-encoded path
+                            var path = trimmed.substring(7); // Remove "file://"
+                            // Handle file://hostname/path vs file:///path
+                            if (path.startsWith("//")) {
+                                path = path.substring(2);
+                                var slashIdx = path.indexOf("/");
+                                if (slashIdx !== -1) {
+                                    path = path.substring(slashIdx);
+                                }
+                            }
+                            try {
+                                return decodeURIComponent(path);
+                            } catch (e) {
+                                return path;
+                            }
+                        }
+                        return null;
+                    })
+                    .filter(function(p) { return p !== null; });
+
+                if (filePaths.length === 0) return;
+
+                invoke("js_log", { message: "Paste: detected " + filePaths.length + " file URI(s): " + filePaths.join(", ") });
+
+                // Prevent default paste handling - we'll handle these files ourselves
+                event.preventDefault();
+                event.stopPropagation();
+
+                // Read files and trigger import
+                var filePromises = filePaths.map(function(filepath) {
+                    var filename = filepath.split("/").pop();
+                    var mimeType = getMimeType(filename);
+
+                    return invoke("read_file_as_binary", { path: filepath }).then(function(bytes) {
+                        // Store path for external attachments hook
+                        window.__pendingExternalFiles = window.__pendingExternalFiles || {};
+                        window.__pendingExternalFiles[filename] = filepath;
+
+                        var file = new File([new Uint8Array(bytes)], filename, { type: mimeType });
+                        return file;
+                    }).catch(function(err) {
+                        console.error("[TiddlyDesktop] Failed to read pasted file:", filepath, err);
+                        return null;
+                    });
+                });
+
+                Promise.all(filePromises).then(function(files) {
+                    var validFiles = files.filter(function(f) { return f !== null; });
+                    if (validFiles.length === 0) {
+                        invoke("js_log", { message: "Paste: no valid files to import" });
+                        return;
+                    }
+
+                    invoke("js_log", { message: "Paste: importing " + validFiles.length + " file(s)" });
+
+                    // Find the dropzone to dispatch to
+                    var dropzone = document.querySelector(".tc-dropzone");
+                    if (!dropzone) {
+                        console.error("[TiddlyDesktop] No dropzone found for pasted files");
+                        return;
+                    }
+
+                    // Create DataTransfer with the files
+                    var dt = new DataTransfer();
+                    validFiles.forEach(function(file) {
+                        dt.items.add(file);
+                    });
+
+                    // Dispatch synthetic drop event
+                    var dropEvent = new DragEvent("drop", {
+                        bubbles: true,
+                        cancelable: true,
+                        dataTransfer: dt
+                    });
+                    dropEvent.__tiddlyDesktopSynthetic = true;
+
+                    // Some browsers don't allow setting dataTransfer in constructor
+                    try {
+                        Object.defineProperty(dropEvent, 'dataTransfer', {
+                            value: dt,
+                            writable: false,
+                            configurable: true
+                        });
+                    } catch (e) {}
+
+                    dropzone.dispatchEvent(dropEvent);
+
+                    // Clear pending files after a delay
+                    setTimeout(function() {
+                        window.__pendingExternalFiles = {};
+                    }, 5000);
+                });
+            }, true); // Capture phase to intercept before TiddlyWiki5
 
             // DIAGNOSTIC: Capture-phase listener to detect if dragenter reaches dropzone
             document.addEventListener("dragenter", function(event) {
@@ -5609,6 +6002,39 @@ fn get_dialog_init_script() -> &'static str {
                 $tw.hooks.addHook("th-importing-file", function(info) {
                     var file = info.file;
                     var filename = file.name;
+                    var type = info.type;
+
+                    // Check if a deserializer exists for this file type
+                    // Files with deserializers (JSON, .tid, HTML, CSV, etc.) should be
+                    // deserialized by TiddlyWiki5, NOT treated as external attachments
+                    var hasDeserializer = false;
+                    if ($tw.Wiki.tiddlerDeserializerModules) {
+                        // Check direct type match
+                        if ($tw.Wiki.tiddlerDeserializerModules[type]) {
+                            hasDeserializer = true;
+                        }
+                        // Check if extension maps to a type with deserializer
+                        if (!hasDeserializer && $tw.utils.getFileExtensionInfo) {
+                            var extInfo = $tw.utils.getFileExtensionInfo(type);
+                            if (extInfo && $tw.Wiki.tiddlerDeserializerModules[extInfo.type]) {
+                                hasDeserializer = true;
+                            }
+                        }
+                        // Check if content type has a deserializerType
+                        if (!hasDeserializer && $tw.config.contentTypeInfo && $tw.config.contentTypeInfo[type]) {
+                            var deserializerType = $tw.config.contentTypeInfo[type].deserializerType;
+                            if (deserializerType && $tw.Wiki.tiddlerDeserializerModules[deserializerType]) {
+                                hasDeserializer = true;
+                            }
+                        }
+                    }
+
+                    // If a deserializer exists, let TiddlyWiki5 handle the import normally
+                    // This ensures JSON, .tid, CSV, static HTML files are properly deserialized
+                    if (hasDeserializer) {
+                        console.log("[TiddlyDesktop] Deserializer found for type '" + type + "', letting TiddlyWiki5 handle import");
+                        return false;
+                    }
 
                     // Read config from tiddlers
                     var externalEnabled = $tw.wiki.getTiddlerText(CONFIG_ENABLE, "yes") === "yes";
@@ -5618,6 +6044,11 @@ fn get_dialog_init_script() -> &'static str {
                     // Check if this file is in our pending external files map
                     var originalPath = window.__pendingExternalFiles && window.__pendingExternalFiles[filename];
 
+                    // Only treat as external attachment if:
+                    // 1. File came from our drag-drop system (has originalPath)
+                    // 2. External attachments are enabled
+                    // 3. File is binary (images, PDFs, etc.)
+                    // 4. No deserializer exists (checked above)
                     if (originalPath && externalEnabled && info.isBinary) {
                         // Calculate the canonical URI
                         var canonicalUri = makePathRelative(originalPath, wikiPath, {
@@ -5627,6 +6058,8 @@ fn get_dialog_init_script() -> &'static str {
 
                         // Remove from pending map
                         delete window.__pendingExternalFiles[filename];
+
+                        console.log("[TiddlyDesktop] Creating external attachment for '" + filename + "' -> " + canonicalUri);
 
                         // Call the callback with our external attachment tiddler fields
                         info.callback([

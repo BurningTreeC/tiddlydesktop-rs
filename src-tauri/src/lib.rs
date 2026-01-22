@@ -524,8 +524,7 @@ mod windows_drag {
     use windows::core::{GUID, HRESULT, BOOL};
     use windows::Win32::Foundation::{HWND, LPARAM, POINTL, S_OK, E_NOINTERFACE, E_POINTER};
     use windows::Win32::System::Com::{
-        CoInitializeEx, IDataObject, COINIT_APARTMENTTHREADED, TYMED_HGLOBAL,
-        FORMATETC, DVASPECT_CONTENT,
+        IDataObject, TYMED_HGLOBAL, FORMATETC, DVASPECT_CONTENT,
     };
     use windows::Win32::System::Ole::{
         IDropTarget, RegisterDragDrop, RevokeDragDrop,

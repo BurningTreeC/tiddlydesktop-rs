@@ -42,23 +42,18 @@ gdk = "0.18"
 glib = "0.18"
 webkit2gtk = "2.0.1"
 
-# Windows drag-drop handling via native OLE APIs
+# Windows content drag-drop handling via OLE APIs (for external app content drops)
 [target.'cfg(target_os = "windows")'.dependencies]
 windows = { version = "0.61", features = [
     "Win32_Foundation",
     "Win32_System_Ole",
     "Win32_System_Com",
-    "Win32_System_Com_StructuredStorage",
     "Win32_System_DataExchange",
-    "Win32_System_SystemServices",
     "Win32_UI_Shell",
     "Win32_UI_WindowsAndMessaging",
     "Win32_System_Memory",
-    "Win32_Graphics_Gdi",
 ] }
-windows-core = "0.61"
 lazy_static = "1.5"
-# WebView2 COM bindings for accessing ICoreWebView2Controller4.AllowExternalDrop
 webview2-com = "0.38"
 
 # macOS drag-drop handling via objc2 (versions must match Tauri's objc2 dependency)

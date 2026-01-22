@@ -259,6 +259,102 @@ jobs:
             tiddlydesktop-rs/src-tauri/target/release/bundle/msi/*.msi
             tiddlydesktop-rs/src-tauri/target/release/bundle/nsis/*.exe
 
+  build-windows-no-nodejs:
+    needs: increment-version
+    runs-on: windows-latest
+    steps:
+      - name: Enable long paths
+        run: |
+          git config --system core.longpaths true
+          reg add "HKLM\SYSTEM\CurrentControlSet\Control\FileSystem" /v LongPathsEnabled /t REG_DWORD /d 1 /f
+
+      - name: Checkout tiddlydesktop-rs
+        uses: actions/checkout@v4
+        with:
+          path: tiddlydesktop-rs
+          ref: ${{ needs.increment-version.outputs.new_tag }}
+
+      - name: Checkout TiddlyWiki5
+        uses: actions/checkout@v4
+        with:
+          repository: TiddlyWiki/TiddlyWiki5
+          ref: v5.3.8
+          path: TiddlyWiki5
+
+      - name: Copy plugin to TiddlyWiki5
+        shell: bash
+        run: |
+          cp -r tiddlydesktop-rs/TiddlyWiki5/plugins/tiddlywiki/tiddlydesktop-rs TiddlyWiki5/plugins/tiddlywiki/
+          cp -r tiddlydesktop-rs/TiddlyWiki5/plugins/tiddlywiki/tiddlydesktop-rs-commands TiddlyWiki5/plugins/tiddlywiki/
+          cp -r tiddlydesktop-rs/TiddlyWiki5/editions/tiddlydesktop-rs TiddlyWiki5/editions/
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install WiX Toolset
+        run: choco install wixtoolset -y
+
+      - name: Install npm dependencies
+        working-directory: tiddlydesktop-rs
+        run: npm install
+
+      - name: Build TiddlyWiki
+        working-directory: TiddlyWiki5
+        shell: bash
+        run: |
+          node tiddlywiki.js editions/tiddlydesktop-rs --output ../tiddlydesktop-rs/src --render '$:/core/save/all' 'index.html' 'text/plain'
+
+      # No Node.js bundling - uses system Node.js like Linux builds
+
+      - name: Bundle TiddlyWiki
+        working-directory: tiddlydesktop-rs
+        shell: bash
+        run: |
+          mkdir -p src-tauri/resources
+          cp -r ../TiddlyWiki5 src-tauri/resources/tiddlywiki
+          rm -rf src-tauri/resources/tiddlywiki/.git
+          rm -rf src-tauri/resources/tiddlywiki/editions/tiddlywiki-surveys
+          # Copy index.html to resources for bundling (avoids WiX issues with map format)
+          cp src/index.html src-tauri/resources/index.html
+
+      - name: Build Tauri (Windows without bundled Node.js)
+        working-directory: tiddlydesktop-rs
+        run: npm run tauri build -- -c src-tauri/tauri.windows.no-nodejs.conf.json
+
+      - name: Rename artifacts with PROVIDE_YOUR_OWN_NODEJS prefix
+        working-directory: tiddlydesktop-rs
+        shell: bash
+        run: |
+          # Rename MSI files
+          for file in src-tauri/target/release/bundle/msi/*.msi; do
+            if [ -f "$file" ]; then
+              dir=$(dirname "$file")
+              base=$(basename "$file")
+              mv "$file" "$dir/PROVIDE_YOUR_OWN_NODEJS_$base"
+            fi
+          done
+          # Rename NSIS exe files
+          for file in src-tauri/target/release/bundle/nsis/*.exe; do
+            if [ -f "$file" ]; then
+              dir=$(dirname "$file")
+              base=$(basename "$file")
+              mv "$file" "$dir/PROVIDE_YOUR_OWN_NODEJS_$base"
+            fi
+          done
+
+      - name: Upload Windows (no Node.js) artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-no-nodejs-artifacts
+          path: |
+            tiddlydesktop-rs/src-tauri/target/release/bundle/msi/*.msi
+            tiddlydesktop-rs/src-tauri/target/release/bundle/nsis/*.exe
+
   build-macos:
     needs: increment-version
     runs-on: macos-latest
@@ -354,8 +450,96 @@ jobs:
             tiddlydesktop-rs/src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg
             tiddlydesktop-rs/src-tauri/target/universal-apple-darwin/release/bundle/macos/*.zip
 
+  build-macos-no-nodejs:
+    needs: increment-version
+    runs-on: macos-latest
+    steps:
+      - name: Checkout tiddlydesktop-rs
+        uses: actions/checkout@v4
+        with:
+          path: tiddlydesktop-rs
+          ref: ${{ needs.increment-version.outputs.new_tag }}
+
+      - name: Checkout TiddlyWiki5
+        uses: actions/checkout@v4
+        with:
+          repository: TiddlyWiki/TiddlyWiki5
+          ref: v5.3.8
+          path: TiddlyWiki5
+
+      - name: Copy plugin to TiddlyWiki5
+        run: |
+          cp -r tiddlydesktop-rs/TiddlyWiki5/plugins/tiddlywiki/tiddlydesktop-rs TiddlyWiki5/plugins/tiddlywiki/
+          cp -r tiddlydesktop-rs/TiddlyWiki5/plugins/tiddlywiki/tiddlydesktop-rs-commands TiddlyWiki5/plugins/tiddlywiki/
+          cp -r tiddlydesktop-rs/TiddlyWiki5/editions/tiddlydesktop-rs TiddlyWiki5/editions/
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install npm dependencies
+        working-directory: tiddlydesktop-rs
+        run: npm install
+
+      - name: Build TiddlyWiki
+        working-directory: TiddlyWiki5
+        run: |
+          node tiddlywiki.js editions/tiddlydesktop-rs --output ../tiddlydesktop-rs/src --render '$:/core/save/all' 'index.html' 'text/plain'
+
+      # No Node.js bundling - uses system Node.js like Linux builds
+
+      - name: Bundle TiddlyWiki
+        working-directory: tiddlydesktop-rs
+        run: |
+          mkdir -p src-tauri/resources
+          cp -r ../TiddlyWiki5 src-tauri/resources/tiddlywiki
+          rm -rf src-tauri/resources/tiddlywiki/.git
+          rm -rf src-tauri/resources/tiddlywiki/editions/tiddlywiki-surveys
+          # Copy index.html to resources for bundling
+          cp src/index.html src-tauri/resources/index.html
+
+      - name: Add Rust targets for universal binary
+        run: |
+          rustup target add x86_64-apple-darwin
+          rustup target add aarch64-apple-darwin
+
+      - name: Build Tauri (macOS universal without bundled Node.js)
+        working-directory: tiddlydesktop-rs
+        run: npm run tauri build -- -c src-tauri/tauri.macos.no-nodejs.conf.json --target universal-apple-darwin
+
+      - name: Zip the .app bundle and rename with prefix
+        working-directory: tiddlydesktop-rs
+        run: |
+          cd src-tauri/target/universal-apple-darwin/release/bundle/macos
+          for app in *.app; do
+            zip -r "PROVIDE_YOUR_OWN_NODEJS_${app%.app}.app.zip" "$app"
+            rm -rf "$app"
+          done
+
+      - name: Rename DMG with prefix
+        working-directory: tiddlydesktop-rs
+        run: |
+          cd src-tauri/target/universal-apple-darwin/release/bundle/dmg
+          for file in *.dmg; do
+            if [ -f "$file" ]; then
+              mv "$file" "PROVIDE_YOUR_OWN_NODEJS_$file"
+            fi
+          done
+
+      - name: Upload macOS (no Node.js) artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-no-nodejs-artifacts
+          path: |
+            tiddlydesktop-rs/src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg
+            tiddlydesktop-rs/src-tauri/target/universal-apple-darwin/release/bundle/macos/*.zip
+
   create-release:
-    needs: [increment-version, build-linux, build-windows, build-macos]
+    needs: [increment-version, build-linux, build-windows, build-windows-no-nodejs, build-macos, build-macos-no-nodejs]
     runs-on: ubuntu-latest
     permissions:
       contents: write

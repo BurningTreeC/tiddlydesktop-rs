@@ -8602,6 +8602,16 @@ fn setup_system_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>>
 }
 
 pub fn run() {
+    // Enable hardware acceleration on all platforms
+    // Linux: WebKitGTK environment variables
+    #[cfg(target_os = "linux")]
+    {
+        // Ensure hardware-accelerated compositing is enabled
+        std::env::set_var("WEBKIT_DISABLE_COMPOSITING_MODE", "0");
+        // Enable DMA-BUF renderer for better hardware acceleration
+        std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "0");
+    }
+
     tauri::Builder::default()
         .setup(|app| {
             // Ensure main wiki exists (creates from template if needed)

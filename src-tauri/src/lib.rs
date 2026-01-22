@@ -2044,6 +2044,7 @@ fn get_clipboard_content_windows() -> Result<ClipboardContentData, String> {
     use std::collections::HashMap;
     use std::ffi::OsString;
     use std::os::windows::ffi::OsStringExt;
+    use windows::Win32::Foundation::HGLOBAL;
     use windows::Win32::System::DataExchange::{
         OpenClipboard, CloseClipboard, GetClipboardData, RegisterClipboardFormatA,
     };
@@ -2064,9 +2065,9 @@ fn get_clipboard_content_windows() -> Result<ClipboardContentData, String> {
         if cf_html != 0 {
             if let Ok(h) = GetClipboardData(cf_html) {
                 if !h.0.is_null() {
-                    let ptr = GlobalLock(h.0) as *const u8;
+                    let ptr = GlobalLock(HGLOBAL(h.0)) as *const u8;
                     if !ptr.is_null() {
-                        let size = GlobalSize(h.0);
+                        let size = GlobalSize(HGLOBAL(h.0));
                         let slice = std::slice::from_raw_parts(ptr, size);
                         let len = slice.iter().position(|&c| c == 0).unwrap_or(slice.len());
                         let html = String::from_utf8_lossy(&slice[..len]).to_string();
@@ -2085,7 +2086,7 @@ fn get_clipboard_content_windows() -> Result<ClipboardContentData, String> {
                             eprintln!("[TiddlyDesktop] Clipboard: Got text/html ({} chars)", html.len());
                         }
 
-                        let _ = GlobalUnlock(h.0);
+                        let _ = GlobalUnlock(HGLOBAL(h.0));
                     }
                 }
             }
@@ -2094,9 +2095,9 @@ fn get_clipboard_content_windows() -> Result<ClipboardContentData, String> {
         // Get Unicode text
         if let Ok(h) = GetClipboardData(CF_UNICODETEXT.0 as u32) {
             if !h.0.is_null() {
-                let ptr = GlobalLock(h.0) as *const u16;
+                let ptr = GlobalLock(HGLOBAL(h.0)) as *const u16;
                 if !ptr.is_null() {
-                    let size = GlobalSize(h.0) / 2;
+                    let size = GlobalSize(HGLOBAL(h.0)) / 2;
                     let slice = std::slice::from_raw_parts(ptr, size);
                     let len = slice.iter().position(|&c| c == 0).unwrap_or(slice.len());
                     let text = OsString::from_wide(&slice[..len]).to_string_lossy().to_string();
@@ -2107,7 +2108,7 @@ fn get_clipboard_content_windows() -> Result<ClipboardContentData, String> {
                         eprintln!("[TiddlyDesktop] Clipboard: Got text/plain ({} chars)", text.len());
                     }
 
-                    let _ = GlobalUnlock(h.0);
+                    let _ = GlobalUnlock(HGLOBAL(h.0));
                 }
             }
         }

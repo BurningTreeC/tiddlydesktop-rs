@@ -782,6 +782,18 @@ mod windows_drag {
             // Convert to client coordinates
             let (x, y) = obj.screen_to_client(pt.x, pt.y);
 
+            // DIAGNOSTIC: Log DragOver calls (rate-limited)
+            static LAST_LOG: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis() as u64)
+                .unwrap_or(0);
+            let last = LAST_LOG.load(std::sync::atomic::Ordering::Relaxed);
+            if now - last > 500 {
+                LAST_LOG.store(now, std::sync::atomic::Ordering::Relaxed);
+                eprintln!("[TiddlyDesktop] Windows IDropTarget::DragOver at ({}, {})", x, y);
+            }
+
             // Emit continuous motion events
             let _ = obj.window.emit("td-drag-motion", serde_json::json!({
                 "x": x,
@@ -800,6 +812,8 @@ mod windows_drag {
         // IDropTarget::DragLeave
         unsafe extern "system" fn drag_leave(this: *mut Self) -> HRESULT {
             let obj = &*this;
+            eprintln!("[TiddlyDesktop] Windows IDropTarget::DragLeave called on HWND(0x{:x})", obj.hwnd);
+
             let was_active = {
                 let mut active = obj.drag_active.lock().unwrap();
                 let was = *active;
@@ -808,7 +822,10 @@ mod windows_drag {
             };
 
             if was_active {
+                eprintln!("[TiddlyDesktop] Windows IDropTarget::DragLeave emitting td-drag-leave");
                 let _ = obj.window.emit("td-drag-leave", ());
+            } else {
+                eprintln!("[TiddlyDesktop] Windows IDropTarget::DragLeave skipped (was not active)");
             }
 
             S_OK
@@ -4451,6 +4468,13 @@ fn get_dialog_init_script() -> &'static str {
                     nativeDragTarget = target;
                     currentTarget = target;
 
+                    // DIAGNOSTIC: Log target element and dropzone info
+                    var targetTag = target.tagName + (target.className ? "." + target.className.split(" ")[0] : "");
+                    var dropzone = target.closest ? target.closest(".tc-dropzone") : null;
+                    var twDragInProgress = (typeof $tw !== "undefined") ? $tw.dragInProgress : "N/A";
+                    var dtTypes = dt.types ? Array.from(dt.types) : [];
+                    invoke("js_log", { message: "td-drag-motion DRAGENTER: target=" + targetTag + " insideDropzone=" + !!dropzone + " $tw.dragInProgress=" + twDragInProgress + " dt.types=" + JSON.stringify(dtTypes) });
+
                     var enterEvent = createSyntheticDragEvent("dragenter", pos, dt);
                     enterEvent.__tiddlyDesktopSynthetic = true;
                     target.dispatchEvent(enterEvent);
@@ -4473,6 +4497,14 @@ fn get_dialog_init_script() -> &'static str {
                 // Always dispatch dragover to allow drop
                 var overEvent = createSyntheticDragEvent("dragover", pos, dt);
                 overEvent.__tiddlyDesktopSynthetic = true;
+
+                // DIAGNOSTIC: Log dragover dispatch (rate-limited)
+                if (!window.__lastDragoverLog || Date.now() - window.__lastDragoverLog > 500) {
+                    window.__lastDragoverLog = Date.now();
+                    var targetTag = target.tagName + (target.className ? "." + target.className.split(" ")[0] : "");
+                    invoke("js_log", { message: "td-drag-motion DRAGOVER: target=" + targetTag + " at " + pos.x + "," + pos.y });
+                }
+
                 target.dispatchEvent(overEvent);
             });
 
@@ -4497,6 +4529,8 @@ fn get_dialog_init_script() -> &'static str {
             // Note: Native handlers may fire drag-leave during drop operations too, so we check nativeDropInProgress
             // to avoid canceling when a drop is actually happening.
             listen("td-drag-leave", function(event) {
+                invoke("js_log", { message: "td-drag-leave received, nativeDropInProgress=" + nativeDropInProgress + " nativeDragActive=" + nativeDragActive });
+
                 // Skip if a drop is in progress
                 if (nativeDropInProgress) return;
 
@@ -4739,6 +4773,25 @@ fn get_dialog_init_script() -> &'static str {
                     cancelContentDrag("window lost focus");
                 }
             }, true);
+
+            // DIAGNOSTIC: Capture-phase listener to detect if dragenter reaches dropzone
+            document.addEventListener("dragenter", function(event) {
+                if (!event.__tiddlyDesktopSynthetic) return; // Only log our synthetic events
+                var target = event.target;
+                var targetTag = target.tagName + (target.className ? "." + target.className.split(" ")[0] : "");
+                var dropzone = target.closest ? target.closest(".tc-dropzone") : null;
+                var dropzoneTag = dropzone ? (dropzone.tagName + "." + dropzone.className.split(" ")[0]) : "NONE";
+                var twDrag = (typeof $tw !== "undefined") ? !!$tw.dragInProgress : "N/A";
+                invoke("js_log", { message: "CAPTURE dragenter: target=" + targetTag + " dropzone=" + dropzoneTag + " $tw.dragInProgress=" + twDrag });
+            }, true); // true = capture phase (fires BEFORE bubble phase handlers)
+
+            // DIAGNOSTIC: Bubble-phase listener to see if dragenter was handled
+            document.addEventListener("dragenter", function(event) {
+                if (!event.__tiddlyDesktopSynthetic) return;
+                // This runs AFTER all bubble-phase handlers on ancestors
+                // If defaultPrevented is true, a handler called preventDefault()
+                invoke("js_log", { message: "BUBBLE dragenter: defaultPrevented=" + event.defaultPrevented + " (if true, a handler accepted the drag)" });
+            }, false); // false = bubble phase
 
             // Native dragenter detection for content drags (Windows/macOS fallback)
             // Tauri drag events may not fire for content drags on these platforms,

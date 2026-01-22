@@ -1366,49 +1366,6 @@ mod windows_drag {
         }
     }
 
-    /// Find ALL Chrome_WidgetWin_* windows (at any depth) for debugging which receives drag events
-    fn find_all_chrome_windows(parent: HWND) -> Vec<HWND> {
-        fn collect_chrome_windows(hwnd: HWND, results: &mut Vec<HWND>) {
-            struct EnumData {
-                chrome_windows: Vec<HWND>,
-            }
-
-            unsafe extern "system" fn enum_callback(hwnd: HWND, lparam: LPARAM) -> BOOL {
-                let data = &mut *(lparam.0 as *mut EnumData);
-                let mut class_name = [0u16; 256];
-                let len = GetClassNameW(hwnd, &mut class_name);
-                if len > 0 {
-                    let class_str = OsString::from_wide(&class_name[..len as usize])
-                        .to_string_lossy()
-                        .to_string();
-                    if class_str.starts_with("Chrome_WidgetWin") {
-                        data.chrome_windows.push(hwnd);
-                    }
-                }
-                BOOL(1)
-            }
-
-            let mut data = EnumData { chrome_windows: Vec::new() };
-            unsafe {
-                let _ = EnumChildWindows(
-                    Some(hwnd),
-                    Some(enum_callback),
-                    LPARAM(&mut data as *mut _ as isize),
-                );
-            }
-
-            for chrome_hwnd in data.chrome_windows {
-                results.push(chrome_hwnd);
-                // Recursively find children of this Chrome window
-                collect_chrome_windows(chrome_hwnd, results);
-            }
-        }
-
-        let mut all_windows = Vec::new();
-        collect_chrome_windows(parent, &mut all_windows);
-        all_windows
-    }
-
     /// Set up drag-drop handling for a webview window
     pub fn setup_drag_handlers(window: &WebviewWindow) {
         let window_for_drop = window.clone();
@@ -1454,49 +1411,32 @@ mod windows_drag {
                     }
                 }
 
-                // Register IDropTarget on ALL windows to find which one receives events
+                // Register IDropTarget on the parent window only
+                // The parent Tauri window receives all drag events; Chrome child windows
+                // are handled by WebView2's internal drag-drop (AllowExternalDrop)
                 if let Ok(parent_hwnd) = window_for_drop.hwnd() {
-                    let parent_hwnd = HWND(parent_hwnd.0 as *mut _);
+                    let hwnd = HWND(parent_hwnd.0 as *mut _);
 
-                    // Collect all windows to register on: parent + all Chrome child windows
-                    let mut all_windows = vec![parent_hwnd];
-                    let chrome_windows = find_all_chrome_windows(parent_hwnd);
-                    all_windows.extend(chrome_windows);
+                    // Create drop target for the parent window
+                    let drop_target_ptr = DropTargetImpl::new(window_for_drop.clone(), hwnd);
+                    let drop_target = DropTargetImpl::as_idroptarget(drop_target_ptr);
 
-                    eprintln!("[TiddlyDesktop] Windows: Registering IDropTarget on {} windows:", all_windows.len());
-                    for (i, &hwnd) in all_windows.iter().enumerate() {
-                        // Get window class name for logging
-                        let mut class_name = [0u16; 256];
-                        let len = GetClassNameW(hwnd, &mut class_name);
-                        let class_str = if len > 0 {
-                            OsString::from_wide(&class_name[..len as usize])
-                                .to_string_lossy()
-                                .to_string()
-                        } else {
-                            "Unknown".to_string()
-                        };
+                    // Store for later cleanup
+                    DROP_TARGET_MAP.lock().unwrap().insert(
+                        hwnd.0 as isize,
+                        SendDropTarget(drop_target_ptr)
+                    );
 
-                        // Create a separate drop target for each window
-                        let drop_target_ptr = DropTargetImpl::new(window_for_drop.clone(), hwnd);
-                        let drop_target = DropTargetImpl::as_idroptarget(drop_target_ptr);
-
-                        // Store for later cleanup
-                        DROP_TARGET_MAP.lock().unwrap().insert(
-                            hwnd.0 as isize,
-                            SendDropTarget(drop_target_ptr)
-                        );
-
-                        // Revoke any existing drop target and register ours
-                        let _ = RevokeDragDrop(hwnd);
-                        match RegisterDragDrop(hwnd, &drop_target) {
-                            Ok(()) => {
-                                eprintln!("[TiddlyDesktop] Windows:   [{}] Registered on HWND(0x{:x}) class={}",
-                                    i, hwnd.0 as isize, class_str);
-                            }
-                            Err(e) => {
-                                eprintln!("[TiddlyDesktop] Windows:   [{}] FAILED on HWND(0x{:x}) class={}: {:?}",
-                                    i, hwnd.0 as isize, class_str, e);
-                            }
+                    // Revoke any existing drop target and register ours
+                    let _ = RevokeDragDrop(hwnd);
+                    match RegisterDragDrop(hwnd, &drop_target) {
+                        Ok(()) => {
+                            eprintln!("[TiddlyDesktop] Windows: Registered IDropTarget on parent HWND(0x{:x})",
+                                hwnd.0 as isize);
+                        }
+                        Err(e) => {
+                            eprintln!("[TiddlyDesktop] Windows: FAILED to register IDropTarget on HWND(0x{:x}): {:?}",
+                                hwnd.0 as isize, e);
                         }
                     }
                 }

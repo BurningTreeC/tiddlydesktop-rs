@@ -439,8 +439,9 @@ mod windows_drag {
     use windows::Win32::Foundation::{HWND, LPARAM, POINTL, S_OK, E_NOINTERFACE, E_POINTER};
     use windows::Win32::System::Com::{
         CoInitializeEx, IDataObject, COINIT_APARTMENTTHREADED, TYMED_HGLOBAL,
-        FORMATETC, DVASPECT_CONTENT,
+        FORMATETC, DVASPECT_CONTENT, DATADIR_GET,
     };
+    use windows::Win32::System::DataExchange::GetClipboardFormatNameW;
     use windows::Win32::System::Ole::{
         IDropTarget, RegisterDragDrop, RevokeDragDrop,
         DROPEFFECT, DROPEFFECT_COPY, DROPEFFECT_MOVE, DROPEFFECT_LINK, DROPEFFECT_NONE,
@@ -770,15 +771,63 @@ mod windows_drag {
             S_OK
         }
 
+        /// Debug: enumerate and log all available clipboard formats in the data object
+        fn log_available_formats(&self, data_object: &IDataObject) {
+            eprintln!("[TiddlyDesktop] Windows: Enumerating available drag formats...");
+            unsafe {
+                if let Ok(enum_format) = data_object.EnumFormatEtc(DATADIR_GET) {
+                    let mut fetched: u32 = 0;
+                    let mut format = [FORMATETC {
+                        cfFormat: 0,
+                        ptd: std::ptr::null_mut(),
+                        dwAspect: 0,
+                        lindex: 0,
+                        tymed: 0,
+                    }];
+
+                    while enum_format.Next(&mut format, Some(&mut fetched)).is_ok() && fetched > 0 {
+                        let cf = format[0].cfFormat;
+                        let mut name_buf = [0u16; 256];
+                        let name_len = GetClipboardFormatNameW(cf as u32, &mut name_buf);
+
+                        let format_name = if name_len > 0 {
+                            String::from_utf16_lossy(&name_buf[..name_len as usize])
+                        } else {
+                            // Standard format - use numeric ID
+                            match cf {
+                                1 => "CF_TEXT".to_string(),
+                                7 => "CF_OEMTEXT".to_string(),
+                                13 => "CF_UNICODETEXT".to_string(),
+                                15 => "CF_HDROP".to_string(),
+                                16 => "CF_LOCALE".to_string(),
+                                _ => format!("CF_{}", cf),
+                            }
+                        };
+                        eprintln!("[TiddlyDesktop]   Format {}: {} (tymed={})", cf, format_name, format[0].tymed);
+                        fetched = 0;
+                    }
+                } else {
+                    eprintln!("[TiddlyDesktop] Windows: Failed to enumerate formats");
+                }
+            }
+        }
+
         // Helper methods (same as before)
         fn extract_data(&self, data_object: &IDataObject) -> Option<DragContentData> {
+            // Debug: log all available formats
+            self.log_available_formats(data_object);
+
             let mut types = Vec::new();
             let mut data = HashMap::new();
 
             let cf_tiddler = get_cf_tiddler();
+            eprintln!("[TiddlyDesktop] Windows: Looking for text/vnd.tiddler (cf={})", cf_tiddler);
             if let Some(tiddler) = self.get_string_data(data_object, cf_tiddler) {
+                eprintln!("[TiddlyDesktop] Windows: Found tiddler data!");
                 types.push("text/vnd.tiddler".to_string());
                 data.insert("text/vnd.tiddler".to_string(), tiddler);
+            } else {
+                eprintln!("[TiddlyDesktop] Windows: No tiddler data found");
             }
 
             // Check for URI list - first custom format, then standard Windows URL formats
@@ -826,7 +875,17 @@ mod windows_drag {
                 }
             }
 
-            if types.is_empty() { None } else { Some(DragContentData { types, data }) }
+            if types.is_empty() {
+                eprintln!("[TiddlyDesktop] Windows: No content data extracted from drop");
+                None
+            } else {
+                eprintln!("[TiddlyDesktop] Windows: Extracted types: {:?}", types);
+                for (k, v) in &data {
+                    let preview = if v.len() > 100 { &v[..100] } else { v.as_str() };
+                    eprintln!("[TiddlyDesktop]   {}: {}...", k, preview);
+                }
+                Some(DragContentData { types, data })
+            }
         }
 
         fn get_unicode_text(&self, data_object: &IDataObject) -> Option<String> {

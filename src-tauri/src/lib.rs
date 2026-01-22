@@ -152,15 +152,22 @@ mod linux_drag {
         }
         let webview = webview.unwrap();
 
-        // Set up drag destination with common content types
+        // Set up drag destination with content types matching TiddlyWiki5's importDataTypes
+        // Order matches TW5 priority: text/vnd.tiddler, URL, text/x-moz-url, text/html, text/plain, Text, text/uri-list
         let targets = vec![
             gtk::TargetEntry::new("text/vnd.tiddler", gtk::TargetFlags::OTHER_APP, 0),
-            gtk::TargetEntry::new("text/plain", gtk::TargetFlags::OTHER_APP, 1),
-            gtk::TargetEntry::new("text/html", gtk::TargetFlags::OTHER_APP, 2),
-            gtk::TargetEntry::new("text/uri-list", gtk::TargetFlags::OTHER_APP, 3),
-            gtk::TargetEntry::new("TEXT", gtk::TargetFlags::OTHER_APP, 4),
-            gtk::TargetEntry::new("STRING", gtk::TargetFlags::OTHER_APP, 5),
-            gtk::TargetEntry::new("UTF8_STRING", gtk::TargetFlags::OTHER_APP, 6),
+            gtk::TargetEntry::new("URL", gtk::TargetFlags::OTHER_APP, 1),
+            gtk::TargetEntry::new("text/x-moz-url", gtk::TargetFlags::OTHER_APP, 2),
+            gtk::TargetEntry::new("text/html", gtk::TargetFlags::OTHER_APP, 3),
+            gtk::TargetEntry::new("text/plain", gtk::TargetFlags::OTHER_APP, 4),
+            gtk::TargetEntry::new("Text", gtk::TargetFlags::OTHER_APP, 5),
+            gtk::TargetEntry::new("text/uri-list", gtk::TargetFlags::OTHER_APP, 6),
+            // Additional X11/GTK-specific formats for encoding compatibility
+            gtk::TargetEntry::new("UTF8_STRING", gtk::TargetFlags::OTHER_APP, 7),
+            gtk::TargetEntry::new("STRING", gtk::TargetFlags::OTHER_APP, 8),
+            gtk::TargetEntry::new("TEXT", gtk::TargetFlags::OTHER_APP, 9),
+            // Chrome-specific format that may contain custom MIME data
+            gtk::TargetEntry::new("chromium/x-web-custom-data", gtk::TargetFlags::OTHER_APP, 10),
         ];
 
         webview.drag_dest_set(
@@ -208,9 +215,22 @@ mod linux_drag {
             // Then text/uri-list for plugin drags (contains data: URI with full content)
             // Then text/plain over text/html (plain text is cleaner for simple drags)
             let targets = context.list_targets();
-            // Prioritize UTF8_STRING before text/plain because UTF8_STRING guarantees UTF-8 encoding
-            // text/plain encoding can vary on X11/Linux, leading to mojibake with non-ASCII chars
-            let preferred_targets = ["text/vnd.tiddler", "text/uri-list", "UTF8_STRING", "text/plain", "text/html", "STRING"];
+
+            // Priority order matches TiddlyWiki5's importDataTypes from dragndrop.js
+            // TW5 order: text/vnd.tiddler, URL, text/x-moz-url, text/html, text/plain, Text, text/uri-list
+            // Additional: UTF8_STRING for X11 encoding safety, chromium/x-web-custom-data for Chrome
+            let preferred_targets = [
+                "text/vnd.tiddler",      // Primary TW format - JSON tiddler data
+                "URL",                   // IE-compatible, contains data URI
+                "text/x-moz-url",        // Mozilla format, contains data URI (Chrome provides this!)
+                "text/html",             // HTML content
+                "text/plain",            // Plain text fallback
+                "Text",                  // IE-compatible text
+                "text/uri-list",         // URI list (Firefox uses for data URIs)
+                "UTF8_STRING",           // X11: guaranteed UTF-8 encoding
+                "STRING",                // X11: basic string
+                "chromium/x-web-custom-data", // Chrome's custom MIME data
+            ];
             let mut selected_target = None;
 
             for preferred in &preferred_targets {
@@ -439,9 +459,8 @@ mod windows_drag {
     use windows::Win32::Foundation::{HWND, LPARAM, POINTL, S_OK, E_NOINTERFACE, E_POINTER};
     use windows::Win32::System::Com::{
         CoInitializeEx, IDataObject, COINIT_APARTMENTTHREADED, TYMED_HGLOBAL,
-        FORMATETC, DVASPECT_CONTENT, DATADIR_GET,
+        FORMATETC, DVASPECT_CONTENT,
     };
-    use windows::Win32::System::DataExchange::GetClipboardFormatNameW;
     use windows::Win32::System::Ole::{
         IDropTarget, RegisterDragDrop, RevokeDragDrop,
         DROPEFFECT, DROPEFFECT_COPY, DROPEFFECT_MOVE, DROPEFFECT_LINK, DROPEFFECT_NONE,
@@ -506,6 +525,13 @@ mod windows_drag {
         use windows::Win32::System::DataExchange::RegisterClipboardFormatW;
         use windows::core::w;
         unsafe { RegisterClipboardFormatW(w!("UniformResourceLocatorW")) as u16 }
+    }
+
+    /// Mozilla URL format - contains data URI with tiddler content
+    fn get_cf_moz_url() -> u16 {
+        use windows::Win32::System::DataExchange::RegisterClipboardFormatW;
+        use windows::core::w;
+        unsafe { RegisterClipboardFormatW(w!("text/x-moz-url")) as u16 }
     }
 
     /// Data captured from a drag operation
@@ -771,98 +797,42 @@ mod windows_drag {
             S_OK
         }
 
-        /// Debug: enumerate and log all available clipboard formats in the data object
-        fn log_available_formats(&self, data_object: &IDataObject) {
-            eprintln!("[TiddlyDesktop] Windows: Enumerating available drag formats...");
-            unsafe {
-                if let Ok(enum_format) = data_object.EnumFormatEtc(DATADIR_GET) {
-                    let mut fetched: u32 = 0;
-                    let mut format = [FORMATETC {
-                        cfFormat: 0,
-                        ptd: std::ptr::null_mut(),
-                        dwAspect: 0,
-                        lindex: 0,
-                        tymed: 0,
-                    }];
-
-                    while enum_format.Next(&mut format, Some(&mut fetched)).is_ok() && fetched > 0 {
-                        let cf = format[0].cfFormat;
-                        let mut name_buf = [0u16; 256];
-                        let name_len = GetClipboardFormatNameW(cf as u32, &mut name_buf);
-
-                        let format_name = if name_len > 0 {
-                            String::from_utf16_lossy(&name_buf[..name_len as usize])
-                        } else {
-                            // Standard format - use numeric ID
-                            match cf {
-                                1 => "CF_TEXT".to_string(),
-                                7 => "CF_OEMTEXT".to_string(),
-                                13 => "CF_UNICODETEXT".to_string(),
-                                15 => "CF_HDROP".to_string(),
-                                16 => "CF_LOCALE".to_string(),
-                                _ => format!("CF_{}", cf),
-                            }
-                        };
-                        eprintln!("[TiddlyDesktop]   Format {}: {} (tymed={})", cf, format_name, format[0].tymed);
-                        fetched = 0;
-                    }
-                } else {
-                    eprintln!("[TiddlyDesktop] Windows: Failed to enumerate formats");
-                }
-            }
-        }
-
-        // Helper methods (same as before)
+        // Helper methods - extract data following TiddlyWiki5's importDataTypes priority:
+        // 1. text/vnd.tiddler  2. URL  3. text/x-moz-url  4. text/html  5. text/plain  6. Text  7. text/uri-list
         fn extract_data(&self, data_object: &IDataObject) -> Option<DragContentData> {
-            // Debug: log all available formats
-            self.log_available_formats(data_object);
-
             let mut types = Vec::new();
             let mut data = HashMap::new();
 
+            // 1. text/vnd.tiddler - Primary TW format (JSON tiddler data)
             let cf_tiddler = get_cf_tiddler();
-            eprintln!("[TiddlyDesktop] Windows: Looking for text/vnd.tiddler (cf={})", cf_tiddler);
             if let Some(tiddler) = self.get_string_data(data_object, cf_tiddler) {
-                eprintln!("[TiddlyDesktop] Windows: Found tiddler data!");
                 types.push("text/vnd.tiddler".to_string());
                 data.insert("text/vnd.tiddler".to_string(), tiddler);
-            } else {
-                eprintln!("[TiddlyDesktop] Windows: No tiddler data found");
             }
 
-            // Check for URI list - first custom format, then standard Windows URL formats
-            let cf_uri = get_cf_uri_list();
-            if let Some(uri_list) = self.get_string_data(data_object, cf_uri) {
-                types.push("text/uri-list".to_string());
-                data.insert("text/uri-list".to_string(), uri_list);
-            } else {
-                // Try standard Windows URL formats (used by browsers like Chrome/Edge)
-                // UniformResourceLocatorW is Unicode, UniformResourceLocator is ANSI
-                let cf_url_w = get_cf_url_w();
-                let cf_url = get_cf_url();
-                if let Some(url) = self.get_unicode_url(data_object, cf_url_w) {
-                    types.push("text/uri-list".to_string());
-                    data.insert("text/uri-list".to_string(), url);
-                } else if let Some(url) = self.get_string_data(data_object, cf_url) {
-                    types.push("text/uri-list".to_string());
-                    data.insert("text/uri-list".to_string(), url);
-                }
+            // 2. URL - Windows UniformResourceLocator (may contain data URI)
+            let cf_url_w = get_cf_url_w();
+            let cf_url = get_cf_url();
+            if let Some(url) = self.get_unicode_url(data_object, cf_url_w) {
+                types.push("URL".to_string());
+                data.insert("URL".to_string(), url);
+            } else if let Some(url) = self.get_string_data(data_object, cf_url) {
+                types.push("URL".to_string());
+                data.insert("URL".to_string(), url);
             }
 
-            if let Some(text) = self.get_unicode_text(data_object) {
-                types.push("text/plain".to_string());
-                data.insert("text/plain".to_string(), text);
+            // 3. text/x-moz-url - Mozilla format (UTF-16, URL on first line, title on second)
+            let cf_moz_url = get_cf_moz_url();
+            if let Some(moz_url) = self.get_unicode_text_format(data_object, cf_moz_url) {
+                // Extract just the URL (first line)
+                let url = moz_url.lines().next().unwrap_or(&moz_url);
+                types.push("text/x-moz-url".to_string());
+                data.insert("text/x-moz-url".to_string(), url.to_string());
             }
 
-            if !data.contains_key("text/plain") {
-                if let Some(text) = self.get_ansi_text(data_object) {
-                    types.push("text/plain".to_string());
-                    data.insert("text/plain".to_string(), text);
-                }
-            }
-
-            let cf_html = get_cf_html();
+            // 4. text/html - HTML content
             if let Some(html) = self.get_string_data(data_object, cf_html) {
+                // Windows HTML Format has markers we need to extract content from
                 if let Some(start) = html.find("<!--StartFragment-->") {
                     if let Some(end) = html.find("<!--EndFragment-->") {
                         let content = &html[start + 20..end];
@@ -875,15 +845,28 @@ mod windows_drag {
                 }
             }
 
+            // 5. text/plain - Unicode text (CF_UNICODETEXT)
+            if let Some(text) = self.get_unicode_text(data_object) {
+                types.push("text/plain".to_string());
+                data.insert("text/plain".to_string(), text);
+            }
+
+            // 6. Text - ANSI text (CF_TEXT) - IE compatible fallback
+            if let Some(text) = self.get_ansi_text(data_object) {
+                types.push("Text".to_string());
+                data.insert("Text".to_string(), text);
+            }
+
+            // 7. text/uri-list - URI list format (lowest priority in TW5)
+            let cf_uri = get_cf_uri_list();
+            if let Some(uri_list) = self.get_string_data(data_object, cf_uri) {
+                types.push("text/uri-list".to_string());
+                data.insert("text/uri-list".to_string(), uri_list);
+            }
+
             if types.is_empty() {
-                eprintln!("[TiddlyDesktop] Windows: No content data extracted from drop");
                 None
             } else {
-                eprintln!("[TiddlyDesktop] Windows: Extracted types: {:?}", types);
-                for (k, v) in &data {
-                    let preview = if v.len() > 100 { &v[..100] } else { v.as_str() };
-                    eprintln!("[TiddlyDesktop]   {}: {}...", k, preview);
-                }
                 Some(DragContentData { types, data })
             }
         }
@@ -962,6 +945,34 @@ mod windows_drag {
                                 let _ = GlobalUnlock(medium.u.hGlobal);
                             }
                             return None;
+                        }
+                    }
+                }
+            }
+            None
+        }
+
+        /// Get UTF-16 encoded text from a custom clipboard format (like text/x-moz-url)
+        fn get_unicode_text_format(&self, data_object: &IDataObject, cf: u16) -> Option<String> {
+            let format = FORMATETC {
+                cfFormat: cf,
+                ptd: std::ptr::null_mut(),
+                dwAspect: DVASPECT_CONTENT.0 as u32,
+                lindex: -1,
+                tymed: TYMED_HGLOBAL.0 as u32,
+            };
+
+            unsafe {
+                if let Ok(medium) = data_object.GetData(&format) {
+                    if !medium.u.hGlobal.0.is_null() {
+                        let ptr = GlobalLock(medium.u.hGlobal) as *const u16;
+                        if !ptr.is_null() {
+                            let size = GlobalSize(medium.u.hGlobal) / 2;
+                            let slice = std::slice::from_raw_parts(ptr, size);
+                            let len = slice.iter().position(|&c| c == 0).unwrap_or(slice.len());
+                            let text = OsString::from_wide(&slice[..len]).to_string_lossy().to_string();
+                            let _ = GlobalUnlock(medium.u.hGlobal);
+                            return Some(text);
                         }
                     }
                 }
@@ -1267,18 +1278,26 @@ mod macos_drag {
         let mut types = Vec::new();
         let mut data = HashMap::new();
 
-        // Request types in order of preference:
-        // 1. text/vnd.tiddler (TiddlyWiki native format)
-        // 2. text/uri-list (for plugin drags)
-        // 3. text/plain (preferred over HTML for simple text)
-        // 4. text/html
+        // Request types matching TiddlyWiki5's importDataTypes priority:
+        // 1. text/vnd.tiddler  2. URL  3. text/x-moz-url  4. text/html  5. text/plain  6. Text  7. text/uri-list
+        // macOS uses UTIs (Uniform Type Identifiers) which we map to MIME types
         let type_mappings: &[(&str, &str)] = &[
+            // 1. text/vnd.tiddler - TiddlyWiki native format (custom UTI)
             ("text/vnd.tiddler", "text/vnd.tiddler"),
-            ("public.url", "text/uri-list"),
-            ("public.utf8-plain-text", "text/plain"),
-            ("NSStringPboardType", "text/plain"),
+            // 2. URL - Standard URL format (contains data URI on macOS)
+            ("public.url", "URL"),
+            // 3. text/x-moz-url - Mozilla URL format (browsers may register this)
+            ("text/x-moz-url", "text/x-moz-url"),
+            // 4. text/html - HTML content
             ("public.html", "text/html"),
             ("Apple HTML pasteboard type", "text/html"),
+            // 5. text/plain - Plain text (UTF-8)
+            ("public.utf8-plain-text", "text/plain"),
+            ("NSStringPboardType", "text/plain"),
+            // 6. Text - Plain text fallback (same as text/plain on macOS)
+            ("public.plain-text", "Text"),
+            // 7. text/uri-list - URI list format
+            ("public.url", "text/uri-list"),
         ];
 
         for (pb_type_name, mime_type) in type_mappings {

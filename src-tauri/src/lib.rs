@@ -888,7 +888,6 @@ mod windows_drag {
 
         /// Log available clipboard formats from the IDataObject for debugging
         fn log_available_formats(&self, data_object: &IDataObject) {
-            use windows::Win32::System::Com::IEnumFORMATETC;
             use windows::Win32::System::DataExchange::GetClipboardFormatNameW;
 
             unsafe {
@@ -2238,7 +2237,7 @@ fn get_clipboard_content_macos() -> Result<ClipboardContentData, String> {
     let mut types = Vec::new();
     let mut data = HashMap::new();
 
-    let pasteboard = unsafe { NSPasteboard::generalPasteboard() };
+    let pasteboard = NSPasteboard::generalPasteboard();
 
     // Request types matching TiddlyWiki5's importDataTypes priority
     let type_mappings: &[(&str, &str)] = &[

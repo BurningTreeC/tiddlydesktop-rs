@@ -1273,52 +1273,8 @@ mod windows_drag {
             paths
         }
 
-        fn screen_to_client(&self, x: i32, y: i32) -> (i32, i32) {
-            // Convert screen coordinates (physical pixels) to CSS client coordinates (logical pixels)
-            // We need to convert to the WEBVIEW's coordinate system, not just the HWND that received the event
-            // JavaScript's elementFromPoint() uses viewport coordinates, which is the webview content area
-            use windows::Win32::Foundation::POINT;
-            use windows::Win32::Graphics::Gdi::ScreenToClient as WinScreenToClient;
-
-            unsafe {
-                // Find the Chrome_WidgetWin_1 window (the actual webview content area)
-                // This is where JavaScript's viewport coordinates are relative to
-                let target_hwnd = if let Ok(parent_hwnd) = self.window.hwnd() {
-                    let parent = HWND(parent_hwnd.0 as *mut _);
-                    // Try to find the deepest Chrome window (the webview content)
-                    if let Some(chrome_hwnd) = find_webview2_content_hwnd(parent) {
-                        chrome_hwnd
-                    } else {
-                        HWND(self.hwnd as *mut _)
-                    }
-                } else {
-                    HWND(self.hwnd as *mut _)
-                };
-
-                let mut pt = POINT { x, y };
-                // Convert to client coordinates of the webview content window
-                if WinScreenToClient(target_hwnd, &mut pt).as_bool() {
-                    // Now divide by scale factor to get CSS pixels
-                    if let Ok(scale_factor) = self.window.scale_factor() {
-                        let client_x = (pt.x as f64 / scale_factor).round() as i32;
-                        let client_y = (pt.y as f64 / scale_factor).round() as i32;
-                        eprintln!("[TiddlyDesktop] Windows screen_to_client: screen({},{}) -> hwnd_client({},{}) -> css({},{}) scale={} target_hwnd={:?}",
-                            x, y, pt.x, pt.y, client_x, client_y, scale_factor, target_hwnd);
-                        return (client_x, client_y);
-                    }
-                    return (pt.x, pt.y);
-                }
-            }
-            // Fallback to old method if ScreenToClient fails
-            if let Ok(scale_factor) = self.window.scale_factor() {
-                if let Ok(inner_pos) = self.window.inner_position() {
-                    let client_x = ((x - inner_pos.x) as f64 / scale_factor).round() as i32;
-                    let client_y = ((y - inner_pos.y) as f64 / scale_factor).round() as i32;
-                    return (client_x, client_y);
-                }
-            }
-            (x, y)
-        }
+        // Note: screen_to_client() was removed - coordinate conversion now happens in JavaScript
+        // using window.screenX/Y for more accurate results. See screenToClient() in injected JS.
     }
 
     /// Choose a drop effect that the source allows

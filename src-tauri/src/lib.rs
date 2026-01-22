@@ -4353,6 +4353,34 @@ fn get_dialog_init_script() -> &'static str {
             var pendingGtkFileDrop = null;
             var nativeDropInProgress = false;  // Set when drop starts, prevents drag-leave cancellation
 
+            // Internal drag tracking (drags that originate within this webview)
+            // Used to skip IDropTarget handling on Windows for internal drags
+            var webviewInternalDragActive = false;
+
+            // Track internal drags - set flag when drag starts within this webview
+            // This runs on ALL platforms to detect drags originating from this window
+            document.addEventListener("dragstart", function(event) {
+                // Skip synthetic events
+                if (event.__tiddlyDesktopSynthetic) return;
+                webviewInternalDragActive = true;
+                invoke("js_log", { message: "Internal drag started, webviewInternalDragActive=true" });
+            }, true);
+
+            // Clear internal drag flag when drag ends
+            document.addEventListener("dragend", function(event) {
+                if (event.__tiddlyDesktopSynthetic) return;
+                webviewInternalDragActive = false;
+                invoke("js_log", { message: "Internal drag ended, webviewInternalDragActive=false" });
+            }, true);
+
+            // Also clear on drop (dragend may not fire in all cases)
+            document.addEventListener("drop", function(event) {
+                // Small delay to allow drop handlers to complete
+                setTimeout(function() {
+                    webviewInternalDragActive = false;
+                }, 100);
+            }, true);
+
             // Helper to create DataTransfer with pending files
             function createDataTransferWithFiles() {
                 var dt = new DataTransfer();
@@ -4536,16 +4564,21 @@ fn get_dialog_init_script() -> &'static str {
             // Fires continuously during drag - use to dispatch synthetic dragenter/dragover
             // Handles both file and content drags
             listen("td-drag-motion", function(event) {
-                invoke("js_log", { message: "td-drag-motion received at " + (event.payload ? event.payload.x + "," + event.payload.y : "null") + " isRendererDrag=" + (event.payload ? event.payload.isRendererDrag : "N/A") });
+                invoke("js_log", { message: "td-drag-motion received at " + (event.payload ? event.payload.x + "," + event.payload.y : "null") + " isRendererDrag=" + (event.payload ? event.payload.isRendererDrag : "N/A") + " webviewInternalDragActive=" + webviewInternalDragActive });
                 if (!event.payload) return;
+
+                // Skip if this is an internal drag (originated within this webview)
+                // Internal drags should use native HTML5 drag-drop, not our IDropTarget handling
+                if (webviewInternalDragActive) {
+                    invoke("js_log", { message: "td-drag-motion: skipping - internal drag active" });
+                    return;
+                }
 
                 // Check if this is a drag from within a Chromium renderer
                 // If so, it might be an internal drag that should be handled by native HTML5 drag-drop
                 var isRendererDrag = event.payload.isRendererDrag;
                 if (isRendererDrag) {
-                    invoke("js_log", { message: "td-drag-motion: isRendererDrag=true, checking if we should skip..." });
-                    // For now, still handle it but log for diagnostics
-                    // TODO: If internal drags are broken, we might want to skip handling here
+                    invoke("js_log", { message: "td-drag-motion: isRendererDrag=true (external browser drag)" });
                 }
 
                 var pos;
@@ -4615,6 +4648,11 @@ fn get_dialog_init_script() -> &'static str {
             // Fires immediately when user releases mouse to drop, BEFORE drag-leave
             // This allows us to distinguish "leaving window" from "dropping"
             listen("td-drag-drop-start", function(event) {
+                // Skip if this is an internal drag - let native HTML5 handle it
+                if (webviewInternalDragActive) {
+                    invoke("js_log", { message: "td-drag-drop-start: skipping - internal drag active" });
+                    return;
+                }
                 nativeDropInProgress = true;
                 if (event.payload) {
                     if (event.payload.screenCoords) {
@@ -4632,6 +4670,11 @@ fn get_dialog_init_script() -> &'static str {
             // Note: Native handlers may fire drag-leave during drop operations too, so we check nativeDropInProgress
             // to avoid canceling when a drop is actually happening.
             listen("td-drag-leave", function(event) {
+                // Skip if this is an internal drag - let native HTML5 handle it
+                if (webviewInternalDragActive) {
+                    invoke("js_log", { message: "td-drag-leave: skipping - internal drag active" });
+                    return;
+                }
                 invoke("js_log", { message: "td-drag-leave received, nativeDropInProgress=" + nativeDropInProgress + " nativeDragActive=" + nativeDragActive });
 
                 // Skip if a drop is in progress
@@ -4670,6 +4713,11 @@ fn get_dialog_init_script() -> &'static str {
             // Native drag content received (Linux GTK, Windows IDropTarget)
             // This provides the actual content data from the drag
             listen("td-drag-content", function(event) {
+                // Skip if this is an internal drag - let native HTML5 handle it
+                if (webviewInternalDragActive) {
+                    invoke("js_log", { message: "td-drag-content: skipping - internal drag active" });
+                    return;
+                }
                 invoke("js_log", { message: "td-drag-content received! types=" + JSON.stringify(event.payload?.types) });
                 // Use document.title to show we received the event (visible indicator)
                 var origTitle = document.title;
@@ -4698,6 +4746,11 @@ fn get_dialog_init_script() -> &'static str {
             // Native drag drop position (Linux GTK, Windows IDropTarget)
             // Note: Don't check contentDragActive - native events are authoritative
             listen("td-drag-drop-position", function(event) {
+                // Skip if this is an internal drag - let native HTML5 handle it
+                if (webviewInternalDragActive) {
+                    invoke("js_log", { message: "td-drag-drop-position: skipping - internal drag active" });
+                    return;
+                }
                 invoke("js_log", { message: "td-drag-drop-position received! x=" + event.payload?.x + " y=" + event.payload?.y });
                 // Use document.title to show we received the event (visible indicator)
                 var origTitle = document.title;
@@ -4727,6 +4780,11 @@ fn get_dialog_init_script() -> &'static str {
             // Native file drop (Linux GTK, Windows IDropTarget)
             // This handles file drags from file managers
             listen("td-file-drop", function(event) {
+                // Skip if this is an internal drag - let native HTML5 handle it
+                if (webviewInternalDragActive) {
+                    invoke("js_log", { message: "td-file-drop: skipping - internal drag active" });
+                    return;
+                }
                 if (!event.payload || !event.payload.paths || event.payload.paths.length === 0) return;
 
                 var paths = event.payload.paths;

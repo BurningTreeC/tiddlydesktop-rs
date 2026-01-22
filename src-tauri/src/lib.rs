@@ -751,13 +751,17 @@ mod windows_drag {
             // Store renderer drag state for DragOver to use
             *obj.is_renderer_drag.lock().unwrap() = is_renderer_drag;
 
-            // For internal/renderer drags, decline handling by returning DROPEFFECT_NONE.
-            // This allows native HTML5 drag-drop within the webview to work properly.
-            // Internal drags are handled by TiddlyWiki5's HTML5 drag-drop handlers.
+            // For internal/renderer drags, accept but don't emit events.
+            // We return DROPEFFECT_COPY (not DROPEFFECT_NONE) so Windows allows the drag to proceed.
+            // If we return DROPEFFECT_NONE, Windows shows a "no-drop" cursor and may cancel the drag.
+            // The actual drop handling is done by TiddlyWiki5's HTML5 drag-drop handlers.
+            // Our drop_impl() will detect was_renderer and skip processing.
             if is_renderer_drag {
-                eprintln!("[TiddlyDesktop] Windows IDropTarget::DragEnter declining renderer drag (DROPEFFECT_NONE)");
+                eprintln!("[TiddlyDesktop] Windows IDropTarget::DragEnter accepting renderer drag (DROPEFFECT_COPY, but won't process drop)");
                 if !pdw_effect.is_null() {
-                    *pdw_effect = DROPEFFECT_NONE.0 as u32;
+                    let allowed = DROPEFFECT(*pdw_effect);
+                    // Return a valid effect so Windows allows the drag
+                    *pdw_effect = choose_drop_effect(allowed).0 as u32;
                 }
                 return S_OK;
             }
@@ -803,11 +807,13 @@ mod windows_drag {
                 }
             }
 
-            // For internal/renderer drags, continue declining handling
+            // For internal/renderer drags, accept but don't emit position events.
+            // Return a valid effect so Windows allows the drag to continue.
             let is_renderer = *obj.is_renderer_drag.lock().unwrap();
             if is_renderer {
                 if !pdw_effect.is_null() {
-                    *pdw_effect = DROPEFFECT_NONE.0 as u32;
+                    let allowed = DROPEFFECT(*pdw_effect);
+                    *pdw_effect = choose_drop_effect(allowed).0 as u32;
                 }
                 return S_OK;
             }
@@ -1470,32 +1476,53 @@ mod windows_drag {
                     }
                 }
 
-                // Register IDropTarget on the parent window only
-                // The parent Tauri window receives all drag events; Chrome child windows
-                // are handled by WebView2's internal drag-drop (AllowExternalDrop)
+                // Register IDropTarget on the Chrome_WidgetWin content window
+                // This is the actual surface where drops occur. With AllowExternalDrop disabled,
+                // we MUST register on the content window to receive Drop events (not just DragEnter/Leave).
+                // Registering only on the parent causes DragLeave when cursor moves over content area.
                 if let Ok(parent_hwnd) = window_for_drop.hwnd() {
-                    let hwnd = HWND(parent_hwnd.0 as *mut _);
+                    let parent = HWND(parent_hwnd.0 as *mut _);
 
-                    // Create drop target for the parent window
-                    let drop_target_ptr = DropTargetImpl::new(window_for_drop.clone(), hwnd);
+                    // Find the Chrome_WidgetWin content window with retry (WebView2 creates it async)
+                    let mut target_hwnd = None;
+                    for attempt in 0..10 {
+                        if let Some(hwnd) = find_webview2_content_hwnd(parent) {
+                            target_hwnd = Some(hwnd);
+                            eprintln!("[TiddlyDesktop] Windows: Found Chrome_WidgetWin on attempt {}", attempt + 1);
+                            break;
+                        }
+                        if attempt < 9 {
+                            std::thread::sleep(std::time::Duration::from_millis(50));
+                        }
+                    }
+                    let target_hwnd = target_hwnd.unwrap_or_else(|| {
+                        eprintln!("[TiddlyDesktop] Windows: Chrome_WidgetWin not found after retries, using parent HWND");
+                        parent
+                    });
+
+                    eprintln!("[TiddlyDesktop] Windows: Target HWND for IDropTarget: 0x{:x} (parent: 0x{:x})",
+                        target_hwnd.0 as isize, parent.0 as isize);
+
+                    // Create drop target for the content window
+                    let drop_target_ptr = DropTargetImpl::new(window_for_drop.clone(), target_hwnd);
                     let drop_target = DropTargetImpl::as_idroptarget(drop_target_ptr);
 
                     // Store for later cleanup
                     DROP_TARGET_MAP.lock().unwrap().insert(
-                        hwnd.0 as isize,
+                        target_hwnd.0 as isize,
                         SendDropTarget(drop_target_ptr)
                     );
 
                     // Revoke any existing drop target and register ours
-                    let _ = RevokeDragDrop(hwnd);
-                    match RegisterDragDrop(hwnd, &drop_target) {
+                    let _ = RevokeDragDrop(target_hwnd);
+                    match RegisterDragDrop(target_hwnd, &drop_target) {
                         Ok(()) => {
-                            eprintln!("[TiddlyDesktop] Windows: Registered IDropTarget on parent HWND(0x{:x})",
-                                hwnd.0 as isize);
+                            eprintln!("[TiddlyDesktop] Windows: Registered IDropTarget on HWND(0x{:x})",
+                                target_hwnd.0 as isize);
                         }
                         Err(e) => {
                             eprintln!("[TiddlyDesktop] Windows: FAILED to register IDropTarget on HWND(0x{:x}): {:?}",
-                                hwnd.0 as isize, e);
+                                target_hwnd.0 as isize, e);
                         }
                     }
                 }

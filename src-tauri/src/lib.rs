@@ -903,11 +903,13 @@ mod windows_drag {
 
             eprintln!("[TiddlyDesktop] Windows IDropTarget::Drop called on HWND(0x{:x}) at ({}, {})", obj.hwnd, pt.x, pt.y);
 
-            // Renderer drags should have been declined, but if drop is called anyway, ignore it
+            // For renderer drags (internal TiddlyWiki drags), we accept but don't process.
+            // Return DROPEFFECT_COPY (not DROPEFFECT_NONE) to be consistent with DragEnter/DragOver.
+            // Chromium will handle the DOM drop event separately - we're just the OLE adapter layer.
             if was_renderer {
-                eprintln!("[TiddlyDesktop] Windows IDropTarget::Drop ignoring (was renderer drag)");
+                eprintln!("[TiddlyDesktop] Windows IDropTarget::Drop ignoring (was renderer drag, letting Chromium handle DOM drop)");
                 if !pdw_effect.is_null() {
-                    *pdw_effect = DROPEFFECT_NONE.0 as u32;
+                    *pdw_effect = DROPEFFECT_COPY.0 as u32;
                 }
                 return S_OK;
             }

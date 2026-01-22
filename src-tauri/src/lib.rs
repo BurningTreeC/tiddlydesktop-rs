@@ -112,13 +112,24 @@ mod linux_drag {
     use gtk::prelude::*;
     use gdk::DragAction;
     use glib;
+    use std::cell::RefCell;
+    use std::collections::HashMap;
+    use std::rc::Rc;
     use tauri::{Emitter, WebviewWindow};
 
     /// Data captured from a drag operation
     #[derive(Clone, Debug, serde::Serialize)]
     pub struct DragContentData {
         pub types: Vec<String>,
-        pub data: std::collections::HashMap<String, String>,
+        pub data: HashMap<String, String>,
+    }
+
+    /// State for multi-format drag data collection
+    /// GTK only allows requesting one format at a time, so we need to track state
+    struct DragState {
+        pending_targets: Vec<gdk::Atom>,
+        collected_data: HashMap<String, String>,
+        drop_position: (i32, i32),
     }
 
     /// Set up drag-drop handling for a webview window
@@ -200,77 +211,85 @@ mod linux_drag {
             let _ = window_for_leave.emit("td-drag-leave", ());
         });
 
-        // Handle drag-drop at GTK level - request the data
+        // Shared state for collecting data from multiple formats
+        let drag_state: Rc<RefCell<Option<DragState>>> = Rc::new(RefCell::new(None));
+
+        // Handle drag-drop at GTK level - request ALL relevant formats
         let window_for_drop = window_clone.clone();
+        let drag_state_for_drop = drag_state.clone();
         webview.connect_drag_drop(move |widget, context, x, y, time| {
             // Emit drop-start immediately so JS knows a drop is in progress
-            // This fires BEFORE drag-data-received, allowing td-drag-leave to check it
             let _ = window_for_drop.emit("td-drag-drop-start", serde_json::json!({
                 "x": x,
                 "y": y
             }));
 
-            // Find a suitable content target (skip DELETE and other non-data targets)
-            // Prioritize text/vnd.tiddler for TiddlyWiki tiddler drags
-            // Then text/uri-list for plugin drags (contains data: URI with full content)
-            // Then text/plain over text/html (plain text is cleaner for simple drags)
-            let targets = context.list_targets();
+            let available_targets = context.list_targets();
 
-            // Priority order matches TiddlyWiki5's importDataTypes from dragndrop.js
-            // TW5 order: text/vnd.tiddler, URL, text/x-moz-url, text/html, text/plain, Text, text/uri-list
-            // Additional: UTF8_STRING for X11 encoding safety, chromium/x-web-custom-data for Chrome
-            let preferred_targets = [
-                "text/vnd.tiddler",      // Primary TW format - JSON tiddler data
-                "URL",                   // IE-compatible, contains data URI
-                "text/x-moz-url",        // Mozilla format, contains data URI (Chrome provides this!)
-                "text/html",             // HTML content
-                "text/plain",            // Plain text fallback
-                "Text",                  // IE-compatible text
-                "text/uri-list",         // URI list (Firefox uses for data URIs)
-                "UTF8_STRING",           // X11: guaranteed UTF-8 encoding
-                "STRING",                // X11: basic string
-                "chromium/x-web-custom-data", // Chrome's custom MIME data
+            // Debug: log all available targets
+            eprintln!("[TiddlyDesktop] Linux: Available drag targets:");
+            for target in &available_targets {
+                eprintln!("[TiddlyDesktop]   - {}", target.name());
+            }
+
+            // Formats we want to collect (in TW5 priority order)
+            // We'll request ALL of these that are available, then let JS pick the best
+            let wanted_formats = [
+                "text/vnd.tiddler",
+                "URL",
+                "text/x-moz-url",
+                "text/html",
+                "text/plain",
+                "Text",
+                "text/uri-list",
+                "UTF8_STRING",
             ];
-            let mut selected_target = None;
 
-            for preferred in &preferred_targets {
-                for target in &targets {
-                    if target.name() == *preferred {
-                        selected_target = Some(target.clone());
+            // Find which wanted formats are available
+            let mut targets_to_request: Vec<gdk::Atom> = Vec::new();
+            for wanted in &wanted_formats {
+                for target in &available_targets {
+                    if target.name() == *wanted {
+                        targets_to_request.push(target.clone());
                         break;
                     }
                 }
-                if selected_target.is_some() {
-                    break;
-                }
             }
 
-            // Fallback: use any target that's not DELETE
-            if selected_target.is_none() {
-                for target in &targets {
+            // If none of our preferred formats, try any non-DELETE format
+            if targets_to_request.is_empty() {
+                for target in &available_targets {
                     if target.name() != "DELETE" {
-                        selected_target = Some(target.clone());
+                        targets_to_request.push(target.clone());
                         break;
                     }
                 }
             }
 
-            if let Some(target) = selected_target {
-                widget.drag_get_data(context, &target, time);
-            }
+            if !targets_to_request.is_empty() {
+                eprintln!("[TiddlyDesktop] Linux: Will request {} formats:", targets_to_request.len());
+                for t in &targets_to_request {
+                    eprintln!("[TiddlyDesktop]   - {}", t.name());
+                }
 
-            // Emit position info
-            let _ = window_for_drop.emit("td-drag-drop-position", serde_json::json!({
-                "x": x,
-                "y": y
-            }));
+                // Store state for the data received handler
+                *drag_state_for_drop.borrow_mut() = Some(DragState {
+                    pending_targets: targets_to_request.clone(),
+                    collected_data: HashMap::new(),
+                    drop_position: (x, y),
+                });
+
+                // Request the first format
+                widget.drag_get_data(context, &targets_to_request[0], time);
+            }
 
             true // We handled it
         });
 
-        // Handle receiving the actual data
+        // Handle receiving the actual data - collects multiple formats
         let window_for_data = window_clone.clone();
-        webview.connect_drag_data_received(move |_widget, context, _x, _y, selection_data, _info, time| {
+        let drag_state_for_data = drag_state.clone();
+        webview.connect_drag_data_received(move |widget, context, _x, _y, selection_data, _info, time| {
             // Get the data type
             let data_type = selection_data.data_type();
             let type_name = data_type.name().to_string();
@@ -283,11 +302,9 @@ mod linux_drag {
 
                 // Check for BOM (Byte Order Mark)
                 if raw_data.len() >= 3 && raw_data[0] == 0xEF && raw_data[1] == 0xBB && raw_data[2] == 0xBF {
-                    // UTF-8 with BOM
                     return String::from_utf8(raw_data[3..].to_vec()).ok();
                 }
                 if raw_data.len() >= 2 && raw_data[0] == 0xFF && raw_data[1] == 0xFE {
-                    // UTF-16LE with BOM
                     if raw_data.len() % 2 == 0 {
                         let u16_data: Vec<u16> = raw_data[2..]
                             .chunks_exact(2)
@@ -297,7 +314,6 @@ mod linux_drag {
                     }
                 }
                 if raw_data.len() >= 2 && raw_data[0] == 0xFE && raw_data[1] == 0xFF {
-                    // UTF-16BE with BOM
                     if raw_data.len() % 2 == 0 {
                         let u16_data: Vec<u16> = raw_data[2..]
                             .chunks_exact(2)
@@ -307,17 +323,13 @@ mod linux_drag {
                     }
                 }
 
-                // Try UTF-8 first
-                if let Ok(s) = String::from_utf8(raw_data.to_vec()) {
-                    return Some(s);
-                }
-
-                // Detect UTF-16LE by pattern: ASCII chars have null as second byte
-                // Check first few bytes for this pattern
+                // Check for UTF-16LE/BE pattern BEFORE trying UTF-8
+                // (UTF-8 will "succeed" with embedded nulls but produce garbage)
                 if raw_data.len() >= 4 && raw_data.len() % 2 == 0 {
                     let looks_like_utf16le = raw_data[1] == 0 && raw_data[3] == 0
                         && raw_data[0] != 0 && raw_data[2] != 0;
                     if looks_like_utf16le {
+                        eprintln!("[TiddlyDesktop] Linux: Detected UTF-16LE encoding");
                         let u16_data: Vec<u16> = raw_data
                             .chunks_exact(2)
                             .map(|chunk| u16::from_le_bytes([chunk[0], chunk[1]]))
@@ -327,10 +339,10 @@ mod linux_drag {
                         }
                     }
 
-                    // Check for UTF-16BE pattern
                     let looks_like_utf16be = raw_data[0] == 0 && raw_data[2] == 0
                         && raw_data[1] != 0 && raw_data[3] != 0;
                     if looks_like_utf16be {
+                        eprintln!("[TiddlyDesktop] Linux: Detected UTF-16BE encoding");
                         let u16_data: Vec<u16> = raw_data
                             .chunks_exact(2)
                             .map(|chunk| u16::from_be_bytes([chunk[0], chunk[1]]))
@@ -341,29 +353,72 @@ mod linux_drag {
                     }
                 }
 
+                // Try UTF-8
+                if let Ok(s) = String::from_utf8(raw_data.to_vec()) {
+                    return Some(s);
+                }
+
                 None
             }
 
-            // Try selection_data.text() first - it handles encoding conversion
-            // Fall back to raw data with our encoding detection
-            let text_data = selection_data.text().map(|s| s.to_string()).or_else(|| {
+            // Decode the received data
+            // Note: selection_data.text() may misinterpret UTF-16LE as UTF-8, embedding null bytes
+            // So we check for null bytes and use decode_text which properly handles UTF-16
+            let text_data = selection_data.text().map(|s| s.to_string()).and_then(|s| {
+                // If the string contains null bytes, it's likely misinterpreted UTF-16
+                if s.contains('\0') {
+                    eprintln!("[TiddlyDesktop] Linux: text() returned string with null bytes, trying decode_text");
+                    decode_text(&selection_data.data())
+                } else {
+                    Some(s)
+                }
+            }).or_else(|| {
                 decode_text(&selection_data.data())
             });
 
-            let success = text_data.is_some();
+            // Get mutable access to drag state
+            let mut state_borrow = drag_state_for_data.borrow_mut();
 
-            if let Some(text) = text_data {
-                // Check if this is a file drag (text/uri-list with file:// URIs)
-                if type_name == "text/uri-list" {
-                    let lines: Vec<&str> = text.lines().collect();
-                    let file_paths: Vec<String> = lines.iter()
+            if let Some(ref mut state) = *state_borrow {
+                // Store the received data
+                if let Some(text) = text_data {
+                    // For text/x-moz-url, extract just the URL (first line)
+                    let value = if type_name == "text/x-moz-url" {
+                        text.lines().next().unwrap_or(&text).to_string()
+                    } else {
+                        text
+                    };
+                    let preview = if value.len() > 100 { &value[..100] } else { &value[..] };
+                    eprintln!("[TiddlyDesktop] Linux: Received {}: {}...", type_name, preview);
+                    state.collected_data.insert(type_name.clone(), value);
+                } else {
+                    eprintln!("[TiddlyDesktop] Linux: Received {} but no text data", type_name);
+                }
+
+                // Remove this target from pending
+                state.pending_targets.retain(|t| t.name() != type_name);
+
+                // If more targets to request, request the next one
+                if !state.pending_targets.is_empty() {
+                    let next_target = state.pending_targets[0].clone();
+                    drop(state_borrow); // Release borrow before calling drag_get_data
+                    widget.drag_get_data(context, &next_target, time);
+                    return;
+                }
+
+                // All targets received - emit the collected data
+                let (x, y) = state.drop_position;
+                let collected = std::mem::take(&mut state.collected_data);
+                drop(state_borrow);
+
+                // Check for file drops in text/uri-list
+                if let Some(uri_list) = collected.get("text/uri-list") {
+                    let file_paths: Vec<String> = uri_list.lines()
                         .filter(|line| !line.starts_with('#') && !line.is_empty())
                         .filter_map(|line| {
                             let trimmed = line.trim();
                             if trimmed.starts_with("file://") {
-                                // Decode percent-encoding and remove file:// prefix
                                 let path = trimmed.strip_prefix("file://").unwrap_or(trimmed);
-                                // URL decode the path
                                 urlencoding::decode(path).ok().map(|s| s.into_owned())
                             } else {
                                 None
@@ -372,32 +427,43 @@ mod linux_drag {
                         .collect();
 
                     if !file_paths.is_empty() {
-                        // This is a file drag - emit file paths
+                        // File drop
+                        let _ = window_for_data.emit("td-drag-drop-position", serde_json::json!({
+                            "x": x, "y": y
+                        }));
                         let _ = window_for_data.emit("td-file-drop", serde_json::json!({
                             "paths": file_paths
                         }));
-                    } else {
-                        // URI list but no file:// URIs - treat as content (e.g., data: URIs)
-                        let mut drag_data = DragContentData {
-                            types: vec![type_name.clone()],
-                            data: std::collections::HashMap::new(),
-                        };
-                        drag_data.data.insert(type_name, text);
-                        let _ = window_for_data.emit("td-drag-content", &drag_data);
+                        context.drag_finish(true, false, time);
+                        return;
                     }
-                } else {
-                    // Not a URI list - treat as content drag
-                    let mut drag_data = DragContentData {
-                        types: vec![type_name.clone()],
-                        data: std::collections::HashMap::new(),
-                    };
-                    drag_data.data.insert(type_name, text);
-                    let _ = window_for_data.emit("td-drag-content", &drag_data);
                 }
-            }
 
-            // Finish the drag operation
-            context.drag_finish(success, false, time);
+                // Content drop - emit ALL collected data, let JS pick the best format
+                if !collected.is_empty() {
+                    let types: Vec<String> = collected.keys().cloned().collect();
+                    let window_label = window_for_data.label();
+                    eprintln!("[TiddlyDesktop] Linux: Emitting td-drag-content to window '{}' with types: {:?}", window_label, types);
+                    let drag_data = DragContentData { types, data: collected };
+
+                    match window_for_data.emit("td-drag-drop-position", serde_json::json!({
+                        "x": x, "y": y
+                    })) {
+                        Ok(_) => eprintln!("[TiddlyDesktop] Linux: td-drag-drop-position emitted OK to '{}'", window_label),
+                        Err(e) => eprintln!("[TiddlyDesktop] Linux: td-drag-drop-position emit FAILED: {:?}", e),
+                    }
+
+                    match window_for_data.emit("td-drag-content", &drag_data) {
+                        Ok(_) => eprintln!("[TiddlyDesktop] Linux: td-drag-content emitted OK to '{}'", window_label),
+                        Err(e) => eprintln!("[TiddlyDesktop] Linux: td-drag-content emit FAILED: {:?}", e),
+                    }
+                }
+
+                context.drag_finish(true, false, time);
+            } else {
+                // No state - shouldn't happen, but handle gracefully
+                context.drag_finish(false, false, time);
+            }
         });
     }
 
@@ -831,6 +897,7 @@ mod windows_drag {
             }
 
             // 4. text/html - HTML content
+            let cf_html = get_cf_html();
             if let Some(html) = self.get_string_data(data_object, cf_html) {
                 // Windows HTML Format has markers we need to extract content from
                 if let Some(start) = html.find("<!--StartFragment-->") {
@@ -1783,6 +1850,317 @@ fn add_to_recent_files(app: &tauri::AppHandle, mut entry: WikiEntry) -> Result<(
 }
 
 /// Get recent files list
+/// Debug logging from JavaScript - prints to terminal
+#[tauri::command]
+fn js_log(message: String) {
+    eprintln!("[TiddlyDesktop] JS: {}", message);
+}
+
+/// Clipboard content data structure (same format as drag-drop)
+#[derive(serde::Serialize)]
+struct ClipboardContentData {
+    types: Vec<String>,
+    data: std::collections::HashMap<String, String>,
+}
+
+/// Get clipboard content for paste handling
+/// Returns content in the same format as drag-drop for consistent processing
+#[tauri::command]
+fn get_clipboard_content() -> Result<ClipboardContentData, String> {
+    #[cfg(target_os = "linux")]
+    {
+        get_clipboard_content_linux()
+    }
+    #[cfg(target_os = "windows")]
+    {
+        get_clipboard_content_windows()
+    }
+    #[cfg(target_os = "macos")]
+    {
+        get_clipboard_content_macos()
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn get_clipboard_content_linux() -> Result<ClipboardContentData, String> {
+    use std::collections::HashMap;
+    use std::sync::{Arc, Mutex};
+
+    // Helper to decode text with proper encoding detection (same as drag-drop)
+    fn decode_text(raw_data: &[u8]) -> Option<String> {
+        if raw_data.is_empty() {
+            return None;
+        }
+
+        // Check for BOM
+        if raw_data.len() >= 3 && raw_data[0] == 0xEF && raw_data[1] == 0xBB && raw_data[2] == 0xBF {
+            return String::from_utf8(raw_data[3..].to_vec()).ok();
+        }
+        if raw_data.len() >= 2 && raw_data[0] == 0xFF && raw_data[1] == 0xFE {
+            if raw_data.len() % 2 == 0 {
+                let u16_data: Vec<u16> = raw_data[2..]
+                    .chunks_exact(2)
+                    .map(|chunk| u16::from_le_bytes([chunk[0], chunk[1]]))
+                    .collect();
+                return String::from_utf16(&u16_data).ok();
+            }
+        }
+        if raw_data.len() >= 2 && raw_data[0] == 0xFE && raw_data[1] == 0xFF {
+            if raw_data.len() % 2 == 0 {
+                let u16_data: Vec<u16> = raw_data[2..]
+                    .chunks_exact(2)
+                    .map(|chunk| u16::from_be_bytes([chunk[0], chunk[1]]))
+                    .collect();
+                return String::from_utf16(&u16_data).ok();
+            }
+        }
+
+        // Check for UTF-16LE/BE pattern BEFORE trying UTF-8
+        if raw_data.len() >= 4 && raw_data.len() % 2 == 0 {
+            let looks_like_utf16le = raw_data[1] == 0 && raw_data[3] == 0
+                && raw_data[0] != 0 && raw_data[2] != 0;
+            if looks_like_utf16le {
+                eprintln!("[TiddlyDesktop] Clipboard: Detected UTF-16LE encoding");
+                let u16_data: Vec<u16> = raw_data
+                    .chunks_exact(2)
+                    .map(|chunk| u16::from_le_bytes([chunk[0], chunk[1]]))
+                    .collect();
+                if let Ok(s) = String::from_utf16(&u16_data) {
+                    return Some(s);
+                }
+            }
+
+            let looks_like_utf16be = raw_data[0] == 0 && raw_data[2] == 0
+                && raw_data[1] != 0 && raw_data[3] != 0;
+            if looks_like_utf16be {
+                eprintln!("[TiddlyDesktop] Clipboard: Detected UTF-16BE encoding");
+                let u16_data: Vec<u16> = raw_data
+                    .chunks_exact(2)
+                    .map(|chunk| u16::from_be_bytes([chunk[0], chunk[1]]))
+                    .collect();
+                if let Ok(s) = String::from_utf16(&u16_data) {
+                    return Some(s);
+                }
+            }
+        }
+
+        // Try UTF-8
+        if let Ok(s) = String::from_utf8(raw_data.to_vec()) {
+            return Some(s);
+        }
+
+        None
+    }
+
+    let mut types = Vec::new();
+    let mut data = HashMap::new();
+
+    // GTK3 clipboard API
+    let display = gdk::Display::default().ok_or("No display")?;
+    let clipboard = gtk::Clipboard::default(&display).ok_or("No clipboard")?;
+
+    // Request formats in TiddlyWiki priority order
+    let formats_to_try = [
+        "text/vnd.tiddler",
+        "text/html",
+        "text/plain",
+        "UTF8_STRING",
+        "STRING",
+    ];
+
+    for clipboard_type in formats_to_try {
+        let target = gdk::Atom::intern(clipboard_type);
+
+        // Use request_contents to get raw data with proper encoding
+        let result: Arc<Mutex<Option<Vec<u8>>>> = Arc::new(Mutex::new(None));
+        let result_clone = result.clone();
+
+        clipboard.request_contents(&target, move |_clipboard, selection_data| {
+            let raw_data = selection_data.data().to_vec();
+            if let Ok(mut guard) = result_clone.lock() {
+                *guard = Some(raw_data);
+            }
+        });
+
+        // Process pending GTK events to complete the async request
+        while gtk::events_pending() {
+            gtk::main_iteration();
+        }
+
+        // Small delay to ensure callback completes
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        while gtk::events_pending() {
+            gtk::main_iteration();
+        }
+
+        if let Ok(guard) = result.lock() {
+            if let Some(raw_data) = guard.as_ref() {
+                if !raw_data.is_empty() {
+                    // Check for null bytes indicating misinterpreted UTF-16
+                    let text = if raw_data.contains(&0) {
+                        decode_text(raw_data)
+                    } else {
+                        String::from_utf8(raw_data.clone()).ok()
+                    };
+
+                    if let Some(text) = text {
+                        if !text.is_empty() {
+                            let mime_type = if clipboard_type == "UTF8_STRING" || clipboard_type == "STRING" {
+                                "text/plain"
+                            } else {
+                                clipboard_type
+                            };
+
+                            if !types.contains(&mime_type.to_string()) {
+                                types.push(mime_type.to_string());
+                                data.insert(mime_type.to_string(), text);
+                                eprintln!("[TiddlyDesktop] Clipboard: Got {} ({} chars)", mime_type, data.get(mime_type).map(|s| s.len()).unwrap_or(0));
+                            }
+                        }
+                    }
+                }
+            }
+        };
+    }
+
+    // Fallback: try wait_for_text (simpler but may have encoding issues)
+    if types.is_empty() {
+        if let Some(text) = clipboard.wait_for_text() {
+            let text_str = text.to_string();
+            if !text_str.is_empty() {
+                types.push("text/plain".to_string());
+                data.insert("text/plain".to_string(), text_str);
+                eprintln!("[TiddlyDesktop] Clipboard: Fallback got text/plain");
+            }
+        }
+    }
+
+    eprintln!("[TiddlyDesktop] Clipboard: Returning {} types", types.len());
+    Ok(ClipboardContentData { types, data })
+}
+
+#[cfg(target_os = "windows")]
+fn get_clipboard_content_windows() -> Result<ClipboardContentData, String> {
+    use std::collections::HashMap;
+    use std::ffi::OsString;
+    use std::os::windows::ffi::OsStringExt;
+    use windows::Win32::Foundation::HANDLE;
+    use windows::Win32::System::DataExchange::{
+        OpenClipboard, CloseClipboard, GetClipboardData, RegisterClipboardFormatA,
+    };
+    use windows::Win32::System::Memory::{GlobalLock, GlobalUnlock, GlobalSize, HGLOBAL};
+    use windows::Win32::System::Ole::CF_UNICODETEXT;
+
+    let mut types = Vec::new();
+    let mut data = HashMap::new();
+
+    unsafe {
+        if OpenClipboard(None).is_err() {
+            return Err("Failed to open clipboard".to_string());
+        }
+
+        // Get HTML format
+        let cf_html = RegisterClipboardFormatA(windows::core::s!("HTML Format"))
+            .map_err(|e| format!("Failed to register HTML format: {}", e))?;
+
+        if cf_html != 0 {
+            if let Ok(h) = GetClipboardData(cf_html) {
+                if !h.0.is_null() {
+                    let hglobal = HGLOBAL(h.0 as *mut std::ffi::c_void);
+                    let ptr = GlobalLock(hglobal) as *const u8;
+                    if !ptr.is_null() {
+                        let size = GlobalSize(hglobal);
+                        let slice = std::slice::from_raw_parts(ptr, size);
+                        let len = slice.iter().position(|&c| c == 0).unwrap_or(slice.len());
+                        let html = String::from_utf8_lossy(&slice[..len]).to_string();
+
+                        // Extract content from Windows HTML Format markers
+                        if let Some(start) = html.find("<!--StartFragment-->") {
+                            if let Some(end) = html.find("<!--EndFragment-->") {
+                                let content = &html[start + 20..end];
+                                types.push("text/html".to_string());
+                                data.insert("text/html".to_string(), content.to_string());
+                                eprintln!("[TiddlyDesktop] Clipboard: Got text/html ({} chars)", content.len());
+                            }
+                        } else if !html.is_empty() {
+                            types.push("text/html".to_string());
+                            data.insert("text/html".to_string(), html.clone());
+                            eprintln!("[TiddlyDesktop] Clipboard: Got text/html ({} chars)", html.len());
+                        }
+
+                        let _ = GlobalUnlock(hglobal);
+                    }
+                }
+            }
+        }
+
+        // Get Unicode text
+        if let Ok(h) = GetClipboardData(CF_UNICODETEXT.0 as u32) {
+            if !h.0.is_null() {
+                let hglobal = HGLOBAL(h.0 as *mut std::ffi::c_void);
+                let ptr = GlobalLock(hglobal) as *const u16;
+                if !ptr.is_null() {
+                    let size = GlobalSize(hglobal) / 2;
+                    let slice = std::slice::from_raw_parts(ptr, size);
+                    let len = slice.iter().position(|&c| c == 0).unwrap_or(slice.len());
+                    let text = OsString::from_wide(&slice[..len]).to_string_lossy().to_string();
+
+                    if !text.is_empty() {
+                        types.push("text/plain".to_string());
+                        data.insert("text/plain".to_string(), text.clone());
+                        eprintln!("[TiddlyDesktop] Clipboard: Got text/plain ({} chars)", text.len());
+                    }
+
+                    let _ = GlobalUnlock(hglobal);
+                }
+            }
+        }
+
+        let _ = CloseClipboard();
+    }
+
+    eprintln!("[TiddlyDesktop] Clipboard: Returning {} types", types.len());
+    Ok(ClipboardContentData { types, data })
+}
+
+#[cfg(target_os = "macos")]
+fn get_clipboard_content_macos() -> Result<ClipboardContentData, String> {
+    use std::collections::HashMap;
+    use objc2_foundation::NSString;
+    use objc2_app_kit::NSPasteboard;
+
+    let mut types = Vec::new();
+    let mut data = HashMap::new();
+
+    unsafe {
+        let pasteboard = NSPasteboard::generalPasteboard();
+
+        // Request types matching TiddlyWiki5's importDataTypes priority
+        let type_mappings: &[(&str, &str)] = &[
+            ("public.html", "text/html"),
+            ("Apple HTML pasteboard type", "text/html"),
+            ("public.utf8-plain-text", "text/plain"),
+            ("NSStringPboardType", "text/plain"),
+            ("public.plain-text", "text/plain"),
+        ];
+
+        for (pb_type_name, mime_type) in type_mappings {
+            let pb_type = NSString::from_str(pb_type_name);
+            if let Some(ns_str) = pasteboard.stringForType(&pb_type) {
+                let value_str = ns_str.to_string();
+                if !value_str.is_empty() && !types.contains(&mime_type.to_string()) {
+                    types.push(mime_type.to_string());
+                    data.insert(mime_type.to_string(), value_str);
+                    eprintln!("[TiddlyDesktop] Clipboard: Got {} ({} chars)", mime_type, value_str.len());
+                }
+            }
+        }
+    }
+
+    eprintln!("[TiddlyDesktop] Clipboard: Returning {} types", types.len());
+    Ok(ClipboardContentData { types, data })
+}
+
 #[tauri::command]
 fn get_recent_files(app: tauri::AppHandle) -> Vec<WikiEntry> {
     load_recent_files_from_disk(&app)
@@ -1819,6 +2197,21 @@ fn set_wiki_backup_dir(app: tauri::AppHandle, path: String, backup_dir: Option<S
     for entry in entries.iter_mut() {
         if paths_equal(&entry.path, &path) {
             entry.backup_dir = backup_dir;
+            break;
+        }
+    }
+
+    save_recent_files_to_disk(&app, &entries)
+}
+
+/// Update favicon for a wiki (used after decryption when favicon wasn't available initially)
+#[tauri::command]
+fn update_wiki_favicon(app: tauri::AppHandle, path: String, favicon: Option<String>) -> Result<(), String> {
+    let mut entries = load_recent_files_from_disk(&app);
+
+    for entry in entries.iter_mut() {
+        if paths_equal(&entry.path, &path) {
+            entry.favicon = favicon;
             break;
         }
     }
@@ -3588,19 +3981,17 @@ fn get_dialog_init_script() -> &'static str {
         var pendingFilePaths = [];
 
         function createSyntheticDragEvent(type, position, dataTransfer, relatedTarget) {
+            // Don't pass dataTransfer to constructor - it may reject non-native DataTransfer objects
             var event = new DragEvent(type, {
                 bubbles: true,
                 cancelable: true,
                 clientX: position ? position.x : 0,
                 clientY: position ? position.y : 0,
-                dataTransfer: dataTransfer,
                 relatedTarget: relatedTarget !== undefined ? relatedTarget : null
             });
 
-            // Force dataTransfer if constructor didn't set it properly
-            // Some browsers (especially Chromium/WebView2) ignore the dataTransfer option
-            // or set it to a new protected DataTransfer instead of the one we passed
-            if (dataTransfer && event.dataTransfer !== dataTransfer) {
+            // Always set dataTransfer via defineProperty - this works with mock objects
+            if (dataTransfer) {
                 try {
                     Object.defineProperty(event, 'dataTransfer', {
                         value: dataTransfer,
@@ -3608,7 +3999,7 @@ fn get_dialog_init_script() -> &'static str {
                         configurable: true
                     });
                 } catch (e) {
-                    console.log("[TiddlyDesktop] Could not override dataTransfer:", e);
+                    console.error("[TiddlyDesktop] Could not set dataTransfer:", e);
                 }
             }
 
@@ -3622,28 +4013,46 @@ fn get_dialog_init_script() -> &'static str {
         function setupExternalAttachments() {
             extAttachRetryCount++;
 
-            if (!window.__TAURI__ || !window.__TAURI__.event) {
-                // Retry for up to 60 seconds (600 × 100ms) to handle very large wikis
-                if (extAttachRetryCount < 600) {
-                    setTimeout(setupExternalAttachments, 100);
+            // Log progress: frequently at first, then less often while waiting for encrypted wikis
+            var shouldLog = extAttachRetryCount === 1 ||
+                (extAttachRetryCount <= 100 && extAttachRetryCount % 10 === 0) ||
+                (extAttachRetryCount > 100 && extAttachRetryCount % 60 === 0);  // Every ~60 seconds after initial wait
+            if (shouldLog) {
+                var msg = "setupExternalAttachments attempt " + extAttachRetryCount +
+                    " __TAURI__:" + !!window.__TAURI__ +
+                    " __IS_MAIN_WIKI__:" + window.__IS_MAIN_WIKI__ +
+                    " __WIKI_PATH__:" + window.__WIKI_PATH__ +
+                    " $tw:" + (typeof $tw !== 'undefined' && $tw.wiki ? "ready" : "not ready");
+                if (window.__TAURI__ && window.__TAURI__.core) {
+                    window.__TAURI__.core.invoke("js_log", { message: msg });
                 }
+            }
+
+            if (!window.__TAURI__ || !window.__TAURI__.event) {
+                // Keep retrying until Tauri is available (should be quick)
+                setTimeout(setupExternalAttachments, 100);
                 return;
             }
 
             // Skip main wiki - no file imports there
             if (window.__IS_MAIN_WIKI__) {
-                console.log('[TiddlyDesktop] Main wiki - external attachments disabled');
+                window.__TAURI__.core.invoke("js_log", { message: "Main wiki - external attachments disabled" });
                 return;
             }
 
             // Wait for __WIKI_PATH__ to be set (by protocol handler script)
             if (!window.__WIKI_PATH__) {
-                // Retry for up to 60 seconds (600 × 100ms) to handle very large wikis
-                if (extAttachRetryCount < 600) {
-                    setTimeout(setupExternalAttachments, 100);
-                } else {
-                    console.log('[TiddlyDesktop] No wiki path available after 60s, external attachments disabled');
-                }
+                // Keep retrying - wiki path should be set soon after page load
+                setTimeout(setupExternalAttachments, 100);
+                return;
+            }
+
+            // Wait for TiddlyWiki to be ready (no timeout - encrypted wikis may take arbitrarily long)
+            // User might not decrypt for minutes or even hours
+            if (typeof $tw === 'undefined' || !$tw.wiki) {
+                // Use longer interval after initial attempts to reduce CPU usage while waiting
+                var interval = extAttachRetryCount < 100 ? 100 : 1000;
+                setTimeout(setupExternalAttachments, interval);
                 return;
             }
 
@@ -3651,7 +4060,8 @@ fn get_dialog_init_script() -> &'static str {
             var invoke = window.__TAURI__.core.invoke;
             var wikiPath = window.__WIKI_PATH__;
 
-            console.log("[TiddlyDesktop] Setting up drag-drop listeners for:", wikiPath);
+            var windowLabel = window.__WINDOW_LABEL__ || 'unknown';
+            invoke("js_log", { message: "Setting up drag-drop listeners for: " + wikiPath + " window: " + windowLabel });
 
             // Get element at position - universal, works for any element
             function getTargetElement(position) {
@@ -3835,6 +4245,7 @@ fn get_dialog_init_script() -> &'static str {
             // Fires continuously during drag - use to dispatch synthetic dragenter/dragover
             // Handles both file and content drags
             listen("td-drag-motion", function(event) {
+                invoke("js_log", { message: "td-drag-motion received at " + (event.payload ? event.payload.x + "," + event.payload.y : "null") });
                 if (!event.payload) return;
 
                 var pos;
@@ -3939,6 +4350,12 @@ fn get_dialog_init_script() -> &'static str {
             // Native drag content received (Linux GTK, Windows IDropTarget)
             // This provides the actual content data from the drag
             listen("td-drag-content", function(event) {
+                invoke("js_log", { message: "td-drag-content received! types=" + JSON.stringify(event.payload?.types) });
+                // Use document.title to show we received the event (visible indicator)
+                var origTitle = document.title;
+                document.title = "[TD-CONTENT] " + origTitle;
+                setTimeout(function() { document.title = origTitle; }, 2000);
+
                 if (event.payload) {
                     // Store the content data for processing
                     pendingContentDropData = {
@@ -3952,11 +4369,21 @@ fn get_dialog_init_script() -> &'static str {
                         processContentDrop();
                     }
                 }
+            }).then(function() {
+                invoke("js_log", { message: "td-drag-content listener REGISTERED for window: " + windowLabel });
+            }).catch(function(e) {
+                invoke("js_log", { message: "td-drag-content listener FAILED: " + e });
             });
 
             // Native drag drop position (Linux GTK, Windows IDropTarget)
             // Note: Don't check contentDragActive - native events are authoritative
             listen("td-drag-drop-position", function(event) {
+                invoke("js_log", { message: "td-drag-drop-position received! x=" + event.payload?.x + " y=" + event.payload?.y });
+                // Use document.title to show we received the event (visible indicator)
+                var origTitle = document.title;
+                document.title = "[TD-POS] " + origTitle;
+                setTimeout(function() { document.title = origTitle; }, 2000);
+
                 if (event.payload) {
                     var pos;
                     if (event.payload.screenCoords) {
@@ -3971,6 +4398,10 @@ fn get_dialog_init_script() -> &'static str {
                         processContentDrop();
                     }
                 }
+            }).then(function() {
+                invoke("js_log", { message: "td-drag-drop-position listener REGISTERED for window: " + windowLabel });
+            }).catch(function(e) {
+                invoke("js_log", { message: "td-drag-drop-position listener FAILED: " + e });
             });
 
             // Native file drop (Linux GTK, Windows IDropTarget)
@@ -4370,24 +4801,117 @@ fn get_dialog_init_script() -> &'static str {
                     contentDropTimeout = null;
                 }
 
-                // Create DataTransfer with captured content
-                var dt = new DataTransfer();
+                // Create a pure mock DataTransfer object - not based on real DataTransfer
+                // This avoids WebView-specific issues with overriding native DataTransfer methods
+                var dataMap = capturedData.data;
+                var fileList = capturedData.files.slice();
+                var typesList = Object.keys(dataMap);
 
-                // Add text/string data
-                for (var type in capturedData.data) {
-                    if (capturedData.data.hasOwnProperty(type)) {
-                        try {
-                            dt.setData(type, capturedData.data[type]);
-                        } catch(e) {
-                            // Ignore unsupported types
-                        }
-                    }
+                // Debug: log what data we received
+                invoke("js_log", { message: "processContentDrop - types: " + JSON.stringify(typesList) });
+                invoke("js_log", { message: "processContentDrop - has text/html: " + ("text/html" in dataMap) });
+                if (dataMap["text/html"]) {
+                    invoke("js_log", { message: "processContentDrop - text/html length: " + dataMap["text/html"].length });
+                    invoke("js_log", { message: "processContentDrop - text/html preview: " + dataMap["text/html"].substring(0, 200) });
                 }
 
-                // Add captured files
-                capturedData.files.forEach(function(file) {
-                    dt.items.add(file);
+                // Add 'Files' to types if we have files
+                if (fileList.length > 0 && typesList.indexOf('Files') === -1) {
+                    typesList.push('Files');
+                }
+
+                // Build items array with DataTransferItem-like objects
+                var itemsArray = [];
+
+                // Add string items for each data type
+                typesList.forEach(function(type) {
+                    if (type !== 'Files') {
+                        itemsArray.push({
+                            kind: "string",
+                            type: type,
+                            getAsString: function(callback) {
+                                if (typeof callback === 'function') {
+                                    var data = dataMap[type] || "";
+                                    setTimeout(function() { callback(data); }, 0);
+                                }
+                            },
+                            getAsFile: function() { return null; }
+                        });
+                    }
                 });
+
+                // Add file items
+                fileList.forEach(function(file) {
+                    itemsArray.push({
+                        kind: "file",
+                        type: file.type || "application/octet-stream",
+                        getAsString: function(callback) {},
+                        getAsFile: function() { return file; }
+                    });
+                });
+
+                // Add DataTransferItemList methods
+                itemsArray.add = function(data, type) {
+                    if (data instanceof File) {
+                        fileList.push(data);
+                        this.push({
+                            kind: "file",
+                            type: data.type || "application/octet-stream",
+                            getAsString: function() {},
+                            getAsFile: function() { return data; }
+                        });
+                    } else if (typeof data === "string" && type) {
+                        dataMap[type] = data;
+                        if (typesList.indexOf(type) === -1) typesList.push(type);
+                        this.push({
+                            kind: "string",
+                            type: type,
+                            getAsString: function(cb) { if (cb) setTimeout(function() { cb(data); }, 0); },
+                            getAsFile: function() { return null; }
+                        });
+                    }
+                };
+                itemsArray.remove = function(index) { this.splice(index, 1); };
+                itemsArray.clear = function() { this.length = 0; };
+
+                // Create the mock DataTransfer object
+                var dt = {
+                    types: typesList,
+                    files: fileList,
+                    items: itemsArray,
+                    dropEffect: "copy",
+                    effectAllowed: "all",
+                    getData: function(type) {
+                        var result = (type in dataMap) ? dataMap[type] : "";
+                        invoke("js_log", { message: "getData('" + type + "') -> " + (result ? "has data (" + result.length + " chars)" : "empty") });
+                        if (result && type === "text/html") {
+                            // Log char codes to detect encoding issues
+                            var codes = [];
+                            for (var i = 0; i < Math.min(20, result.length); i++) {
+                                codes.push(result.charCodeAt(i));
+                            }
+                            invoke("js_log", { message: "text/html first 20 char codes: " + JSON.stringify(codes) });
+                        }
+                        return result;
+                    },
+                    setData: function(type, value) {
+                        dataMap[type] = value;
+                        if (typesList.indexOf(type) === -1) {
+                            typesList.push(type);
+                        }
+                    },
+                    clearData: function(type) {
+                        if (type) {
+                            delete dataMap[type];
+                            var idx = typesList.indexOf(type);
+                            if (idx !== -1) typesList.splice(idx, 1);
+                        } else {
+                            for (var k in dataMap) delete dataMap[k];
+                            typesList.length = 0;
+                        }
+                    },
+                    setDragImage: function() {}
+                };
 
                 // Fire dragleave on current target first (to unhighlight dropzone)
                 // Use relatedTarget=null to signal drag is ending, not moving to another element
@@ -4398,14 +4922,17 @@ fn get_dialog_init_script() -> &'static str {
                 }
 
                 // Fire drop event
+                invoke("js_log", { message: "Dispatching drop event to: " + (dropTarget.tagName || "unknown") + " at " + pos.x + "," + pos.y });
                 var dropEvent = createSyntheticDragEvent("drop", pos, dt);
                 dropEvent.__tiddlyDesktopSynthetic = true;
                 dropTarget.dispatchEvent(dropEvent);
+                invoke("js_log", { message: "Drop event dispatched, defaultPrevented=" + dropEvent.defaultPrevented });
 
                 // Fire dragend to signal drag operation completed
                 var endEvent = createSyntheticDragEvent("dragend", pos, dt);
                 endEvent.__tiddlyDesktopSynthetic = true;
                 document.body.dispatchEvent(endEvent);
+                invoke("js_log", { message: "Dragend event dispatched" });
 
                 // Reset drag state (mirrors tauri://drag-drop)
                 pendingFilePaths = [];
@@ -4814,6 +5341,114 @@ fn get_dialog_init_script() -> &'static str {
 
             installImportHook();
             setupCleanup();
+
+            // Track last clicked element for paste targeting
+            // Paste events go to focused element (usually BODY), but we need to know
+            // which dropzone the user interacted with
+            var lastClickedElement = null;
+            document.addEventListener("click", function(event) {
+                lastClickedElement = event.target;
+            }, true);
+
+            // Paste event handler - intercept paste and use native clipboard reading
+            // This ensures proper encoding handling (e.g., UTF-16LE from Firefox on Linux)
+            document.addEventListener("paste", function(event) {
+                // Skip if in a text input or contenteditable
+                var target = event.target;
+                if (target.tagName === "TEXTAREA" || target.tagName === "INPUT" || target.isContentEditable) {
+                    return; // Let native paste work in text fields
+                }
+
+                // Skip if TiddlyWiki editor is handling it
+                if (event.twEditor) {
+                    return;
+                }
+
+                // Skip our own synthetic paste events
+                if (event.__tiddlyDesktopSynthetic) {
+                    return;
+                }
+
+                // Prevent default and handle via native clipboard
+                event.preventDefault();
+                event.stopPropagation();
+
+                invoke("js_log", { message: "Paste event intercepted, reading native clipboard" });
+
+                // Read clipboard content via Rust (handles encoding properly)
+                invoke("get_clipboard_content").then(function(clipboardData) {
+                    if (!clipboardData || !clipboardData.types || clipboardData.types.length === 0) {
+                        invoke("js_log", { message: "Clipboard is empty or unreadable" });
+                        return;
+                    }
+
+                    invoke("js_log", { message: "Clipboard content types: " + JSON.stringify(clipboardData.types) });
+
+                    // Create a mock ClipboardData/DataTransfer for the synthetic paste event
+                    var dataMap = clipboardData.data || {};
+                    var typesList = clipboardData.types || [];
+
+                    // Build items array matching ClipboardItem interface
+                    var itemsArray = [];
+                    typesList.forEach(function(type) {
+                        itemsArray.push({
+                            kind: "string",
+                            type: type,
+                            getAsString: function(callback) {
+                                if (typeof callback === "function") {
+                                    setTimeout(function() { callback(dataMap[type] || ""); }, 0);
+                                }
+                            },
+                            getAsFile: function() { return null; }
+                        });
+                    });
+
+                    // Create mock clipboardData object
+                    var mockClipboardData = {
+                        types: typesList,
+                        items: itemsArray,
+                        getData: function(type) {
+                            return dataMap[type] || "";
+                        },
+                        setData: function() {},
+                        clearData: function() {}
+                    };
+
+                    // Create synthetic paste event
+                    var syntheticPaste = new ClipboardEvent("paste", {
+                        bubbles: true,
+                        cancelable: true,
+                        composed: true
+                    });
+
+                    // Override clipboardData (readonly in real events, but we can define it on our object)
+                    Object.defineProperty(syntheticPaste, "clipboardData", {
+                        value: mockClipboardData,
+                        writable: false
+                    });
+
+                    // Mark as our synthetic event
+                    syntheticPaste.__tiddlyDesktopSynthetic = true;
+
+                    // Use the last clicked element to determine which dropzone to target
+                    // This is more precise than focus state since divs aren't focusable
+                    var pasteTarget = lastClickedElement || target;
+                    var dropzone = pasteTarget.closest ? pasteTarget.closest(".tc-dropzone") : null;
+
+                    if (dropzone) {
+                        // Last click was inside a dropzone - dispatch there, it will bubble up
+                        invoke("js_log", { message: "Dispatching synthetic paste to: " + pasteTarget.tagName + " (inside dropzone)" });
+                        pasteTarget.dispatchEvent(syntheticPaste);
+                        invoke("js_log", { message: "Synthetic paste dispatched, defaultPrevented=" + syntheticPaste.defaultPrevented });
+                    } else {
+                        // Last click was not inside any dropzone
+                        // Paste import only works when user clicked inside a dropzone area
+                        invoke("js_log", { message: "Last clicked element (" + (pasteTarget ? pasteTarget.tagName : "none") + ") is not inside a dropzone - no import" });
+                    }
+                }).catch(function(err) {
+                    invoke("js_log", { message: "Failed to read clipboard: " + err });
+                });
+            }, true); // Use capture phase to intercept before TiddlyWiki
 
             console.log("[TiddlyDesktop] External attachments ready for:", wikiPath);
         }
@@ -5299,17 +5934,18 @@ fn get_dialog_init_script() -> &'static str {
             // Helper to create synthetic drag events with proper dataTransfer
             // WebKitGTK may not set dataTransfer from DragEvent constructor
             function createSyntheticDragEvent(type, options, dataTransfer) {
+                // Don't pass dataTransfer to constructor - it may reject non-native objects
                 var event = new DragEvent(type, Object.assign({
                     bubbles: true,
-                    cancelable: true,
-                    dataTransfer: dataTransfer
+                    cancelable: true
                 }, options));
 
-                // Force dataTransfer if constructor didn't set it
-                if (!event.dataTransfer && dataTransfer) {
+                // Always set dataTransfer via defineProperty
+                if (dataTransfer) {
                     Object.defineProperty(event, 'dataTransfer', {
                         value: dataTransfer,
-                        writable: false
+                        writable: false,
+                        configurable: true
                     });
                 }
 
@@ -7679,6 +8315,51 @@ window.__IS_MAIN_WIKI__ = {};
         setInterval(syncTitle, 2000);
     }})();
 
+    // Favicon extraction for encrypted wikis
+    // When the wiki is encrypted, we can't extract the favicon from the HTML during load
+    // After decryption, extract it from $:/favicon.ico and send to Rust
+    (function() {{
+        var wikiPath = window.__WIKI_PATH__;
+
+        function extractAndUpdateFavicon() {{
+            if (typeof $tw === 'undefined' || !$tw.wiki) {{
+                setTimeout(extractAndUpdateFavicon, 100);
+                return;
+            }}
+
+            // Get the favicon tiddler
+            var faviconTiddler = $tw.wiki.getTiddler('$:/favicon.ico');
+            if (!faviconTiddler || !faviconTiddler.fields.text) {{
+                return; // No favicon tiddler
+            }}
+
+            var text = faviconTiddler.fields.text;
+            var type = faviconTiddler.fields.type || 'image/x-icon';
+
+            // Build data URI
+            var dataUri;
+            if (text.startsWith('data:')) {{
+                dataUri = text; // Already a data URI
+            }} else {{
+                // Assume base64 encoded
+                dataUri = 'data:' + type + ';base64,' + text;
+            }}
+
+            // Send to Rust to update the wiki list entry
+            if (window.__TAURI__ && window.__TAURI__.core) {{
+                window.__TAURI__.core.invoke('update_wiki_favicon', {{
+                    path: wikiPath,
+                    favicon: dataUri
+                }}).catch(function(err) {{
+                    console.error('TiddlyDesktop: Failed to update favicon:', err);
+                }});
+            }}
+        }}
+
+        // Run once TiddlyWiki is ready
+        extractAndUpdateFavicon();
+    }})();
+
     // Single-tiddler window mode
     if (window.__SINGLE_TIDDLER__) {{
         (function() {{
@@ -8032,6 +8713,7 @@ pub fn run() {
             remove_recent_file,
             set_wiki_backups,
             set_wiki_backup_dir,
+            update_wiki_favicon,
             get_wiki_backup_dir_setting,
             set_wiki_group,
             get_wiki_groups,
@@ -8045,7 +8727,9 @@ pub fn run() {
             set_session_auth_config,
             open_auth_window,
             run_command,
-            show_find_in_page
+            show_find_in_page,
+            js_log,
+            get_clipboard_content
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

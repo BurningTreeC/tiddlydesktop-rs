@@ -746,14 +746,15 @@ mod windows_drag {
                 false
             };
 
-            // Convert to client coordinates
-            let (x, y) = obj.screen_to_client(pt.x, pt.y);
-            eprintln!("[TiddlyDesktop] Windows IDropTarget::DragEnter client coords: ({}, {})", x, y);
+            // Send raw screen coordinates - let JavaScript convert using its own window position
+            // This is more reliable than trying to convert in Rust with HWND client areas
+            eprintln!("[TiddlyDesktop] Windows IDropTarget::DragEnter screen coords: ({}, {})", pt.x, pt.y);
 
-            // Emit event with client coordinates and renderer flag
+            // Emit event with screen coordinates - JS will convert
             let _ = obj.window.emit("td-drag-motion", serde_json::json!({
-                "x": x,
-                "y": y,
+                "x": pt.x,
+                "y": pt.y,
+                "screenCoords": true,
                 "isRendererDrag": is_renderer_drag
             }));
 
@@ -786,9 +787,6 @@ mod windows_drag {
                 }
             }
 
-            // Convert to client coordinates
-            let (x, y) = obj.screen_to_client(pt.x, pt.y);
-
             // DIAGNOSTIC: Log DragOver calls (rate-limited)
             static LAST_LOG: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
             let now = std::time::SystemTime::now()
@@ -798,13 +796,14 @@ mod windows_drag {
             let last = LAST_LOG.load(std::sync::atomic::Ordering::Relaxed);
             if now - last > 500 {
                 LAST_LOG.store(now, std::sync::atomic::Ordering::Relaxed);
-                eprintln!("[TiddlyDesktop] Windows IDropTarget::DragOver at ({}, {})", x, y);
+                eprintln!("[TiddlyDesktop] Windows IDropTarget::DragOver screen coords: ({}, {})", pt.x, pt.y);
             }
 
-            // Emit continuous motion events
+            // Send raw screen coordinates - let JavaScript convert
             let _ = obj.window.emit("td-drag-motion", serde_json::json!({
-                "x": x,
-                "y": y
+                "x": pt.x,
+                "y": pt.y,
+                "screenCoords": true
             }));
 
             // Accept the drag
@@ -858,14 +857,14 @@ mod windows_drag {
                 // Log available formats for debugging
                 obj.log_available_formats(data_object);
 
-                // Convert to client coordinates
-                let (x, y) = obj.screen_to_client(pt.x, pt.y);
-                eprintln!("[TiddlyDesktop] Windows IDropTarget::Drop client coords: ({}, {})", x, y);
+                // Send raw screen coordinates - let JavaScript convert
+                eprintln!("[TiddlyDesktop] Windows IDropTarget::Drop screen coords: ({}, {})", pt.x, pt.y);
 
-                // Emit drop start
+                // Emit drop start with screen coordinates
                 let _ = obj.window.emit("td-drag-drop-start", serde_json::json!({
-                    "x": x,
-                    "y": y
+                    "x": pt.x,
+                    "y": pt.y,
+                    "screenCoords": true
                 }));
 
                 // Check for file paths first
@@ -874,8 +873,9 @@ mod windows_drag {
                 if !file_paths.is_empty() {
                     eprintln!("[TiddlyDesktop] Windows IDropTarget::Drop emitting td-file-drop");
                     let _ = obj.window.emit("td-drag-drop-position", serde_json::json!({
-                        "x": x,
-                        "y": y
+                        "x": pt.x,
+                        "y": pt.y,
+                        "screenCoords": true
                     }));
                     let _ = obj.window.emit("td-file-drop", serde_json::json!({
                         "paths": file_paths
@@ -892,8 +892,9 @@ mod windows_drag {
                     eprintln!("[TiddlyDesktop] Windows IDropTarget::Drop extracted {} types: {:?}",
                              content_data.types.len(), content_data.types);
                     let _ = obj.window.emit("td-drag-drop-position", serde_json::json!({
-                        "x": x,
-                        "y": y
+                        "x": pt.x,
+                        "y": pt.y,
+                        "screenCoords": true
                     }));
                     let _ = obj.window.emit("td-drag-content", &content_data);
                     eprintln!("[TiddlyDesktop] Windows IDropTarget::Drop emitted td-drag-content");
@@ -4500,12 +4501,34 @@ fn get_dialog_init_script() -> &'static str {
 
             // Helper to convert screen coordinates to client coordinates
             // Used when native handlers send screen coordinates (with screenCoords: true)
-            function screenToClient(x, y) {
-                // On Windows with DPI scaling, coordinates need adjustment
+            function screenToClient(screenX, screenY) {
+                // On Windows with DPI scaling, screen coordinates are in physical pixels
+                // window.screenX/Y are in CSS pixels
                 var dpr = window.devicePixelRatio || 1;
+
+                // Convert physical screen pixels to CSS screen pixels
+                var cssScreenX = screenX / dpr;
+                var cssScreenY = screenY / dpr;
+
+                // Subtract window position to get client coordinates
+                // Note: window.screenX/Y gives the browser window position, which should
+                // match the webview content origin in Tauri
+                var clientX = cssScreenX - window.screenX;
+                var clientY = cssScreenY - window.screenY;
+
+                // Log conversion for debugging
+                invoke("js_log", { message: "screenToClient: screen(" + screenX + "," + screenY +
+                    ") / dpr=" + dpr + " - window.screen(" + window.screenX + "," + window.screenY +
+                    ") = client(" + clientX + "," + clientY + ") viewport=" + window.innerWidth + "x" + window.innerHeight });
+
+                // Clamp to viewport bounds as a safety measure
+                // This handles cases where the window position doesn't exactly match the content area
+                clientX = Math.max(0, Math.min(clientX, window.innerWidth - 1));
+                clientY = Math.max(0, Math.min(clientY, window.innerHeight - 1));
+
                 return {
-                    x: x / dpr - window.screenX,
-                    y: y / dpr - window.screenY
+                    x: Math.round(clientX),
+                    y: Math.round(clientY)
                 };
             }
 

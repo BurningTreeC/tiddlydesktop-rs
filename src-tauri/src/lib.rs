@@ -735,19 +735,26 @@ mod windows_drag {
             eprintln!("[TiddlyDesktop] Windows IDropTarget::DragEnter called on HWND(0x{:x}) at ({}, {})", obj.hwnd, pt.x, pt.y);
 
             // Log available clipboard formats for debugging
-            if !p_data_obj.is_null() {
+            let is_renderer_drag = if !p_data_obj.is_null() {
                 let data_object: &IDataObject = std::mem::transmute(&p_data_obj);
                 obj.log_available_formats(data_object);
-            }
+                // Check if this is a drag from within a Chromium renderer
+                let is_renderer = obj.is_chromium_renderer_drag(data_object);
+                eprintln!("[TiddlyDesktop] Windows IDropTarget::DragEnter is_chromium_renderer_drag={}", is_renderer);
+                is_renderer
+            } else {
+                false
+            };
 
             // Convert to client coordinates
             let (x, y) = obj.screen_to_client(pt.x, pt.y);
             eprintln!("[TiddlyDesktop] Windows IDropTarget::DragEnter client coords: ({}, {})", x, y);
 
-            // Emit event with client coordinates
+            // Emit event with client coordinates and renderer flag
             let _ = obj.window.emit("td-drag-motion", serde_json::json!({
                 "x": x,
-                "y": y
+                "y": y,
+                "isRendererDrag": is_renderer_drag
             }));
 
             // Accept the drag
@@ -948,6 +955,35 @@ mod windows_drag {
                 } else {
                     eprintln!("[TiddlyDesktop] Windows: Failed to enumerate formats");
                 }
+            }
+        }
+
+        /// Check if this is an internal Chromium drag (from within a webview)
+        /// The presence of "chromium/x-renderer-taint" format indicates the drag
+        /// originated from within a Chromium renderer (could be our webview or another browser)
+        fn is_chromium_renderer_drag(&self, data_object: &IDataObject) -> bool {
+            use windows::Win32::System::DataExchange::{GetClipboardFormatNameW, RegisterClipboardFormatW};
+            use windows::core::w;
+
+            unsafe {
+                // Get the format ID for chromium/x-renderer-taint
+                let taint_format = RegisterClipboardFormatW(w!("chromium/x-renderer-taint"));
+                if taint_format == 0 {
+                    return false;
+                }
+
+                // Check if this format is available
+                if let Ok(enum_fmt) = data_object.EnumFormatEtc(1) {
+                    let mut formats: [FORMATETC; 1] = [std::mem::zeroed()];
+                    let mut fetched: u32 = 0;
+                    while enum_fmt.Next(&mut formats, Some(&mut fetched)).is_ok() && fetched > 0 {
+                        if formats[0].cfFormat as u32 == taint_format {
+                            return true;
+                        }
+                        fetched = 0;
+                    }
+                }
+                false
             }
         }
 
@@ -1238,11 +1274,43 @@ mod windows_drag {
 
         fn screen_to_client(&self, x: i32, y: i32) -> (i32, i32) {
             // Convert screen coordinates (physical pixels) to CSS client coordinates (logical pixels)
-            // IDropTarget receives physical pixel coordinates, but JavaScript's elementFromPoint
-            // expects CSS pixels (logical), so we need to account for DPI scaling
+            // We need to convert to the WEBVIEW's coordinate system, not just the HWND that received the event
+            // JavaScript's elementFromPoint() uses viewport coordinates, which is the webview content area
+            use windows::Win32::Foundation::POINT;
+            use windows::Win32::UI::WindowsAndMessaging::ScreenToClient as WinScreenToClient;
+
+            unsafe {
+                // Find the Chrome_WidgetWin_1 window (the actual webview content area)
+                // This is where JavaScript's viewport coordinates are relative to
+                let target_hwnd = if let Ok(parent_hwnd) = self.window.hwnd() {
+                    let parent = HWND(parent_hwnd.0 as *mut _);
+                    // Try to find the deepest Chrome window (the webview content)
+                    if let Some(chrome_hwnd) = find_webview2_content_hwnd(parent) {
+                        chrome_hwnd
+                    } else {
+                        HWND(self.hwnd as *mut _)
+                    }
+                } else {
+                    HWND(self.hwnd as *mut _)
+                };
+
+                let mut pt = POINT { x, y };
+                // Convert to client coordinates of the webview content window
+                if WinScreenToClient(target_hwnd, &mut pt).as_bool() {
+                    // Now divide by scale factor to get CSS pixels
+                    if let Ok(scale_factor) = self.window.scale_factor() {
+                        let client_x = (pt.x as f64 / scale_factor).round() as i32;
+                        let client_y = (pt.y as f64 / scale_factor).round() as i32;
+                        eprintln!("[TiddlyDesktop] Windows screen_to_client: screen({},{}) -> hwnd_client({},{}) -> css({},{}) scale={} target_hwnd={:?}",
+                            x, y, pt.x, pt.y, client_x, client_y, scale_factor, target_hwnd);
+                        return (client_x, client_y);
+                    }
+                    return (pt.x, pt.y);
+                }
+            }
+            // Fallback to old method if ScreenToClient fails
             if let Ok(scale_factor) = self.window.scale_factor() {
                 if let Ok(inner_pos) = self.window.inner_position() {
-                    // inner_pos is in physical pixels, so subtract first, then divide by scale
                     let client_x = ((x - inner_pos.x) as f64 / scale_factor).round() as i32;
                     let client_y = ((y - inner_pos.y) as f64 / scale_factor).round() as i32;
                     return (client_x, client_y);
@@ -4445,8 +4513,17 @@ fn get_dialog_init_script() -> &'static str {
             // Fires continuously during drag - use to dispatch synthetic dragenter/dragover
             // Handles both file and content drags
             listen("td-drag-motion", function(event) {
-                invoke("js_log", { message: "td-drag-motion received at " + (event.payload ? event.payload.x + "," + event.payload.y : "null") });
+                invoke("js_log", { message: "td-drag-motion received at " + (event.payload ? event.payload.x + "," + event.payload.y : "null") + " isRendererDrag=" + (event.payload ? event.payload.isRendererDrag : "N/A") });
                 if (!event.payload) return;
+
+                // Check if this is a drag from within a Chromium renderer
+                // If so, it might be an internal drag that should be handled by native HTML5 drag-drop
+                var isRendererDrag = event.payload.isRendererDrag;
+                if (isRendererDrag) {
+                    invoke("js_log", { message: "td-drag-motion: isRendererDrag=true, checking if we should skip..." });
+                    // For now, still handle it but log for diagnostics
+                    // TODO: If internal drags are broken, we might want to skip handling here
+                }
 
                 var pos;
                 if (event.payload.screenCoords) {
@@ -4455,6 +4532,9 @@ fn get_dialog_init_script() -> &'static str {
                     pos = { x: event.payload.x, y: event.payload.y };
                 }
                 var target = getTargetElement(pos);
+
+                // DIAGNOSTIC: Log more details about the target and viewport
+                invoke("js_log", { message: "td-drag-motion: pos=(" + pos.x + "," + pos.y + ") viewport=(" + window.innerWidth + "x" + window.innerHeight + ") target=" + (target ? target.tagName : "null") });
 
                 // Create DataTransfer with content types (empty values - actual data comes at drop time)
                 var dt = new DataTransfer();

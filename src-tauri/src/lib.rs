@@ -962,9 +962,15 @@ mod windows_drag {
         }
 
         fn screen_to_client(&self, x: i32, y: i32) -> (i32, i32) {
-            if let Ok(_pos) = self.window.outer_position() {
+            // Convert screen coordinates (physical pixels) to CSS client coordinates (logical pixels)
+            // IDropTarget receives physical pixel coordinates, but JavaScript's elementFromPoint
+            // expects CSS pixels (logical), so we need to account for DPI scaling
+            if let Ok(scale_factor) = self.window.scale_factor() {
                 if let Ok(inner_pos) = self.window.inner_position() {
-                    return (x - inner_pos.x, y - inner_pos.y);
+                    // inner_pos is in physical pixels, so subtract first, then divide by scale
+                    let client_x = ((x - inner_pos.x) as f64 / scale_factor).round() as i32;
+                    let client_y = ((y - inner_pos.y) as f64 / scale_factor).round() as i32;
+                    return (client_x, client_y);
                 }
             }
             (x, y)
@@ -4935,9 +4941,16 @@ fn get_dialog_init_script() -> &'static str {
 
         setupSessionAuthentication();
 
-        // Internal drag-and-drop polyfill for WebKitGTK
-        // Native HTML5 drag-and-drop can have issues in Tauri's webview
+        // Internal drag-and-drop polyfill for WebKitGTK (Linux only)
+        // Native HTML5 drag-and-drop has issues in WebKitGTK but works fine in WebView2 (Windows) and WKWebView (macOS)
         (function setupInternalDragPolyfill() {
+            // Only run on Linux where WebKitGTK has drag issues
+            // Windows (WebView2) and macOS (WKWebView) work fine with native drags
+            if (!/Linux/.test(navigator.userAgent)) {
+                console.log("[TiddlyDesktop] Skipping internal drag polyfill on non-Linux platform");
+                return;
+            }
+
             // Store drag data globally since dataTransfer may not work reliably
             window.__tiddlyDesktopDragData = null;
             var internalDragSource = null;

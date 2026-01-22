@@ -208,7 +208,9 @@ mod linux_drag {
             // Then text/uri-list for plugin drags (contains data: URI with full content)
             // Then text/plain over text/html (plain text is cleaner for simple drags)
             let targets = context.list_targets();
-            let preferred_targets = ["text/vnd.tiddler", "text/uri-list", "text/plain", "text/html", "UTF8_STRING", "STRING"];
+            // Prioritize UTF8_STRING before text/plain because UTF8_STRING guarantees UTF-8 encoding
+            // text/plain encoding can vary on X11/Linux, leading to mojibake with non-ASCII chars
+            let preferred_targets = ["text/vnd.tiddler", "text/uri-list", "UTF8_STRING", "text/plain", "text/html", "STRING"];
             let mut selected_target = None;
 
             for preferred in &preferred_targets {
@@ -444,6 +446,7 @@ mod windows_drag {
         DROPEFFECT, DROPEFFECT_COPY, DROPEFFECT_MOVE, DROPEFFECT_LINK, DROPEFFECT_NONE,
     };
     use windows::Win32::System::Memory::{GlobalLock, GlobalUnlock, GlobalSize};
+    use windows::Win32::Globalization::{MultiByteToWideChar, CP_ACP, MULTI_BYTE_TO_WIDE_CHAR_FLAGS};
     use windows::Win32::UI::Shell::DragQueryFileW;
     use windows::Win32::UI::Shell::HDROP;
     use windows::Win32::UI::WindowsAndMessaging::{EnumChildWindows, GetClassNameW};
@@ -870,9 +873,36 @@ mod windows_drag {
                             let size = GlobalSize(medium.u.hGlobal);
                             let slice = std::slice::from_raw_parts(ptr, size);
                             let len = slice.iter().position(|&c| c == 0).unwrap_or(slice.len());
-                            let text = String::from_utf8_lossy(&slice[..len]).to_string();
-                            let _ = GlobalUnlock(medium.u.hGlobal);
-                            return Some(text);
+                            let ansi_bytes = &slice[..len];
+
+                            // Convert from system ANSI code page (CP_ACP) to UTF-16, then to UTF-8
+                            // First, get required buffer size
+                            let wide_len = MultiByteToWideChar(
+                                CP_ACP,
+                                MULTI_BYTE_TO_WIDE_CHAR_FLAGS(0),
+                                ansi_bytes,
+                                None,
+                            );
+
+                            if wide_len > 0 {
+                                let mut wide_buf: Vec<u16> = vec![0; wide_len as usize];
+                                let result = MultiByteToWideChar(
+                                    CP_ACP,
+                                    MULTI_BYTE_TO_WIDE_CHAR_FLAGS(0),
+                                    ansi_bytes,
+                                    Some(&mut wide_buf),
+                                );
+
+                                let _ = GlobalUnlock(medium.u.hGlobal);
+
+                                if result > 0 {
+                                    // Convert UTF-16 to UTF-8 String
+                                    return String::from_utf16(&wide_buf[..result as usize]).ok();
+                                }
+                            } else {
+                                let _ = GlobalUnlock(medium.u.hGlobal);
+                            }
+                            return None;
                         }
                     }
                 }
@@ -7738,6 +7768,48 @@ window.__IS_MAIN_WIKI__ = {};
     }
 }
 
+/// Reveal the main window, or recreate it if it was closed
+fn reveal_or_create_main_window(app_handle: &tauri::AppHandle) {
+    // Try to get existing window first
+    if let Some(window) = app_handle.get_webview_window("main") {
+        let _ = window.unminimize();
+        let _ = window.show();
+        let _ = window.set_focus();
+        return;
+    }
+
+    // Window was closed - recreate it
+    let state = app_handle.state::<AppState>();
+    let main_wiki_path = state.main_wiki_path.clone();
+    let path_key = base64_url_encode(&main_wiki_path.to_string_lossy());
+    let wiki_url = format!("wikifile://localhost/{}", path_key);
+
+    if let Ok(icon) = Image::from_bytes(include_bytes!("../icons/icon.png")) {
+        if let Ok(main_window) = WebviewWindowBuilder::new(
+            app_handle,
+            "main",
+            WebviewUrl::External(wiki_url.parse().unwrap())
+        )
+            .title("TiddlyDesktopRS")
+            .inner_size(800.0, 600.0)
+            .icon(icon)
+            .expect("Failed to set icon")
+            .initialization_script(get_dialog_init_script())
+            .build()
+        {
+            // Set up platform-specific drag handlers
+            #[cfg(target_os = "linux")]
+            linux_drag::setup_drag_handlers(&main_window);
+            #[cfg(target_os = "windows")]
+            windows_drag::setup_drag_handlers(&main_window);
+            #[cfg(target_os = "macos")]
+            macos_drag::setup_drag_handlers(&main_window);
+
+            let _ = main_window.set_focus();
+        }
+    }
+}
+
 fn setup_system_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     let open_wiki = MenuItemBuilder::with_id("open_wiki", "Open Wiki...").build(app)?;
     let quit = MenuItemBuilder::with_id("quit", "Quit").build(app)?;
@@ -7755,15 +7827,18 @@ fn setup_system_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>>
         .on_menu_event(|app, event| {
             match event.id().as_ref() {
                 "open_wiki" => {
-                    if let Some(window) = app.get_webview_window("main") {
-                        let _ = window.show();
-                        let _ = window.set_focus();
-                    }
+                    reveal_or_create_main_window(app);
                 }
                 "quit" => {
                     app.exit(0);
                 }
                 _ => {}
+            }
+        })
+        .on_tray_icon_event(|tray, event| {
+            // Handle double-click on tray icon - reveal the main window
+            if let tauri::tray::TrayIconEvent::DoubleClick { .. } = event {
+                reveal_or_create_main_window(tray.app_handle());
             }
         })
         .build(app)?;

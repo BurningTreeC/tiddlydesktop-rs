@@ -3544,7 +3544,8 @@ fn get_dialog_init_script() -> &'static str {
             extAttachRetryCount++;
 
             if (!window.__TAURI__ || !window.__TAURI__.event) {
-                if (extAttachRetryCount < 50) {
+                // Retry for up to 60 seconds (600 × 100ms) to handle very large wikis
+                if (extAttachRetryCount < 600) {
                     setTimeout(setupExternalAttachments, 100);
                 }
                 return;
@@ -3558,10 +3559,11 @@ fn get_dialog_init_script() -> &'static str {
 
             // Wait for __WIKI_PATH__ to be set (by protocol handler script)
             if (!window.__WIKI_PATH__) {
-                if (extAttachRetryCount < 50) {
+                // Retry for up to 60 seconds (600 × 100ms) to handle very large wikis
+                if (extAttachRetryCount < 600) {
                     setTimeout(setupExternalAttachments, 100);
                 } else {
-                    console.log('[TiddlyDesktop] No wiki path available after 5s, external attachments disabled');
+                    console.log('[TiddlyDesktop] No wiki path available after 60s, external attachments disabled');
                 }
                 return;
             }
@@ -4752,18 +4754,23 @@ fn get_dialog_init_script() -> &'static str {
             }
 
             var wikiPath = window.__WIKI_PATH__;
-            if (!wikiPath) {
-                console.log('[TiddlyDesktop] No wiki path - session authentication disabled');
-                return;
-            }
-
-            if (typeof $tw === "undefined" || !$tw.wiki) {
-                setTimeout(setupSessionAuthentication, 100);
+            var twReady = (typeof $tw !== "undefined") && $tw && $tw.wiki;
+            if (!wikiPath || !twReady) {
+                // Wiki not ready yet - retry (path injected via protocol handler, $tw needs boot)
+                if (!window.__sessionAuthRetryCount) window.__sessionAuthRetryCount = 0;
+                window.__sessionAuthRetryCount++;
+                // Retry for up to 60 seconds (600 × 100ms) to handle very large wikis
+                if (window.__sessionAuthRetryCount < 600) {
+                    setTimeout(setupSessionAuthentication, 100);
+                } else {
+                    console.log('[TiddlyDesktop] Wiki not ready after 60s - session authentication disabled');
+                }
                 return;
             }
 
             var CONFIG_SETTINGS_TAB = "$:/plugins/tiddlydesktop/session-auth/settings";
             var CONFIG_AUTH_URLS = "$:/temp/tiddlydesktop-rs/session-auth/urls";
+            var invoke = window.__TAURI__.core.invoke;
 
             function saveConfigToTauri() {
                 // Collect all auth URL tiddlers

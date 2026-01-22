@@ -1297,9 +1297,9 @@ mod windows_drag {
                 // First, disable WebView2's AllowExternalDrop so our IDropTarget receives events
                 let controller = webview.controller();
                 if let Ok(controller4) = controller.cast::<ICoreWebView2Controller4>() {
-                    match controller4.SetAllowExternalDrop(false) {
+                    match controller4.SetAllowExternalDrop(true) {
                         Ok(()) => {
-                            eprintln!("[TiddlyDesktop] Windows: Disabled WebView2 AllowExternalDrop");
+                            eprintln!("[TiddlyDesktop] Windows: Enabled WebView2 AllowExternalDrop (testing content drags)");
                         }
                         Err(e) => {
                             eprintln!("[TiddlyDesktop] Windows: Failed to disable AllowExternalDrop: {:?}", e);
@@ -4632,6 +4632,11 @@ fn get_dialog_init_script() -> &'static str {
             // Tauri drag events may not fire for content drags on these platforms,
             // so we detect content drags directly via native dragenter
             document.addEventListener("dragenter", function(event) {
+                // DIAGNOSTIC: Log dragenter events
+                var dt = event.dataTransfer;
+                var diagTypes = dt ? Array.from(dt.types || []) : [];
+                invoke("js_log", { message: "DRAGENTER EVENT: types=" + JSON.stringify(diagTypes) + " synthetic=" + !!event.__tiddlyDesktopSynthetic + " nativeDragActive=" + nativeDragActive + " isDragging=" + isDragging });
+
                 // Skip synthetic events and already tracked drags
                 if (event.__tiddlyDesktopSynthetic) return;
                 if (nativeDragActive || isDragging) return;
@@ -5022,6 +5027,18 @@ fn get_dialog_init_script() -> &'static str {
             // Capture native drop event to get DataTransfer content for external content drags
             // This runs in capture phase before any other handlers
             document.addEventListener("drop", function(event) {
+                // DIAGNOSTIC: Log all drop events
+                var dt = event.dataTransfer;
+                var diagTypes = dt ? Array.from(dt.types || []) : [];
+                var diagData = {};
+                if (dt) {
+                    diagTypes.forEach(function(t) {
+                        try { diagData[t] = dt.getData(t); } catch(e) { diagData[t] = "ERROR: " + e; }
+                    });
+                }
+                invoke("js_log", { message: "DROP EVENT: types=" + JSON.stringify(diagTypes) + " internalDrag=" + !!window.__tiddlyDesktopDragData + " twDragInProgress=" + (typeof $tw !== "undefined" && $tw.dragInProgress) + " isDragging=" + isDragging + " nativeDragActive=" + nativeDragActive });
+                invoke("js_log", { message: "DROP EVENT data: " + JSON.stringify(diagData).substring(0, 500) });
+
                 // Skip if this is an internal drag (handled separately)
                 // Check window.__tiddlyDesktopDragData which is set during internal drags
                 if (window.__tiddlyDesktopDragData || (typeof $tw !== "undefined" && $tw.dragInProgress)) {

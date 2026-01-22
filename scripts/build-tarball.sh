@@ -39,6 +39,10 @@ mkdir -p "${BUILD_DIR}/share/icons/hicolor/256x256/apps"
 # Copy binary
 cp "src-tauri/target/release/${NAME}" "${BUILD_DIR}/bin/"
 
+# Create portable marker (enables local data storage when running directly from tarball)
+# This file is NOT copied by install.sh, so installed versions use standard app data dirs
+touch "${BUILD_DIR}/bin/portable"
+
 # Copy resources to lib/<app-name>/ (where Tauri expects them)
 cp -r src-tauri/resources/tiddlywiki "${BUILD_DIR}/lib/${NAME}/"
 cp src/index.html "${BUILD_DIR}/lib/${NAME}/"
@@ -151,8 +155,11 @@ Option 1: System-wide (as root)
 Option 2: Custom prefix
   ./install.sh /opt/tiddlydesktop
 
-Option 3: Run directly without installing
+Option 3: Run directly without installing (portable mode)
   ./bin/tiddlydesktop-rs
+
+  In portable mode, all data (settings, wiki sessions) is stored
+  locally in the tarball directory instead of ~/.local/share/.
 
 UNINSTALLATION
 --------------

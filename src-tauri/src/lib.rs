@@ -434,7 +434,7 @@ mod windows_drag {
     use std::sync::atomic::{AtomicU32, Ordering};
     use tauri::{Emitter, WebviewWindow};
     use windows::core::{GUID, HRESULT};
-    use windows::Win32::Foundation::{HWND, POINTL, S_OK, E_NOINTERFACE, E_POINTER};
+    use windows::Win32::Foundation::{BOOL, HWND, LPARAM, POINTL, S_OK, E_NOINTERFACE, E_POINTER};
     use windows::Win32::System::Com::{
         CoInitializeEx, IDataObject, COINIT_APARTMENTTHREADED, TYMED_HGLOBAL,
         FORMATETC, DVASPECT_CONTENT,
@@ -446,6 +446,7 @@ mod windows_drag {
     use windows::Win32::System::Memory::{GlobalLock, GlobalUnlock, GlobalSize};
     use windows::Win32::UI::Shell::DragQueryFileW;
     use windows::Win32::UI::Shell::HDROP;
+    use windows::Win32::UI::WindowsAndMessaging::{EnumChildWindows, GetClassNameW};
     use webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2Controller4;
 
     /// Thread-safe wrapper for our drop target (stored for cleanup, pointer kept alive)
@@ -487,6 +488,20 @@ mod windows_drag {
         use windows::Win32::System::DataExchange::RegisterClipboardFormatW;
         use windows::core::w;
         unsafe { RegisterClipboardFormatW(w!("text/vnd.tiddler")) as u16 }
+    }
+
+    /// Standard Windows clipboard format for URLs (ANSI) - used by browsers
+    fn get_cf_url() -> u16 {
+        use windows::Win32::System::DataExchange::RegisterClipboardFormatW;
+        use windows::core::w;
+        unsafe { RegisterClipboardFormatW(w!("UniformResourceLocator")) as u16 }
+    }
+
+    /// Standard Windows clipboard format for URLs (Unicode) - used by browsers
+    fn get_cf_url_w() -> u16 {
+        use windows::Win32::System::DataExchange::RegisterClipboardFormatW;
+        use windows::core::w;
+        unsafe { RegisterClipboardFormatW(w!("UniformResourceLocatorW")) as u16 }
     }
 
     /// Data captured from a drag operation
@@ -763,10 +778,23 @@ mod windows_drag {
                 data.insert("text/vnd.tiddler".to_string(), tiddler);
             }
 
+            // Check for URI list - first custom format, then standard Windows URL formats
             let cf_uri = get_cf_uri_list();
             if let Some(uri_list) = self.get_string_data(data_object, cf_uri) {
                 types.push("text/uri-list".to_string());
                 data.insert("text/uri-list".to_string(), uri_list);
+            } else {
+                // Try standard Windows URL formats (used by browsers like Chrome/Edge)
+                // UniformResourceLocatorW is Unicode, UniformResourceLocator is ANSI
+                let cf_url_w = get_cf_url_w();
+                let cf_url = get_cf_url();
+                if let Some(url) = self.get_unicode_url(data_object, cf_url_w) {
+                    types.push("text/uri-list".to_string());
+                    data.insert("text/uri-list".to_string(), url);
+                } else if let Some(url) = self.get_string_data(data_object, cf_url) {
+                    types.push("text/uri-list".to_string());
+                    data.insert("text/uri-list".to_string(), url);
+                }
             }
 
             if let Some(text) = self.get_unicode_text(data_object) {
@@ -879,6 +907,34 @@ mod windows_drag {
             None
         }
 
+        /// Get Unicode URL data from a custom clipboard format (e.g., UniformResourceLocatorW)
+        fn get_unicode_url(&self, data_object: &IDataObject, cf: u16) -> Option<String> {
+            let format = FORMATETC {
+                cfFormat: cf,
+                ptd: std::ptr::null_mut(),
+                dwAspect: DVASPECT_CONTENT.0 as u32,
+                lindex: -1,
+                tymed: TYMED_HGLOBAL.0 as u32,
+            };
+
+            unsafe {
+                if let Ok(medium) = data_object.GetData(&format) {
+                    if !medium.u.hGlobal.0.is_null() {
+                        let ptr = GlobalLock(medium.u.hGlobal) as *const u16;
+                        if !ptr.is_null() {
+                            let size = GlobalSize(medium.u.hGlobal) / 2;
+                            let slice = std::slice::from_raw_parts(ptr, size);
+                            let len = slice.iter().position(|&c| c == 0).unwrap_or(slice.len());
+                            let text = OsString::from_wide(&slice[..len]).to_string_lossy().to_string();
+                            let _ = GlobalUnlock(medium.u.hGlobal);
+                            return Some(text);
+                        }
+                    }
+                }
+            }
+            None
+        }
+
         fn get_file_paths(&self, data_object: &IDataObject) -> Vec<String> {
             let mut paths = Vec::new();
             let format = FORMATETC {
@@ -928,6 +984,45 @@ mod windows_drag {
         }
     }
 
+    /// Find the WebView2 content window (Chrome-based child window)
+    /// WebView2 uses Chromium which creates child windows with class names containing "Chrome"
+    fn find_webview2_content_hwnd(parent: HWND) -> Option<HWND> {
+        // Structure to pass data to the callback
+        struct EnumData {
+            found: Option<HWND>,
+        }
+
+        unsafe extern "system" fn enum_callback(hwnd: HWND, lparam: LPARAM) -> BOOL {
+            let data = &mut *(lparam.0 as *mut EnumData);
+
+            // Get the class name
+            let mut class_name = [0u16; 256];
+            let len = GetClassNameW(hwnd, &mut class_name);
+            if len > 0 {
+                let class_str = OsString::from_wide(&class_name[..len as usize])
+                    .to_string_lossy()
+                    .to_string();
+
+                // WebView2 content window has class name like "Chrome_WidgetWin_0" or "Chrome_WidgetWin_1"
+                if class_str.starts_with("Chrome_WidgetWin") {
+                    data.found = Some(hwnd);
+                    return BOOL(0); // Stop enumeration
+                }
+            }
+            BOOL(1) // Continue enumeration
+        }
+
+        let mut data = EnumData { found: None };
+        unsafe {
+            let _ = EnumChildWindows(
+                Some(parent),
+                Some(enum_callback),
+                LPARAM(&mut data as *mut _ as isize),
+            );
+        }
+        data.found
+    }
+
     /// Set up drag-drop handling for a webview window
     pub fn setup_drag_handlers(window: &WebviewWindow) {
         let window_for_drop = window.clone();
@@ -959,16 +1054,28 @@ mod windows_drag {
             }
         });
 
-        // Now register our IDropTarget on the parent window
+        // Now register our IDropTarget on the WebView2 content window
         // Use a thread with delay to ensure WebView2 is fully initialized
         std::thread::spawn(move || {
+            // Wait for WebView2 to be fully initialized
             std::thread::sleep(std::time::Duration::from_millis(500));
 
             unsafe {
                 let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
 
-                if let Ok(hwnd) = window_for_drop.hwnd() {
-                    let hwnd = HWND(hwnd.0 as *mut _);
+                if let Ok(parent_hwnd) = window_for_drop.hwnd() {
+                    let parent_hwnd = HWND(parent_hwnd.0 as *mut _);
+
+                    // Find the WebView2 content window (Chrome_WidgetWin_*)
+                    // This is where we need to register to receive drag events
+                    let target_hwnd = if let Some(webview_hwnd) = find_webview2_content_hwnd(parent_hwnd) {
+                        eprintln!("[TiddlyDesktop] Windows: Found WebView2 content window");
+                        webview_hwnd
+                    } else {
+                        // Fallback to parent window if WebView2 content not found
+                        eprintln!("[TiddlyDesktop] Windows: WebView2 content window not found, using parent");
+                        parent_hwnd
+                    };
 
                     // Create our drop target
                     let drop_target_ptr = DropTargetImpl::new(window_for_drop.clone());
@@ -976,15 +1083,15 @@ mod windows_drag {
 
                     // Store for later cleanup
                     DROP_TARGET_MAP.lock().unwrap().insert(
-                        hwnd.0 as isize,
+                        target_hwnd.0 as isize,
                         SendDropTarget(drop_target_ptr)
                     );
 
-                    // Revoke any existing and register ours
-                    let _ = RevokeDragDrop(hwnd);
-                    match RegisterDragDrop(hwnd, &drop_target) {
+                    // Revoke any existing drop target and register ours
+                    let _ = RevokeDragDrop(target_hwnd);
+                    match RegisterDragDrop(target_hwnd, &drop_target) {
                         Ok(()) => {
-                            eprintln!("[TiddlyDesktop] Windows: Registered IDropTarget on parent window");
+                            eprintln!("[TiddlyDesktop] Windows: Registered IDropTarget on WebView2 content window");
                         }
                         Err(e) => {
                             eprintln!("[TiddlyDesktop] Windows: Failed to register IDropTarget: {:?}", e);
@@ -998,11 +1105,15 @@ mod windows_drag {
     /// Clean up drop target for a window
     #[allow(dead_code)]
     pub fn cleanup_drag_handlers(window: &WebviewWindow) {
-        if let Ok(hwnd) = window.hwnd() {
-            let hwnd = HWND(hwnd.0 as *mut _);
+        if let Ok(parent_hwnd) = window.hwnd() {
+            let parent_hwnd = HWND(parent_hwnd.0 as *mut _);
+
+            // Find the WebView2 content window (same logic as setup)
+            let target_hwnd = find_webview2_content_hwnd(parent_hwnd).unwrap_or(parent_hwnd);
+
             unsafe {
-                let _ = RevokeDragDrop(hwnd);
-                DROP_TARGET_MAP.lock().unwrap().remove(&(hwnd.0 as isize));
+                let _ = RevokeDragDrop(target_hwnd);
+                DROP_TARGET_MAP.lock().unwrap().remove(&(target_hwnd.0 as isize));
             }
         }
     }
@@ -1881,7 +1992,9 @@ fn inject_tiddler_into_html(html: &str, tiddler_title: &str, tiddler_type: &str,
 
 /// Get the bundled index.html path
 fn get_bundled_index_path(app: &tauri::App) -> Result<PathBuf, String> {
-    let resource_path = app.path().resource_dir().map_err(|e| e.to_string())?;
+    // Use our helper that prefers exe-relative paths (avoids baked-in CI paths)
+    let resource_path = get_resource_dir_path(app.handle())
+        .ok_or_else(|| "Failed to get resource directory".to_string())?;
     let resource_path = normalize_path(resource_path);
 
     let possible_sources = [
@@ -2482,6 +2595,331 @@ fn close_window_by_label(app: tauri::AppHandle, label: String) -> Result<(), Str
     } else {
         Err(format!("Window '{}' not found", label))
     }
+}
+
+/// JavaScript for injecting a custom find bar UI
+/// This is used on platforms without native find-in-page UI (Linux, Windows)
+const FIND_BAR_JS: &str = r#"
+(function() {
+    var HIGHLIGHT_CLASS = 'td-find-highlight';
+    var CURRENT_CLASS = 'td-find-current';
+
+    // Add highlight styles if not present
+    if (!document.getElementById('td-find-styles')) {
+        var style = document.createElement('style');
+        style.id = 'td-find-styles';
+        style.textContent = '.' + HIGHLIGHT_CLASS + '{background:#ffeb3b;color:#000;border-radius:2px;}' +
+            '.' + CURRENT_CLASS + '{background:#ff9800;color:#000;box-shadow:0 0 0 2px #ff9800;}';
+        document.head.appendChild(style);
+    }
+
+    // Check if find bar already exists
+    var existingBar = document.getElementById('td-find-bar');
+    if (existingBar) {
+        existingBar.style.display = 'flex';
+        var input = existingBar.querySelector('input');
+        if (input) {
+            input.focus();
+            input.select();
+        }
+        return;
+    }
+
+    // Create find bar
+    var bar = document.createElement('div');
+    bar.id = 'td-find-bar';
+    bar.style.cssText = 'position:fixed;top:0;left:0;right:0;display:flex;align-items:center;gap:8px;padding:8px 12px;background:#f0f0f0;border-bottom:1px solid #ccc;z-index:999999;font-family:system-ui,sans-serif;font-size:14px;box-shadow:0 2px 8px rgba(0,0,0,0.15);';
+
+    var input = document.createElement('input');
+    input.type = 'text';
+    input.placeholder = 'Find in page...';
+    input.style.cssText = 'flex:1;max-width:300px;padding:6px 10px;border:1px solid #ccc;border-radius:4px;font-size:14px;outline:none;';
+
+    var info = document.createElement('span');
+    info.style.cssText = 'color:#666;min-width:100px;text-align:center;';
+    info.textContent = '';
+
+    var prevBtn = document.createElement('button');
+    prevBtn.textContent = '▲';
+    prevBtn.title = 'Previous (Shift+F3 or Shift+Enter)';
+    prevBtn.style.cssText = 'padding:4px 10px;border:1px solid #ccc;border-radius:4px;background:#fff;cursor:pointer;font-size:12px;';
+
+    var nextBtn = document.createElement('button');
+    nextBtn.textContent = '▼';
+    nextBtn.title = 'Next (F3 or Enter)';
+    nextBtn.style.cssText = 'padding:4px 10px;border:1px solid #ccc;border-radius:4px;background:#fff;cursor:pointer;font-size:12px;';
+
+    var closeBtn = document.createElement('button');
+    closeBtn.textContent = '✕';
+    closeBtn.title = 'Close (Escape)';
+    closeBtn.style.cssText = 'padding:4px 10px;border:none;background:transparent;cursor:pointer;font-size:16px;color:#666;';
+
+    bar.appendChild(input);
+    bar.appendChild(info);
+    bar.appendChild(prevBtn);
+    bar.appendChild(nextBtn);
+    bar.appendChild(closeBtn);
+    document.body.appendChild(bar);
+
+    var highlights = [];
+    var currentIndex = -1;
+    var lastSearch = '';
+    var searchTimeout = null;
+
+    function clearHighlights() {
+        highlights.forEach(function(span) {
+            var parent = span.parentNode;
+            if (parent) {
+                parent.replaceChild(document.createTextNode(span.textContent), span);
+                parent.normalize();
+            }
+        });
+        highlights = [];
+        currentIndex = -1;
+    }
+
+    function highlightMatches(term) {
+        clearHighlights();
+        if (!term) {
+            info.textContent = '';
+            return;
+        }
+
+        var termLower = term.toLowerCase();
+        var walker = document.createTreeWalker(
+            document.body,
+            NodeFilter.SHOW_TEXT,
+            {
+                acceptNode: function(node) {
+                    // Skip the find bar itself and script/style elements
+                    var parent = node.parentElement;
+                    if (!parent) return NodeFilter.FILTER_REJECT;
+                    if (parent.closest('#td-find-bar')) return NodeFilter.FILTER_REJECT;
+                    var tag = parent.tagName;
+                    if (tag === 'SCRIPT' || tag === 'STYLE' || tag === 'NOSCRIPT') {
+                        return NodeFilter.FILTER_REJECT;
+                    }
+                    if (node.textContent.toLowerCase().indexOf(termLower) !== -1) {
+                        return NodeFilter.FILTER_ACCEPT;
+                    }
+                    return NodeFilter.FILTER_REJECT;
+                }
+            }
+        );
+
+        var nodesToProcess = [];
+        var textNode;
+        while (textNode = walker.nextNode()) {
+            nodesToProcess.push(textNode);
+        }
+
+        nodesToProcess.forEach(function(node) {
+            var text = node.textContent;
+            var textLower = text.toLowerCase();
+            var idx = 0;
+            var lastIdx = 0;
+            var frag = document.createDocumentFragment();
+
+            while ((idx = textLower.indexOf(termLower, lastIdx)) !== -1) {
+                // Add text before match
+                if (idx > lastIdx) {
+                    frag.appendChild(document.createTextNode(text.substring(lastIdx, idx)));
+                }
+                // Add highlighted match
+                var span = document.createElement('span');
+                span.className = HIGHLIGHT_CLASS;
+                span.textContent = text.substring(idx, idx + term.length);
+                frag.appendChild(span);
+                highlights.push(span);
+                lastIdx = idx + term.length;
+            }
+
+            // Add remaining text
+            if (lastIdx < text.length) {
+                frag.appendChild(document.createTextNode(text.substring(lastIdx)));
+            }
+
+            node.parentNode.replaceChild(frag, node);
+        });
+
+        if (highlights.length > 0) {
+            currentIndex = 0;
+            updateCurrent();
+            info.textContent = '1 of ' + highlights.length;
+            info.style.color = '#666';
+        } else {
+            info.textContent = 'No matches';
+            info.style.color = '#c00';
+        }
+    }
+
+    function updateCurrent() {
+        highlights.forEach(function(span, i) {
+            if (i === currentIndex) {
+                span.classList.add(CURRENT_CLASS);
+                span.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            } else {
+                span.classList.remove(CURRENT_CLASS);
+            }
+        });
+    }
+
+    function goToMatch(delta) {
+        if (highlights.length === 0) return;
+        currentIndex = (currentIndex + delta + highlights.length) % highlights.length;
+        updateCurrent();
+        info.textContent = (currentIndex + 1) + ' of ' + highlights.length;
+    }
+
+    function doSearch() {
+        var term = input.value;
+        if (term === lastSearch) return;
+        lastSearch = term;
+        highlightMatches(term);
+    }
+
+    function closeBar() {
+        bar.style.display = 'none';
+        clearHighlights();
+        lastSearch = '';
+        info.textContent = '';
+        document.removeEventListener('keydown', globalKeyHandler, true);
+    }
+
+    function globalKeyHandler(e) {
+        if (bar.style.display === 'none') return;
+
+        if (e.key === 'F3') {
+            e.preventDefault();
+            e.stopPropagation();
+            goToMatch(e.shiftKey ? -1 : 1);
+            input.focus();
+        } else if (e.key === 'Escape') {
+            e.preventDefault();
+            e.stopPropagation();
+            closeBar();
+        } else if ((e.key === 'f' || e.key === 'F') && (e.ctrlKey || e.metaKey)) {
+            e.preventDefault();
+            e.stopPropagation();
+            input.focus();
+            input.select();
+        }
+    }
+
+    document.addEventListener('keydown', globalKeyHandler, true);
+
+    input.addEventListener('input', function() {
+        if (searchTimeout) clearTimeout(searchTimeout);
+        searchTimeout = setTimeout(doSearch, 200);
+    });
+
+    input.addEventListener('keydown', function(e) {
+        if (e.key === 'Enter' || e.key === 'F3') {
+            e.preventDefault();
+            if (searchTimeout) {
+                clearTimeout(searchTimeout);
+                doSearch();
+            }
+            goToMatch(e.shiftKey ? -1 : 1);
+        } else if (e.key === 'Escape') {
+            e.preventDefault();
+            closeBar();
+        }
+    });
+
+    prevBtn.addEventListener('click', function(e) {
+        e.preventDefault();
+        goToMatch(-1);
+        input.focus();
+    });
+
+    nextBtn.addEventListener('click', function(e) {
+        e.preventDefault();
+        goToMatch(1);
+        input.focus();
+    });
+
+    closeBtn.addEventListener('click', function(e) {
+        e.preventDefault();
+        closeBar();
+    });
+
+    input.focus();
+})();
+"#;
+
+/// Show the find-in-page UI for the webview
+/// Platform-specific implementations:
+/// - Windows (WebView2): Injects custom find bar (no native UI)
+/// - macOS (WKWebView): Uses performTextFinderAction for native find bar
+/// - Linux (WebKitGTK): Injects custom find bar (no native UI)
+#[tauri::command]
+fn show_find_in_page(window: tauri::WebviewWindow) -> Result<(), String> {
+    show_find_in_page_impl(&window)
+}
+
+#[cfg(target_os = "windows")]
+fn show_find_in_page_impl(window: &tauri::WebviewWindow) -> Result<(), String> {
+    // WebView2 doesn't have a built-in find bar UI
+    // Inject a custom find bar that uses window.find() API
+    let _ = window.eval(FIND_BAR_JS);
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn show_find_in_page_impl(window: &tauri::WebviewWindow) -> Result<(), String> {
+    use objc2::runtime::{AnyObject, AnyClass};
+    use objc2::ffi::class_getName;
+    use objc2::msg_send;
+    use std::ffi::CStr;
+
+    // Get the NSWindow from Tauri
+    if let Ok(ns_window) = window.ns_window() {
+        let ns_window_ptr = ns_window.0 as *mut AnyObject;
+
+        unsafe {
+            // Find the WKWebView in the view hierarchy
+            fn find_webview(view: *mut AnyObject) -> Option<*mut AnyObject> {
+                if view.is_null() {
+                    return None;
+                }
+                let view_class: *const AnyClass = msg_send![view, class];
+                let class_name_ptr = class_getName(view_class);
+                let name = CStr::from_ptr(class_name_ptr).to_string_lossy();
+                if name.contains("WKWebView") {
+                    return Some(view);
+                }
+                let subviews: *mut AnyObject = msg_send![view, subviews];
+                if !subviews.is_null() {
+                    let count: usize = msg_send![subviews, count];
+                    for i in 0..count {
+                        let subview: *mut AnyObject = msg_send![subviews, objectAtIndex: i];
+                        if let Some(wv) = find_webview(subview) {
+                            return Some(wv);
+                        }
+                    }
+                }
+                None
+            }
+
+            let content_view: *mut AnyObject = msg_send![ns_window_ptr, contentView];
+            if !content_view.is_null() {
+                if let Some(webview) = find_webview(content_view) {
+                    // NSTextFinderActionShowFindInterface = 1
+                    let _: () = msg_send![webview, performTextFinderAction: 1usize];
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn show_find_in_page_impl(window: &tauri::WebviewWindow) -> Result<(), String> {
+    // WebKitGTK doesn't have a built-in find bar UI
+    // Inject a custom find bar that uses window.find() API
+    let _ = window.eval(FIND_BAR_JS);
+    Ok(())
 }
 
 /// Result of running a command
@@ -3550,7 +3988,37 @@ fn get_dialog_init_script() -> &'static str {
                         cancelContentDrag("escape pressed");
                     }
                 }
+
+                // Handle Ctrl+F / Cmd+F for find-in-page
+                // Block on main/landing page
+                if ((event.key === "f" || event.key === "F") && (event.ctrlKey || event.metaKey)) {
+                    if (window.__IS_MAIN_WIKI__) {
+                        // Block find on the landing page
+                        event.preventDefault();
+                        event.stopPropagation();
+                    }
+                }
             }, true);
+
+            // Bubble-phase handler for find-in-page on wiki windows
+            // This runs AFTER editors have had a chance to handle Ctrl+F
+            document.addEventListener("keydown", function(event) {
+                if ((event.key === "f" || event.key === "F") && (event.ctrlKey || event.metaKey)) {
+                    // Skip if this is the main wiki (already blocked in capture phase)
+                    if (window.__IS_MAIN_WIKI__) return;
+
+                    // Skip if an editor or other handler already handled this
+                    if (event.defaultPrevented) return;
+
+                    // Show native find-in-page UI
+                    if (window.__TAURI__ && window.__TAURI__.core && window.__TAURI__.core.invoke) {
+                        event.preventDefault();
+                        window.__TAURI__.core.invoke('show_find_in_page').catch(function(err) {
+                            console.log('[TiddlyDesktop] Find in page error:', err);
+                        });
+                    }
+                }
+            }, false); // false = bubble phase
 
             // Handle window blur during external drag (file or browser)
             window.addEventListener("blur", function(event) {
@@ -5047,8 +5515,8 @@ fn get_node_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     }
 
     // Fall back to bundled Node.js
-    let resource_path = app.path().resource_dir()
-        .map_err(|e| format!("Failed to get resource dir: {}", e))?;
+    let resource_path = get_resource_dir_path(app)
+        .ok_or_else(|| "Failed to get resource directory".to_string())?;
     let resource_path = normalize_path(resource_path);
 
     #[cfg(target_os = "windows")]
@@ -5082,22 +5550,27 @@ fn get_node_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
 
 /// Get path to bundled TiddlyWiki
 fn get_tiddlywiki_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
-    let resource_path = app.path().resource_dir()
-        .map_err(|e| format!("Failed to get resource dir: {}", e))?;
+    let resource_path = get_resource_dir_path(app)
+        .ok_or_else(|| "Failed to get resource directory".to_string())?;
     let resource_path = normalize_path(resource_path);
 
-    let tw_path = resource_path.join("resources").join("tiddlywiki").join("tiddlywiki.js");
+    // Tarball structure has tiddlywiki directly in lib/tiddlydesktop-rs/tiddlywiki/
+    let tw_path = resource_path.join("tiddlywiki").join("tiddlywiki.js");
+    // Also check Tauri bundle structure with resources/ prefix
+    let tw_path_bundled = resource_path.join("resources").join("tiddlywiki").join("tiddlywiki.js");
 
     // Also check in the development path
     let dev_path = PathBuf::from("src-tauri/resources/tiddlywiki/tiddlywiki.js");
 
     if tw_path.exists() {
         Ok(tw_path)
+    } else if tw_path_bundled.exists() {
+        Ok(tw_path_bundled)
     } else if dev_path.exists() {
         let canonical = dev_path.canonicalize().map_err(|e| e.to_string())?;
         Ok(normalize_path(canonical))
     } else {
-        Err(format!("TiddlyWiki not found at {:?} or {:?}", tw_path, dev_path))
+        Err(format!("TiddlyWiki not found at {:?}, {:?}, or {:?}", tw_path, tw_path_bundled, dev_path))
     }
 }
 
@@ -5307,13 +5780,24 @@ async fn open_wiki_folder(app: tauri::AppHandle, path: String) -> Result<WikiEnt
 
     let icon = Image::from_bytes(include_bytes!("../icons/icon.png"))
         .map_err(|e| format!("Failed to load icon: {}", e))?;
-    let window = WebviewWindowBuilder::new(&app, &label, WebviewUrl::External(server_url.parse().unwrap()))
+
+    // Get isolated session directory for this wiki folder
+    let session_dir = get_wiki_session_dir(&app, &path);
+
+    let mut builder = WebviewWindowBuilder::new(&app, &label, WebviewUrl::External(server_url.parse().unwrap()))
         .title(&folder_name)
         .inner_size(1200.0, 800.0)
         .icon(icon)
         .map_err(|e| format!("Failed to set icon: {}", e))?
         .window_classname("tiddlydesktop-rs")
-        .initialization_script(&get_init_script_with_path(&path))
+        .initialization_script(&get_init_script_with_path(&path));
+
+    // Apply isolated session if available
+    if let Some(dir) = session_dir {
+        builder = builder.data_directory(dir);
+    }
+
+    let window = builder
         // NOT calling disable_drag_drop_handler() - we need tauri://drag-drop events
         // for external attachments support. File drops are handled via Tauri events.
         .build()
@@ -6059,13 +6543,24 @@ async fn open_wiki_window(app: tauri::AppHandle, path: String) -> Result<WikiEnt
 
     let icon = Image::from_bytes(include_bytes!("../icons/icon.png"))
         .map_err(|e| format!("Failed to load icon: {}", e))?;
-    let window = WebviewWindowBuilder::new(&app, &label, WebviewUrl::External(wiki_url.parse().unwrap()))
+
+    // Get isolated session directory for this wiki
+    let session_dir = get_wiki_session_dir(&app, &path);
+
+    let mut builder = WebviewWindowBuilder::new(&app, &label, WebviewUrl::External(wiki_url.parse().unwrap()))
         .title(&title)
         .inner_size(1200.0, 800.0)
         .icon(icon)
         .map_err(|e| format!("Failed to set icon: {}", e))?
         .window_classname("tiddlydesktop-rs")
-        .initialization_script(get_dialog_init_script())
+        .initialization_script(get_dialog_init_script());
+
+    // Apply isolated session if available
+    if let Some(dir) = session_dir {
+        builder = builder.data_directory(dir);
+    }
+
+    let window = builder
         // NOT calling disable_drag_drop_handler() - we need tauri://drag-drop events
         // for external attachments support. File drops are handled via Tauri events.
         .build()
@@ -6181,6 +6676,10 @@ async fn open_tiddler_window(
     let icon = Image::from_bytes(include_bytes!("../icons/icon.png"))
         .map_err(|e| format!("Failed to load icon: {}", e))?;
 
+    // Get isolated session directory - use the PARENT wiki's path so tiddler windows
+    // share session with their parent wiki
+    let session_dir = get_wiki_session_dir(&app, &wiki_path);
+
     let mut builder = WebviewWindowBuilder::new(&app, &label, WebviewUrl::External(wiki_url.parse().unwrap()))
         .title(&title)
         .inner_size(win_width, win_height)
@@ -6188,6 +6687,11 @@ async fn open_tiddler_window(
         .map_err(|e| format!("Failed to set icon: {}", e))?
         .window_classname("tiddlydesktop-rs")
         .initialization_script(get_dialog_init_script());
+
+    // Apply isolated session if available (shares with parent wiki)
+    if let Some(dir) = session_dir {
+        builder = builder.data_directory(dir);
+    }
 
     // Set window position if specified
     if let (Some(x), Some(y)) = (left, top) {
@@ -6232,6 +6736,81 @@ fn base64_url_decode(input: &str) -> Option<String> {
         .decode(input)
         .ok()
         .and_then(|bytes| String::from_utf8(bytes).ok())
+}
+
+/// Get the resource directory, preferring paths relative to executable for tarball installs
+/// This avoids baked-in CI paths like /home/runner/...
+fn get_resource_dir_path(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
+    if let Ok(exe_path) = std::env::current_exe() {
+        if let Some(exe_dir) = exe_path.parent() {
+            // Tarball structure: bin/tiddlydesktop-rs with resources at ../lib/tiddlydesktop-rs/
+            let tarball_resources = exe_dir.join("..").join("lib").join("tiddlydesktop-rs");
+            if tarball_resources.exists() {
+                if let Ok(canonical) = tarball_resources.canonicalize() {
+                    return Some(canonical);
+                }
+            }
+
+            // AppImage/installed structure: resources might be in ../lib/<app-name>
+            // or alongside the binary
+            let lib_resources = exe_dir.join("..").join("lib").join("tiddlydesktop-rs");
+            if lib_resources.exists() {
+                if let Ok(canonical) = lib_resources.canonicalize() {
+                    return Some(canonical);
+                }
+            }
+        }
+    }
+
+    // Fall back to Tauri's resource_dir (may have baked-in paths from CI)
+    app.path().resource_dir().ok()
+}
+
+/// Get the base data directory, respecting portable mode
+/// Checks for portable marker files in exe directory on all platforms
+/// Falls back to app_data_dir for installed mode
+fn get_data_dir(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
+    if let Ok(exe_path) = std::env::current_exe() {
+        if let Some(exe_dir) = exe_path.parent() {
+            // Check for portable marker files
+            if exe_dir.join("portable").exists() || exe_dir.join("portable.txt").exists() {
+                return Some(exe_dir.to_path_buf());
+            }
+            // Check if portable data file already exists (user chose portable mode previously)
+            if exe_dir.join("tiddlydesktop.html").exists() {
+                return Some(exe_dir.to_path_buf());
+            }
+        }
+    }
+
+    // Default: use app data directory (installed mode)
+    app.path().app_data_dir().ok()
+}
+
+/// Get an isolated session data directory for a wiki
+/// Each wiki gets its own session storage (cookies, localStorage, etc.)
+/// This prevents cross-wiki data leakage from plugins/scripts
+fn get_wiki_session_dir(app: &tauri::AppHandle, wiki_path: &str) -> Option<std::path::PathBuf> {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+
+    // Create a hash of the wiki path for a shorter directory name
+    let mut hasher = DefaultHasher::new();
+    wiki_path.hash(&mut hasher);
+    let hash = hasher.finish();
+
+    // Get data directory (respects portable mode)
+    if let Some(data_dir) = get_data_dir(app) {
+        let session_dir = data_dir.join("wiki_sessions").join(format!("{:016x}", hash));
+        // Create the directory if it doesn't exist
+        if let Err(e) = std::fs::create_dir_all(&session_dir) {
+            eprintln!("[TiddlyDesktop] Failed to create session directory: {}", e);
+            return None;
+        }
+        Some(session_dir)
+    } else {
+        None
+    }
 }
 
 /// Parse query string into a HashMap
@@ -6995,7 +7574,8 @@ pub fn run() {
             read_file_as_binary,
             get_external_attachments_config,
             set_external_attachments_config,
-            run_command
+            run_command,
+            show_find_in_page
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

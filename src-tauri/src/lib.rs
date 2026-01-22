@@ -1284,66 +1284,34 @@ mod windows_drag {
     /// Set up drag-drop handling for a webview window
     pub fn setup_drag_handlers(window: &WebviewWindow) {
         let window_for_drop = window.clone();
-        let window_for_webview = window.clone();
 
-        // Use a channel to coordinate between with_webview and the registration thread
-        // This ensures AllowExternalDrop is set BEFORE we register our IDropTarget
-        let (tx, rx) = std::sync::mpsc::channel::<bool>();
-
-        // First, disable WebView2's AllowExternalDrop so our IDropTarget receives events
-        // This must be done via with_webview which runs on the webview's thread
-        let _ = window_for_webview.with_webview(move |webview| {
+        // CRITICAL: Both AllowExternalDrop AND RegisterDragDrop must be called from the
+        // same thread that owns the window (the webview's thread). OLE drag-drop uses COM
+        // and the IDropTarget must be registered from the window's owning thread for
+        // events to be properly delivered. Registering from a different thread causes
+        // the drop target to never receive events.
+        let _ = window.with_webview(move |webview| {
             #[cfg(windows)]
             unsafe {
                 use windows::core::Interface;
 
-                // Get the WebView2 controller and cast to ICoreWebView2Controller4
-                // which has the AllowExternalDrop property
+                // First, disable WebView2's AllowExternalDrop so our IDropTarget receives events
                 let controller = webview.controller();
                 if let Ok(controller4) = controller.cast::<ICoreWebView2Controller4>() {
-                    // Disable external drop handling so drags pass through to our IDropTarget
                     match controller4.SetAllowExternalDrop(false) {
                         Ok(()) => {
                             eprintln!("[TiddlyDesktop] Windows: Disabled WebView2 AllowExternalDrop");
-                            let _ = tx.send(true);
                         }
                         Err(e) => {
                             eprintln!("[TiddlyDesktop] Windows: Failed to disable AllowExternalDrop: {:?}", e);
-                            let _ = tx.send(false);
                         }
                     }
                 } else {
                     eprintln!("[TiddlyDesktop] Windows: Could not get ICoreWebView2Controller4 (older WebView2?)");
-                    // Still try to register IDropTarget - it might work without disabling AllowExternalDrop
-                    let _ = tx.send(true);
                 }
-            }
-        });
 
-        // Now register our IDropTarget on the WebView2 content window
-        // Wait for AllowExternalDrop to be set first
-        std::thread::spawn(move || {
-            // Wait for the signal that AllowExternalDrop has been set (with timeout)
-            let allow_external_drop_result = rx.recv_timeout(std::time::Duration::from_secs(5));
-            match allow_external_drop_result {
-                Ok(success) => {
-                    if success {
-                        eprintln!("[TiddlyDesktop] Windows: AllowExternalDrop signal received, proceeding with IDropTarget registration");
-                    } else {
-                        eprintln!("[TiddlyDesktop] Windows: AllowExternalDrop failed, still attempting IDropTarget registration");
-                    }
-                }
-                Err(_) => {
-                    // Timeout - with_webview might not have been called or is taking too long
-                    eprintln!("[TiddlyDesktop] Windows: Timeout waiting for AllowExternalDrop signal, proceeding anyway");
-                }
-            }
-            // Additional small delay to ensure WebView2 window structure is ready
-            std::thread::sleep(std::time::Duration::from_millis(100));
-
-            unsafe {
-                let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
-
+                // Now register our IDropTarget on the WebView2 content window
+                // This MUST be done on the same thread that processes the window's messages
                 if let Ok(parent_hwnd) = window_for_drop.hwnd() {
                     let parent_hwnd = HWND(parent_hwnd.0 as *mut _);
 

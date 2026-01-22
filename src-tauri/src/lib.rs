@@ -668,13 +668,27 @@ mod windows_drag {
 
         unsafe extern "system" fn drag_enter(this: *mut Self, p_data_obj: *mut std::ffi::c_void, _key: u32, pt: POINTL, pdw_effect: *mut u32) -> HRESULT {
             let obj = &*this;
+            eprintln!("[TiddlyDesktop] Windows: drag_enter called at ({}, {})", pt.x, pt.y);
             *obj.drag_active.lock().unwrap() = true;
 
             let is_internal = if !p_data_obj.is_null() {
                 let data_object: &IDataObject = std::mem::transmute(&p_data_obj);
+                // Log available formats
+                if let Ok(enum_fmt) = data_object.EnumFormatEtc(1) {
+                    let mut formats: [FORMATETC; 1] = [std::mem::zeroed()];
+                    let mut fetched: u32 = 0;
+                    eprintln!("[TiddlyDesktop] Windows: drag_enter - Available formats:");
+                    while enum_fmt.Next(&mut formats, Some(&mut fetched)).is_ok() && fetched > 0 {
+                        let cf = formats[0].cfFormat as u32;
+                        let name = Self::get_format_name(cf);
+                        eprintln!("  - cfFormat={} ({})", cf, name);
+                        fetched = 0;
+                    }
+                }
                 Self::is_chromium_renderer_drag(data_object)
             } else { false };
 
+            eprintln!("[TiddlyDesktop] Windows: drag_enter - is_internal={}", is_internal);
             *obj.is_internal_drag.lock().unwrap() = is_internal;
 
             // For internal drags, accept but let native HTML5 handle it
@@ -683,6 +697,7 @@ mod windows_drag {
                 return S_OK;
             }
 
+            eprintln!("[TiddlyDesktop] Windows: drag_enter - emitting td-drag-motion");
             let _ = obj.window.emit("td-drag-motion", serde_json::json!({
                 "x": pt.x, "y": pt.y, "screenCoords": true
             }));
@@ -708,6 +723,7 @@ mod windows_drag {
 
         unsafe extern "system" fn drag_leave(this: *mut Self) -> HRESULT {
             let obj = &*this;
+            eprintln!("[TiddlyDesktop] Windows: drag_leave called");
             let was_internal = {
                 let mut internal = obj.is_internal_drag.lock().unwrap();
                 let was = *internal;
@@ -717,13 +733,17 @@ mod windows_drag {
             *obj.drag_active.lock().unwrap() = false;
 
             if !was_internal {
+                eprintln!("[TiddlyDesktop] Windows: drag_leave - emitting td-drag-leave");
                 let _ = obj.window.emit("td-drag-leave", ());
+            } else {
+                eprintln!("[TiddlyDesktop] Windows: drag_leave - was internal, skipping event");
             }
             S_OK
         }
 
         unsafe extern "system" fn drop_impl(this: *mut Self, p_data_obj: *mut std::ffi::c_void, _key: u32, pt: POINTL, pdw_effect: *mut u32) -> HRESULT {
             let obj = &*this;
+            eprintln!("[TiddlyDesktop] Windows: drop_impl called at ({}, {})", pt.x, pt.y);
             *obj.drag_active.lock().unwrap() = false;
 
             let was_internal = {
@@ -735,11 +755,13 @@ mod windows_drag {
 
             // Internal drags handled by native HTML5
             if was_internal {
+                eprintln!("[TiddlyDesktop] Windows: drop_impl - internal drag, letting native handle it");
                 if !pdw_effect.is_null() { *pdw_effect = DROPEFFECT_COPY.0 as u32; }
                 return S_OK;
             }
 
             if p_data_obj.is_null() {
+                eprintln!("[TiddlyDesktop] Windows: drop_impl - p_data_obj is null!");
                 if !pdw_effect.is_null() { *pdw_effect = DROPEFFECT_NONE.0 as u32; }
                 return S_OK;
             }
@@ -753,6 +775,7 @@ mod windows_drag {
             // Check for file drop first
             let file_paths = obj.get_file_paths(data_object);
             if !file_paths.is_empty() {
+                eprintln!("[TiddlyDesktop] Windows: drop_impl - file drop with {} files", file_paths.len());
                 let _ = obj.window.emit("td-drag-drop-position", serde_json::json!({
                     "x": pt.x, "y": pt.y, "screenCoords": true
                 }));
@@ -762,13 +785,16 @@ mod windows_drag {
             }
 
             // Content drop - extract text/HTML
+            eprintln!("[TiddlyDesktop] Windows: drop_impl - attempting content extraction");
             if let Some(content) = obj.extract_content(data_object) {
+                eprintln!("[TiddlyDesktop] Windows: drop_impl - content extracted, types: {:?}", content.types);
                 let _ = obj.window.emit("td-drag-drop-position", serde_json::json!({
                     "x": pt.x, "y": pt.y, "screenCoords": true
                 }));
                 let _ = obj.window.emit("td-drag-content", &content);
                 if !pdw_effect.is_null() { *pdw_effect = DROPEFFECT_COPY.0 as u32; }
             } else {
+                eprintln!("[TiddlyDesktop] Windows: drop_impl - no content extracted!");
                 if !pdw_effect.is_null() { *pdw_effect = DROPEFFECT_NONE.0 as u32; }
             }
             S_OK
@@ -802,58 +828,125 @@ mod windows_drag {
             let mut types = Vec::new();
             let mut data = HashMap::new();
 
+            eprintln!("[TiddlyDesktop] Windows: extract_content called");
+
+            // First, enumerate all available formats for debugging
+            unsafe {
+                if let Ok(enum_fmt) = data_object.EnumFormatEtc(1) {
+                    let mut formats: [FORMATETC; 1] = [std::mem::zeroed()];
+                    let mut fetched: u32 = 0;
+                    eprintln!("[TiddlyDesktop] Windows: Available formats in IDataObject:");
+                    while enum_fmt.Next(&mut formats, Some(&mut fetched)).is_ok() && fetched > 0 {
+                        let cf = formats[0].cfFormat as u32;
+                        let name = Self::get_format_name(cf);
+                        eprintln!("  - cfFormat={} ({})", cf, name);
+                        fetched = 0;
+                    }
+                } else {
+                    eprintln!("[TiddlyDesktop] Windows: Failed to enumerate formats");
+                }
+            }
+
             // text/vnd.tiddler
-            if let Some(t) = self.get_string_data(data_object, get_cf_tiddler()) {
+            let cf_tiddler = get_cf_tiddler();
+            eprintln!("[TiddlyDesktop] Windows: Trying text/vnd.tiddler (cf={})", cf_tiddler);
+            if let Some(t) = self.get_string_data(data_object, cf_tiddler) {
+                eprintln!("[TiddlyDesktop] Windows: Got text/vnd.tiddler: {} chars", t.len());
                 types.push("text/vnd.tiddler".to_string());
                 data.insert("text/vnd.tiddler".to_string(), t);
             }
 
             // URL (try Unicode first, then ANSI fallback)
-            if let Some(url) = self.get_unicode_data(data_object, get_cf_url_w()) {
+            let cf_url_w = get_cf_url_w();
+            let cf_url = get_cf_url();
+            eprintln!("[TiddlyDesktop] Windows: Trying URL (cf_w={}, cf={})", cf_url_w, cf_url);
+            if let Some(url) = self.get_unicode_data(data_object, cf_url_w) {
+                eprintln!("[TiddlyDesktop] Windows: Got URL (Unicode): {}", url);
                 types.push("URL".to_string());
                 data.insert("URL".to_string(), url);
-            } else if let Some(url) = self.get_string_data(data_object, get_cf_url()) {
+            } else if let Some(url) = self.get_string_data(data_object, cf_url) {
+                eprintln!("[TiddlyDesktop] Windows: Got URL (ANSI): {}", url);
                 types.push("URL".to_string());
                 data.insert("URL".to_string(), url);
             }
 
             // text/x-moz-url
-            if let Some(moz) = self.get_unicode_data(data_object, get_cf_moz_url()) {
+            let cf_moz = get_cf_moz_url();
+            eprintln!("[TiddlyDesktop] Windows: Trying text/x-moz-url (cf={})", cf_moz);
+            if let Some(moz) = self.get_unicode_data(data_object, cf_moz) {
                 let url = moz.lines().next().unwrap_or(&moz).to_string();
+                eprintln!("[TiddlyDesktop] Windows: Got text/x-moz-url: {}", url);
                 types.push("text/x-moz-url".to_string());
                 data.insert("text/x-moz-url".to_string(), url);
             }
 
             // text/html
-            if let Some(html) = self.get_string_data(data_object, get_cf_html()) {
+            let cf_html = get_cf_html();
+            eprintln!("[TiddlyDesktop] Windows: Trying text/html (cf={})", cf_html);
+            if let Some(html) = self.get_string_data(data_object, cf_html) {
+                eprintln!("[TiddlyDesktop] Windows: Got HTML Format: {} chars", html.len());
                 let content = if let Some(start) = html.find("<!--StartFragment-->") {
                     if let Some(end) = html.find("<!--EndFragment-->") {
                         html[start + 20..end].to_string()
                     } else { html }
                 } else { html };
+                eprintln!("[TiddlyDesktop] Windows: Extracted HTML content: {} chars", content.len());
                 types.push("text/html".to_string());
                 data.insert("text/html".to_string(), content);
             }
 
             // text/plain (Unicode)
+            eprintln!("[TiddlyDesktop] Windows: Trying text/plain (CF_UNICODETEXT={})", CF_UNICODETEXT);
             if let Some(text) = self.get_unicode_data(data_object, CF_UNICODETEXT) {
+                eprintln!("[TiddlyDesktop] Windows: Got text/plain: {} chars", text.len());
                 types.push("text/plain".to_string());
                 data.insert("text/plain".to_string(), text);
             }
 
             // Text (ANSI fallback)
+            eprintln!("[TiddlyDesktop] Windows: Trying Text (CF_TEXT={})", CF_TEXT);
             if let Some(text) = self.get_string_data(data_object, CF_TEXT) {
+                eprintln!("[TiddlyDesktop] Windows: Got Text (ANSI): {} chars", text.len());
                 types.push("Text".to_string());
                 data.insert("Text".to_string(), text);
             }
 
             // text/uri-list
-            if let Some(uri_list) = self.get_string_data(data_object, get_cf_uri_list()) {
+            let cf_uri_list = get_cf_uri_list();
+            eprintln!("[TiddlyDesktop] Windows: Trying text/uri-list (cf={})", cf_uri_list);
+            if let Some(uri_list) = self.get_string_data(data_object, cf_uri_list) {
+                eprintln!("[TiddlyDesktop] Windows: Got text/uri-list: {}", uri_list);
                 types.push("text/uri-list".to_string());
                 data.insert("text/uri-list".to_string(), uri_list);
             }
 
+            eprintln!("[TiddlyDesktop] Windows: extract_content result: {} types", types.len());
             if types.is_empty() { None } else { Some(DragContentData { types, data }) }
+        }
+
+        fn get_format_name(cf: u32) -> String {
+            use windows::Win32::System::DataExchange::GetClipboardFormatNameW;
+            // Standard formats
+            match cf {
+                1 => return "CF_TEXT".to_string(),
+                2 => return "CF_BITMAP".to_string(),
+                7 => return "CF_OEMTEXT".to_string(),
+                8 => return "CF_DIB".to_string(),
+                13 => return "CF_UNICODETEXT".to_string(),
+                15 => return "CF_HDROP".to_string(),
+                17 => return "CF_DIBV5".to_string(),
+                _ => {}
+            }
+            // Registered format - get name
+            let mut buf = [0u16; 256];
+            unsafe {
+                let len = GetClipboardFormatNameW(cf, &mut buf);
+                if len > 0 {
+                    std::ffi::OsString::from_wide(&buf[..len as usize]).to_string_lossy().to_string()
+                } else {
+                    format!("Unknown({})", cf)
+                }
+            }
         }
 
         fn get_unicode_data(&self, data_object: &IDataObject, cf: u16) -> Option<String> {
@@ -945,6 +1038,7 @@ mod windows_drag {
 
     pub fn setup_drag_handlers(window: &WebviewWindow) {
         let window_for_drop = window.clone();
+        eprintln!("[TiddlyDesktop] Windows: setup_drag_handlers called for window '{}'", window.label());
 
         let _ = window.with_webview(move |webview| {
             #[cfg(windows)]
@@ -954,32 +1048,42 @@ mod windows_drag {
                 // Disable WebView2's external drop handling so we can intercept content drops
                 let controller = webview.controller();
                 if let Ok(controller4) = controller.cast::<ICoreWebView2Controller4>() {
-                    let _ = controller4.SetAllowExternalDrop(false);
+                    let result = controller4.SetAllowExternalDrop(false);
+                    eprintln!("[TiddlyDesktop] Windows: SetAllowExternalDrop(false) result: {:?}", result);
+                } else {
+                    eprintln!("[TiddlyDesktop] Windows: Failed to get ICoreWebView2Controller4");
                 }
 
                 let _ = OleInitialize(None);
 
                 if let Ok(parent_hwnd) = window_for_drop.hwnd() {
                     let parent = HWND(parent_hwnd.0 as *mut _);
+                    eprintln!("[TiddlyDesktop] Windows: Parent HWND = {:?}", parent);
 
                     // Find WebView2 content window with retry
                     let mut target = None;
-                    for _ in 0..10 {
+                    for i in 0..10 {
                         if let Some(hwnd) = find_webview2_content_hwnd(parent) {
+                            eprintln!("[TiddlyDesktop] Windows: Found WebView2 content window {:?} on attempt {}", hwnd, i + 1);
                             target = Some(hwnd);
                             break;
                         }
                         std::thread::sleep(std::time::Duration::from_millis(50));
                     }
-                    let target = target.unwrap_or(parent);
+                    let target = target.unwrap_or_else(|| {
+                        eprintln!("[TiddlyDesktop] Windows: WebView2 content window NOT FOUND, using parent");
+                        parent
+                    });
 
                     let drop_target_ptr = DropTargetImpl::new(window_for_drop.clone());
                     let drop_target = DropTargetImpl::as_idroptarget(drop_target_ptr);
 
                     DROP_TARGET_MAP.lock().unwrap().insert(target.0 as isize, SendDropTarget(drop_target_ptr));
 
-                    let _ = RevokeDragDrop(target);
-                    let _ = RegisterDragDrop(target, &drop_target);
+                    let revoke_result = RevokeDragDrop(target);
+                    eprintln!("[TiddlyDesktop] Windows: RevokeDragDrop result: {:?}", revoke_result);
+                    let register_result = RegisterDragDrop(target, &drop_target);
+                    eprintln!("[TiddlyDesktop] Windows: RegisterDragDrop on {:?} result: {:?}", target, register_result);
                 }
             }
         });

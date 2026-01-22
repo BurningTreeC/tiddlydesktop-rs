@@ -751,7 +751,12 @@ mod windows_drag {
             // Accept the drag
             if !pdw_effect.is_null() {
                 let allowed = DROPEFFECT(*pdw_effect);
-                *pdw_effect = choose_drop_effect(allowed).0 as u32;
+                let chosen = choose_drop_effect(allowed);
+                eprintln!("[TiddlyDesktop] Windows IDropTarget::DragEnter allowed effects: 0x{:x}, choosing: 0x{:x}",
+                    allowed.0, chosen.0);
+                *pdw_effect = chosen.0 as u32;
+            } else {
+                eprintln!("[TiddlyDesktop] Windows IDropTarget::DragEnter pdwEffect is NULL!");
             }
 
             S_OK
@@ -1242,42 +1247,79 @@ mod windows_drag {
     }
 
     /// Find the WebView2 content window (Chrome-based child window)
-    /// WebView2 uses Chromium which creates child windows with class names containing "Chrome"
+    /// WebView2 uses Chromium which creates nested child windows - we need the DEEPEST one
+    /// to properly receive drag-drop events on the actual content surface.
     fn find_webview2_content_hwnd(parent: HWND) -> Option<HWND> {
-        // Structure to pass data to the callback
-        struct EnumData {
-            found: Option<HWND>,
-        }
+        // Recursively find the deepest Chrome_WidgetWin_* window
+        fn find_deepest_chrome_window(hwnd: HWND, depth: usize) -> Option<(HWND, usize)> {
+            // Structure to pass data to the callback
+            struct EnumData {
+                chrome_windows: Vec<HWND>,
+            }
 
-        unsafe extern "system" fn enum_callback(hwnd: HWND, lparam: LPARAM) -> BOOL {
-            let data = &mut *(lparam.0 as *mut EnumData);
+            unsafe extern "system" fn enum_callback(hwnd: HWND, lparam: LPARAM) -> BOOL {
+                let data = &mut *(lparam.0 as *mut EnumData);
 
-            // Get the class name
-            let mut class_name = [0u16; 256];
-            let len = GetClassNameW(hwnd, &mut class_name);
-            if len > 0 {
-                let class_str = OsString::from_wide(&class_name[..len as usize])
-                    .to_string_lossy()
-                    .to_string();
+                // Get the class name
+                let mut class_name = [0u16; 256];
+                let len = GetClassNameW(hwnd, &mut class_name);
+                if len > 0 {
+                    let class_str = OsString::from_wide(&class_name[..len as usize])
+                        .to_string_lossy()
+                        .to_string();
 
-                // WebView2 content window has class name like "Chrome_WidgetWin_0" or "Chrome_WidgetWin_1"
-                if class_str.starts_with("Chrome_WidgetWin") {
-                    data.found = Some(hwnd);
-                    return BOOL(0); // Stop enumeration
+                    // Collect all Chrome_WidgetWin_* windows
+                    if class_str.starts_with("Chrome_WidgetWin") {
+                        data.chrome_windows.push(hwnd);
+                    }
+                }
+                BOOL(1) // Continue enumeration to find all children
+            }
+
+            let mut data = EnumData { chrome_windows: Vec::new() };
+            unsafe {
+                let _ = EnumChildWindows(
+                    Some(hwnd),
+                    Some(enum_callback),
+                    LPARAM(&mut data as *mut _ as isize),
+                );
+            }
+
+            // Log what we found at this level
+            if !data.chrome_windows.is_empty() {
+                eprintln!("[TiddlyDesktop] Windows: Found {} Chrome windows at depth {}",
+                    data.chrome_windows.len(), depth);
+                for (i, chrome_hwnd) in data.chrome_windows.iter().enumerate() {
+                    eprintln!("[TiddlyDesktop] Windows:   Chrome window {}: {:?}", i, chrome_hwnd);
                 }
             }
-            BOOL(1) // Continue enumeration
+
+            // Recursively search each Chrome window for deeper Chrome windows
+            let mut deepest: Option<(HWND, usize)> = None;
+            for chrome_hwnd in &data.chrome_windows {
+                // First check if this Chrome window has deeper Chrome children
+                if let Some((child_hwnd, child_depth)) = find_deepest_chrome_window(*chrome_hwnd, depth + 1) {
+                    if deepest.is_none() || child_depth > deepest.unwrap().1 {
+                        deepest = Some((child_hwnd, child_depth));
+                    }
+                } else {
+                    // No deeper Chrome children, this is a leaf Chrome window
+                    if deepest.is_none() || depth > deepest.unwrap().1 {
+                        deepest = Some((*chrome_hwnd, depth));
+                    }
+                }
+            }
+
+            deepest
         }
 
-        let mut data = EnumData { found: None };
-        unsafe {
-            let _ = EnumChildWindows(
-                Some(parent),
-                Some(enum_callback),
-                LPARAM(&mut data as *mut _ as isize),
-            );
+        let result = find_deepest_chrome_window(parent, 0);
+        if let Some((hwnd, depth)) = result {
+            eprintln!("[TiddlyDesktop] Windows: Selected deepest Chrome window at depth {}: {:?}", depth, hwnd);
+            Some(hwnd)
+        } else {
+            None
         }
-        data.found
     }
 
     /// Set up drag-drop handling for a webview window
@@ -1294,12 +1336,13 @@ mod windows_drag {
             unsafe {
                 use windows::core::Interface;
 
-                // First, disable WebView2's AllowExternalDrop so our IDropTarget receives events
+                // Disable WebView2's AllowExternalDrop so our IDropTarget receives all drag events
+                // (including content drags, not just file drags)
                 let controller = webview.controller();
                 if let Ok(controller4) = controller.cast::<ICoreWebView2Controller4>() {
-                    match controller4.SetAllowExternalDrop(true) {
+                    match controller4.SetAllowExternalDrop(false) {
                         Ok(()) => {
-                            eprintln!("[TiddlyDesktop] Windows: Enabled WebView2 AllowExternalDrop (testing content drags)");
+                            eprintln!("[TiddlyDesktop] Windows: Disabled WebView2 AllowExternalDrop");
                         }
                         Err(e) => {
                             eprintln!("[TiddlyDesktop] Windows: Failed to disable AllowExternalDrop: {:?}", e);

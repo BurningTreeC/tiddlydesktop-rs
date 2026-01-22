@@ -2657,12 +2657,12 @@ const FIND_BAR_JS: &str = r#"
 
     var prevBtn = document.createElement('button');
     prevBtn.textContent = '▲';
-    prevBtn.title = 'Previous (Shift+F3 or Shift+Enter)';
+    prevBtn.title = 'Previous (Shift+F3, Shift+Enter, Ctrl/Cmd+Shift+G)';
     prevBtn.style.cssText = 'padding:4px 10px;border:1px solid #ccc;border-radius:4px;background:#fff;cursor:pointer;font-size:12px;';
 
     var nextBtn = document.createElement('button');
     nextBtn.textContent = '▼';
-    nextBtn.title = 'Next (F3 or Enter)';
+    nextBtn.title = 'Next (F3, Enter, Ctrl/Cmd+G)';
     nextBtn.style.cssText = 'padding:4px 10px;border:1px solid #ccc;border-radius:4px;background:#fff;cursor:pointer;font-size:12px;';
 
     var closeBtn = document.createElement('button');
@@ -2810,6 +2810,12 @@ const FIND_BAR_JS: &str = r#"
             e.stopPropagation();
             goToMatch(e.shiftKey ? -1 : 1);
             input.focus();
+        } else if ((e.key === 'g' || e.key === 'G') && (e.ctrlKey || e.metaKey)) {
+            // Ctrl+G / Cmd+G - Find next, Ctrl+Shift+G / Cmd+Shift+G - Find previous
+            e.preventDefault();
+            e.stopPropagation();
+            goToMatch(e.shiftKey ? -1 : 1);
+            input.focus();
         } else if (e.key === 'Escape') {
             e.preventDefault();
             e.stopPropagation();
@@ -2884,49 +2890,8 @@ fn show_find_in_page_impl(window: &tauri::WebviewWindow) -> Result<(), String> {
 
 #[cfg(target_os = "macos")]
 fn show_find_in_page_impl(window: &tauri::WebviewWindow) -> Result<(), String> {
-    use objc2::runtime::{AnyObject, AnyClass};
-    use objc2::ffi::class_getName;
-    use objc2::msg_send;
-    use std::ffi::CStr;
-
-    // Get the NSWindow from Tauri
-    if let Ok(ns_window) = window.ns_window() {
-        let ns_window_ptr = ns_window as *mut AnyObject;
-
-        // Find the WKWebView in the view hierarchy
-        unsafe fn find_webview(view: *mut AnyObject) -> Option<*mut AnyObject> {
-            if view.is_null() {
-                return None;
-            }
-            let view_class: *const AnyClass = msg_send![view, class];
-            let class_name_ptr = class_getName(view_class);
-            let name = CStr::from_ptr(class_name_ptr).to_string_lossy();
-            if name.contains("WKWebView") {
-                return Some(view);
-            }
-            let subviews: *mut AnyObject = msg_send![view, subviews];
-            if !subviews.is_null() {
-                let count: usize = msg_send![subviews, count];
-                for i in 0..count {
-                    let subview: *mut AnyObject = msg_send![subviews, objectAtIndex: i];
-                    if let Some(wv) = find_webview(subview) {
-                        return Some(wv);
-                    }
-                }
-            }
-            None
-        }
-
-        unsafe {
-            let content_view: *mut AnyObject = msg_send![ns_window_ptr, contentView];
-            if !content_view.is_null() {
-                if let Some(webview) = find_webview(content_view) {
-                    // NSTextFinderActionShowFindInterface = 1
-                    let _: () = msg_send![webview, performTextFinderAction: 1usize];
-                }
-            }
-        }
-    }
+    // Use the same JavaScript find bar as Linux/Windows for consistency
+    let _ = window.eval(FIND_BAR_JS);
     Ok(())
 }
 

@@ -514,7 +514,7 @@ mod windows_drag {
     use windows::Win32::System::Com::{IDataObject, TYMED_HGLOBAL, FORMATETC, DVASPECT_CONTENT};
     use windows::Win32::System::Ole::{
         IDropTarget, OleInitialize, RegisterDragDrop, RevokeDragDrop,
-        DROPEFFECT, DROPEFFECT_COPY, DROPEFFECT_NONE,
+        DROPEFFECT_COPY, DROPEFFECT_NONE,
     };
     use windows::Win32::System::Memory::{GlobalLock, GlobalUnlock, GlobalSize};
     use windows::Win32::UI::Shell::{DragQueryFileW, HDROP};
@@ -6018,15 +6018,18 @@ fn get_dialog_init_script() -> &'static str {
 
         setupSessionAuthentication();
 
-        // Internal drag-and-drop polyfill for WebKitGTK (Linux only)
-        // Native HTML5 drag-and-drop has issues in WebKitGTK but works fine in WebView2 (Windows) and WKWebView (macOS)
+        // Internal drag-and-drop polyfill for Linux and Windows
+        // On Linux (WebKitGTK): Native HTML5 drag-drop has reliability issues
+        // On Windows (WebView2): Our custom IDropTarget replaces native handling, breaking internal drags
+        // On macOS (WKWebView): Native drags work fine even with our custom drag handlers
         (function setupInternalDragPolyfill() {
-            // Only run on Linux where WebKitGTK has drag issues
-            // Windows (WebView2) and macOS (WKWebView) work fine with native drags
-            if (!/Linux/.test(navigator.userAgent)) {
-                console.log("[TiddlyDesktop] Skipping internal drag polyfill on non-Linux platform");
+            // Only run on Linux and Windows where we need polyfill
+            // macOS WKWebView works fine with native drags
+            if (/Mac/.test(navigator.userAgent)) {
+                console.log("[TiddlyDesktop] Skipping internal drag polyfill on macOS (native drags work)");
                 return;
             }
+            console.log("[TiddlyDesktop] Setting up internal drag polyfill for " + (navigator.userAgent.includes("Windows") ? "Windows" : "Linux"));
 
             // Store drag data globally since dataTransfer may not work reliably
             window.__tiddlyDesktopDragData = null;

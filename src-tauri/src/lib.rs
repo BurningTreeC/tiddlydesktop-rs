@@ -5162,6 +5162,63 @@ fn get_dialog_init_script() -> &'static str {
                 isDragging = false;
             });
 
+            // Intercept file input clicks to use native Tauri dialog
+            // This allows us to get the full file path for external attachments
+            document.addEventListener('click', function(e) {
+                var input = e.target;
+                if (input.tagName === 'INPUT' && input.type === 'file') {
+                    e.preventDefault();
+                    e.stopPropagation();
+
+                    var multiple = input.hasAttribute('multiple');
+                    invoke('pick_files_for_import', { multiple: multiple }).then(function(paths) {
+                        if (paths.length === 0) return;
+
+                        // Read files and store paths for the import hook
+                        var filePromises = paths.map(function(filepath) {
+                            // Skip wiki files - they should be opened, not imported
+                            var filename = filepath.split(/[/\\]/).pop();
+                            if (filename.toLowerCase().endsWith('.html') || filename.toLowerCase().endsWith('.htm')) {
+                                return Promise.resolve(null);
+                            }
+
+                            // Store the path in global map for the import hook to find
+                            window.__pendingExternalFiles[filename] = filepath;
+
+                            return invoke('read_file_as_binary', { path: filepath }).then(function(bytes) {
+                                var mimeType = getMimeType(filename);
+                                return new File([new Uint8Array(bytes)], filename, { type: mimeType });
+                            }).catch(function(err) {
+                                console.error('[TiddlyDesktop] Failed to read file:', filepath, err);
+                                return null;
+                            });
+                        });
+
+                        Promise.all(filePromises).then(function(files) {
+                            var validFiles = files.filter(function(f) { return f !== null; });
+                            if (validFiles.length === 0) return;
+
+                            // Create a DataTransfer to build a FileList
+                            var dt = new DataTransfer();
+                            validFiles.forEach(function(file) {
+                                dt.items.add(file);
+                            });
+
+                            // Assign files to the input and trigger change event
+                            input.files = dt.files;
+                            input.dispatchEvent(new Event('change', { bubbles: true }));
+
+                            // Clear pending files after a delay
+                            setTimeout(function() {
+                                window.__pendingExternalFiles = {};
+                            }, 5000);
+                        });
+                    }).catch(function(err) {
+                        console.error('[TiddlyDesktop] Failed to pick files:', err);
+                    });
+                }
+            }, true); // Use capture phase to intercept before browser opens dialog
+
             // Config tiddler titles (injected temporarily, stored in Tauri)
             var CONFIG_ENABLE = "$:/config/TiddlyDesktop/ExternalAttachments/Enable";
             var CONFIG_ABS_DESC = "$:/config/TiddlyDesktop/ExternalAttachments/UseAbsoluteForDescendents";
@@ -7406,6 +7463,38 @@ async fn read_file_as_binary(path: String) -> Result<Vec<u8>, String> {
         .map_err(|e| format!("Failed to read file {}: {}", path, e))
 }
 
+/// Open a file picker dialog for importing files
+/// Returns the selected file paths (empty if cancelled)
+/// Used to replace browser's file input with native dialog that exposes full paths
+#[tauri::command]
+async fn pick_files_for_import(app: tauri::AppHandle, multiple: bool) -> Result<Vec<String>, String> {
+    use tauri_plugin_dialog::DialogExt;
+
+    let title = if multiple { "Import Files" } else { "Import File" };
+
+    let paths: Vec<String> = if multiple {
+        app.dialog()
+            .file()
+            .set_title(title)
+            .blocking_pick_files()
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|p| p.into_path().ok())
+            .map(|p| p.to_string_lossy().to_string())
+            .collect()
+    } else {
+        app.dialog()
+            .file()
+            .set_title(title)
+            .blocking_pick_file()
+            .and_then(|p| p.into_path().ok())
+            .map(|p| vec![p.to_string_lossy().to_string()])
+            .unwrap_or_default()
+    };
+
+    Ok(paths)
+}
+
 /// Get external attachments config for a specific wiki
 #[tauri::command]
 fn get_external_attachments_config(app: tauri::AppHandle, wiki_path: String) -> Result<ExternalAttachmentsConfig, String> {
@@ -8727,6 +8816,7 @@ pub fn run() {
             delete_wiki_group,
             read_file_as_data_uri,
             read_file_as_binary,
+            pick_files_for_import,
             get_external_attachments_config,
             set_external_attachments_config,
             get_session_auth_config,

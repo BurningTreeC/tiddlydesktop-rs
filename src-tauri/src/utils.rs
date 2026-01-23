@@ -1,0 +1,149 @@
+//! Utility functions for TiddlyDesktop
+//!
+//! This module contains common utility functions used throughout the application:
+//! - HTML encoding/decoding
+//! - MIME type detection
+//! - Path utilities
+//! - Base64 encoding
+
+use std::path::PathBuf;
+
+/// Decode basic HTML entities
+pub fn html_decode(s: &str) -> String {
+    s.replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&amp;", "&")
+        .replace("&quot;", "\"")
+        .replace("&#34;", "\"")
+}
+
+/// Encode basic HTML entities
+pub fn html_encode(s: &str) -> String {
+    s.replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace("\"", "&quot;")
+}
+
+/// Get MIME type from file extension
+pub fn get_mime_type(path: &std::path::Path) -> &'static str {
+    match path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_lowercase())
+        .as_deref()
+    {
+        // Images
+        Some("png") => "image/png",
+        Some("jpg") | Some("jpeg") => "image/jpeg",
+        Some("gif") => "image/gif",
+        Some("webp") => "image/webp",
+        Some("svg") => "image/svg+xml",
+        Some("ico") => "image/x-icon",
+        Some("bmp") => "image/bmp",
+        Some("tiff") | Some("tif") => "image/tiff",
+        // Audio
+        Some("mp3") => "audio/mpeg",
+        Some("wav") => "audio/wav",
+        Some("ogg") => "audio/ogg",
+        Some("m4a") => "audio/mp4",
+        Some("flac") => "audio/flac",
+        // Video
+        Some("mp4") => "video/mp4",
+        Some("webm") => "video/webm",
+        Some("ogv") => "video/ogg",
+        Some("avi") => "video/x-msvideo",
+        Some("mov") => "video/quicktime",
+        // Documents
+        Some("pdf") => "application/pdf",
+        Some("json") => "application/json",
+        Some("xml") => "application/xml",
+        // Text
+        Some("txt") => "text/plain",
+        Some("html") | Some("htm") => "text/html",
+        Some("css") => "text/css",
+        Some("js") => "application/javascript",
+        Some("csv") => "text/csv",
+        // Fonts
+        Some("woff") => "font/woff",
+        Some("woff2") => "font/woff2",
+        Some("ttf") => "font/ttf",
+        Some("otf") => "font/otf",
+        // Default
+        _ => "application/octet-stream",
+    }
+}
+
+/// Check if a path string looks like an absolute filesystem path
+pub fn is_absolute_filesystem_path(path: &str) -> bool {
+    // Unix absolute path
+    if path.starts_with('/') {
+        return true;
+    }
+    // Windows absolute path (e.g., C:\, D:\, etc.)
+    if path.len() >= 3 {
+        let bytes = path.as_bytes();
+        if bytes[0].is_ascii_alphabetic()
+            && bytes[1] == b':'
+            && (bytes[2] == b'\\' || bytes[2] == b'/')
+        {
+            return true;
+        }
+    }
+    false
+}
+
+/// Compare two paths for equality (case-insensitive on Windows)
+pub fn paths_equal(path1: &str, path2: &str) -> bool {
+    #[cfg(target_os = "windows")]
+    {
+        path1.eq_ignore_ascii_case(path2)
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        path1 == path2
+    }
+}
+
+/// Normalize a path for cross-platform compatibility
+/// On Windows: removes \\?\ prefixes and ensures proper separators
+pub fn normalize_path(path: PathBuf) -> PathBuf {
+    // Use dunce to simplify Windows paths (removes \\?\ UNC prefixes)
+    let normalized = dunce::simplified(&path).to_path_buf();
+
+    #[cfg(target_os = "windows")]
+    {
+        let path_str = normalized.to_string_lossy();
+        // Fix malformed paths like "C:resources" -> "C:\resources"
+        if path_str.len() >= 2 {
+            let chars: Vec<char> = path_str.chars().collect();
+            if chars[1] == ':' && path_str.len() > 2 && chars[2] != '\\' && chars[2] != '/' {
+                let fixed = format!("{}:\\{}", chars[0], &path_str[2..]);
+                println!("Fixed malformed path: {} -> {}", path_str, fixed);
+                return PathBuf::from(fixed);
+            }
+        }
+    }
+
+    normalized
+}
+
+/// Check if a path is a wiki folder (contains tiddlywiki.info)
+pub fn is_wiki_folder(path: &std::path::Path) -> bool {
+    path.is_dir() && path.join("tiddlywiki.info").exists()
+}
+
+/// Simple base64 URL-safe encoding for path keys
+pub fn base64_url_encode(input: &str) -> String {
+    use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
+    URL_SAFE_NO_PAD.encode(input.as_bytes())
+}
+
+/// Decode base64 URL-safe string
+pub fn base64_url_decode(input: &str) -> Option<String> {
+    use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
+    URL_SAFE_NO_PAD
+        .decode(input)
+        .ok()
+        .and_then(|bytes| String::from_utf8(bytes).ok())
+}

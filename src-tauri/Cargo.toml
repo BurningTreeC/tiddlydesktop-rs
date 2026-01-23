@@ -52,6 +52,7 @@ windows = { version = "0.61", features = [
     "Win32_UI_Shell",
     "Win32_UI_WindowsAndMessaging",
     "Win32_System_Memory",
+    "Win32_Globalization",
 ] }
 lazy_static = "1.5"
 webview2-com = "0.38"

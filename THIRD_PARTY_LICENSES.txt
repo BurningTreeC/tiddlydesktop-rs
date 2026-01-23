@@ -1131,7 +1131,7 @@ DEALINGS IN THE SOFTWARE.
 ## MIT License
 
 Used by:
-- cc 1.2.53 (https://github.com/rust-lang/cc-rs)
+- cc 1.2.54 (https://github.com/rust-lang/cc-rs)
 - cfg-if 1.0.4 (https://github.com/rust-lang/cfg-if)
 - find-msvc-tools 0.1.8 (https://github.com/rust-lang/cc-rs)
 - js-sys 0.3.85 (https://github.com/wasm-bindgen/wasm-bindgen/tree/master/crates/js-sys)
@@ -5021,7 +5021,7 @@ SOFTWARE.
 ## MIT License
 
 Used by:
-- tiddlydesktop-rs 0.1.39
+- tiddlydesktop-rs 0.1.40
 - block2 0.6.2 (https://github.com/madsmtm/objc2)
 - brotli-decompressor 5.0.0 (https://github.com/dropbox/rust-brotli-decompressor)
 - cargo_toml 0.22.3 (https://gitlab.com/lib.rs/cargo_toml)

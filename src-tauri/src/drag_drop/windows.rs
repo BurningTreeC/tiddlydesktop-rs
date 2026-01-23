@@ -1025,6 +1025,7 @@ fn find_webview2_content_hwnd(parent: HWND) -> Option<HWND> {
 /// Data to be provided during an outgoing drag operation
 /// Matches MIME types used by TiddlyWiki5's drag-drop system
 #[derive(Clone, Debug, Default)]
+#[allow(dead_code)]
 pub struct OutgoingDragData {
     pub text_plain: Option<String>,
     pub text_html: Option<String>,
@@ -1035,6 +1036,7 @@ pub struct OutgoingDragData {
 }
 
 /// Global state for outgoing drag operation
+#[allow(dead_code)]
 struct OutgoingDragState {
     data: OutgoingDragData,
     source_window_label: String,
@@ -1076,6 +1078,7 @@ struct STGMEDIUM {
 
 #[repr(C)]
 #[derive(Copy, Clone)]
+#[allow(non_snake_case)]
 union STGMEDIUM_u {
     hBitmap: *mut std::ffi::c_void,
     hMetaFilePict: *mut std::ffi::c_void,

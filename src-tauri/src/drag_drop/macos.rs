@@ -23,7 +23,7 @@ use objc2::msg_send;
 use objc2::rc::Retained;
 use objc2::runtime::{AnyClass, AnyObject, Bool, Sel};
 use objc2::sel;
-use objc2_app_kit::{NSPasteboard, NSView, NSWindow, NSDraggingSession, NSEvent, NSImage, NSPasteboardItem};
+use objc2_app_kit::{NSPasteboard, NSView, NSWindow, NSDraggingSession, NSEvent, NSPasteboardItem};
 use objc2_foundation::{NSArray, NSData, NSPoint, NSRect, NSSize, NSString};
 use tauri::{Emitter, WebviewWindow};
 
@@ -194,8 +194,11 @@ unsafe fn swizzle_method<F>(
     new_impl: *mut c_void,
     original_storage: &mut Option<F>,
 ) {
-    use objc2::runtime::class_getInstanceMethod;
-    use objc2::runtime::method_setImplementation;
+    // Use libc to call the Objective-C runtime functions directly
+    extern "C" {
+        fn class_getInstanceMethod(cls: *const AnyClass, sel: Sel) -> *mut c_void;
+        fn method_setImplementation(method: *mut c_void, imp: *mut c_void) -> *mut c_void;
+    }
 
     let method = class_getInstanceMethod(class as *const AnyClass, selector);
     if method.is_null() {
@@ -203,7 +206,7 @@ unsafe fn swizzle_method<F>(
         return;
     }
 
-    let original_impl = method_setImplementation(method, new_impl as *mut c_void);
+    let original_impl = method_setImplementation(method, new_impl);
     if !original_impl.is_null() {
         *original_storage = Some(std::mem::transmute_copy(&original_impl));
         eprintln!("[TiddlyDesktop] macOS: Swizzled {:?}", selector);
@@ -222,7 +225,7 @@ unsafe fn get_dragging_location(dragging_info: *mut AnyObject, webview: *mut Any
     let location: NSPoint = msg_send![dragging_info, draggingLocation];
 
     // Convert to view coordinates
-    let view_location: NSPoint = msg_send![webview, convertPoint:location fromView:std::ptr::null::<AnyObject>()];
+    let view_location: NSPoint = msg_send![webview, convertPoint: location, fromView: std::ptr::null::<AnyObject>()];
 
     // Get view bounds to flip Y coordinate (Cocoa uses bottom-left origin, web uses top-left)
     let bounds: objc2_foundation::NSRect = msg_send![webview, bounds];
@@ -911,7 +914,7 @@ extern "C" fn swizzled_dragging_session_moved(
             if let Some(label) = get_window_label(this) {
                 if label == window_label {
                     // Convert screen point to view coordinates
-                    let view_point: NSPoint = msg_send![this, convertPoint:screen_point fromView:std::ptr::null::<AnyObject>()];
+                    let view_point: NSPoint = msg_send![this, convertPoint: screen_point, fromView: std::ptr::null::<AnyObject>()];
                     let bounds: NSRect = msg_send![this, bounds];
                     let flipped_y = bounds.size.height - view_point.y;
 
@@ -1099,25 +1102,25 @@ fn start_native_drag_on_main_thread(
         if let Some(ref text) = data.text_plain {
             let type_str = NSString::from_str(NS_PASTEBOARD_TYPE_STRING);
             let text_str = NSString::from_str(text);
-            let _: Bool = msg_send![&pasteboard_item, setString:&*text_str forType:&*type_str];
+            let _: Bool = msg_send![&pasteboard_item, setString: &*text_str, forType: &*type_str];
         }
 
         if let Some(ref html) = data.text_html {
             let type_str = NSString::from_str(NS_PASTEBOARD_TYPE_HTML);
             let html_str = NSString::from_str(html);
-            let _: Bool = msg_send![&pasteboard_item, setString:&*html_str forType:&*type_str];
+            let _: Bool = msg_send![&pasteboard_item, setString: &*html_str, forType: &*type_str];
         }
 
         if let Some(ref tiddler) = data.text_vnd_tiddler {
             let type_str = NSString::from_str(NS_PASTEBOARD_TYPE_TIDDLER);
             let tiddler_str = NSString::from_str(tiddler);
-            let _: Bool = msg_send![&pasteboard_item, setString:&*tiddler_str forType:&*type_str];
+            let _: Bool = msg_send![&pasteboard_item, setString: &*tiddler_str, forType: &*type_str];
         }
 
         if let Some(ref url) = data.url {
             let type_str = NSString::from_str(NS_PASTEBOARD_TYPE_URL);
             let url_str = NSString::from_str(url);
-            let _: Bool = msg_send![&pasteboard_item, setString:&*url_str forType:&*type_str];
+            let _: Bool = msg_send![&pasteboard_item, setString: &*url_str, forType: &*type_str];
         }
 
         // Create dragging item
@@ -1144,11 +1147,12 @@ fn start_native_drag_on_main_thread(
         // Try to create drag image from PNG data
         if let Some(img_bytes) = image_data {
             let ns_data = NSData::from_vec(img_bytes);
-            let image: Option<Retained<NSImage>> = msg_send![objc2::class!(NSImage), alloc];
-            if let Some(image) = image {
-                let image: Option<Retained<NSImage>> = msg_send![image, initWithData: &*ns_data];
-                if let Some(image) = image {
-                    let size: NSSize = msg_send![&image, size];
+            // Use raw pointers to avoid objc2 type issues with alloc/init pattern
+            let image_class: *const AnyObject = msg_send![objc2::class!(NSImage), alloc];
+            if !image_class.is_null() {
+                let image: *mut AnyObject = msg_send![image_class, initWithData: &*ns_data];
+                if !image.is_null() {
+                    let size: NSSize = msg_send![image, size];
                     let image_frame = NSRect {
                         origin: NSPoint {
                             x: x as f64 - offset_x as f64,
@@ -1156,16 +1160,16 @@ fn start_native_drag_on_main_thread(
                         },
                         size,
                     };
-                    let _: () = msg_send![&dragging_item, setDraggingFrame: image_frame contents: &*image];
+                    let _: () = msg_send![&dragging_item, setDraggingFrame: image_frame, contents: image];
                     eprintln!("[TiddlyDesktop] macOS: Set drag image {}x{}", size.width, size.height);
                 } else {
-                    let _: () = msg_send![&dragging_item, setDraggingFrame: frame contents: std::ptr::null::<AnyObject>()];
+                    let _: () = msg_send![&dragging_item, setDraggingFrame: frame, contents: std::ptr::null::<AnyObject>()];
                 }
             } else {
-                let _: () = msg_send![&dragging_item, setDraggingFrame: frame contents: std::ptr::null::<AnyObject>()];
+                let _: () = msg_send![&dragging_item, setDraggingFrame: frame, contents: std::ptr::null::<AnyObject>()];
             }
         } else {
-            let _: () = msg_send![&dragging_item, setDraggingFrame: frame contents: std::ptr::null::<AnyObject>()];
+            let _: () = msg_send![&dragging_item, setDraggingFrame: frame, contents: std::ptr::null::<AnyObject>()];
         }
 
         // Create items array
@@ -1186,8 +1190,8 @@ fn start_native_drag_on_main_thread(
 
         let session: Option<Retained<NSDraggingSession>> = msg_send![
             &webview,
-            beginDraggingSessionWithItems: &*items
-            event: &*event
+            beginDraggingSessionWithItems: &*items,
+            event: &*event,
             source: &*webview
         ];
 

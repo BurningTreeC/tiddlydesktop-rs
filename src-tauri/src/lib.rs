@@ -665,8 +665,10 @@ mod windows_drag {
             count
         }
 
-        /// Check if drag is from Chromium renderer (internal drag)
-        fn is_chromium_renderer_drag(data_object: &IDataObject) -> bool {
+        /// Check if drag is from any Chromium-based browser (Chrome, Edge, our WebView2, etc.)
+        /// Note: This does NOT distinguish between true internal drags (from our webview) and
+        /// external Chromium drags (from Chrome/Edge). JavaScript uses webviewInternalDragActive for that.
+        fn is_chromium_browser_drag(data_object: &IDataObject) -> bool {
             use windows::Win32::System::DataExchange::RegisterClipboardFormatW;
             use windows::core::w;
             unsafe {
@@ -703,36 +705,22 @@ mod windows_drag {
                         fetched = 0;
                     }
                 }
-                Self::is_chromium_renderer_drag(data_object)
+                Self::is_chromium_browser_drag(data_object)
             } else { false };
 
-            eprintln!("[TiddlyDesktop] Windows: drag_enter - is_internal={}", is_internal);
-            *obj.is_internal_drag.lock().unwrap() = is_internal;
+            // Note: is_chromium_browser_drag detects chromium/x-renderer-taint format, which is present
+            // in ALL Chromium browser drags (Chrome, Edge, our WebView2), not just our own webview.
+            // We can't distinguish true internal drags (from our webview) from external Chromium drags
+            // (from Chrome/Edge) on the Rust side alone.
+            //
+            // Solution: Always emit our events and let JavaScript filter based on webviewInternalDragActive.
+            // For true internal drags, JS sets webviewInternalDragActive=true on dragstart, so our events
+            // will be ignored. For external Chromium drags, webviewInternalDragActive stays false.
+            let is_chromium = is_internal; // Rename for clarity - this just means "from any Chromium browser"
+            eprintln!("[TiddlyDesktop] Windows: drag_enter - is_chromium={}", is_chromium);
+            *obj.is_internal_drag.lock().unwrap() = is_chromium;
 
-            // For internal drags, forward to original drop target or CompositionController
-            if is_internal {
-                eprintln!("[TiddlyDesktop] Windows: drag_enter - internal drag detected");
-                // Try original drop target first (for internal drag handling by wry/WebView2)
-                if let Some(ref odt) = obj.original_drop_target {
-                    let data_object: IDataObject = std::mem::transmute_copy(&p_data_obj);
-                    let mut effect = DROPEFFECT_COPY;
-                    let result = odt.DragEnter(&data_object, MODIFIERKEYS_FLAGS(key), pt, &mut effect as *mut DROPEFFECT);
-                    eprintln!("[TiddlyDesktop] Windows: drag_enter - internal drag forwarded to original drop target: {:?}", result);
-                    if !pdw_effect.is_null() { *pdw_effect = effect.0 as u32; }
-                } else if let Some(ref cc) = obj.composition_controller {
-                    let client_pt = obj.screen_to_client(pt);
-                    let data_object: IDataObject = std::mem::transmute_copy(&p_data_obj);
-                    let mut effect = DROPEFFECT_COPY.0 as u32;
-                    let result = cc.DragEnter(&data_object, key, client_pt, &mut effect);
-                    eprintln!("[TiddlyDesktop] Windows: drag_enter - internal drag forwarded to CompositionController: {:?}", result);
-                    if !pdw_effect.is_null() { *pdw_effect = effect; }
-                } else {
-                    eprintln!("[TiddlyDesktop] Windows: drag_enter - internal drag but no original drop target or CompositionController, accepting anyway");
-                    if !pdw_effect.is_null() { *pdw_effect = DROPEFFECT_COPY.0 as u32; }
-                }
-                return S_OK;
-            }
-
+            // Always emit our events - JavaScript will filter based on webviewInternalDragActive
             eprintln!("[TiddlyDesktop] Windows: drag_enter - emitting td-drag-motion");
             let _ = obj.window.emit("td-drag-motion", serde_json::json!({
                 "x": pt.x, "y": pt.y, "screenCoords": true
@@ -762,28 +750,13 @@ mod windows_drag {
         unsafe extern "system" fn drag_over(this: *mut Self, key: u32, pt: POINTL, pdw_effect: *mut u32) -> HRESULT {
             let obj = &*this;
 
-            // For internal drags, forward to original drop target or CompositionController
-            if *obj.is_internal_drag.lock().unwrap() {
-                if let Some(ref odt) = obj.original_drop_target {
-                    let mut effect = DROPEFFECT_COPY;
-                    let _ = odt.DragOver(MODIFIERKEYS_FLAGS(key), pt, &mut effect as *mut DROPEFFECT);
-                    if !pdw_effect.is_null() { *pdw_effect = effect.0 as u32; }
-                } else if let Some(ref cc) = obj.composition_controller {
-                    let client_pt = obj.screen_to_client(pt);
-                    let mut effect = DROPEFFECT_COPY.0 as u32;
-                    let _ = cc.DragOver(key, client_pt, &mut effect);
-                    if !pdw_effect.is_null() { *pdw_effect = effect; }
-                } else {
-                    if !pdw_effect.is_null() { *pdw_effect = DROPEFFECT_COPY.0 as u32; }
-                }
-                return S_OK;
-            }
-
+            // Always emit our events - JavaScript will filter based on webviewInternalDragActive
             let _ = obj.window.emit("td-drag-motion", serde_json::json!({
                 "x": pt.x, "y": pt.y, "screenCoords": true
             }));
 
-            // Forward to original drop target or CompositionController
+            // Always forward to original drop target or CompositionController
+            // This ensures WebView2's native HTML5 drag handling works for true internal drags
             if let Some(ref odt) = obj.original_drop_target {
                 let mut effect = DROPEFFECT_COPY;
                 let _ = odt.DragOver(MODIFIERKEYS_FLAGS(key), pt, &mut effect as *mut DROPEFFECT);
@@ -802,12 +775,10 @@ mod windows_drag {
         unsafe extern "system" fn drag_leave(this: *mut Self) -> HRESULT {
             let obj = &*this;
             eprintln!("[TiddlyDesktop] Windows: drag_leave called");
-            let was_internal = {
+            {
                 let mut internal = obj.is_internal_drag.lock().unwrap();
-                let was = *internal;
                 *internal = false;
-                was
-            };
+            }
             *obj.drag_active.lock().unwrap() = false;
 
             // Forward to original drop target or CompositionController
@@ -817,12 +788,9 @@ mod windows_drag {
                 let _ = cc.DragLeave();
             }
 
-            if !was_internal {
-                eprintln!("[TiddlyDesktop] Windows: drag_leave - emitting td-drag-leave");
-                let _ = obj.window.emit("td-drag-leave", ());
-            } else {
-                eprintln!("[TiddlyDesktop] Windows: drag_leave - was internal, skipping event");
-            }
+            // Always emit our event - JavaScript will filter based on webviewInternalDragActive
+            eprintln!("[TiddlyDesktop] Windows: drag_leave - emitting td-drag-leave");
+            let _ = obj.window.emit("td-drag-leave", ());
             S_OK
         }
 
@@ -831,34 +799,12 @@ mod windows_drag {
             eprintln!("[TiddlyDesktop] Windows: drop_impl called at ({}, {})", pt.x, pt.y);
             *obj.drag_active.lock().unwrap() = false;
 
-            let was_internal = {
+            let was_chromium = {
                 let mut internal = obj.is_internal_drag.lock().unwrap();
                 let was = *internal;
                 *internal = false;
                 was
             };
-
-            // Internal drags - forward to original drop target or CompositionController
-            if was_internal {
-                eprintln!("[TiddlyDesktop] Windows: drop_impl - internal drag, forwarding to original handler");
-                if let Some(ref odt) = obj.original_drop_target {
-                    let data_object: IDataObject = std::mem::transmute_copy(&p_data_obj);
-                    let mut effect = DROPEFFECT_COPY;
-                    let result = odt.Drop(&data_object, MODIFIERKEYS_FLAGS(key), pt, &mut effect as *mut DROPEFFECT);
-                    eprintln!("[TiddlyDesktop] Windows: drop_impl - forwarded to original drop target: {:?}", result);
-                    if !pdw_effect.is_null() { *pdw_effect = effect.0 as u32; }
-                } else if let Some(ref cc) = obj.composition_controller {
-                    let client_pt = obj.screen_to_client(pt);
-                    let data_object: IDataObject = std::mem::transmute_copy(&p_data_obj);
-                    let mut effect = DROPEFFECT_COPY.0 as u32;
-                    let _ = cc.Drop(&data_object, key, client_pt, &mut effect);
-                    if !pdw_effect.is_null() { *pdw_effect = effect; }
-                } else {
-                    eprintln!("[TiddlyDesktop] Windows: drop_impl - no original drop target or CompositionController");
-                    if !pdw_effect.is_null() { *pdw_effect = DROPEFFECT_COPY.0 as u32; }
-                }
-                return S_OK;
-            }
 
             if p_data_obj.is_null() {
                 eprintln!("[TiddlyDesktop] Windows: drop_impl - p_data_obj is null!");
@@ -868,6 +814,7 @@ mod windows_drag {
 
             let data_object: &IDataObject = std::mem::transmute(&p_data_obj);
 
+            // Always emit drop start event - JavaScript will filter based on webviewInternalDragActive
             let _ = obj.window.emit("td-drag-drop-start", serde_json::json!({
                 "x": pt.x, "y": pt.y, "screenCoords": true
             }));
@@ -881,11 +828,12 @@ mod windows_drag {
                 }));
                 let _ = obj.window.emit("td-file-drop", serde_json::json!({ "paths": file_paths }));
                 if !pdw_effect.is_null() { *pdw_effect = DROPEFFECT_COPY.0 as u32; }
+                // Don't forward file drops to original - we handle them exclusively
                 return S_OK;
             }
 
             // Content drop - extract text/HTML
-            eprintln!("[TiddlyDesktop] Windows: drop_impl - attempting content extraction");
+            eprintln!("[TiddlyDesktop] Windows: drop_impl - attempting content extraction (was_chromium={})", was_chromium);
             if let Some(content) = obj.extract_content(data_object) {
                 eprintln!("[TiddlyDesktop] Windows: drop_impl - content extracted, types: {:?}", content.types);
                 let _ = obj.window.emit("td-drag-drop-position", serde_json::json!({
@@ -896,6 +844,23 @@ mod windows_drag {
             } else {
                 eprintln!("[TiddlyDesktop] Windows: drop_impl - no content extracted!");
                 if !pdw_effect.is_null() { *pdw_effect = DROPEFFECT_NONE.0 as u32; }
+            }
+
+            // Also forward to original drop target for Chromium drags
+            // This is needed for true internal drags (from our webview) where native HTML5 handling is expected
+            // For external Chromium drags, JS will process our events and native handling will be redundant but harmless
+            if was_chromium {
+                eprintln!("[TiddlyDesktop] Windows: drop_impl - also forwarding to original handler for native HTML5 support");
+                if let Some(ref odt) = obj.original_drop_target {
+                    let data_object: IDataObject = std::mem::transmute_copy(&p_data_obj);
+                    let mut effect = DROPEFFECT_COPY;
+                    let _ = odt.Drop(&data_object, MODIFIERKEYS_FLAGS(key), pt, &mut effect as *mut DROPEFFECT);
+                } else if let Some(ref cc) = obj.composition_controller {
+                    let client_pt = obj.screen_to_client(pt);
+                    let data_object: IDataObject = std::mem::transmute_copy(&p_data_obj);
+                    let mut effect = DROPEFFECT_COPY.0 as u32;
+                    let _ = cc.Drop(&data_object, key, client_pt, &mut effect);
+                }
             }
             S_OK
         }
@@ -3653,6 +3618,21 @@ fn get_init_script_with_path(wiki_path: &str) -> String {
     "#, wiki_path.replace('\\', "\\\\").replace('"', "\\\"")) + get_dialog_init_script()
 }
 
+/// Full JavaScript initialization script for wiki windows - sets all necessary variables early
+/// This ensures __WIKI_PATH__, __WINDOW_LABEL__, and __IS_MAIN_WIKI__ are available before
+/// setupExternalAttachments runs, avoiding race conditions with protocol handler injection.
+fn get_wiki_init_script(wiki_path: &str, window_label: &str, is_main_wiki: bool) -> String {
+    format!(r#"
+    window.__WIKI_PATH__ = "{}";
+    window.__WINDOW_LABEL__ = "{}";
+    window.__IS_MAIN_WIKI__ = {};
+    "#,
+        wiki_path.replace('\\', "\\\\").replace('"', "\\\""),
+        window_label.replace('\\', "\\\\").replace('"', "\\\""),
+        is_main_wiki
+    ) + get_dialog_init_script()
+}
+
 fn get_dialog_init_script() -> &'static str {
     r#"
     (function() {
@@ -5887,6 +5867,9 @@ fn get_dialog_init_script() -> &'static str {
             // Paste event handler - intercept paste and use native clipboard reading
             // This ensures proper encoding handling (e.g., UTF-16LE from Firefox on Linux)
             document.addEventListener("paste", function(event) {
+                // Skip on landing page - no file import there
+                if (window.__IS_MAIN_WIKI__) return;
+
                 // Skip if in a text input or contenteditable
                 var target = event.target;
                 if (target.tagName === "TEXTAREA" || target.tagName === "INPUT" || target.isContentEditable) {
@@ -7417,13 +7400,14 @@ async fn open_wiki_folder(app: tauri::AppHandle, path: String) -> Result<WikiEnt
     // Get isolated session directory for this wiki folder
     let session_dir = get_wiki_session_dir(&app, &path);
 
+    // Use full init script that sets __WIKI_PATH__, __WINDOW_LABEL__, __IS_MAIN_WIKI__ early
     let mut builder = WebviewWindowBuilder::new(&app, &label, WebviewUrl::External(server_url.parse().unwrap()))
         .title(&folder_name)
         .inner_size(1200.0, 800.0)
         .icon(icon)
         .map_err(|e| format!("Failed to set icon: {}", e))?
         .window_classname("tiddlydesktop-rs")
-        .initialization_script(&get_init_script_with_path(&path))
+        .initialization_script(&get_wiki_init_script(&path, &label, false))
         .devtools(false);
 
     // Apply isolated session if available
@@ -8302,13 +8286,16 @@ async fn open_wiki_window(app: tauri::AppHandle, path: String) -> Result<WikiEnt
     // Get isolated session directory for this wiki
     let session_dir = get_wiki_session_dir(&app, &path);
 
+    // Use full init script that sets __WIKI_PATH__, __WINDOW_LABEL__, __IS_MAIN_WIKI__ early
+    // This ensures these variables are available before setupExternalAttachments runs,
+    // avoiding race conditions with the protocol handler's HTML injection
     let mut builder = WebviewWindowBuilder::new(&app, &label, WebviewUrl::External(wiki_url.parse().unwrap()))
         .title(&title)
         .inner_size(1200.0, 800.0)
         .icon(icon)
         .map_err(|e| format!("Failed to set icon: {}", e))?
         .window_classname("tiddlydesktop-rs")
-        .initialization_script(get_dialog_init_script())
+        .initialization_script(&get_wiki_init_script(&path, &label, false))
         .devtools(false);
 
     // Apply isolated session if available
@@ -8436,13 +8423,14 @@ async fn open_tiddler_window(
     // share session with their parent wiki
     let session_dir = get_wiki_session_dir(&app, &wiki_path);
 
+    // Use full init script for tiddler windows too - they need __WIKI_PATH__ for external attachments
     let mut builder = WebviewWindowBuilder::new(&app, &label, WebviewUrl::External(wiki_url.parse().unwrap()))
         .title(&title)
         .inner_size(win_width, win_height)
         .icon(icon)
         .map_err(|e| format!("Failed to set icon: {}", e))?
         .window_classname("tiddlydesktop-rs")
-        .initialization_script(get_dialog_init_script())
+        .initialization_script(&get_wiki_init_script(&wiki_path, &label, false))
         .devtools(false);
 
     // Apply isolated session if available (shares with parent wiki)
@@ -9254,6 +9242,7 @@ fn reveal_or_create_main_window(app_handle: &tauri::AppHandle) {
     let wiki_url = format!("wikifile://localhost/{}", path_key);
 
     if let Ok(icon) = Image::from_bytes(include_bytes!("../icons/icon.png")) {
+        // Use full init script with is_main_wiki=true
         if let Ok(main_window) = WebviewWindowBuilder::new(
             app_handle,
             "main",
@@ -9263,7 +9252,7 @@ fn reveal_or_create_main_window(app_handle: &tauri::AppHandle) {
             .inner_size(800.0, 600.0)
             .icon(icon)
             .expect("Failed to set icon")
-            .initialization_script(get_dialog_init_script())
+            .initialization_script(&get_wiki_init_script(&main_wiki_path.to_string_lossy(), "main", true))
             .build()
         {
             // Set up platform-specific drag handlers for content drops from external apps
@@ -9390,13 +9379,14 @@ pub fn run() {
             let wiki_url = format!("wikifile://localhost/{}", path_key);
 
             // Create the main window programmatically with initialization script
+            // Use full init script with is_main_wiki=true so setupExternalAttachments knows to skip
             let icon = Image::from_bytes(include_bytes!("../icons/icon.png"))?;
             let main_window = WebviewWindowBuilder::new(app, "main", WebviewUrl::External(wiki_url.parse().unwrap()))
                 .title("TiddlyDesktopRS")
                 .inner_size(800.0, 600.0)
                 .icon(icon)?
                 .window_classname("tiddlydesktop-rs")
-                .initialization_script(get_dialog_init_script())
+                .initialization_script(&get_wiki_init_script(&main_wiki_path.to_string_lossy(), "main", true))
                 .devtools(false)
                 .build()?;
 

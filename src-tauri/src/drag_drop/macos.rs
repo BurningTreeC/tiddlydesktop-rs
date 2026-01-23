@@ -20,7 +20,7 @@ use objc2::msg_send;
 use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
 use objc2_app_kit::{NSPasteboard, NSView, NSWindow};
-use objc2_foundation::{NSArray, NSString};
+use objc2_foundation::{NSArray, NSData, NSString};
 use tauri::{Emitter, WebviewWindow};
 
 /// Data captured from a drag operation
@@ -174,6 +174,18 @@ fn create_drag_types_array() -> Retained<NSArray<NSString>> {
     NSArray::from_retained_slice(&types)
 }
 
+/// Extract bytes from NSData
+fn nsdata_to_vec(data: &NSData) -> Vec<u8> {
+    let len = data.len();
+    if len == 0 {
+        return Vec::new();
+    }
+    unsafe {
+        let ptr = data.bytes();
+        std::slice::from_raw_parts(ptr as *const u8, len).to_vec()
+    }
+}
+
 /// Decode UTF-16LE bytes to a String
 fn decode_utf16le(data: &[u8]) -> String {
     if data.len() < 2 {
@@ -301,7 +313,7 @@ pub fn extract_pasteboard_content(pasteboard: &NSPasteboard) -> Option<DragConte
     // 0a. Try Mozilla custom clipdata format first
     let moz_type = NSString::from_str(NS_PASTEBOARD_TYPE_MOZ_CUSTOM);
     if let Some(moz_data) = pasteboard.dataForType(&moz_type) {
-        let bytes: Vec<u8> = moz_data.bytes().to_vec();
+        let bytes = nsdata_to_vec(&moz_data);
         if let Some(moz_entries) = parse_moz_custom_clipdata(&bytes) {
             eprintln!("[TiddlyDesktop] macOS: Parsed Mozilla custom clipdata, found {} entries", moz_entries.len());
             if let Some(tiddler_json) = moz_entries.get("text/vnd.tiddler") {
@@ -322,7 +334,7 @@ pub fn extract_pasteboard_content(pasteboard: &NSPasteboard) -> Option<DragConte
     if !data.contains_key("text/vnd.tiddler") {
         let chrome_type = NSString::from_str(NS_PASTEBOARD_TYPE_CHROME_CUSTOM);
         if let Some(chrome_data) = pasteboard.dataForType(&chrome_type) {
-            let bytes: Vec<u8> = chrome_data.bytes().to_vec();
+            let bytes = nsdata_to_vec(&chrome_data);
             if let Some(chrome_entries) = parse_chromium_custom_data(&bytes) {
                 eprintln!("[TiddlyDesktop] macOS: Parsed Chrome custom clipdata, found {} entries", chrome_entries.len());
                 if let Some(tiddler_json) = chrome_entries.get("text/vnd.tiddler") {

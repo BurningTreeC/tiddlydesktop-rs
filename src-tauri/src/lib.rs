@@ -9261,19 +9261,40 @@ pub fn run() {
     // (useful for older nvidia cards with nouveau driver, or other GPU issues)
     #[cfg(target_os = "linux")]
     {
+        // Helper to set env var only if not already set by user
+        fn set_env_if_unset(key: &str, value: &str) {
+            if std::env::var(key).is_err() {
+                std::env::set_var(key, value);
+            }
+        }
+
+        // Check if user has set any WebKit env vars directly
+        let user_set_compositing = std::env::var("WEBKIT_DISABLE_COMPOSITING_MODE").is_ok();
+        let user_set_dmabuf = std::env::var("WEBKIT_DISABLE_DMABUF_RENDERER").is_ok();
+        let user_set_libgl = std::env::var("LIBGL_ALWAYS_SOFTWARE").is_ok();
+
         if std::env::var("TIDDLYDESKTOP_DISABLE_GPU").map(|v| v == "1" || v.to_lowercase() == "true").unwrap_or(false) {
             // Disable hardware acceleration for problematic GPU drivers
             eprintln!("[TiddlyDesktop] GPU acceleration disabled via TIDDLYDESKTOP_DISABLE_GPU");
-            std::env::set_var("WEBKIT_DISABLE_COMPOSITING_MODE", "1");
-            std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
-            // Force software rendering
-            std::env::set_var("LIBGL_ALWAYS_SOFTWARE", "1");
+            set_env_if_unset("WEBKIT_DISABLE_COMPOSITING_MODE", "1");
+            set_env_if_unset("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
+            set_env_if_unset("LIBGL_ALWAYS_SOFTWARE", "1");
         } else {
-            // Enable hardware-accelerated compositing (default)
-            std::env::set_var("WEBKIT_DISABLE_COMPOSITING_MODE", "0");
-            // Enable DMA-BUF renderer for better hardware acceleration
-            std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "0");
+            // Only set defaults if user hasn't specified their own values
+            set_env_if_unset("WEBKIT_DISABLE_COMPOSITING_MODE", "0");
+            set_env_if_unset("WEBKIT_DISABLE_DMABUF_RENDERER", "0");
         }
+
+        // Log if user has set custom values
+        if user_set_compositing || user_set_dmabuf || user_set_libgl {
+            eprintln!("[TiddlyDesktop] Using user-provided WebKit environment variables");
+        }
+
+        // Print helpful hints for troubleshooting display issues
+        eprintln!("[TiddlyDesktop] Linux: If you experience display issues (black artifacts, rendering problems), try:");
+        eprintln!("[TiddlyDesktop]   WEBKIT_DISABLE_DMABUF_RENDERER=1 tiddlydesktop-rs");
+        eprintln!("[TiddlyDesktop]   WEBKIT_DISABLE_COMPOSITING_MODE=1 tiddlydesktop-rs");
+        eprintln!("[TiddlyDesktop]   TIDDLYDESKTOP_DISABLE_GPU=1 tiddlydesktop-rs  (disables all GPU acceleration)");
     }
 
     tauri::Builder::default()

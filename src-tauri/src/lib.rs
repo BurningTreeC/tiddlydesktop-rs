@@ -516,6 +516,8 @@ mod windows_drag {
         IDropTarget, OleInitialize, RegisterDragDrop, RevokeDragDrop,
         DROPEFFECT_COPY, DROPEFFECT_NONE,
     };
+    use windows::Win32::UI::WindowsAndMessaging::GetPropW;
+    use windows::core::w;
     use windows::Win32::System::Memory::{GlobalLock, GlobalUnlock, GlobalSize};
     use windows::Win32::UI::Shell::{DragQueryFileW, HDROP};
     use windows::Win32::Graphics::Gdi::ScreenToClient;
@@ -596,6 +598,7 @@ mod windows_drag {
         ref_count: AtomicU32,
         window: WebviewWindow,
         composition_controller: Option<ICoreWebView2CompositionController3>,
+        original_drop_target: Option<IDropTarget>,
         parent_hwnd: HWND,
         drag_active: Mutex<bool>,
         is_internal_drag: Mutex<bool>,
@@ -612,12 +615,13 @@ mod windows_drag {
     };
 
     impl DropTargetImpl {
-        fn new(window: WebviewWindow, composition_controller: Option<ICoreWebView2CompositionController3>, parent_hwnd: HWND) -> *mut Self {
+        fn new(window: WebviewWindow, composition_controller: Option<ICoreWebView2CompositionController3>, original_drop_target: Option<IDropTarget>, parent_hwnd: HWND) -> *mut Self {
             Box::into_raw(Box::new(Self {
                 vtbl: &DROPTARGET_VTBL,
                 ref_count: AtomicU32::new(1),
                 window,
                 composition_controller,
+                original_drop_target,
                 parent_hwnd,
                 drag_active: Mutex::new(false),
                 is_internal_drag: Mutex::new(false),
@@ -704,18 +708,25 @@ mod windows_drag {
             eprintln!("[TiddlyDesktop] Windows: drag_enter - is_internal={}", is_internal);
             *obj.is_internal_drag.lock().unwrap() = is_internal;
 
-            // For internal drags, forward to CompositionController and let WebView2 handle it
+            // For internal drags, forward to original drop target or CompositionController
             if is_internal {
                 eprintln!("[TiddlyDesktop] Windows: drag_enter - internal drag detected");
-                if let Some(ref cc) = obj.composition_controller {
+                // Try original drop target first (for internal drag handling by wry/WebView2)
+                if let Some(ref odt) = obj.original_drop_target {
+                    let data_object: IDataObject = std::mem::transmute_copy(&p_data_obj);
+                    let mut effect = DROPEFFECT_COPY.0 as u32;
+                    let result = odt.DragEnter(&data_object, key as u32, pt, &mut effect);
+                    eprintln!("[TiddlyDesktop] Windows: drag_enter - internal drag forwarded to original drop target: {:?}", result);
+                    if !pdw_effect.is_null() { *pdw_effect = effect; }
+                } else if let Some(ref cc) = obj.composition_controller {
                     let client_pt = obj.screen_to_client(pt);
                     let data_object: IDataObject = std::mem::transmute_copy(&p_data_obj);
                     let mut effect = DROPEFFECT_COPY.0 as u32;
                     let result = cc.DragEnter(&data_object, key, client_pt, &mut effect);
-                    eprintln!("[TiddlyDesktop] Windows: drag_enter - internal drag forwarded: {:?}", result);
+                    eprintln!("[TiddlyDesktop] Windows: drag_enter - internal drag forwarded to CompositionController: {:?}", result);
                     if !pdw_effect.is_null() { *pdw_effect = effect; }
                 } else {
-                    eprintln!("[TiddlyDesktop] Windows: drag_enter - internal drag but no CompositionController, accepting anyway");
+                    eprintln!("[TiddlyDesktop] Windows: drag_enter - internal drag but no original drop target or CompositionController, accepting anyway");
                     if !pdw_effect.is_null() { *pdw_effect = DROPEFFECT_COPY.0 as u32; }
                 }
                 return S_OK;
@@ -726,8 +737,14 @@ mod windows_drag {
                 "x": pt.x, "y": pt.y, "screenCoords": true
             }));
 
-            // Forward to CompositionController so WebView2 knows about the drag
-            if let Some(ref cc) = obj.composition_controller {
+            // Forward to original drop target or CompositionController so WebView2 knows about the drag
+            if let Some(ref odt) = obj.original_drop_target {
+                let data_object: IDataObject = std::mem::transmute_copy(&p_data_obj);
+                let mut effect = DROPEFFECT_COPY.0 as u32;
+                let result = odt.DragEnter(&data_object, key as u32, pt, &mut effect);
+                eprintln!("[TiddlyDesktop] Windows: drag_enter - forwarded to original drop target: {:?}", result);
+                if !pdw_effect.is_null() { *pdw_effect = effect; }
+            } else if let Some(ref cc) = obj.composition_controller {
                 let client_pt = obj.screen_to_client(pt);
                 let data_object: IDataObject = std::mem::transmute_copy(&p_data_obj);
                 let mut effect = DROPEFFECT_COPY.0 as u32;
@@ -735,7 +752,7 @@ mod windows_drag {
                 eprintln!("[TiddlyDesktop] Windows: drag_enter - forwarded to CompositionController: {:?}", result);
                 if !pdw_effect.is_null() { *pdw_effect = effect; }
             } else {
-                eprintln!("[TiddlyDesktop] Windows: drag_enter - no CompositionController, using td-* events only");
+                eprintln!("[TiddlyDesktop] Windows: drag_enter - no original drop target or CompositionController, using td-* events only");
                 if !pdw_effect.is_null() { *pdw_effect = DROPEFFECT_COPY.0 as u32; }
             }
             S_OK
@@ -744,9 +761,13 @@ mod windows_drag {
         unsafe extern "system" fn drag_over(this: *mut Self, key: u32, pt: POINTL, pdw_effect: *mut u32) -> HRESULT {
             let obj = &*this;
 
-            // For internal drags, forward to CompositionController
+            // For internal drags, forward to original drop target or CompositionController
             if *obj.is_internal_drag.lock().unwrap() {
-                if let Some(ref cc) = obj.composition_controller {
+                if let Some(ref odt) = obj.original_drop_target {
+                    let mut effect = DROPEFFECT_COPY.0 as u32;
+                    let _ = odt.DragOver(key as u32, pt, &mut effect);
+                    if !pdw_effect.is_null() { *pdw_effect = effect; }
+                } else if let Some(ref cc) = obj.composition_controller {
                     let client_pt = obj.screen_to_client(pt);
                     let mut effect = DROPEFFECT_COPY.0 as u32;
                     let _ = cc.DragOver(key, client_pt, &mut effect);
@@ -761,8 +782,12 @@ mod windows_drag {
                 "x": pt.x, "y": pt.y, "screenCoords": true
             }));
 
-            // Forward to CompositionController
-            if let Some(ref cc) = obj.composition_controller {
+            // Forward to original drop target or CompositionController
+            if let Some(ref odt) = obj.original_drop_target {
+                let mut effect = DROPEFFECT_COPY.0 as u32;
+                let _ = odt.DragOver(key as u32, pt, &mut effect);
+                if !pdw_effect.is_null() { *pdw_effect = effect; }
+            } else if let Some(ref cc) = obj.composition_controller {
                 let client_pt = obj.screen_to_client(pt);
                 let mut effect = DROPEFFECT_COPY.0 as u32;
                 let _ = cc.DragOver(key, client_pt, &mut effect);
@@ -784,8 +809,10 @@ mod windows_drag {
             };
             *obj.drag_active.lock().unwrap() = false;
 
-            // Forward to CompositionController
-            if let Some(ref cc) = obj.composition_controller {
+            // Forward to original drop target or CompositionController
+            if let Some(ref odt) = obj.original_drop_target {
+                let _ = odt.DragLeave();
+            } else if let Some(ref cc) = obj.composition_controller {
                 let _ = cc.DragLeave();
             }
 
@@ -810,16 +837,23 @@ mod windows_drag {
                 was
             };
 
-            // Internal drags - forward to CompositionController and let WebView2 handle it
+            // Internal drags - forward to original drop target or CompositionController
             if was_internal {
-                eprintln!("[TiddlyDesktop] Windows: drop_impl - internal drag, forwarding to WebView2");
-                if let Some(ref cc) = obj.composition_controller {
+                eprintln!("[TiddlyDesktop] Windows: drop_impl - internal drag, forwarding to original handler");
+                if let Some(ref odt) = obj.original_drop_target {
+                    let data_object: IDataObject = std::mem::transmute_copy(&p_data_obj);
+                    let mut effect = DROPEFFECT_COPY.0 as u32;
+                    let result = odt.Drop(&data_object, key as u32, pt, &mut effect);
+                    eprintln!("[TiddlyDesktop] Windows: drop_impl - forwarded to original drop target: {:?}", result);
+                    if !pdw_effect.is_null() { *pdw_effect = effect; }
+                } else if let Some(ref cc) = obj.composition_controller {
                     let client_pt = obj.screen_to_client(pt);
                     let data_object: IDataObject = std::mem::transmute_copy(&p_data_obj);
                     let mut effect = DROPEFFECT_COPY.0 as u32;
                     let _ = cc.Drop(&data_object, key, client_pt, &mut effect);
                     if !pdw_effect.is_null() { *pdw_effect = effect; }
                 } else {
+                    eprintln!("[TiddlyDesktop] Windows: drop_impl - no original drop target or CompositionController");
                     if !pdw_effect.is_null() { *pdw_effect = DROPEFFECT_COPY.0 as u32; }
                 }
                 return S_OK;
@@ -1102,20 +1136,45 @@ mod windows_drag {
                     let parent = HWND(parent_hwnd.0 as *mut _);
                     eprintln!("[TiddlyDesktop] Windows: Parent HWND = {:?}", parent);
 
+                    // Query the original drop target BEFORE revoking it
+                    // This allows us to forward internal drags to the original handler
+                    let original_drop_target: Option<IDropTarget> = {
+                        let prop_handle = GetPropW(parent, w!("OleDropTargetInterface"));
+                        if !prop_handle.0.is_null() {
+                            eprintln!("[TiddlyDesktop] Windows: Found original drop target via OleDropTargetInterface property");
+                            // The property value is an IUnknown pointer - query for IDropTarget
+                            let punk: windows::core::IUnknown = std::mem::transmute(prop_handle.0);
+                            match punk.cast::<IDropTarget>() {
+                                Ok(dt) => {
+                                    eprintln!("[TiddlyDesktop] Windows: Successfully got IDropTarget from original handler");
+                                    Some(dt)
+                                }
+                                Err(e) => {
+                                    eprintln!("[TiddlyDesktop] Windows: Failed to cast to IDropTarget: {:?}", e);
+                                    None
+                                }
+                            }
+                        } else {
+                            eprintln!("[TiddlyDesktop] Windows: No original drop target found");
+                            None
+                        }
+                    };
+
+                    // Revoke any existing drop target on the parent window
+                    let revoke_result = RevokeDragDrop(parent);
+                    eprintln!("[TiddlyDesktop] Windows: RevokeDragDrop on parent result: {:?}", revoke_result);
+
                     // Register on the PARENT window, not the WebView2 content window
                     // This ensures we receive OLE drag events before WebView2's internal handling
                     let drop_target_ptr = DropTargetImpl::new(
                         window_for_drop.clone(),
                         composition_controller,
+                        original_drop_target,
                         parent
                     );
                     let drop_target = DropTargetImpl::as_idroptarget(drop_target_ptr);
 
                     DROP_TARGET_MAP.lock().unwrap().insert(parent.0 as isize, SendDropTarget(drop_target_ptr));
-
-                    // Revoke any existing drop target on the parent window
-                    let revoke_result = RevokeDragDrop(parent);
-                    eprintln!("[TiddlyDesktop] Windows: RevokeDragDrop on parent result: {:?}", revoke_result);
 
                     // Register our drop target on the parent window
                     let register_result = RegisterDragDrop(parent, &drop_target);

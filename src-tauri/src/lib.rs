@@ -3637,6 +3637,14 @@ fn get_wiki_init_script(wiki_path: &str, window_label: &str, is_main_wiki: bool)
 fn get_dialog_init_script() -> &'static str {
     r#"
     (function() {
+        // Prevent double execution - this script may be injected multiple times
+        // (via Tauri initialization_script AND protocol handler HTML injection)
+        if (window.__TD_INIT_SCRIPT_LOADED__) {
+            console.log('[TiddlyDesktop] Initialization script already loaded - skipping duplicate');
+            return;
+        }
+        window.__TD_INIT_SCRIPT_LOADED__ = true;
+
         console.log('[TiddlyDesktop] Initialization script loaded');
         var promptWrapper = null;
         var confirmationBypassed = false;
@@ -4152,9 +4160,16 @@ fn get_dialog_init_script() -> &'static str {
             return event;
         }
 
-        var extAttachRetryCount = 0;
+        // Use window property for retry count to persist across script re-executions
+        window.__extAttachRetryCount = window.__extAttachRetryCount || 0;
         function setupExternalAttachments() {
-            extAttachRetryCount++;
+            // Guard: if listeners are already set up, don't run again
+            if (window.__TD_EXTERNAL_ATTACHMENTS_READY__) {
+                return;
+            }
+
+            window.__extAttachRetryCount++;
+            var extAttachRetryCount = window.__extAttachRetryCount;
 
             // Log progress: frequently at first, then less often while waiting for encrypted wikis
             var shouldLog = extAttachRetryCount === 1 ||
@@ -4179,6 +4194,7 @@ fn get_dialog_init_script() -> &'static str {
 
             // Skip main wiki - no file imports there
             if (window.__IS_MAIN_WIKI__) {
+                window.__TD_EXTERNAL_ATTACHMENTS_READY__ = true; // Mark as done to prevent retry loops
                 window.__TAURI__.core.invoke("js_log", { message: "Main wiki - external attachments disabled" });
                 return;
             }
@@ -4468,7 +4484,10 @@ fn get_dialog_init_script() -> &'static str {
                 if (event.payload.screenCoords) {
                     pos = screenToClient(event.payload.x, event.payload.y);
                 } else {
-                    pos = { x: event.payload.x, y: event.payload.y };
+                    // Coordinates from Rust ScreenToClient are in physical pixels
+                    // Convert to CSS pixels by dividing by devicePixelRatio
+                    var dpr = window.devicePixelRatio || 1;
+                    pos = { x: event.payload.x / dpr, y: event.payload.y / dpr };
                 }
                 var target = getTargetElement(pos);
 
@@ -4541,9 +4560,12 @@ fn get_dialog_init_script() -> &'static str {
                     if (event.payload.screenCoords) {
                         pendingContentDropPos = screenToClient(event.payload.x, event.payload.y);
                     } else {
+                        // Coordinates from Rust ScreenToClient are in physical pixels
+                        // Convert to CSS pixels by dividing by devicePixelRatio
+                        var dpr = window.devicePixelRatio || 1;
                         pendingContentDropPos = {
-                            x: event.payload.x,
-                            y: event.payload.y
+                            x: event.payload.x / dpr,
+                            y: event.payload.y / dpr
                         };
                     }
                 }
@@ -4646,7 +4668,10 @@ fn get_dialog_init_script() -> &'static str {
                         // Windows IDropTarget sends screen coordinates - convert to client
                         pos = screenToClient(event.payload.x, event.payload.y);
                     } else {
-                        pos = { x: event.payload.x, y: event.payload.y };
+                        // Coordinates from Rust ScreenToClient are in physical pixels
+                        // Convert to CSS pixels by dividing by devicePixelRatio
+                        var dpr = window.devicePixelRatio || 1;
+                        pos = { x: event.payload.x / dpr, y: event.payload.y / dpr };
                     }
                     pendingContentDropPos = pos;
                     // Process the content drop now that we have position
@@ -5958,6 +5983,8 @@ fn get_dialog_init_script() -> &'static str {
                 });
             }, true); // Use capture phase to intercept before TiddlyWiki
 
+            // Mark as complete to prevent duplicate listener registration
+            window.__TD_EXTERNAL_ATTACHMENTS_READY__ = true;
             console.log("[TiddlyDesktop] External attachments ready for:", wikiPath);
         }
 
@@ -8833,6 +8860,13 @@ window.__IS_MAIN_WIKI__ = {};
 
 // TiddlyDesktop initialization - handles both normal and encrypted wikis
 (function() {{
+    // Prevent double execution if protocol handler script runs multiple times
+    if (window.__TD_PROTOCOL_SCRIPT_LOADED__) {{
+        console.log('[TiddlyDesktop] Protocol handler script already loaded - skipping duplicate');
+        return;
+    }}
+    window.__TD_PROTOCOL_SCRIPT_LOADED__ = true;
+
     var SAVE_URL = "{}";
 
     // Check if this is an encrypted wiki

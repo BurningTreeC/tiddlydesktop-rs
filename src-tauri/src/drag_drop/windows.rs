@@ -20,6 +20,8 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Mutex;
 
 use tauri::{Emitter, WebviewWindow};
+
+use super::sanitize::{sanitize_html, sanitize_uri_list, sanitize_file_paths, is_dangerous_url};
 use webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2Controller4;
 use windows::core::{GUID, HRESULT};
 use windows::core::BOOL;
@@ -391,6 +393,8 @@ impl DropTargetImpl {
 
             // Check for file paths first
             let file_paths = obj.get_file_paths(data_object);
+            // Security: Sanitize file paths to prevent path traversal
+            let file_paths = sanitize_file_paths(file_paths);
             if !file_paths.is_empty() {
                 eprintln!(
                     "[TiddlyDesktop] Windows IDropTarget::Drop - {} files",
@@ -505,8 +509,16 @@ impl DropTargetImpl {
                 }
                 for (mime_type, content) in moz_data {
                     if !data.contains_key(&mime_type) {
+                        // Security: Sanitize content based on MIME type
+                        let sanitized = if mime_type == "text/html" {
+                            sanitize_html(&content)
+                        } else if mime_type == "text/uri-list" {
+                            sanitize_uri_list(&content)
+                        } else {
+                            content
+                        };
                         types.push(mime_type.clone());
-                        data.insert(mime_type, content);
+                        data.insert(mime_type, sanitized);
                     }
                 }
             }
@@ -528,8 +540,16 @@ impl DropTargetImpl {
                     }
                     for (mime_type, content) in chrome_data {
                         if !data.contains_key(&mime_type) {
+                            // Security: Sanitize content based on MIME type
+                            let sanitized = if mime_type == "text/html" {
+                                sanitize_html(&content)
+                            } else if mime_type == "text/uri-list" {
+                                sanitize_uri_list(&content)
+                            } else {
+                                content
+                            };
                             types.push(mime_type.clone());
-                            data.insert(mime_type, content);
+                            data.insert(mime_type, sanitized);
                         }
                     }
                 }
@@ -549,35 +569,47 @@ impl DropTargetImpl {
         let cf_url_w = get_cf_url_w();
         let cf_url = get_cf_url();
         if let Some(url) = self.get_unicode_text_format(data_object, cf_url_w) {
-            types.push("URL".to_string());
-            data.insert("URL".to_string(), url);
+            // Security: Block dangerous URL schemes
+            if !is_dangerous_url(&url) {
+                types.push("URL".to_string());
+                data.insert("URL".to_string(), url);
+            }
         } else if let Some(url) = self.get_string_data(data_object, cf_url) {
-            types.push("URL".to_string());
-            data.insert("URL".to_string(), url);
+            // Security: Block dangerous URL schemes
+            if !is_dangerous_url(&url) {
+                types.push("URL".to_string());
+                data.insert("URL".to_string(), url);
+            }
         }
 
         // 3. text/x-moz-url
         let cf_moz_url = get_cf_moz_url();
         if let Some(moz_url) = self.get_unicode_text_format(data_object, cf_moz_url) {
             let url = moz_url.lines().next().unwrap_or(&moz_url);
-            types.push("text/x-moz-url".to_string());
-            data.insert("text/x-moz-url".to_string(), url.to_string());
+            // Security: Block dangerous URL schemes
+            if !is_dangerous_url(url) {
+                types.push("text/x-moz-url".to_string());
+                data.insert("text/x-moz-url".to_string(), url.to_string());
+            }
         }
 
         // 4. text/html (HTML Format)
         let cf_html = get_cf_html();
         if let Some(html) = self.get_string_data(data_object, cf_html) {
             // Extract content from Windows HTML Format markers
-            if let Some(start) = html.find("<!--StartFragment-->") {
+            let html_content = if let Some(start) = html.find("<!--StartFragment-->") {
                 if let Some(end) = html.find("<!--EndFragment-->") {
-                    let content = &html[start + 20..end];
-                    types.push("text/html".to_string());
-                    data.insert("text/html".to_string(), content.to_string());
+                    html[start + 20..end].to_string()
+                } else {
+                    html
                 }
             } else {
-                types.push("text/html".to_string());
-                data.insert("text/html".to_string(), html);
-            }
+                html
+            };
+            // Security: Sanitize HTML content
+            let sanitized_html = sanitize_html(&html_content);
+            types.push("text/html".to_string());
+            data.insert("text/html".to_string(), sanitized_html);
         }
 
         // 5. text/plain (CF_UNICODETEXT)
@@ -617,8 +649,10 @@ impl DropTargetImpl {
         // 7. text/uri-list
         let cf_uri = get_cf_uri_list();
         if let Some(uri_list) = self.get_string_data(data_object, cf_uri) {
+            // Security: Sanitize URI list
+            let sanitized_uri_list = sanitize_uri_list(&uri_list);
             types.push("text/uri-list".to_string());
-            data.insert("text/uri-list".to_string(), uri_list);
+            data.insert("text/uri-list".to_string(), sanitized_uri_list);
         }
 
         if types.is_empty() {

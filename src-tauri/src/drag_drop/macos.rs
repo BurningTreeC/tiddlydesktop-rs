@@ -27,6 +27,8 @@ use objc2_app_kit::{NSPasteboard, NSView, NSWindow, NSDraggingSession, NSEvent, 
 use objc2_foundation::{NSArray, NSData, NSPoint, NSRect, NSSize, NSString};
 use tauri::{Emitter, WebviewWindow};
 
+use super::sanitize::{sanitize_html, sanitize_uri_list, sanitize_file_paths, is_dangerous_url};
+
 /// Data captured from a drag operation
 #[derive(Clone, Debug, serde::Serialize)]
 pub struct DragContentData {
@@ -660,10 +662,13 @@ fn extract_pasteboard_content(pasteboard: &NSPasteboard) -> Option<DragContentDa
 
             // Check if it's a URL
             if text_str.starts_with("http://") || text_str.starts_with("https://") {
-                types.push("text/uri-list".to_string());
-                data.insert("text/uri-list".to_string(), text_str.clone());
-                types.push("URL".to_string());
-                data.insert("URL".to_string(), text_str);
+                // Security: Block dangerous URL schemes
+                if !is_dangerous_url(&text_str) {
+                    types.push("text/uri-list".to_string());
+                    data.insert("text/uri-list".to_string(), text_str.clone());
+                    types.push("URL".to_string());
+                    data.insert("URL".to_string(), text_str);
+                }
             }
         }
     }
@@ -673,8 +678,10 @@ fn extract_pasteboard_content(pasteboard: &NSPasteboard) -> Option<DragContentDa
     if let Some(html) = pasteboard.stringForType(&html_type) {
         let html_str = html.to_string();
         if !html_str.is_empty() && !data.contains_key("text/html") {
+            // Security: Sanitize HTML content
+            let sanitized_html = sanitize_html(&html_str);
             types.push("text/html".to_string());
-            data.insert("text/html".to_string(), html_str);
+            data.insert("text/html".to_string(), sanitized_html);
         }
     }
 
@@ -682,7 +689,8 @@ fn extract_pasteboard_content(pasteboard: &NSPasteboard) -> Option<DragContentDa
     let url_type = NSString::from_str(NS_PASTEBOARD_TYPE_URL);
     if let Some(url) = pasteboard.stringForType(&url_type) {
         let url_str = url.to_string();
-        if !url_str.is_empty() && !data.contains_key("URL") {
+        // Security: Block dangerous URL schemes
+        if !url_str.is_empty() && !data.contains_key("URL") && !is_dangerous_url(&url_str) {
             types.push("URL".to_string());
             data.insert("URL".to_string(), url_str);
         }
@@ -761,6 +769,13 @@ fn emit_drop_with_content(window_label: &str, x: f64, y: f64, content: DragConte
 
 /// Emit drop events with file paths
 fn emit_drop_with_files(window_label: &str, x: f64, y: f64, paths: Vec<String>) {
+    // Security: Sanitize file paths to prevent path traversal
+    let paths = sanitize_file_paths(paths);
+
+    if paths.is_empty() {
+        return;
+    }
+
     if let Some(state) = DRAG_STATES.lock().unwrap().get(window_label) {
         let state = state.lock().unwrap();
 
@@ -1123,15 +1138,15 @@ fn start_native_drag_on_main_thread(
             let _: Bool = msg_send![&pasteboard_item, setString: &*url_str, forType: &*type_str];
         }
 
-        // Create dragging item
-        let dragging_item: Retained<AnyObject> = msg_send![
-            objc2::class!(NSDraggingItem),
-            alloc
-        ];
-        let dragging_item: Retained<AnyObject> = msg_send![
-            dragging_item,
-            initWithPasteboardWriter: &*pasteboard_item
-        ];
+        // Create dragging item using raw pointers to avoid objc2 type issues
+        let dragging_item_alloc: *mut AnyObject = msg_send![objc2::class!(NSDraggingItem), alloc];
+        if dragging_item_alloc.is_null() {
+            return Err("Failed to allocate NSDraggingItem".to_string());
+        }
+        let dragging_item: *mut AnyObject = msg_send![dragging_item_alloc, initWithPasteboardWriter: &*pasteboard_item];
+        if dragging_item.is_null() {
+            return Err("Failed to init NSDraggingItem".to_string());
+        }
 
         // Set dragging frame (required)
         let offset_x = image_offset_x.unwrap_or(0);
@@ -1160,20 +1175,20 @@ fn start_native_drag_on_main_thread(
                         },
                         size,
                     };
-                    let _: () = msg_send![&dragging_item, setDraggingFrame: image_frame, contents: image];
+                    let _: () = msg_send![dragging_item, setDraggingFrame: image_frame, contents: image];
                     eprintln!("[TiddlyDesktop] macOS: Set drag image {}x{}", size.width, size.height);
                 } else {
-                    let _: () = msg_send![&dragging_item, setDraggingFrame: frame, contents: std::ptr::null::<AnyObject>()];
+                    let _: () = msg_send![dragging_item, setDraggingFrame: frame, contents: std::ptr::null::<AnyObject>()];
                 }
             } else {
-                let _: () = msg_send![&dragging_item, setDraggingFrame: frame, contents: std::ptr::null::<AnyObject>()];
+                let _: () = msg_send![dragging_item, setDraggingFrame: frame, contents: std::ptr::null::<AnyObject>()];
             }
         } else {
-            let _: () = msg_send![&dragging_item, setDraggingFrame: frame, contents: std::ptr::null::<AnyObject>()];
+            let _: () = msg_send![dragging_item, setDraggingFrame: frame, contents: std::ptr::null::<AnyObject>()];
         }
 
-        // Create items array
-        let items: Retained<NSArray<AnyObject>> = NSArray::from_retained_slice(&[dragging_item]);
+        // Create items array using raw pointer
+        let items: *mut AnyObject = msg_send![objc2::class!(NSArray), arrayWithObject: dragging_item];
 
         // Get current event for drag initiation (required by beginDraggingSession)
         let current_event: Option<Retained<NSEvent>> = msg_send![objc2::class!(NSApp), currentEvent];
@@ -1188,14 +1203,14 @@ fn start_native_drag_on_main_thread(
             start_point.x, start_point.y
         );
 
-        let session: Option<Retained<NSDraggingSession>> = msg_send![
+        let session: *mut AnyObject = msg_send![
             &webview,
-            beginDraggingSessionWithItems: &*items,
+            beginDraggingSessionWithItems: items,
             event: &*event,
             source: &*webview
         ];
 
-        if session.is_some() {
+        if !session.is_null() {
             eprintln!("[TiddlyDesktop] macOS: Native drag session started for window '{}'", label);
             Ok(())
         } else {

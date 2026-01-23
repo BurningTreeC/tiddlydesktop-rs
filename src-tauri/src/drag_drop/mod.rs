@@ -5,6 +5,7 @@
 //!
 //! ## Shared utilities
 //! - `encoding` - Text encoding detection and conversion (UTF-8, UTF-16 LE/BE)
+//! - `sanitize` - Security sanitization for incoming drag content
 //!
 //! ## Platform implementations
 //!
@@ -27,8 +28,16 @@
 //! - `internal_drag.js` intercepts dragstart for draggable elements and text selections
 //! - `td-drag-*` handlers check `TD.isInternalDragActive()` and skip if true
 //! - `internal_drag.js` creates synthetic drag events using mouse tracking
+//!
+//! ## Security
+//!
+//! Incoming drag content from external applications is sanitized:
+//! - URLs: Dangerous schemes (javascript:, vbscript:, data:text/html) are blocked
+//! - HTML: Script tags and event handlers are stripped
+//! - File paths: Path traversal sequences are rejected
 
 mod encoding;
+mod sanitize;
 
 #[cfg(target_os = "windows")]
 mod windows;

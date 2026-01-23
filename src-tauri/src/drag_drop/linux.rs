@@ -87,6 +87,7 @@ fn has_outgoing_data_for_window(window_label: &str) -> bool {
 }
 
 use super::encoding::decode_string;
+use super::sanitize::{sanitize_html, sanitize_uri_list, sanitize_file_paths, is_dangerous_url};
 
 /// Data captured from a drag operation
 #[derive(Clone, Debug, serde::Serialize)]
@@ -1104,6 +1105,12 @@ fn handle_drag_data_received(
                 );
                 if mime_type == "text/vnd.tiddler" {
                     tiddler_json = Some(content.clone());
+                } else if mime_type == "text/html" {
+                    // Security: Sanitize HTML from external sources
+                    other_content.insert(mime_type.clone(), sanitize_html(content));
+                } else if mime_type == "text/uri-list" {
+                    // Security: Sanitize URI list
+                    other_content.insert(mime_type.clone(), sanitize_uri_list(content));
                 } else {
                     other_content.insert(mime_type.clone(), content.clone());
                 }
@@ -1123,6 +1130,12 @@ fn handle_drag_data_received(
                 );
                 if mime_type == "text/vnd.tiddler" {
                     tiddler_json = Some(content.clone());
+                } else if mime_type == "text/html" {
+                    // Security: Sanitize HTML from external sources
+                    other_content.insert(mime_type.clone(), sanitize_html(content));
+                } else if mime_type == "text/uri-list" {
+                    // Security: Sanitize URI list
+                    other_content.insert(mime_type.clone(), sanitize_uri_list(content));
                 } else {
                     other_content.insert(mime_type.clone(), content.clone());
                 }
@@ -1165,6 +1178,9 @@ fn handle_drag_data_received(
                     }
                 })
                 .collect();
+
+            // Security: Sanitize file paths to prevent path traversal
+            let paths = sanitize_file_paths(paths);
 
             if !paths.is_empty() {
                 eprintln!(
@@ -1211,10 +1227,15 @@ fn handle_drag_data_received(
         // Store other content types
         if tiddler_json.is_none() {
             if text_content.starts_with("http://") || text_content.starts_with("https://") {
-                other_content.insert("text/uri-list".to_string(), text_content.clone());
-                other_content.insert("URL".to_string(), text_content.clone());
+                // Security: Check for dangerous URL schemes
+                if !is_dangerous_url(text_content) {
+                    other_content.insert("text/uri-list".to_string(), text_content.clone());
+                    other_content.insert("URL".to_string(), text_content.clone());
+                }
             } else if text_content.trim_start().starts_with('<') || data_type == "text/html" {
-                other_content.insert("text/html".to_string(), text_content.clone());
+                // Security: Sanitize HTML content
+                let sanitized_html = sanitize_html(text_content);
+                other_content.insert("text/html".to_string(), sanitized_html);
             }
             other_content.insert("text/plain".to_string(), text_content.clone());
         }

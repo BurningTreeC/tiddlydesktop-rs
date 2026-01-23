@@ -16,9 +16,9 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
+use objc2::msg_send;
 use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
-use objc2::{msg_send_id, ClassType};
 use objc2_app_kit::{NSPasteboard, NSView, NSWindow};
 use objc2_foundation::{NSArray, NSString};
 use tauri::{Emitter, WebviewWindow};
@@ -82,8 +82,8 @@ pub fn setup_drag_handlers(window: &WebviewWindow) {
 fn setup_drag_destination(window: &WebviewWindow) {
     // Get the NSWindow
     if let Ok(ns_window) = window.ns_window() {
-        // Tauri returns a raw pointer wrapped in a type
-        let ns_window_ptr = ns_window.0 as *mut AnyObject;
+        // Tauri returns a raw pointer - cast it to NSWindow
+        let ns_window_ptr = ns_window as *mut std::ffi::c_void as *mut AnyObject;
 
         unsafe {
             // Convert to NSWindow reference
@@ -97,7 +97,7 @@ fn setup_drag_destination(window: &WebviewWindow) {
 
                     // Register for drag types we're interested in
                     let drag_types = create_drag_types_array();
-                    let _: () = msg_send_id![&webview, registerForDraggedTypes: &*drag_types];
+                    let _: () = msg_send![&webview, registerForDraggedTypes: &*drag_types];
 
                     eprintln!(
                         "[TiddlyDesktop] macOS: Drag types registered for window '{}'",
@@ -139,8 +139,8 @@ fn find_wkwebview(view: &NSView) -> Option<Retained<NSView>> {
 /// Get the class name of an Objective-C object
 fn get_class_name(obj: &NSView) -> String {
     unsafe {
-        let class: *const AnyObject = msg_send_id![obj, class];
-        let name: Retained<NSString> = msg_send_id![class, className];
+        let class: *const AnyObject = msg_send![obj, class];
+        let name: Retained<NSString> = msg_send![class, className];
         name.to_string()
     }
 }
@@ -169,7 +169,7 @@ pub fn extract_pasteboard_content(pasteboard: &NSPasteboard) -> Option<DragConte
 
     // Try to get plain text
     let text_type = NSString::from_str(NS_PASTEBOARD_TYPE_STRING);
-    if let Some(text) = unsafe { pasteboard.stringForType(&text_type) } {
+    if let Some(text) = pasteboard.stringForType(&text_type) {
         let text_str = text.to_string();
         if !text_str.is_empty() {
             types.push("text/plain".to_string());
@@ -187,7 +187,7 @@ pub fn extract_pasteboard_content(pasteboard: &NSPasteboard) -> Option<DragConte
 
     // Try to get HTML
     let html_type = NSString::from_str(NS_PASTEBOARD_TYPE_HTML);
-    if let Some(html) = unsafe { pasteboard.stringForType(&html_type) } {
+    if let Some(html) = pasteboard.stringForType(&html_type) {
         let html_str = html.to_string();
         if !html_str.is_empty() {
             types.push("text/html".to_string());
@@ -197,7 +197,7 @@ pub fn extract_pasteboard_content(pasteboard: &NSPasteboard) -> Option<DragConte
 
     // Try to get URL
     let url_type = NSString::from_str(NS_PASTEBOARD_TYPE_URL);
-    if let Some(url) = unsafe { pasteboard.stringForType(&url_type) } {
+    if let Some(url) = pasteboard.stringForType(&url_type) {
         let url_str = url.to_string();
         if !url_str.is_empty() && !data.contains_key("URL") {
             types.push("URL".to_string());
@@ -218,7 +218,7 @@ pub fn extract_file_paths(pasteboard: &NSPasteboard) -> Vec<String> {
 
     // Try public.file-url
     let file_url_type = NSString::from_str(NS_PASTEBOARD_TYPE_FILE_URL);
-    if let Some(file_url) = unsafe { pasteboard.stringForType(&file_url_type) } {
+    if let Some(file_url) = pasteboard.stringForType(&file_url_type) {
         let url_str = file_url.to_string();
         if url_str.starts_with("file://") {
             if let Some(path) = url_str.strip_prefix("file://") {
@@ -232,13 +232,13 @@ pub fn extract_file_paths(pasteboard: &NSPasteboard) -> Vec<String> {
     // Also try NSFilenamesPboardType
     if paths.is_empty() {
         let filenames_type = NSString::from_str("NSFilenamesPboardType");
-        if let Some(filenames) = unsafe { pasteboard.propertyListForType(&filenames_type) } {
+        if let Some(filenames) = pasteboard.propertyListForType(&filenames_type) {
             // filenames is an NSArray of NSStrings
             unsafe {
-                let array: &NSArray<NSString> = &*(filenames.as_ref() as *const AnyObject
-                    as *const NSArray<NSString>);
+                let filenames_ptr: *const AnyObject = &*filenames;
+                let array: &NSArray<NSString> = &*(filenames_ptr as *const NSArray<NSString>);
                 for item in array.iter() {
-                    let path_str = item.to_string();
+                    let path_str: String = item.to_string();
                     if !path_str.is_empty() {
                         paths.push(path_str);
                     }

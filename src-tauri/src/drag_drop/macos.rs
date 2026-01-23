@@ -175,14 +175,19 @@ fn create_drag_types_array() -> Retained<NSArray<NSString>> {
 }
 
 /// Extract bytes from NSData
-fn nsdata_to_vec(data: &NSData) -> Vec<u8> {
-    let len = data.len();
-    if len == 0 {
-        return Vec::new();
-    }
+fn nsdata_to_vec(data: &Retained<NSData>) -> Vec<u8> {
     unsafe {
-        let ptr = data.bytes();
-        std::slice::from_raw_parts(ptr as *const u8, len).to_vec()
+        // Cast to AnyObject to use msg_send
+        let obj = &**data as *const NSData as *const AnyObject;
+        let len: usize = msg_send![obj, length];
+        if len == 0 {
+            return Vec::new();
+        }
+        let ptr: *const u8 = msg_send![obj, bytes];
+        if ptr.is_null() {
+            return Vec::new();
+        }
+        std::slice::from_raw_parts(ptr, len).to_vec()
     }
 }
 

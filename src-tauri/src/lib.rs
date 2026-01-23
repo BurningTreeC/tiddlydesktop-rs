@@ -721,9 +721,11 @@ mod windows_drag {
             *obj.is_internal_drag.lock().unwrap() = is_chromium;
 
             // Always emit our events - JavaScript will filter based on webviewInternalDragActive
-            eprintln!("[TiddlyDesktop] Windows: drag_enter - emitting td-drag-motion");
+            // Convert to client coordinates on the Rust side (handles DPI correctly)
+            let client_pt = obj.screen_to_client(pt);
+            eprintln!("[TiddlyDesktop] Windows: drag_enter - emitting td-drag-motion at client ({}, {})", client_pt.x, client_pt.y);
             let _ = obj.window.emit("td-drag-motion", serde_json::json!({
-                "x": pt.x, "y": pt.y, "screenCoords": true
+                "x": client_pt.x, "y": client_pt.y
             }));
 
             // Forward to original drop target or CompositionController so WebView2 knows about the drag
@@ -751,8 +753,10 @@ mod windows_drag {
             let obj = &*this;
 
             // Always emit our events - JavaScript will filter based on webviewInternalDragActive
+            // Convert to client coordinates on the Rust side (handles DPI correctly)
+            let client_pt = obj.screen_to_client(pt);
             let _ = obj.window.emit("td-drag-motion", serde_json::json!({
-                "x": pt.x, "y": pt.y, "screenCoords": true
+                "x": client_pt.x, "y": client_pt.y
             }));
 
             // Always forward to original drop target or CompositionController
@@ -814,9 +818,13 @@ mod windows_drag {
 
             let data_object: &IDataObject = std::mem::transmute(&p_data_obj);
 
+            // Convert to client coordinates on the Rust side (handles DPI correctly)
+            let client_pt = obj.screen_to_client(pt);
+            eprintln!("[TiddlyDesktop] Windows: drop_impl - client coords ({}, {})", client_pt.x, client_pt.y);
+
             // Always emit drop start event - JavaScript will filter based on webviewInternalDragActive
             let _ = obj.window.emit("td-drag-drop-start", serde_json::json!({
-                "x": pt.x, "y": pt.y, "screenCoords": true
+                "x": client_pt.x, "y": client_pt.y
             }));
 
             // Check for file drop first
@@ -824,7 +832,7 @@ mod windows_drag {
             if !file_paths.is_empty() {
                 eprintln!("[TiddlyDesktop] Windows: drop_impl - file drop with {} files", file_paths.len());
                 let _ = obj.window.emit("td-drag-drop-position", serde_json::json!({
-                    "x": pt.x, "y": pt.y, "screenCoords": true
+                    "x": client_pt.x, "y": client_pt.y
                 }));
                 let _ = obj.window.emit("td-file-drop", serde_json::json!({ "paths": file_paths }));
                 if !pdw_effect.is_null() { *pdw_effect = DROPEFFECT_COPY.0 as u32; }
@@ -837,7 +845,7 @@ mod windows_drag {
             if let Some(content) = obj.extract_content(data_object) {
                 eprintln!("[TiddlyDesktop] Windows: drop_impl - content extracted, types: {:?}", content.types);
                 let _ = obj.window.emit("td-drag-drop-position", serde_json::json!({
-                    "x": pt.x, "y": pt.y, "screenCoords": true
+                    "x": client_pt.x, "y": client_pt.y
                 }));
                 let _ = obj.window.emit("td-drag-content", &content);
                 if !pdw_effect.is_null() { *pdw_effect = DROPEFFECT_COPY.0 as u32; }
@@ -4702,11 +4710,6 @@ fn get_dialog_init_script() -> &'static str {
                     var filename = filepath.split(/[/\\]/).pop();
                     var mimeType = getMimeType(filename);
 
-                    // Skip wiki files
-                    if (filename.toLowerCase().endsWith(".html") || filename.toLowerCase().endsWith(".htm")) {
-                        return Promise.resolve(null);
-                    }
-
                     return invoke("read_file_as_binary", { path: filepath }).then(function(bytes) {
                         // Store the path in global map for the import hook to find
                         window.__pendingExternalFiles[filename] = filepath;
@@ -5528,11 +5531,6 @@ fn get_dialog_init_script() -> &'static str {
 
                     var filename = filepath.split(/[/\\]/).pop();
                     var mimeType = getMimeType(filename);
-
-                    // Skip wiki files
-                    if (filename.toLowerCase().endsWith(".html") || filename.toLowerCase().endsWith(".htm")) {
-                        return Promise.resolve(null);
-                    }
 
                     return invoke("read_file_as_binary", { path: filepath }).then(function(bytes) {
                         // Store the path in global map for the import hook to find

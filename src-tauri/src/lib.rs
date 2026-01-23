@@ -514,8 +514,9 @@ mod windows_drag {
     use windows::Win32::System::Com::{IDataObject, TYMED_HGLOBAL, FORMATETC, DVASPECT_CONTENT};
     use windows::Win32::System::Ole::{
         IDropTarget, OleInitialize, RegisterDragDrop, RevokeDragDrop,
-        DROPEFFECT_COPY, DROPEFFECT_NONE,
+        DROPEFFECT, DROPEFFECT_COPY, DROPEFFECT_NONE,
     };
+    use windows::Win32::System::SystemServices::MODIFIERKEYS_FLAGS;
     use windows::Win32::UI::WindowsAndMessaging::GetPropW;
     use windows::core::w;
     use windows::Win32::System::Memory::{GlobalLock, GlobalUnlock, GlobalSize};
@@ -714,10 +715,10 @@ mod windows_drag {
                 // Try original drop target first (for internal drag handling by wry/WebView2)
                 if let Some(ref odt) = obj.original_drop_target {
                     let data_object: IDataObject = std::mem::transmute_copy(&p_data_obj);
-                    let mut effect = DROPEFFECT_COPY.0 as u32;
-                    let result = odt.DragEnter(&data_object, key as u32, pt, &mut effect);
+                    let mut effect = DROPEFFECT_COPY;
+                    let result = odt.DragEnter(&data_object, MODIFIERKEYS_FLAGS(key), pt, &mut effect as *mut DROPEFFECT);
                     eprintln!("[TiddlyDesktop] Windows: drag_enter - internal drag forwarded to original drop target: {:?}", result);
-                    if !pdw_effect.is_null() { *pdw_effect = effect; }
+                    if !pdw_effect.is_null() { *pdw_effect = effect.0 as u32; }
                 } else if let Some(ref cc) = obj.composition_controller {
                     let client_pt = obj.screen_to_client(pt);
                     let data_object: IDataObject = std::mem::transmute_copy(&p_data_obj);
@@ -740,10 +741,10 @@ mod windows_drag {
             // Forward to original drop target or CompositionController so WebView2 knows about the drag
             if let Some(ref odt) = obj.original_drop_target {
                 let data_object: IDataObject = std::mem::transmute_copy(&p_data_obj);
-                let mut effect = DROPEFFECT_COPY.0 as u32;
-                let result = odt.DragEnter(&data_object, key as u32, pt, &mut effect);
+                let mut effect = DROPEFFECT_COPY;
+                let result = odt.DragEnter(&data_object, MODIFIERKEYS_FLAGS(key), pt, &mut effect as *mut DROPEFFECT);
                 eprintln!("[TiddlyDesktop] Windows: drag_enter - forwarded to original drop target: {:?}", result);
-                if !pdw_effect.is_null() { *pdw_effect = effect; }
+                if !pdw_effect.is_null() { *pdw_effect = effect.0 as u32; }
             } else if let Some(ref cc) = obj.composition_controller {
                 let client_pt = obj.screen_to_client(pt);
                 let data_object: IDataObject = std::mem::transmute_copy(&p_data_obj);
@@ -764,9 +765,9 @@ mod windows_drag {
             // For internal drags, forward to original drop target or CompositionController
             if *obj.is_internal_drag.lock().unwrap() {
                 if let Some(ref odt) = obj.original_drop_target {
-                    let mut effect = DROPEFFECT_COPY.0 as u32;
-                    let _ = odt.DragOver(key as u32, pt, &mut effect);
-                    if !pdw_effect.is_null() { *pdw_effect = effect; }
+                    let mut effect = DROPEFFECT_COPY;
+                    let _ = odt.DragOver(MODIFIERKEYS_FLAGS(key), pt, &mut effect as *mut DROPEFFECT);
+                    if !pdw_effect.is_null() { *pdw_effect = effect.0 as u32; }
                 } else if let Some(ref cc) = obj.composition_controller {
                     let client_pt = obj.screen_to_client(pt);
                     let mut effect = DROPEFFECT_COPY.0 as u32;
@@ -784,9 +785,9 @@ mod windows_drag {
 
             // Forward to original drop target or CompositionController
             if let Some(ref odt) = obj.original_drop_target {
-                let mut effect = DROPEFFECT_COPY.0 as u32;
-                let _ = odt.DragOver(key as u32, pt, &mut effect);
-                if !pdw_effect.is_null() { *pdw_effect = effect; }
+                let mut effect = DROPEFFECT_COPY;
+                let _ = odt.DragOver(MODIFIERKEYS_FLAGS(key), pt, &mut effect as *mut DROPEFFECT);
+                if !pdw_effect.is_null() { *pdw_effect = effect.0 as u32; }
             } else if let Some(ref cc) = obj.composition_controller {
                 let client_pt = obj.screen_to_client(pt);
                 let mut effect = DROPEFFECT_COPY.0 as u32;
@@ -842,10 +843,10 @@ mod windows_drag {
                 eprintln!("[TiddlyDesktop] Windows: drop_impl - internal drag, forwarding to original handler");
                 if let Some(ref odt) = obj.original_drop_target {
                     let data_object: IDataObject = std::mem::transmute_copy(&p_data_obj);
-                    let mut effect = DROPEFFECT_COPY.0 as u32;
-                    let result = odt.Drop(&data_object, key as u32, pt, &mut effect);
+                    let mut effect = DROPEFFECT_COPY;
+                    let result = odt.Drop(&data_object, MODIFIERKEYS_FLAGS(key), pt, &mut effect as *mut DROPEFFECT);
                     eprintln!("[TiddlyDesktop] Windows: drop_impl - forwarded to original drop target: {:?}", result);
-                    if !pdw_effect.is_null() { *pdw_effect = effect; }
+                    if !pdw_effect.is_null() { *pdw_effect = effect.0 as u32; }
                 } else if let Some(ref cc) = obj.composition_controller {
                     let client_pt = obj.screen_to_client(pt);
                     let data_object: IDataObject = std::mem::transmute_copy(&p_data_obj);

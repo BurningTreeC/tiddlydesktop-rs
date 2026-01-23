@@ -1033,12 +1033,13 @@ pub fn setup_drag_handlers(window: &WebviewWindow) {
 
             let controller = webview.controller();
 
-            // DISABLE WebView2's native external drop - we handle it via IDropTarget
-            // WebView2's native handling doesn't expose content (text/html) to JavaScript
+            // ENABLE WebView2's native external drop setting - this allows OLE drag-drop
+            // to reach our custom IDropTarget. We then intercept via RegisterDragDrop.
+            // Setting this to false would block external drops at the WebView2 level entirely.
             if let Ok(controller4) = controller.cast::<ICoreWebView2Controller4>() {
-                let result = controller4.SetAllowExternalDrop(false);
+                let result = controller4.SetAllowExternalDrop(true);
                 eprintln!(
-                    "[TiddlyDesktop] Windows: SetAllowExternalDrop(false) result: {:?}",
+                    "[TiddlyDesktop] Windows: SetAllowExternalDrop(true) result: {:?}",
                     result
                 );
             }

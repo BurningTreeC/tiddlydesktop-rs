@@ -509,8 +509,8 @@ mod windows_drag {
     use std::sync::Mutex;
     use std::sync::atomic::{AtomicU32, Ordering};
     use tauri::{Emitter, WebviewWindow};
-    use windows::core::{GUID, HRESULT, BOOL};
-    use windows::Win32::Foundation::{HWND, POINTL, S_OK, E_NOINTERFACE, E_POINTER};
+    use windows::core::{GUID, HRESULT};
+    use windows::Win32::Foundation::{HWND, POINT, POINTL, S_OK, E_NOINTERFACE, E_POINTER};
     use windows::Win32::System::Com::{IDataObject, TYMED_HGLOBAL, FORMATETC, DVASPECT_CONTENT};
     use windows::Win32::System::Ole::{
         IDropTarget, OleInitialize, RegisterDragDrop, RevokeDragDrop,
@@ -518,8 +518,7 @@ mod windows_drag {
     };
     use windows::Win32::System::Memory::{GlobalLock, GlobalUnlock, GlobalSize};
     use windows::Win32::UI::Shell::{DragQueryFileW, HDROP};
-    use windows::Win32::UI::WindowsAndMessaging::ScreenToClient;
-    use windows::Win32::Foundation::POINT;
+    use windows::Win32::Graphics::Gdi::ScreenToClient;
     use webview2_com::Microsoft::Web::WebView2::Win32::{ICoreWebView2Controller4, ICoreWebView2CompositionController3};
 
     #[allow(dead_code)]

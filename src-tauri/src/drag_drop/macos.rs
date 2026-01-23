@@ -1,7 +1,8 @@
 //! macOS drag-drop handling using objc2/AppKit for content extraction
 //!
 //! WKWebView's native drag-drop handling doesn't reliably expose content (text, HTML, URLs)
-//! from external apps to JavaScript via dataTransfer. We use Cocoa drag pasteboard APIs to:
+//! from external apps to JavaScript via dataTransfer. We use method swizzling to intercept
+//! NSDraggingDestination protocol methods and:
 //! 1. Extract content from the drag pasteboard (NSPasteboard)
 //! 2. Emit td-drag-* events to JavaScript
 //! 3. Let JavaScript create synthetic DOM events for TiddlyWiki
@@ -14,13 +15,15 @@
 #![cfg(target_os = "macos")]
 
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::ffi::c_void;
+use std::sync::{Arc, Mutex, Once};
 
 use objc2::msg_send;
 use objc2::rc::Retained;
-use objc2::runtime::AnyObject;
+use objc2::runtime::{AnyClass, AnyObject, Bool, Sel};
+use objc2::sel;
 use objc2_app_kit::{NSPasteboard, NSView, NSWindow};
-use objc2_foundation::{NSArray, NSData, NSString};
+use objc2_foundation::{NSArray, NSData, NSPoint, NSString};
 use tauri::{Emitter, WebviewWindow};
 
 /// Data captured from a drag operation
@@ -39,19 +42,35 @@ const NS_PASTEBOARD_TYPE_FILE_URL: &str = "public.file-url";
 const NS_PASTEBOARD_TYPE_TIDDLER: &str = "text/vnd.tiddler";
 const NS_PASTEBOARD_TYPE_JSON: &str = "public.json";
 /// Browser custom data formats (may contain text/vnd.tiddler)
+/// Note: Safari exposes content through standard pasteboard types, no custom format needed
 const NS_PASTEBOARD_TYPE_MOZ_CUSTOM: &str = "org.mozilla.custom-clipdata";
 const NS_PASTEBOARD_TYPE_CHROME_CUSTOM: &str = "org.chromium.web-custom-data";
+
+/// NSDragOperation constants
+const NS_DRAG_OPERATION_NONE: usize = 0;
+const NS_DRAG_OPERATION_COPY: usize = 1;
+const NS_DRAG_OPERATION_GENERIC: usize = 4;
 
 /// State for tracking drag operations per window
 struct DragState {
     window: WebviewWindow,
     drag_active: bool,
-    drop_in_progress: bool,
+    last_position: Option<(f64, f64)>,
 }
 
 lazy_static::lazy_static! {
     static ref DRAG_STATES: Mutex<HashMap<String, Arc<Mutex<DragState>>>> = Mutex::new(HashMap::new());
+    /// Maps webview pointer to window label for lookup in swizzled methods
+    static ref WEBVIEW_TO_LABEL: Mutex<HashMap<usize, String>> = Mutex::new(HashMap::new());
 }
+
+/// Original method implementations (stored after first swizzle)
+static mut ORIGINAL_DRAGGING_ENTERED: Option<unsafe extern "C" fn(*mut AnyObject, Sel, *mut AnyObject) -> usize> = None;
+static mut ORIGINAL_DRAGGING_UPDATED: Option<unsafe extern "C" fn(*mut AnyObject, Sel, *mut AnyObject) -> usize> = None;
+static mut ORIGINAL_DRAGGING_EXITED: Option<unsafe extern "C" fn(*mut AnyObject, Sel, *mut AnyObject)> = None;
+static mut ORIGINAL_PERFORM_DRAG: Option<unsafe extern "C" fn(*mut AnyObject, Sel, *mut AnyObject) -> Bool> = None;
+
+static SWIZZLE_ONCE: Once = Once::new();
 
 /// Set up drag-drop handling for a webview window
 pub fn setup_drag_handlers(window: &WebviewWindow) {
@@ -64,7 +83,7 @@ pub fn setup_drag_handlers(window: &WebviewWindow) {
     let state = Arc::new(Mutex::new(DragState {
         window: window.clone(),
         drag_active: false,
-        drop_in_progress: false,
+        last_position: None,
     }));
 
     DRAG_STATES
@@ -72,42 +91,41 @@ pub fn setup_drag_handlers(window: &WebviewWindow) {
         .unwrap()
         .insert(label.clone(), state.clone());
 
-    // Register for drag types on the webview
-    // Note: The actual drag interception happens through Wry's drag-drop handler
-    // which Tauri exposes via tauri://drag-* events. Our implementation here
-    // supplements that by providing helper functions for content extraction.
-
     let window_clone = window.clone();
+    let label_clone = label.clone();
 
     // Use run_on_main_thread to safely access Cocoa APIs
     let _ = window.run_on_main_thread(move || {
-        setup_drag_destination(&window_clone);
+        setup_drag_destination(&window_clone, &label_clone);
     });
 }
 
-fn setup_drag_destination(window: &WebviewWindow) {
+fn setup_drag_destination(window: &WebviewWindow, label: &str) {
     // Get the NSWindow
     if let Ok(ns_window) = window.ns_window() {
-        // Tauri returns a raw pointer - cast it to NSWindow
-        let ns_window_ptr = ns_window as *mut std::ffi::c_void as *mut AnyObject;
+        let ns_window_ptr = ns_window as *mut c_void as *mut AnyObject;
 
         unsafe {
-            // Convert to NSWindow reference
             let ns_window: &NSWindow = &*(ns_window_ptr as *const NSWindow);
 
-            // Get the content view
             if let Some(content_view) = ns_window.contentView() {
-                // Find the WKWebView in the view hierarchy
                 if let Some(webview) = find_wkwebview(&content_view) {
-                    eprintln!("[TiddlyDesktop] macOS: Found WKWebView, registering drag types");
+                    eprintln!("[TiddlyDesktop] macOS: Found WKWebView, setting up drag handling");
 
-                    // Register for drag types we're interested in
+                    // Store mapping from webview pointer to window label
+                    let webview_ptr = &*webview as *const NSView as usize;
+                    WEBVIEW_TO_LABEL.lock().unwrap().insert(webview_ptr, label.to_string());
+
+                    // Register for drag types
                     let drag_types = create_drag_types_array();
                     let _: () = msg_send![&webview, registerForDraggedTypes: &*drag_types];
 
+                    // Swizzle methods (only once globally)
+                    swizzle_drag_methods(&webview);
+
                     eprintln!(
-                        "[TiddlyDesktop] macOS: Drag types registered for window '{}'",
-                        window.label()
+                        "[TiddlyDesktop] macOS: Drag handling set up for window '{}'",
+                        label
                     );
                 } else {
                     eprintln!("[TiddlyDesktop] macOS: WKWebView not found in view hierarchy");
@@ -121,16 +139,251 @@ fn setup_drag_destination(window: &WebviewWindow) {
     }
 }
 
+/// Swizzle NSDraggingDestination methods on the WKWebView class
+unsafe fn swizzle_drag_methods(webview: &NSView) {
+    SWIZZLE_ONCE.call_once(|| {
+        let class: *const AnyClass = msg_send![webview, class];
+        if class.is_null() {
+            eprintln!("[TiddlyDesktop] macOS: Failed to get WKWebView class");
+            return;
+        }
+
+        eprintln!("[TiddlyDesktop] macOS: Swizzling drag methods on class");
+
+        // Swizzle draggingEntered:
+        swizzle_method(
+            class as *mut AnyClass,
+            sel!(draggingEntered:),
+            swizzled_dragging_entered as *mut c_void,
+            &mut ORIGINAL_DRAGGING_ENTERED,
+        );
+
+        // Swizzle draggingUpdated:
+        swizzle_method(
+            class as *mut AnyClass,
+            sel!(draggingUpdated:),
+            swizzled_dragging_updated as *mut c_void,
+            &mut ORIGINAL_DRAGGING_UPDATED,
+        );
+
+        // Swizzle draggingExited:
+        swizzle_method(
+            class as *mut AnyClass,
+            sel!(draggingExited:),
+            swizzled_dragging_exited as *mut c_void,
+            &mut ORIGINAL_DRAGGING_EXITED,
+        );
+
+        // Swizzle performDragOperation:
+        swizzle_method(
+            class as *mut AnyClass,
+            sel!(performDragOperation:),
+            swizzled_perform_drag_operation as *mut c_void,
+            &mut ORIGINAL_PERFORM_DRAG,
+        );
+
+        eprintln!("[TiddlyDesktop] macOS: Method swizzling complete");
+    });
+}
+
+/// Helper to swizzle a single method
+unsafe fn swizzle_method<F>(
+    class: *mut AnyClass,
+    selector: Sel,
+    new_impl: *mut c_void,
+    original_storage: &mut Option<F>,
+) {
+    use objc2::runtime::class_getInstanceMethod;
+    use objc2::runtime::method_setImplementation;
+
+    let method = class_getInstanceMethod(class as *const AnyClass, selector);
+    if method.is_null() {
+        eprintln!("[TiddlyDesktop] macOS: Method {:?} not found, skipping swizzle", selector);
+        return;
+    }
+
+    let original_impl = method_setImplementation(method, new_impl as *mut c_void);
+    if !original_impl.is_null() {
+        *original_storage = Some(std::mem::transmute_copy(&original_impl));
+        eprintln!("[TiddlyDesktop] macOS: Swizzled {:?}", selector);
+    }
+}
+
+/// Get window label from webview pointer
+fn get_window_label(webview: *mut AnyObject) -> Option<String> {
+    let ptr = webview as usize;
+    WEBVIEW_TO_LABEL.lock().unwrap().get(&ptr).cloned()
+}
+
+/// Get dragging location from NSDraggingInfo
+unsafe fn get_dragging_location(dragging_info: *mut AnyObject, webview: *mut AnyObject) -> (f64, f64) {
+    // Get location in window coordinates
+    let location: NSPoint = msg_send![dragging_info, draggingLocation];
+
+    // Convert to view coordinates
+    let view_location: NSPoint = msg_send![webview, convertPoint:location fromView:std::ptr::null::<AnyObject>()];
+
+    // Get view bounds to flip Y coordinate (Cocoa uses bottom-left origin, web uses top-left)
+    let bounds: objc2_foundation::NSRect = msg_send![webview, bounds];
+    let flipped_y = bounds.size.height - view_location.y;
+
+    (view_location.x, flipped_y)
+}
+
+/// Get pasteboard from NSDraggingInfo
+unsafe fn get_dragging_pasteboard(dragging_info: *mut AnyObject) -> Option<Retained<NSPasteboard>> {
+    let pasteboard: *mut AnyObject = msg_send![dragging_info, draggingPasteboard];
+    if pasteboard.is_null() {
+        return None;
+    }
+    Some(Retained::retain(pasteboard as *mut NSPasteboard).unwrap())
+}
+
+// ============================================================================
+// Swizzled method implementations
+// ============================================================================
+
+/// Swizzled draggingEntered: - called when drag enters the view
+extern "C" fn swizzled_dragging_entered(this: *mut AnyObject, _sel: Sel, dragging_info: *mut AnyObject) -> usize {
+    unsafe {
+        eprintln!("[TiddlyDesktop] macOS: draggingEntered");
+
+        if let Some(label) = get_window_label(this) {
+            let (x, y) = get_dragging_location(dragging_info, this);
+
+            if let Some(state) = DRAG_STATES.lock().unwrap().get(&label) {
+                let mut state = state.lock().unwrap();
+                state.drag_active = true;
+                state.last_position = Some((x, y));
+
+                let _ = state.window.emit(
+                    "td-drag-motion",
+                    serde_json::json!({
+                        "x": x,
+                        "y": y,
+                        "screenCoords": false
+                    }),
+                );
+            }
+        }
+
+        // Call original or return copy operation
+        if let Some(original) = ORIGINAL_DRAGGING_ENTERED {
+            original(this, _sel, dragging_info)
+        } else {
+            NS_DRAG_OPERATION_COPY | NS_DRAG_OPERATION_GENERIC
+        }
+    }
+}
+
+/// Swizzled draggingUpdated: - called as drag moves over the view
+extern "C" fn swizzled_dragging_updated(this: *mut AnyObject, _sel: Sel, dragging_info: *mut AnyObject) -> usize {
+    unsafe {
+        if let Some(label) = get_window_label(this) {
+            let (x, y) = get_dragging_location(dragging_info, this);
+
+            if let Some(state) = DRAG_STATES.lock().unwrap().get(&label) {
+                let mut state = state.lock().unwrap();
+                state.last_position = Some((x, y));
+
+                let _ = state.window.emit(
+                    "td-drag-motion",
+                    serde_json::json!({
+                        "x": x,
+                        "y": y,
+                        "screenCoords": false
+                    }),
+                );
+            }
+        }
+
+        // Call original or return copy operation
+        if let Some(original) = ORIGINAL_DRAGGING_UPDATED {
+            original(this, _sel, dragging_info)
+        } else {
+            NS_DRAG_OPERATION_COPY | NS_DRAG_OPERATION_GENERIC
+        }
+    }
+}
+
+/// Swizzled draggingExited: - called when drag leaves the view
+extern "C" fn swizzled_dragging_exited(this: *mut AnyObject, _sel: Sel, dragging_info: *mut AnyObject) {
+    unsafe {
+        eprintln!("[TiddlyDesktop] macOS: draggingExited");
+
+        if let Some(label) = get_window_label(this) {
+            if let Some(state) = DRAG_STATES.lock().unwrap().get(&label) {
+                let mut state = state.lock().unwrap();
+                state.drag_active = false;
+                state.last_position = None;
+
+                let _ = state.window.emit("td-drag-leave", ());
+            }
+        }
+
+        // Call original
+        if let Some(original) = ORIGINAL_DRAGGING_EXITED {
+            original(this, _sel, dragging_info);
+        }
+    }
+}
+
+/// Swizzled performDragOperation: - called when drop occurs
+extern "C" fn swizzled_perform_drag_operation(this: *mut AnyObject, _sel: Sel, dragging_info: *mut AnyObject) -> Bool {
+    unsafe {
+        eprintln!("[TiddlyDesktop] macOS: performDragOperation");
+
+        let mut handled = false;
+
+        if let Some(label) = get_window_label(this) {
+            let (x, y) = get_dragging_location(dragging_info, this);
+
+            if let Some(pasteboard) = get_dragging_pasteboard(dragging_info) {
+                // Check for file drops first
+                let file_paths = extract_file_paths(&pasteboard);
+
+                if !file_paths.is_empty() {
+                    eprintln!("[TiddlyDesktop] macOS: File drop with {} paths", file_paths.len());
+                    emit_drop_with_files(&label, x, y, file_paths);
+                    handled = true;
+                } else if let Some(content) = extract_pasteboard_content(&pasteboard) {
+                    eprintln!("[TiddlyDesktop] macOS: Content drop with types: {:?}", content.types);
+                    emit_drop_with_content(&label, x, y, content);
+                    handled = true;
+                }
+            }
+
+            // Reset state
+            if let Some(state) = DRAG_STATES.lock().unwrap().get(&label) {
+                let mut state = state.lock().unwrap();
+                state.drag_active = false;
+                state.last_position = None;
+            }
+        }
+
+        // If we handled it, return true; otherwise call original
+        if handled {
+            Bool::YES
+        } else if let Some(original) = ORIGINAL_PERFORM_DRAG {
+            original(this, _sel, dragging_info)
+        } else {
+            Bool::YES
+        }
+    }
+}
+
+// ============================================================================
+// Helper functions
+// ============================================================================
+
 /// Find WKWebView in the view hierarchy
 fn find_wkwebview(view: &NSView) -> Option<Retained<NSView>> {
     unsafe {
-        // Check if this view is a WKWebView
         let class_name = get_class_name(view);
         if class_name.contains("WKWebView") || class_name.contains("WryWebView") {
             return Some(Retained::retain(view as *const NSView as *mut NSView).unwrap());
         }
 
-        // Recursively search subviews
         let subviews = view.subviews();
         for subview in subviews.iter() {
             if let Some(found) = find_wkwebview(&subview) {
@@ -155,9 +408,10 @@ fn get_class_name(obj: &NSView) -> String {
 fn create_drag_types_array() -> Retained<NSArray<NSString>> {
     let types = vec![
         // Browser custom data formats - highest priority (may contain text/vnd.tiddler)
+        // Note: Safari uses standard pasteboard types, no custom format needed
         NSString::from_str(NS_PASTEBOARD_TYPE_MOZ_CUSTOM),
         NSString::from_str(NS_PASTEBOARD_TYPE_CHROME_CUSTOM),
-        // TiddlyWiki tiddler JSON - highest priority for cross-wiki drag
+        // TiddlyWiki tiddler JSON
         NSString::from_str(NS_PASTEBOARD_TYPE_TIDDLER),
         NSString::from_str(NS_PASTEBOARD_TYPE_JSON),
         NSString::from_str(NS_PASTEBOARD_TYPE_STRING),
@@ -177,7 +431,6 @@ fn create_drag_types_array() -> Retained<NSArray<NSString>> {
 /// Extract bytes from NSData
 fn nsdata_to_vec(data: &Retained<NSData>) -> Vec<u8> {
     unsafe {
-        // Cast to AnyObject to use msg_send
         let obj = &**data as *const NSData as *const AnyObject;
         let len: usize = msg_send![obj, length];
         if len == 0 {
@@ -311,7 +564,7 @@ fn parse_chromium_custom_data(data: &[u8]) -> Option<HashMap<String, String>> {
 }
 
 /// Extract content from a drag pasteboard
-pub fn extract_pasteboard_content(pasteboard: &NSPasteboard) -> Option<DragContentData> {
+fn extract_pasteboard_content(pasteboard: &NSPasteboard) -> Option<DragContentData> {
     let mut types = Vec::new();
     let mut data = HashMap::new();
 
@@ -357,17 +610,18 @@ pub fn extract_pasteboard_content(pasteboard: &NSPasteboard) -> Option<DragConte
         }
     }
 
-    // 1. Try to get TiddlyWiki tiddler JSON (highest priority for cross-wiki drag)
-    let tiddler_type = NSString::from_str(NS_PASTEBOARD_TYPE_TIDDLER);
-    if let Some(tiddler) = pasteboard.stringForType(&tiddler_type) {
-        let tiddler_str = tiddler.to_string();
-        if !tiddler_str.is_empty() {
-            eprintln!("[TiddlyDesktop] macOS: Got tiddler data!");
-            types.push("text/vnd.tiddler".to_string());
-            data.insert("text/vnd.tiddler".to_string(), tiddler_str.clone());
-            // Also include as text/plain for fallback
-            types.push("text/plain".to_string());
-            data.insert("text/plain".to_string(), tiddler_str);
+    // 1. Try to get TiddlyWiki tiddler JSON
+    if !data.contains_key("text/vnd.tiddler") {
+        let tiddler_type = NSString::from_str(NS_PASTEBOARD_TYPE_TIDDLER);
+        if let Some(tiddler) = pasteboard.stringForType(&tiddler_type) {
+            let tiddler_str = tiddler.to_string();
+            if !tiddler_str.is_empty() {
+                eprintln!("[TiddlyDesktop] macOS: Got tiddler data!");
+                types.push("text/vnd.tiddler".to_string());
+                data.insert("text/vnd.tiddler".to_string(), tiddler_str.clone());
+                types.push("text/plain".to_string());
+                data.insert("text/plain".to_string(), tiddler_str);
+            }
         }
     }
 
@@ -386,7 +640,7 @@ pub fn extract_pasteboard_content(pasteboard: &NSPasteboard) -> Option<DragConte
     if let Some(text) = pasteboard.stringForType(&text_type) {
         let text_str = text.to_string();
         if !text_str.is_empty() && !data.contains_key("text/plain") {
-            // Check if plain text looks like tiddler JSON (browser may not expose text/vnd.tiddler)
+            // Check if plain text looks like tiddler JSON
             let looks_like_tiddler_json = text_str.trim_start().starts_with('[')
                 && text_str.contains("\"title\"")
                 && (text_str.contains("\"text\"") || text_str.contains("\"fields\""));
@@ -414,7 +668,7 @@ pub fn extract_pasteboard_content(pasteboard: &NSPasteboard) -> Option<DragConte
     let html_type = NSString::from_str(NS_PASTEBOARD_TYPE_HTML);
     if let Some(html) = pasteboard.stringForType(&html_type) {
         let html_str = html.to_string();
-        if !html_str.is_empty() {
+        if !html_str.is_empty() && !data.contains_key("text/html") {
             types.push("text/html".to_string());
             data.insert("text/html".to_string(), html_str);
         }
@@ -438,7 +692,7 @@ pub fn extract_pasteboard_content(pasteboard: &NSPasteboard) -> Option<DragConte
 }
 
 /// Extract file paths from a drag pasteboard
-pub fn extract_file_paths(pasteboard: &NSPasteboard) -> Vec<String> {
+fn extract_file_paths(pasteboard: &NSPasteboard) -> Vec<String> {
     let mut paths = Vec::new();
 
     // Try public.file-url
@@ -458,7 +712,6 @@ pub fn extract_file_paths(pasteboard: &NSPasteboard) -> Vec<String> {
     if paths.is_empty() {
         let filenames_type = NSString::from_str("NSFilenamesPboardType");
         if let Some(filenames) = pasteboard.propertyListForType(&filenames_type) {
-            // filenames is an NSArray of NSStrings
             unsafe {
                 let filenames_ptr: *const AnyObject = &*filenames;
                 let array: &NSArray<NSString> = &*(filenames_ptr as *const NSArray<NSString>);
@@ -475,31 +728,8 @@ pub fn extract_file_paths(pasteboard: &NSPasteboard) -> Vec<String> {
     paths
 }
 
-/// Emit drag motion event
-pub fn emit_drag_motion(window_label: &str, x: f64, y: f64) {
-    if let Some(state) = DRAG_STATES.lock().unwrap().get(window_label) {
-        let state = state.lock().unwrap();
-        let _ = state.window.emit(
-            "td-drag-motion",
-            serde_json::json!({
-                "x": x,
-                "y": y,
-                "screenCoords": false
-            }),
-        );
-    }
-}
-
-/// Emit drag leave event
-pub fn emit_drag_leave(window_label: &str) {
-    if let Some(state) = DRAG_STATES.lock().unwrap().get(window_label) {
-        let state = state.lock().unwrap();
-        let _ = state.window.emit("td-drag-leave", ());
-    }
-}
-
 /// Emit drop events with content
-pub fn emit_drop_with_content(window_label: &str, x: f64, y: f64, content: DragContentData) {
+fn emit_drop_with_content(window_label: &str, x: f64, y: f64, content: DragContentData) {
     if let Some(state) = DRAG_STATES.lock().unwrap().get(window_label) {
         let state = state.lock().unwrap();
 
@@ -522,16 +752,11 @@ pub fn emit_drop_with_content(window_label: &str, x: f64, y: f64, content: DragC
         );
 
         let _ = state.window.emit("td-drag-content", &content);
-
-        eprintln!(
-            "[TiddlyDesktop] macOS: Emitted content drop with types: {:?}",
-            content.types
-        );
     }
 }
 
 /// Emit drop events with file paths
-pub fn emit_drop_with_files(window_label: &str, x: f64, y: f64, paths: Vec<String>) {
+fn emit_drop_with_files(window_label: &str, x: f64, y: f64, paths: Vec<String>) {
     if let Some(state) = DRAG_STATES.lock().unwrap().get(window_label) {
         let state = state.lock().unwrap();
 
@@ -558,11 +783,6 @@ pub fn emit_drop_with_files(window_label: &str, x: f64, y: f64, paths: Vec<Strin
             serde_json::json!({
                 "paths": paths
             }),
-        );
-
-        eprintln!(
-            "[TiddlyDesktop] macOS: Emitted file drop with {} paths",
-            paths.len()
         );
     }
 }

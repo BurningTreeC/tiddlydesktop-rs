@@ -1018,6 +1018,801 @@ fn find_webview2_content_hwnd(parent: HWND) -> Option<HWND> {
     find_deepest_chrome_window(parent, 0).map(|(hwnd, _)| hwnd)
 }
 
+// ============================================================================
+// Outgoing drag support (TiddlyWiki → external apps)
+// ============================================================================
+
+/// Data to be provided during an outgoing drag operation
+/// Matches MIME types used by TiddlyWiki5's drag-drop system
+#[derive(Clone, Debug, Default)]
+pub struct OutgoingDragData {
+    pub text_plain: Option<String>,
+    pub text_html: Option<String>,
+    pub text_vnd_tiddler: Option<String>,
+    pub text_uri_list: Option<String>,
+    pub text_x_moz_url: Option<String>,
+    pub url: Option<String>,
+}
+
+/// Global state for outgoing drag operation
+struct OutgoingDragState {
+    data: OutgoingDragData,
+    source_window_label: String,
+    data_was_requested: bool,
+}
+
+lazy_static::lazy_static! {
+    static ref OUTGOING_DRAG_STATE: Mutex<Option<OutgoingDragState>> = Mutex::new(None);
+}
+
+/// IDataObject vtable
+#[repr(C)]
+#[allow(non_snake_case)]
+struct IDataObjectVtbl {
+    // IUnknown
+    QueryInterface: unsafe extern "system" fn(*mut DataObjectImpl, *const GUID, *mut *mut std::ffi::c_void) -> HRESULT,
+    AddRef: unsafe extern "system" fn(*mut DataObjectImpl) -> u32,
+    Release: unsafe extern "system" fn(*mut DataObjectImpl) -> u32,
+    // IDataObject
+    GetData: unsafe extern "system" fn(*mut DataObjectImpl, *const FORMATETC, *mut STGMEDIUM) -> HRESULT,
+    GetDataHere: unsafe extern "system" fn(*mut DataObjectImpl, *const FORMATETC, *mut STGMEDIUM) -> HRESULT,
+    QueryGetData: unsafe extern "system" fn(*mut DataObjectImpl, *const FORMATETC) -> HRESULT,
+    GetCanonicalFormatEtc: unsafe extern "system" fn(*mut DataObjectImpl, *const FORMATETC, *mut FORMATETC) -> HRESULT,
+    SetData: unsafe extern "system" fn(*mut DataObjectImpl, *const FORMATETC, *const STGMEDIUM, i32) -> HRESULT,
+    EnumFormatEtc: unsafe extern "system" fn(*mut DataObjectImpl, u32, *mut *mut std::ffi::c_void) -> HRESULT,
+    DAdvise: unsafe extern "system" fn(*mut DataObjectImpl, *const FORMATETC, u32, *mut std::ffi::c_void, *mut u32) -> HRESULT,
+    DUnadvise: unsafe extern "system" fn(*mut DataObjectImpl, u32) -> HRESULT,
+    EnumDAdvise: unsafe extern "system" fn(*mut DataObjectImpl, *mut *mut std::ffi::c_void) -> HRESULT,
+}
+
+/// STGMEDIUM for data transfer
+#[repr(C)]
+#[allow(non_snake_case)]
+struct STGMEDIUM {
+    tymed: u32,
+    u: STGMEDIUM_u,
+    pUnkForRelease: *mut std::ffi::c_void,
+}
+
+#[repr(C)]
+#[derive(Copy, Clone)]
+union STGMEDIUM_u {
+    hBitmap: *mut std::ffi::c_void,
+    hMetaFilePict: *mut std::ffi::c_void,
+    hEnhMetaFile: *mut std::ffi::c_void,
+    hGlobal: *mut std::ffi::c_void,
+    lpszFileName: *mut u16,
+    pstm: *mut std::ffi::c_void,
+    pstg: *mut std::ffi::c_void,
+}
+
+impl Default for STGMEDIUM_u {
+    fn default() -> Self {
+        Self { hGlobal: std::ptr::null_mut() }
+    }
+}
+
+const IID_IDATAOBJECT: GUID = GUID::from_u128(0x0000010e_0000_0000_c000_000000000046);
+
+/// Our IDataObject implementation
+#[repr(C)]
+struct DataObjectImpl {
+    vtbl: *const IDataObjectVtbl,
+    ref_count: AtomicU32,
+    data: OutgoingDragData,
+    cf_tiddler: u16,
+    cf_html: u16,
+    cf_url_w: u16,
+    cf_moz_url: u16,
+}
+
+static DATAOBJECT_VTBL: IDataObjectVtbl = IDataObjectVtbl {
+    QueryInterface: DataObjectImpl::query_interface,
+    AddRef: DataObjectImpl::add_ref,
+    Release: DataObjectImpl::release,
+    GetData: DataObjectImpl::get_data,
+    GetDataHere: DataObjectImpl::get_data_here,
+    QueryGetData: DataObjectImpl::query_get_data,
+    GetCanonicalFormatEtc: DataObjectImpl::get_canonical_format_etc,
+    SetData: DataObjectImpl::set_data,
+    EnumFormatEtc: DataObjectImpl::enum_format_etc,
+    DAdvise: DataObjectImpl::d_advise,
+    DUnadvise: DataObjectImpl::d_unadvise,
+    EnumDAdvise: DataObjectImpl::enum_d_advise,
+};
+
+impl DataObjectImpl {
+    fn new(data: OutgoingDragData) -> *mut Self {
+        let obj = Box::new(Self {
+            vtbl: &DATAOBJECT_VTBL,
+            ref_count: AtomicU32::new(1),
+            data,
+            cf_tiddler: get_cf_tiddler(),
+            cf_html: get_cf_html(),
+            cf_url_w: get_cf_url_w(),
+            cf_moz_url: get_cf_moz_url(),
+        });
+        Box::into_raw(obj)
+    }
+
+    unsafe extern "system" fn query_interface(
+        this: *mut Self,
+        riid: *const GUID,
+        ppv: *mut *mut std::ffi::c_void,
+    ) -> HRESULT {
+        if ppv.is_null() {
+            return E_POINTER;
+        }
+        let iid = &*riid;
+        if *iid == IID_IUNKNOWN || *iid == IID_IDATAOBJECT {
+            Self::add_ref(this);
+            *ppv = this as *mut std::ffi::c_void;
+            S_OK
+        } else {
+            *ppv = std::ptr::null_mut();
+            E_NOINTERFACE
+        }
+    }
+
+    unsafe extern "system" fn add_ref(this: *mut Self) -> u32 {
+        (*this).ref_count.fetch_add(1, Ordering::SeqCst) + 1
+    }
+
+    unsafe extern "system" fn release(this: *mut Self) -> u32 {
+        let count = (*this).ref_count.fetch_sub(1, Ordering::SeqCst) - 1;
+        if count == 0 {
+            drop(Box::from_raw(this));
+        }
+        count
+    }
+
+    unsafe extern "system" fn get_data(
+        this: *mut Self,
+        pformatetc: *const FORMATETC,
+        pmedium: *mut STGMEDIUM,
+    ) -> HRESULT {
+        use windows::Win32::System::Memory::{GlobalAlloc, GLOBAL_ALLOC_FLAGS};
+
+        if pformatetc.is_null() || pmedium.is_null() {
+            return E_POINTER;
+        }
+
+        let obj = &*this;
+        let format = &*pformatetc;
+
+        // Mark data as requested
+        if let Ok(mut guard) = OUTGOING_DRAG_STATE.lock() {
+            if let Some(state) = guard.as_mut() {
+                state.data_was_requested = true;
+            }
+        }
+
+        let cf = format.cfFormat;
+        eprintln!("[TiddlyDesktop] Windows IDataObject::GetData called for format {}", cf);
+
+        // Determine which data to provide based on clipboard format
+        let data_bytes: Option<Vec<u8>> = if cf == CF_UNICODETEXT {
+            // Plain text as UTF-16LE with null terminator
+            obj.data.text_plain.as_ref().map(|s| {
+                let mut bytes: Vec<u8> = s.encode_utf16()
+                    .flat_map(|c| c.to_le_bytes())
+                    .collect();
+                bytes.extend_from_slice(&[0, 0]); // null terminator
+                bytes
+            })
+        } else if cf == obj.cf_tiddler {
+            // TiddlyWiki tiddler JSON as UTF-8
+            obj.data.text_vnd_tiddler.as_ref().map(|s| {
+                let mut bytes = s.as_bytes().to_vec();
+                bytes.push(0); // null terminator
+                bytes
+            })
+        } else if cf == obj.cf_html {
+            // HTML Format (Windows-specific with headers)
+            obj.data.text_html.as_ref().map(|html| {
+                create_html_format(html)
+            })
+        } else if cf == obj.cf_url_w {
+            // URL as UTF-16LE
+            obj.data.url.as_ref().map(|s| {
+                let mut bytes: Vec<u8> = s.encode_utf16()
+                    .flat_map(|c| c.to_le_bytes())
+                    .collect();
+                bytes.extend_from_slice(&[0, 0]);
+                bytes
+            })
+        } else if cf == obj.cf_moz_url {
+            // Mozilla URL format: URL\nTitle as UTF-16LE
+            obj.data.text_x_moz_url.as_ref().map(|url| {
+                let title = obj.data.text_plain.as_deref().unwrap_or("");
+                let full = format!("{}\n{}", url, title);
+                let mut bytes: Vec<u8> = full.encode_utf16()
+                    .flat_map(|c| c.to_le_bytes())
+                    .collect();
+                bytes.extend_from_slice(&[0, 0]);
+                bytes
+            })
+        } else {
+            None
+        };
+
+        if let Some(bytes) = data_bytes {
+            // Allocate global memory and copy data
+            let hglobal = GlobalAlloc(GLOBAL_ALLOC_FLAGS(0x0042), bytes.len()); // GMEM_MOVEABLE | GMEM_ZEROINIT
+            if hglobal.is_err() {
+                return HRESULT::from_win32(0x8007000E); // E_OUTOFMEMORY
+            }
+            let hglobal = hglobal.unwrap();
+
+            let ptr = GlobalLock(hglobal);
+            if ptr.is_null() {
+                return HRESULT::from_win32(0x8007000E);
+            }
+
+            std::ptr::copy_nonoverlapping(bytes.as_ptr(), ptr as *mut u8, bytes.len());
+            let _ = GlobalUnlock(hglobal);
+
+            (*pmedium).tymed = TYMED_HGLOBAL.0 as u32;
+            (*pmedium).u.hGlobal = hglobal.0 as *mut std::ffi::c_void;
+            (*pmedium).pUnkForRelease = std::ptr::null_mut();
+
+            eprintln!("[TiddlyDesktop] Windows IDataObject::GetData provided {} bytes for format {}", bytes.len(), cf);
+            S_OK
+        } else {
+            HRESULT::from_win32(0x80040064) // DV_E_FORMATETC
+        }
+    }
+
+    unsafe extern "system" fn get_data_here(
+        _this: *mut Self,
+        _pformatetc: *const FORMATETC,
+        _pmedium: *mut STGMEDIUM,
+    ) -> HRESULT {
+        HRESULT::from_win32(0x80040069) // DV_E_FORMATETC - not implemented
+    }
+
+    unsafe extern "system" fn query_get_data(
+        this: *mut Self,
+        pformatetc: *const FORMATETC,
+    ) -> HRESULT {
+        if pformatetc.is_null() {
+            return E_POINTER;
+        }
+
+        let obj = &*this;
+        let format = &*pformatetc;
+        let cf = format.cfFormat;
+
+        // Check if we support this format
+        let supported = (cf == CF_UNICODETEXT && obj.data.text_plain.is_some())
+            || (cf == obj.cf_tiddler && obj.data.text_vnd_tiddler.is_some())
+            || (cf == obj.cf_html && obj.data.text_html.is_some())
+            || (cf == obj.cf_url_w && obj.data.url.is_some())
+            || (cf == obj.cf_moz_url && obj.data.text_x_moz_url.is_some());
+
+        if supported {
+            S_OK
+        } else {
+            HRESULT::from_win32(0x80040064) // DV_E_FORMATETC
+        }
+    }
+
+    unsafe extern "system" fn get_canonical_format_etc(
+        _this: *mut Self,
+        _pformatetcin: *const FORMATETC,
+        pformatetcout: *mut FORMATETC,
+    ) -> HRESULT {
+        if !pformatetcout.is_null() {
+            (*pformatetcout).ptd = std::ptr::null_mut();
+        }
+        HRESULT::from_win32(0x00040003) // DATA_S_SAMEFORMATETC
+    }
+
+    unsafe extern "system" fn set_data(
+        _this: *mut Self,
+        _pformatetc: *const FORMATETC,
+        _pmedium: *const STGMEDIUM,
+        _frelease: i32,
+    ) -> HRESULT {
+        HRESULT::from_win32(0x80004001) // E_NOTIMPL
+    }
+
+    unsafe extern "system" fn enum_format_etc(
+        this: *mut Self,
+        dwdirection: u32,
+        ppenumformatetc: *mut *mut std::ffi::c_void,
+    ) -> HRESULT {
+        if ppenumformatetc.is_null() {
+            return E_POINTER;
+        }
+
+        if dwdirection != 1 {
+            // Only DATADIR_GET supported
+            return HRESULT::from_win32(0x80004001); // E_NOTIMPL
+        }
+
+        let obj = &*this;
+
+        // Build list of supported formats
+        let mut formats = Vec::new();
+
+        if obj.data.text_vnd_tiddler.is_some() {
+            formats.push(FORMATETC {
+                cfFormat: obj.cf_tiddler,
+                ptd: std::ptr::null_mut(),
+                dwAspect: DVASPECT_CONTENT.0 as u32,
+                lindex: -1,
+                tymed: TYMED_HGLOBAL.0 as u32,
+            });
+        }
+        if obj.data.url.is_some() {
+            formats.push(FORMATETC {
+                cfFormat: obj.cf_url_w,
+                ptd: std::ptr::null_mut(),
+                dwAspect: DVASPECT_CONTENT.0 as u32,
+                lindex: -1,
+                tymed: TYMED_HGLOBAL.0 as u32,
+            });
+        }
+        if obj.data.text_x_moz_url.is_some() {
+            formats.push(FORMATETC {
+                cfFormat: obj.cf_moz_url,
+                ptd: std::ptr::null_mut(),
+                dwAspect: DVASPECT_CONTENT.0 as u32,
+                lindex: -1,
+                tymed: TYMED_HGLOBAL.0 as u32,
+            });
+        }
+        if obj.data.text_html.is_some() {
+            formats.push(FORMATETC {
+                cfFormat: obj.cf_html,
+                ptd: std::ptr::null_mut(),
+                dwAspect: DVASPECT_CONTENT.0 as u32,
+                lindex: -1,
+                tymed: TYMED_HGLOBAL.0 as u32,
+            });
+        }
+        if obj.data.text_plain.is_some() {
+            formats.push(FORMATETC {
+                cfFormat: CF_UNICODETEXT,
+                ptd: std::ptr::null_mut(),
+                dwAspect: DVASPECT_CONTENT.0 as u32,
+                lindex: -1,
+                tymed: TYMED_HGLOBAL.0 as u32,
+            });
+        }
+
+        // Create enumerator
+        let enum_ptr = FormatEnumerator::new(formats);
+        *ppenumformatetc = enum_ptr as *mut std::ffi::c_void;
+
+        S_OK
+    }
+
+    unsafe extern "system" fn d_advise(
+        _this: *mut Self,
+        _pformatetc: *const FORMATETC,
+        _advf: u32,
+        _padvsink: *mut std::ffi::c_void,
+        _pdwconnection: *mut u32,
+    ) -> HRESULT {
+        HRESULT::from_win32(0x80040003) // OLE_E_ADVISENOTSUPPORTED
+    }
+
+    unsafe extern "system" fn d_unadvise(_this: *mut Self, _dwconnection: u32) -> HRESULT {
+        HRESULT::from_win32(0x80040003) // OLE_E_ADVISENOTSUPPORTED
+    }
+
+    unsafe extern "system" fn enum_d_advise(
+        _this: *mut Self,
+        _ppenumadvise: *mut *mut std::ffi::c_void,
+    ) -> HRESULT {
+        HRESULT::from_win32(0x80040003) // OLE_E_ADVISENOTSUPPORTED
+    }
+}
+
+/// Create Windows "HTML Format" clipboard data with required headers
+fn create_html_format(html: &str) -> Vec<u8> {
+    let header = "Version:0.9\r\nStartHTML:00000000\r\nEndHTML:00000000\r\nStartFragment:00000000\r\nEndFragment:00000000\r\n";
+    let prefix = "<!DOCTYPE html>\r\n<html>\r\n<body>\r\n<!--StartFragment-->";
+    let suffix = "<!--EndFragment-->\r\n</body>\r\n</html>";
+
+    let start_html = header.len();
+    let start_fragment = start_html + prefix.len();
+    let end_fragment = start_fragment + html.len();
+    let end_html = end_fragment + suffix.len();
+
+    let formatted = format!(
+        "Version:0.9\r\nStartHTML:{:08}\r\nEndHTML:{:08}\r\nStartFragment:{:08}\r\nEndFragment:{:08}\r\n{}{}{}",
+        start_html, end_html, start_fragment, end_fragment, prefix, html, suffix
+    );
+
+    let mut bytes = formatted.into_bytes();
+    bytes.push(0);
+    bytes
+}
+
+/// IEnumFORMATETC implementation
+#[repr(C)]
+#[allow(non_snake_case)]
+struct IEnumFORMATETCVtbl {
+    QueryInterface: unsafe extern "system" fn(*mut FormatEnumerator, *const GUID, *mut *mut std::ffi::c_void) -> HRESULT,
+    AddRef: unsafe extern "system" fn(*mut FormatEnumerator) -> u32,
+    Release: unsafe extern "system" fn(*mut FormatEnumerator) -> u32,
+    Next: unsafe extern "system" fn(*mut FormatEnumerator, u32, *mut FORMATETC, *mut u32) -> HRESULT,
+    Skip: unsafe extern "system" fn(*mut FormatEnumerator, u32) -> HRESULT,
+    Reset: unsafe extern "system" fn(*mut FormatEnumerator) -> HRESULT,
+    Clone: unsafe extern "system" fn(*mut FormatEnumerator, *mut *mut std::ffi::c_void) -> HRESULT,
+}
+
+const IID_IENUMFORMATETC: GUID = GUID::from_u128(0x00000103_0000_0000_c000_000000000046);
+
+#[repr(C)]
+struct FormatEnumerator {
+    vtbl: *const IEnumFORMATETCVtbl,
+    ref_count: AtomicU32,
+    formats: Vec<FORMATETC>,
+    index: AtomicU32,
+}
+
+static ENUM_FORMATETC_VTBL: IEnumFORMATETCVtbl = IEnumFORMATETCVtbl {
+    QueryInterface: FormatEnumerator::query_interface,
+    AddRef: FormatEnumerator::add_ref,
+    Release: FormatEnumerator::release,
+    Next: FormatEnumerator::next,
+    Skip: FormatEnumerator::skip,
+    Reset: FormatEnumerator::reset,
+    Clone: FormatEnumerator::clone_enum,
+};
+
+impl FormatEnumerator {
+    fn new(formats: Vec<FORMATETC>) -> *mut Self {
+        let obj = Box::new(Self {
+            vtbl: &ENUM_FORMATETC_VTBL,
+            ref_count: AtomicU32::new(1),
+            formats,
+            index: AtomicU32::new(0),
+        });
+        Box::into_raw(obj)
+    }
+
+    unsafe extern "system" fn query_interface(
+        this: *mut Self,
+        riid: *const GUID,
+        ppv: *mut *mut std::ffi::c_void,
+    ) -> HRESULT {
+        if ppv.is_null() {
+            return E_POINTER;
+        }
+        let iid = &*riid;
+        if *iid == IID_IUNKNOWN || *iid == IID_IENUMFORMATETC {
+            Self::add_ref(this);
+            *ppv = this as *mut std::ffi::c_void;
+            S_OK
+        } else {
+            *ppv = std::ptr::null_mut();
+            E_NOINTERFACE
+        }
+    }
+
+    unsafe extern "system" fn add_ref(this: *mut Self) -> u32 {
+        (*this).ref_count.fetch_add(1, Ordering::SeqCst) + 1
+    }
+
+    unsafe extern "system" fn release(this: *mut Self) -> u32 {
+        let count = (*this).ref_count.fetch_sub(1, Ordering::SeqCst) - 1;
+        if count == 0 {
+            drop(Box::from_raw(this));
+        }
+        count
+    }
+
+    unsafe extern "system" fn next(
+        this: *mut Self,
+        celt: u32,
+        rgelt: *mut FORMATETC,
+        pcelt_fetched: *mut u32,
+    ) -> HRESULT {
+        let obj = &*this;
+        let mut fetched = 0u32;
+        let mut index = obj.index.load(Ordering::SeqCst);
+
+        for i in 0..celt {
+            if index >= obj.formats.len() as u32 {
+                break;
+            }
+            if !rgelt.is_null() {
+                *rgelt.add(i as usize) = obj.formats[index as usize];
+            }
+            index += 1;
+            fetched += 1;
+        }
+
+        obj.index.store(index, Ordering::SeqCst);
+
+        if !pcelt_fetched.is_null() {
+            *pcelt_fetched = fetched;
+        }
+
+        if fetched == celt {
+            S_OK
+        } else {
+            HRESULT(1) // S_FALSE
+        }
+    }
+
+    unsafe extern "system" fn skip(this: *mut Self, celt: u32) -> HRESULT {
+        let obj = &*this;
+        let index = obj.index.fetch_add(celt, Ordering::SeqCst);
+        if index + celt <= obj.formats.len() as u32 {
+            S_OK
+        } else {
+            HRESULT(1) // S_FALSE
+        }
+    }
+
+    unsafe extern "system" fn reset(this: *mut Self) -> HRESULT {
+        (*this).index.store(0, Ordering::SeqCst);
+        S_OK
+    }
+
+    unsafe extern "system" fn clone_enum(
+        this: *mut Self,
+        ppenum: *mut *mut std::ffi::c_void,
+    ) -> HRESULT {
+        if ppenum.is_null() {
+            return E_POINTER;
+        }
+        let obj = &*this;
+        let clone = FormatEnumerator::new(obj.formats.clone());
+        (*clone).index.store(obj.index.load(Ordering::SeqCst), Ordering::SeqCst);
+        *ppenum = clone as *mut std::ffi::c_void;
+        S_OK
+    }
+}
+
+/// IDropSource implementation
+#[repr(C)]
+#[allow(non_snake_case)]
+struct IDropSourceVtbl {
+    QueryInterface: unsafe extern "system" fn(*mut DropSourceImpl, *const GUID, *mut *mut std::ffi::c_void) -> HRESULT,
+    AddRef: unsafe extern "system" fn(*mut DropSourceImpl) -> u32,
+    Release: unsafe extern "system" fn(*mut DropSourceImpl) -> u32,
+    QueryContinueDrag: unsafe extern "system" fn(*mut DropSourceImpl, i32, u32) -> HRESULT,
+    GiveFeedback: unsafe extern "system" fn(*mut DropSourceImpl, u32) -> HRESULT,
+}
+
+const IID_IDROPSOURCE: GUID = GUID::from_u128(0x00000121_0000_0000_c000_000000000046);
+
+const DRAGDROP_S_DROP: HRESULT = HRESULT(0x00040100u32 as i32);
+const DRAGDROP_S_CANCEL: HRESULT = HRESULT(0x00040101u32 as i32);
+const DRAGDROP_S_USEDEFAULTCURSORS: HRESULT = HRESULT(0x00040102u32 as i32);
+
+/// MK_LBUTTON constant
+const MK_LBUTTON: u32 = 0x0001;
+
+#[repr(C)]
+struct DropSourceImpl {
+    vtbl: *const IDropSourceVtbl,
+    ref_count: AtomicU32,
+    window: WebviewWindow,
+    window_hwnd: HWND,
+    last_inside_window: AtomicBool,
+}
+
+static DROPSOURCE_VTBL: IDropSourceVtbl = IDropSourceVtbl {
+    QueryInterface: DropSourceImpl::query_interface,
+    AddRef: DropSourceImpl::add_ref,
+    Release: DropSourceImpl::release,
+    QueryContinueDrag: DropSourceImpl::query_continue_drag,
+    GiveFeedback: DropSourceImpl::give_feedback,
+};
+
+impl DropSourceImpl {
+    fn new(window: WebviewWindow, window_hwnd: HWND) -> *mut Self {
+        let obj = Box::new(Self {
+            vtbl: &DROPSOURCE_VTBL,
+            ref_count: AtomicU32::new(1),
+            window,
+            window_hwnd,
+            last_inside_window: AtomicBool::new(true),
+        });
+        Box::into_raw(obj)
+    }
+
+    unsafe extern "system" fn query_interface(
+        this: *mut Self,
+        riid: *const GUID,
+        ppv: *mut *mut std::ffi::c_void,
+    ) -> HRESULT {
+        if ppv.is_null() {
+            return E_POINTER;
+        }
+        let iid = &*riid;
+        if *iid == IID_IUNKNOWN || *iid == IID_IDROPSOURCE {
+            Self::add_ref(this);
+            *ppv = this as *mut std::ffi::c_void;
+            S_OK
+        } else {
+            *ppv = std::ptr::null_mut();
+            E_NOINTERFACE
+        }
+    }
+
+    unsafe extern "system" fn add_ref(this: *mut Self) -> u32 {
+        (*this).ref_count.fetch_add(1, Ordering::SeqCst) + 1
+    }
+
+    unsafe extern "system" fn release(this: *mut Self) -> u32 {
+        let count = (*this).ref_count.fetch_sub(1, Ordering::SeqCst) - 1;
+        if count == 0 {
+            drop(Box::from_raw(this));
+        }
+        count
+    }
+
+    unsafe extern "system" fn query_continue_drag(
+        _this: *mut Self,
+        f_escape_pressed: i32,
+        grf_key_state: u32,
+    ) -> HRESULT {
+        // Cancel on Escape
+        if f_escape_pressed != 0 {
+            eprintln!("[TiddlyDesktop] Windows IDropSource: Escape pressed, canceling drag");
+            return DRAGDROP_S_CANCEL;
+        }
+
+        // Drop when button released
+        if (grf_key_state & MK_LBUTTON) == 0 {
+            eprintln!("[TiddlyDesktop] Windows IDropSource: Button released, dropping");
+            return DRAGDROP_S_DROP;
+        }
+
+        S_OK
+    }
+
+    unsafe extern "system" fn give_feedback(
+        this: *mut Self,
+        _dw_effect: u32,
+    ) -> HRESULT {
+        use windows::Win32::UI::WindowsAndMessaging::{GetCursorPos, GetWindowRect};
+
+        let obj = &*this;
+
+        // Get current cursor position
+        let mut cursor_pos = POINT { x: 0, y: 0 };
+        if GetCursorPos(&mut cursor_pos).is_err() {
+            return DRAGDROP_S_USEDEFAULTCURSORS;
+        }
+
+        // Get window rect
+        let mut window_rect: windows::Win32::Foundation::RECT = std::mem::zeroed();
+        if GetWindowRect(obj.window_hwnd, &mut window_rect).is_err() {
+            return DRAGDROP_S_USEDEFAULTCURSORS;
+        }
+
+        // Check if cursor is inside window
+        let inside = cursor_pos.x >= window_rect.left
+            && cursor_pos.x < window_rect.right
+            && cursor_pos.y >= window_rect.top
+            && cursor_pos.y < window_rect.bottom;
+
+        let was_inside = obj.last_inside_window.swap(inside, Ordering::SeqCst);
+
+        if inside {
+            // Convert to client coordinates
+            let mut client_pos = cursor_pos;
+            let _ = ScreenToClient(obj.window_hwnd, &mut client_pos);
+
+            if !was_inside {
+                eprintln!("[TiddlyDesktop] Windows IDropSource: Re-entered window at ({}, {})", client_pos.x, client_pos.y);
+            }
+
+            // Emit motion event
+            let _ = obj.window.emit(
+                "td-drag-motion",
+                serde_json::json!({
+                    "x": client_pos.x,
+                    "y": client_pos.y,
+                    "isOurDrag": true,
+                    "fromPolling": true,
+                    "windowLabel": obj.window.label()
+                }),
+            );
+        } else if was_inside {
+            // Just left the window
+            eprintln!("[TiddlyDesktop] Windows IDropSource: Left window");
+            let _ = obj.window.emit(
+                "td-drag-leave",
+                serde_json::json!({
+                    "isOurDrag": true,
+                    "windowLabel": obj.window.label()
+                }),
+            );
+        }
+
+        DRAGDROP_S_USEDEFAULTCURSORS
+    }
+}
+
+use std::sync::atomic::AtomicBool;
+
+/// Start a native drag operation (called from JavaScript when pointer leaves window during internal drag)
+pub fn start_native_drag(window: &WebviewWindow, data: OutgoingDragData, _x: i32, _y: i32, _image_data: Option<Vec<u8>>, _image_offset_x: Option<i32>, _image_offset_y: Option<i32>) -> Result<(), String> {
+    use windows::Win32::System::Ole::DoDragDrop;
+
+    let label = window.label().to_string();
+    eprintln!(
+        "[TiddlyDesktop] Windows: start_native_drag called for window '{}'",
+        label
+    );
+
+    // Store drag state
+    {
+        let mut guard = OUTGOING_DRAG_STATE.lock().map_err(|e| e.to_string())?;
+        *guard = Some(OutgoingDragState {
+            data: data.clone(),
+            source_window_label: label.clone(),
+            data_was_requested: false,
+        });
+    }
+
+    // Get HWND
+    let hwnd = window.hwnd().map_err(|e| format!("Failed to get HWND: {}", e))?;
+    let hwnd = HWND(hwnd.0 as *mut _);
+
+    // Find the Chrome_WidgetWin for better drag source
+    let target_hwnd = find_webview2_content_hwnd(hwnd).unwrap_or(hwnd);
+
+    // Create COM objects
+    let data_object_ptr = DataObjectImpl::new(data);
+    let drop_source_ptr = DropSourceImpl::new(window.clone(), target_hwnd);
+
+    eprintln!("[TiddlyDesktop] Windows: Starting DoDragDrop");
+
+    // DoDragDrop is blocking - it runs its own message loop
+    let result = unsafe {
+        let data_object: IDataObject = std::mem::transmute(data_object_ptr);
+        let drop_source: windows::Win32::System::Ole::IDropSource = std::mem::transmute(drop_source_ptr);
+
+        let mut effect: DROPEFFECT = DROPEFFECT_NONE;
+        let hr = DoDragDrop(
+            &data_object,
+            &drop_source,
+            DROPEFFECT_COPY | DROPEFFECT_MOVE | DROPEFFECT_LINK,
+            &mut effect,
+        );
+
+        eprintln!("[TiddlyDesktop] Windows: DoDragDrop returned {:?}, effect {:?}", hr, effect);
+        hr
+    };
+
+    // Get whether data was requested and emit end event
+    let data_was_requested = OUTGOING_DRAG_STATE
+        .lock()
+        .ok()
+        .and_then(|g| g.as_ref().map(|s| s.data_was_requested))
+        .unwrap_or(false);
+
+    let _ = window.emit(
+        "td-drag-end",
+        serde_json::json!({
+            "data_was_requested": data_was_requested
+        }),
+    );
+
+    // Clean up state
+    if let Ok(mut guard) = OUTGOING_DRAG_STATE.lock() {
+        *guard = None;
+    }
+
+    if result.is_ok() {
+        Ok(())
+    } else {
+        Err(format!("DoDragDrop failed: {:?}", result))
+    }
+}
+
 /// Set up drag-drop handling for a webview window
 pub fn setup_drag_handlers(window: &WebviewWindow) {
     eprintln!(

@@ -39,6 +39,7 @@ pub mod windows_job;
 #[cfg(target_os = "linux")]
 mod linux;
 
+
 #[cfg(target_os = "macos")]
 mod macos;
 
@@ -54,4 +55,98 @@ pub fn setup_drag_handlers(window: &WebviewWindow) {
 
     #[cfg(target_os = "macos")]
     macos::setup_drag_handlers(window);
+}
+
+/// Data for starting a native drag operation (cross-platform structure)
+/// Matches MIME types used by TiddlyWiki5's drag-drop system
+#[derive(Clone, Debug, Default, serde::Deserialize)]
+pub struct NativeDragData {
+    pub text_plain: Option<String>,
+    pub text_html: Option<String>,
+    pub text_vnd_tiddler: Option<String>,
+    pub text_uri_list: Option<String>,
+    /// Mozilla URL format: data:text/vnd.tiddler,<url-encoded-json>
+    pub text_x_moz_url: Option<String>,
+    /// Standard URL type: data:text/vnd.tiddler,<url-encoded-json>
+    pub url: Option<String>,
+}
+
+/// Start a native drag operation (called from JavaScript when pointer leaves window during internal drag)
+#[cfg(target_os = "linux")]
+pub fn start_native_drag_impl(window: &WebviewWindow, data: NativeDragData, x: i32, y: i32, image_data: Option<Vec<u8>>, image_offset_x: Option<i32>, image_offset_y: Option<i32>) -> Result<(), String> {
+    let outgoing_data = linux::OutgoingDragData {
+        text_plain: data.text_plain,
+        text_html: data.text_html,
+        text_vnd_tiddler: data.text_vnd_tiddler,
+        text_uri_list: data.text_uri_list,
+        text_x_moz_url: data.text_x_moz_url,
+        url: data.url,
+    };
+    linux::start_native_drag(window, outgoing_data, x, y, image_data, image_offset_x, image_offset_y)
+}
+
+#[cfg(target_os = "windows")]
+pub fn start_native_drag_impl(window: &WebviewWindow, data: NativeDragData, x: i32, y: i32, image_data: Option<Vec<u8>>, image_offset_x: Option<i32>, image_offset_y: Option<i32>) -> Result<(), String> {
+    let outgoing_data = windows::OutgoingDragData {
+        text_plain: data.text_plain,
+        text_html: data.text_html,
+        text_vnd_tiddler: data.text_vnd_tiddler,
+        text_uri_list: data.text_uri_list,
+        text_x_moz_url: data.text_x_moz_url,
+        url: data.url,
+    };
+    windows::start_native_drag(window, outgoing_data, x, y, image_data, image_offset_x, image_offset_y)
+}
+
+#[cfg(target_os = "macos")]
+pub fn start_native_drag_impl(window: &WebviewWindow, data: NativeDragData, x: i32, y: i32, image_data: Option<Vec<u8>>, image_offset_x: Option<i32>, image_offset_y: Option<i32>) -> Result<(), String> {
+    let outgoing_data = macos::OutgoingDragData {
+        text_plain: data.text_plain,
+        text_html: data.text_html,
+        text_vnd_tiddler: data.text_vnd_tiddler,
+        text_uri_list: data.text_uri_list,
+        text_x_moz_url: data.text_x_moz_url,
+        url: data.url,
+    };
+    macos::start_native_drag(window, outgoing_data, x, y, image_data, image_offset_x, image_offset_y)
+}
+
+/// Prepare for a potential native drag (called when internal drag starts)
+#[cfg(target_os = "linux")]
+pub fn prepare_native_drag_impl(window: &WebviewWindow, data: NativeDragData) -> Result<(), String> {
+    let outgoing_data = linux::OutgoingDragData {
+        text_plain: data.text_plain,
+        text_html: data.text_html,
+        text_vnd_tiddler: data.text_vnd_tiddler,
+        text_uri_list: data.text_uri_list,
+        text_x_moz_url: data.text_x_moz_url,
+        url: data.url,
+    };
+    linux::prepare_native_drag(window, outgoing_data)
+}
+
+#[cfg(target_os = "windows")]
+pub fn prepare_native_drag_impl(_window: &WebviewWindow, _data: NativeDragData) -> Result<(), String> {
+    Ok(()) // No-op for Windows currently
+}
+
+#[cfg(target_os = "macos")]
+pub fn prepare_native_drag_impl(_window: &WebviewWindow, _data: NativeDragData) -> Result<(), String> {
+    Ok(()) // No-op for macOS currently
+}
+
+/// Clean up native drag preparation (called when internal drag ends normally)
+#[cfg(target_os = "linux")]
+pub fn cleanup_native_drag_impl() -> Result<(), String> {
+    linux::cleanup_native_drag()
+}
+
+#[cfg(target_os = "windows")]
+pub fn cleanup_native_drag_impl() -> Result<(), String> {
+    Ok(()) // No-op for Windows currently
+}
+
+#[cfg(target_os = "macos")]
+pub fn cleanup_native_drag_impl() -> Result<(), String> {
+    Ok(()) // No-op for macOS currently
 }

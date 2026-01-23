@@ -673,6 +673,38 @@ fn show_find_in_page_impl(window: &tauri::WebviewWindow) -> Result<(), String> {
     Ok(())
 }
 
+/// Start a native OS drag operation with the provided data
+/// Called from JavaScript when the pointer leaves the window during an internal drag
+#[tauri::command]
+fn start_native_drag(
+    window: tauri::WebviewWindow,
+    data: drag_drop::NativeDragData,
+    x: i32,
+    y: i32,
+    image_data: Option<Vec<u8>>,
+    image_offset_x: Option<i32>,
+    image_offset_y: Option<i32>,
+) -> Result<(), String> {
+    drag_drop::start_native_drag_impl(&window, data, x, y, image_data, image_offset_x, image_offset_y)
+}
+
+/// Prepare for a potential native drag operation
+/// Called from JavaScript when an internal drag starts
+#[tauri::command]
+fn prepare_native_drag(
+    window: tauri::WebviewWindow,
+    data: drag_drop::NativeDragData,
+) -> Result<(), String> {
+    drag_drop::prepare_native_drag_impl(&window, data)
+}
+
+/// Clean up native drag preparation
+/// Called from JavaScript when an internal drag ends normally (within the window)
+#[tauri::command]
+fn cleanup_native_drag() -> Result<(), String> {
+    drag_drop::cleanup_native_drag_impl()
+}
+
 /// Run a shell command with optional confirmation dialog
 /// Security: Shows a confirmation dialog by default to prevent unauthorized execution
 #[tauri::command]
@@ -3168,7 +3200,10 @@ pub fn run() {
             run_command,
             show_find_in_page,
             wiki_storage::js_log,
-            clipboard::get_clipboard_content
+            clipboard::get_clipboard_content,
+            start_native_drag,
+            prepare_native_drag,
+            cleanup_native_drag
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

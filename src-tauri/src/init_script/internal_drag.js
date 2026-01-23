@@ -10,6 +10,32 @@
 (function(TD) {
     'use strict';
 
+    // Skip entirely for the main launcher window - it has no drag-drop functionality
+    if (window.__WINDOW_LABEL__ === 'main') {
+        return;
+    }
+
+    // Helper function to log to terminal via Tauri
+    function log(message) {
+        if (window.__TAURI__ && window.__TAURI__.core && window.__TAURI__.core.invoke) {
+            window.__TAURI__.core.invoke("js_log", { message: "[internal_drag] " + message });
+        }
+    }
+
+    // Set up window-specific Tauri event listener
+    // This ensures we only receive events for THIS window, not all windows
+    var tauriListen = null;
+    var currentWindowLabel = window.__WINDOW_LABEL__ || 'unknown';
+    function setupTauriListen() {
+        if (tauriListen) return; // Already set up
+        if (window.__TAURI__ && window.__TAURI__.window) {
+            var currentWindow = window.__TAURI__.window.getCurrentWindow();
+            tauriListen = currentWindow.listen.bind(currentWindow);
+            currentWindowLabel = window.__WINDOW_LABEL__ || 'unknown';
+            log('Tauri window-specific listen set up for: ' + currentWindowLabel);
+        }
+    }
+
     // Store drag data globally since dataTransfer may not work reliably
     window.__tiddlyDesktopDragData = null;
     var internalDragSource = null;
@@ -27,6 +53,14 @@
     var capturedSelection = null;  // Selection captured on pointerdown
     var capturedSelectionHtml = null;
     var capturedPointerId = null;  // Track which pointer we're handling
+    var nativeDragStarting = false;  // Flag to prevent multiple native drag starts
+    var nativeDragFromSelf = false;  // True when we started a native drag that might re-enter
+    var nativeDragData = null;  // Saved drag data for re-entry detection
+    var savedDragImage = null;  // Saved drag image element for re-entry
+    var savedDragInProgress = null;  // Saved $tw.dragInProgress for re-entry
+    var savedDragSource = null;  // Saved internalDragSource element for re-entry
+    var pollingActive = false;  // True when Rust GDK polling is handling drag tracking
+    var dragCancelledByEscape = false;  // True when Escape was pressed to cancel drag
 
     // Extract background color from element or its ancestors
     function getBackgroundColor(element) {
@@ -54,6 +88,30 @@
             el = el.parentElement;
         }
         return "#333";
+    }
+
+    // Copy all computed styles from source to target element
+    // This ensures the cloned element looks identical to the original
+    function copyComputedStyles(source, target) {
+        var computedStyle = window.getComputedStyle(source);
+        for (var i = 0; i < computedStyle.length; i++) {
+            var prop = computedStyle[i];
+            try {
+                target.style.setProperty(prop, computedStyle.getPropertyValue(prop));
+            } catch (e) {
+                // Some properties may not be settable
+            }
+        }
+    }
+
+    // Recursively copy computed styles for element and all descendants
+    function deepCopyComputedStyles(source, target) {
+        copyComputedStyles(source, target);
+        var sourceChildren = source.children;
+        var targetChildren = target.children;
+        for (var i = 0; i < sourceChildren.length && i < targetChildren.length; i++) {
+            deepCopyComputedStyles(sourceChildren[i], targetChildren[i]);
+        }
     }
 
     function createDragImage(sourceElement, clientX, clientY, selectedText) {
@@ -92,22 +150,15 @@
             dragImageOffsetX = 10;
             dragImageOffsetY = 10;
         } else {
-            // For element drags, clone the element
+            // For element drags, clone the element with all computed styles
             dragEl = sourceElement.cloneNode(true);
+            // Copy all computed styles from source to ensure identical appearance
+            deepCopyComputedStyles(sourceElement, dragEl);
+            // Override with drag-specific positioning and effects
             dragEl.style.position = "fixed";
             dragEl.style.pointerEvents = "none";
             dragEl.style.zIndex = "999999";
             dragEl.style.opacity = "0.7";
-            dragEl.style.transform = "scale(0.9)";
-            dragEl.style.maxWidth = "300px";
-            dragEl.style.maxHeight = "100px";
-            dragEl.style.overflow = "hidden";
-            dragEl.style.whiteSpace = "nowrap";
-            dragEl.style.textOverflow = "ellipsis";
-            dragEl.style.background = getBackgroundColor(sourceElement);
-            dragEl.style.padding = "4px 8px";
-            dragEl.style.borderRadius = "4px";
-            dragEl.style.boxShadow = "0 2px 8px rgba(0,0,0,0.3)";
 
             var rect = sourceElement.getBoundingClientRect();
             dragImageOffsetX = clientX - rect.left;
@@ -471,27 +522,41 @@
 
     // Helper to cancel drag
     function cancelDrag(reason) {
-        if (!internalDragActive && !pointerDragStarted) return;
+        if (!internalDragActive && !pointerDragStarted && !nativeDragFromSelf) return;
 
+        log('[TiddlyDesktop] cancelDrag called: ' + reason);
+
+        // Create a DataTransfer with dropEffect="none" to signal cancellation
+        // We use a wrapper object since DataTransfer.dropEffect may be read-only
         var dt = pointerDragDataTransfer || new DataTransfer();
+        var cancelDt = {
+            dropEffect: "none",
+            effectAllowed: dt.effectAllowed || "none",
+            types: dt.types || [],
+            getData: function(type) { return dt.getData ? dt.getData(type) : ""; },
+            setData: function(type, data) { if (dt.setData) dt.setData(type, data); },
+            items: dt.items,
+            files: dt.files
+        };
 
         if (lastDragOverTarget) {
-            var leaveEvent = createSyntheticDragEvent("dragleave", { relatedTarget: null }, dt);
+            var leaveEvent = createSyntheticDragEvent("dragleave", { relatedTarget: null }, cancelDt);
             lastDragOverTarget.dispatchEvent(leaveEvent);
         }
 
+        // Remove visual feedback classes first
         document.querySelectorAll(".tc-dragover").forEach(function(el) {
             el.classList.remove("tc-dragover");
-            var endEvent = createSyntheticDragEvent("dragend", {}, dt);
-            el.dispatchEvent(endEvent);
         });
 
         document.querySelectorAll(".tc-dragging").forEach(function(el) {
             el.classList.remove("tc-dragging");
         });
 
+        // Dispatch dragend to the source element (TiddlyWiki listens for this)
+        // IMPORTANT: Do this while $tw.dragInProgress is still set
         if (internalDragSource) {
-            var endEvent = createSyntheticDragEvent("dragend", {}, dt);
+            var endEvent = createSyntheticDragEvent("dragend", {}, cancelDt);
             internalDragSource.dispatchEvent(endEvent);
 
             // Release pointer capture
@@ -502,8 +567,14 @@
             }
         }
 
+        // Clear TiddlyWiki state AFTER dispatching events
         if (typeof $tw !== "undefined") {
             $tw.dragInProgress = null;
+        }
+
+        // Clean up native drag state on Rust side
+        if (nativeDragFromSelf || nativeDragStarting) {
+            cleanupNativeDrag();
         }
 
         window.__tiddlyDesktopDragData = null;
@@ -518,6 +589,17 @@
         capturedSelection = null;
         capturedSelectionHtml = null;
         capturedPointerId = null;
+        nativeDragStarting = false;
+        nativeDragFromSelf = false;
+        nativeDragData = null;
+        savedDragInProgress = null;
+        savedDragSource = null;
+        pollingActive = false;
+        // Destroy saved drag image
+        if (savedDragImage && savedDragImage.parentNode) {
+            savedDragImage.parentNode.removeChild(savedDragImage);
+        }
+        savedDragImage = null;
         removeDragImage();
         document.body.style.userSelect = "";
         document.body.style.webkitUserSelect = "";
@@ -604,6 +686,11 @@
             return;
         }
 
+        // If transitioning to native drag, don't clean up - we need the drag image
+        if (nativeDragStarting || nativeDragFromSelf) {
+            return;
+        }
+
         window.__tiddlyDesktopDragData = null;
         window.__tiddlyDesktopEffectAllowed = null;
         internalDragSource = null;
@@ -644,10 +731,143 @@
 
     // Pointermove to start drag and track position
     document.addEventListener("pointermove", function(event) {
+        // Debug: log all pointermove events when in native drag mode
+        if (nativeDragFromSelf) {
+            log('[pointermove] nativeDragFromSelf=true, x=' + event.clientX + ', y=' + event.clientY +
+                ', capturedPointerId=' + capturedPointerId + ', event.pointerId=' + event.pointerId +
+                ', pointerDownPos=' + !!pointerDownPos + ', internalDragActive=' + internalDragActive +
+                ', pollingActive=' + pollingActive);
+        }
+
+        // If GDK polling is handling the drag, don't interfere
+        // Polling provides accurate tracking when pointer is outside window with button held
+        if (pollingActive && nativeDragFromSelf) {
+            return;
+        }
+
         // Only handle the pointer we're tracking
         if (capturedPointerId !== null && event.pointerId !== capturedPointerId) return;
 
         if (!pointerDownPos) return;
+
+        // Check for re-entry from native drag via pointer capture
+        // This handles the case where GTK drag-end fired immediately (no valid GDK event)
+        // and we're tracking pointer position via capture instead
+        // NOTE: This is a fallback - GDK polling is the primary mechanism
+        if (nativeDragFromSelf && !internalDragActive && !pollingActive) {
+            var insideWindow = event.clientX >= 0 && event.clientY >= 0 &&
+                              event.clientX <= window.innerWidth &&
+                              event.clientY <= window.innerHeight;
+            if (insideWindow) {
+                log('[TiddlyDesktop] Re-entry detected via pointer capture at ' + event.clientX + ', ' + event.clientY);
+
+                // Focus the window so it can receive events properly
+                if (window.__TAURI__ && window.__TAURI__.window) {
+                    window.__TAURI__.window.getCurrentWindow().setFocus().catch(function(err) {
+                        log('[TiddlyDesktop] Failed to focus window on re-entry: ' + err);
+                    });
+                }
+
+                // Restore the drag data if we still have it
+                if (nativeDragData) {
+                    window.__tiddlyDesktopDragData = nativeDragData;
+                }
+
+                // Restore drag source element
+                if (savedDragSource) {
+                    internalDragSource = savedDragSource;
+                }
+
+                // Restore the saved drag image if it's not currently in the DOM
+                // First, clean up any existing drag image to prevent duplicates
+                log('[TiddlyDesktop] Re-entry via capture: savedDragImage=' + !!savedDragImage +
+                    ', inDOM=' + !!(savedDragImage && savedDragImage.parentNode) +
+                    ', internalDragImage=' + !!internalDragImage +
+                    ', internalInDOM=' + !!(internalDragImage && internalDragImage.parentNode));
+
+                // Remove any existing internalDragImage that's different from savedDragImage
+                if (internalDragImage && internalDragImage !== savedDragImage && internalDragImage.parentNode) {
+                    log('[TiddlyDesktop] Re-entry via capture: removing old internalDragImage from DOM');
+                    internalDragImage.parentNode.removeChild(internalDragImage);
+                    internalDragImage = null;
+                }
+
+                if (savedDragImage && !savedDragImage.parentNode) {
+                    document.body.appendChild(savedDragImage);
+                    internalDragImage = savedDragImage;
+                    savedDragImage = null;  // Clear to prevent duplicates
+                    log('[TiddlyDesktop] Re-entry via capture: drag image restored to DOM');
+                } else if (savedDragImage && savedDragImage.parentNode) {
+                    // Element is already in DOM (e.g., during async capture) - just use it
+                    internalDragImage = savedDragImage;
+                    savedDragImage = null;
+                    log('[TiddlyDesktop] Re-entry via capture: drag image already in DOM, using it');
+                } else if (!savedDragImage) {
+                    log('[TiddlyDesktop] Re-entry via capture: WARNING - no savedDragImage to restore!');
+                }
+
+                // Create a DataTransfer with our data for synthetic events
+                pointerDragDataTransfer = new DataTransfer();
+                var dataToUse = nativeDragData || window.__tiddlyDesktopDragData;
+                if (dataToUse) {
+                    for (var type in dataToUse) {
+                        if (dataToUse[type]) {
+                            try {
+                                pointerDragDataTransfer.setData(type, dataToUse[type]);
+                            } catch (e) {}
+                        }
+                    }
+                }
+
+                // Update drag image position
+                if (internalDragImage) {
+                    internalDragImage.style.left = (event.clientX - dragImageOffsetX) + "px";
+                    internalDragImage.style.top = (event.clientY - dragImageOffsetY) + "px";
+                }
+
+                // Restore TiddlyWiki's drag state
+                var dragElement = null;
+                if (typeof $tw !== "undefined") {
+                    dragElement = savedDragInProgress || savedDragSource || internalDragSource;
+                    if (dragElement) {
+                        $tw.dragInProgress = dragElement;
+                        $tw.utils.addClass(dragElement, "tc-dragging");
+                        log('[TiddlyDesktop] Re-entry via capture: restored $tw.dragInProgress');
+                    }
+                }
+
+                // Note: We don't dispatch dragstart here - the drag was already started before leaving.
+                // We just need to continue with dragenter/dragover to activate drop zones.
+
+                // Dispatch dragenter and dragover to the element under cursor
+                var elementInfo = getElementAtPoint(event.clientX, event.clientY);
+                if (elementInfo.target) {
+                    var enterEvent = createSyntheticDragEvent("dragenter", {
+                        clientX: event.clientX,
+                        clientY: event.clientY,
+                        relatedTarget: null
+                    }, pointerDragDataTransfer);
+                    elementInfo.target.dispatchEvent(enterEvent);
+                    lastDragOverTarget = elementInfo.target;
+
+                    var overEvent = createSyntheticDragEvent("dragover", {
+                        clientX: event.clientX,
+                        clientY: event.clientY
+                    }, pointerDragDataTransfer);
+                    elementInfo.target.dispatchEvent(overEvent);
+                }
+
+                // Mark as active again
+                internalDragActive = true;
+                pointerDragStarted = true;
+                nativeDragStarting = false;
+
+                // Don't return - continue with normal drag tracking
+            } else {
+                // Still outside window, just update tracking
+                return;
+            }
+        }
 
         var dx = event.clientX - pointerDownPos.x;
         var dy = event.clientY - pointerDownPos.y;
@@ -716,6 +936,10 @@
             window.__tiddlyDesktopEffectAllowed = pointerDragDataTransfer.effectAllowed || "all";
             createDragImage(internalDragSource, event.clientX, event.clientY, isTextDrag ? selectedText : null);
 
+            // Prepare native drag in case pointer leaves window
+            // Do this AFTER dragstart event so TiddlyWiki has set the data
+            prepareNativeDrag();
+
             var elementInfo = getElementAtPoint(event.clientX, event.clientY);
             if (elementInfo.target) {
                 var enterEvent = createSyntheticDragEvent("dragenter", {
@@ -731,6 +955,19 @@
 
         // Drag is in progress - update position and target
         if (!internalDragSource) return;
+
+        // Check if pointer has left the window bounds - start native drag
+        var outsideWindow = event.clientX < 0 || event.clientY < 0 ||
+                           event.clientX > window.innerWidth ||
+                           event.clientY > window.innerHeight;
+        if (outsideWindow) {
+            log('[TiddlyDesktop] Pointer left window bounds at ' + event.clientX + ', ' + event.clientY +
+                ', nativeDragFromSelf=' + nativeDragFromSelf +
+                ', nativeDragStarting=' + nativeDragStarting +
+                ', internalDragActive=' + internalDragActive);
+            startNativeDrag(event.clientX, event.clientY);
+            return;
+        }
 
         updateDragImagePosition(event.clientX, event.clientY);
 
@@ -771,6 +1008,14 @@
 
     // Pointerup to complete drop
     document.addEventListener("pointerup", function(event) {
+        // Debug: log all pointerup events when relevant
+        if (nativeDragFromSelf || pointerDragStarted) {
+            log('[pointerup] x=' + event.clientX + ', y=' + event.clientY +
+                ', nativeDragFromSelf=' + nativeDragFromSelf +
+                ', pointerDragStarted=' + pointerDragStarted +
+                ', capturedPointerId=' + capturedPointerId + ', event.pointerId=' + event.pointerId);
+        }
+
         // Only handle the pointer we're tracking
         if (capturedPointerId !== null && event.pointerId !== capturedPointerId) return;
 
@@ -830,13 +1075,65 @@
             }, pointerDragDataTransfer);
             internalDragSource.dispatchEvent(endEvent);
 
-            // Reset all drag state
+            // Clean up native drag preparation - drag is complete
+            cleanupNativeDrag();
+
+            // Reset all drag state (including native drag from self state)
             window.__tiddlyDesktopDragData = null;
             window.__tiddlyDesktopEffectAllowed = null;
             internalDragSource = null;
             internalDragActive = false;
             lastDragOverTarget = null;
             pointerDragDataTransfer = null;
+            nativeDragFromSelf = false;
+            nativeDragData = null;
+            savedDragInProgress = null;
+            savedDragSource = null;
+            pollingActive = false;
+            // Destroy saved drag image
+            if (savedDragImage && savedDragImage.parentNode) {
+                savedDragImage.parentNode.removeChild(savedDragImage);
+            }
+            savedDragImage = null;
+            removeDragImage();
+            document.body.style.userSelect = "";
+            document.body.style.webkitUserSelect = "";
+        } else if (nativeDragFromSelf) {
+            // User released mouse button while in native drag mode (dropped outside window)
+            // Clean up all drag state
+            log('[TiddlyDesktop] pointerup during nativeDragFromSelf - cleaning up (dropped outside)');
+
+            // Release pointer capture if we still have it
+            if (savedDragSource) {
+                try {
+                    savedDragSource.releasePointerCapture(event.pointerId);
+                } catch (e) {}
+            } else if (internalDragSource) {
+                try {
+                    internalDragSource.releasePointerCapture(event.pointerId);
+                } catch (e) {}
+            }
+
+            // Clean up native drag on Rust side
+            cleanupNativeDrag();
+
+            // Reset all state
+            window.__tiddlyDesktopDragData = null;
+            window.__tiddlyDesktopEffectAllowed = null;
+            internalDragSource = null;
+            internalDragActive = false;
+            lastDragOverTarget = null;
+            pointerDragDataTransfer = null;
+            nativeDragFromSelf = false;
+            nativeDragData = null;
+            savedDragInProgress = null;
+            savedDragSource = null;
+            pollingActive = false;
+            // Destroy saved drag image
+            if (savedDragImage && savedDragImage.parentNode) {
+                savedDragImage.parentNode.removeChild(savedDragImage);
+            }
+            savedDragImage = null;
             removeDragImage();
             document.body.style.userSelect = "";
             document.body.style.webkitUserSelect = "";
@@ -848,36 +1145,390 @@
         capturedSelection = null;
         capturedSelectionHtml = null;
         capturedPointerId = null;
+        nativeDragStarting = false;
     }, true);
 
     // Handle pointer cancel (e.g., system gesture, palm rejection)
     document.addEventListener("pointercancel", function(event) {
         if (capturedPointerId !== null && event.pointerId === capturedPointerId) {
+            // Don't cancel if we're transitioning to native drag
+            // (releasing pointer capture triggers pointercancel)
+            if (nativeDragStarting || nativeDragFromSelf) {
+                log('[TiddlyDesktop] Ignoring pointercancel during native drag transition');
+                return;
+            }
             cancelDrag("pointer cancelled");
         }
     }, true);
 
-    // Handle pointer leaving window
-    document.addEventListener("pointerleave", function(event) {
-        // Only cancel if pointer leaves the document element (the window)
-        if (event.target === document.documentElement) {
-            if (internalDragActive || pointerDragStarted) {
-                cancelDrag("pointer left window");
-            }
+    // Note: pointerleave doesn't fire when pointer capture is active
+    // We detect window boundary crossing in pointermove instead
+
+    // Prepare for potential native drag (called when internal drag starts)
+    function prepareNativeDrag() {
+        if (!window.__tiddlyDesktopDragData) {
+            return;
         }
-    }, true);
+
+        // Get the tiddler JSON data
+        var tiddlerJson = window.__tiddlyDesktopDragData['text/vnd.tiddler'] || null;
+
+        // TiddlyWiki uses data URIs for text/x-moz-url and URL types
+        // Format: data:text/vnd.tiddler,<url-encoded-json>
+        var tiddlerDataUri = null;
+        if (tiddlerJson) {
+            tiddlerDataUri = 'data:text/vnd.tiddler,' + encodeURIComponent(tiddlerJson);
+        }
+
+        // Get text/x-moz-url if set, otherwise generate from tiddler data
+        var mozUrl = window.__tiddlyDesktopDragData['text/x-moz-url'] || tiddlerDataUri;
+        // Get URL if set, otherwise generate from tiddler data
+        var url = window.__tiddlyDesktopDragData['URL'] || tiddlerDataUri;
+
+        var data = {
+            text_plain: window.__tiddlyDesktopDragData['text/plain'] || null,
+            text_html: window.__tiddlyDesktopDragData['text/html'] || null,
+            text_vnd_tiddler: tiddlerJson,
+            text_uri_list: window.__tiddlyDesktopDragData['text/uri-list'] || null,
+            text_x_moz_url: mozUrl,
+            url: url
+        };
+
+        log('[TiddlyDesktop] Preparing native drag with data types: ' + Object.keys(data).filter(function(k) { return data[k] !== null; }).join(', '));
+
+        if (window.__TAURI__ && window.__TAURI__.core && window.__TAURI__.core.invoke) {
+            window.__TAURI__.core.invoke('prepare_native_drag', { data: data })
+                .then(function() {
+                    log('[TiddlyDesktop] Native drag prepared');
+                })
+                .catch(function(err) {
+                    console.error('[TiddlyDesktop] Failed to prepare native drag:', err);
+                });
+        }
+    }
+
+    // Clean up native drag preparation (called when internal drag ends normally)
+    function cleanupNativeDrag() {
+        if (window.__TAURI__ && window.__TAURI__.core && window.__TAURI__.core.invoke) {
+            window.__TAURI__.core.invoke('cleanup_native_drag')
+                .catch(function(err) {
+                    console.error('[TiddlyDesktop] Failed to cleanup native drag:', err);
+                });
+        }
+    }
+
+    // Capture drag image element as PNG bytes
+    function captureDragImageAsPng(callback) {
+        if (!internalDragImage) {
+            callback(null);
+            return;
+        }
+
+        try {
+            // Get the element's dimensions and styles
+            var rect = internalDragImage.getBoundingClientRect();
+            var style = window.getComputedStyle(internalDragImage);
+            var width = Math.ceil(rect.width);
+            var height = Math.ceil(rect.height);
+
+            if (width <= 0 || height <= 0) {
+                callback(null);
+                return;
+            }
+
+            // Create a canvas - use 1:1 for Linux, DPR scaling for macOS/Windows
+            // Platform-specific handling is done in Rust
+            var canvas = document.createElement('canvas');
+            var dpr = window.devicePixelRatio || 1;
+            // For now, use 1:1 on all platforms (Linux is the only one implemented)
+            // TODO: When macOS/Windows are implemented, they may need DPR-scaled images
+            var scale = 1; // Could be: navigator.platform.includes('Mac') ? dpr : 1
+            canvas.width = width * scale;
+            canvas.height = height * scale;
+            var ctx = canvas.getContext('2d');
+            if (scale !== 1) {
+                ctx.scale(scale, scale);
+            }
+
+            // Draw background
+            var bgColor = style.backgroundColor || 'white';
+            if (bgColor === 'transparent' || bgColor === 'rgba(0, 0, 0, 0)') {
+                bgColor = 'white';
+            }
+            ctx.fillStyle = bgColor;
+
+            // Draw rounded rectangle if border-radius is set
+            var borderRadius = parseFloat(style.borderRadius) || 0;
+            if (borderRadius > 0) {
+                ctx.beginPath();
+                ctx.roundRect(0, 0, width, height, borderRadius);
+                ctx.fill();
+            } else {
+                ctx.fillRect(0, 0, width, height);
+            }
+
+            // Draw text
+            var text = internalDragImage.textContent || '';
+            if (text) {
+                ctx.fillStyle = style.color || '#333';
+                ctx.font = style.font || '13px sans-serif';
+                ctx.textBaseline = 'middle';
+                var paddingLeft = parseFloat(style.paddingLeft) || 6;
+                var paddingTop = parseFloat(style.paddingTop) || 6;
+                ctx.fillText(text, paddingLeft, height / 2);
+            }
+
+            // Convert to PNG blob
+            canvas.toBlob(function(blob) {
+                if (blob) {
+                    var reader = new FileReader();
+                    reader.onload = function() {
+                        // Convert ArrayBuffer to Uint8Array
+                        var arrayBuffer = reader.result;
+                        var bytes = new Uint8Array(arrayBuffer);
+                        callback(Array.from(bytes)); // Convert to regular array for JSON serialization
+                    };
+                    reader.onerror = function() {
+                        console.error('[TiddlyDesktop] Failed to read drag image blob');
+                        callback(null);
+                    };
+                    reader.readAsArrayBuffer(blob);
+                } else {
+                    callback(null);
+                }
+            }, 'image/png');
+        } catch (e) {
+            console.error('[TiddlyDesktop] Failed to capture drag image:', e);
+            callback(null);
+        }
+    }
+
+    // Start a native OS drag via Tauri command
+    function startNativeDrag(x, y) {
+        // Prevent multiple calls while async operation is in progress
+        if (nativeDragStarting) {
+            return;
+        }
+
+        if (!window.__tiddlyDesktopDragData) {
+            cancelDrag("no drag data for native drag");
+            return;
+        }
+
+        // Set flag immediately to prevent re-entry
+        nativeDragStarting = true;
+
+        // Get the tiddler JSON data
+        var tiddlerJson = window.__tiddlyDesktopDragData['text/vnd.tiddler'] || null;
+
+        // TiddlyWiki uses data URIs for text/x-moz-url and URL types
+        // Format: data:text/vnd.tiddler,<url-encoded-json>
+        var tiddlerDataUri = null;
+        if (tiddlerJson) {
+            tiddlerDataUri = 'data:text/vnd.tiddler,' + encodeURIComponent(tiddlerJson);
+        }
+
+        // Get text/x-moz-url if set, otherwise generate from tiddler data
+        var mozUrl = window.__tiddlyDesktopDragData['text/x-moz-url'] || tiddlerDataUri;
+        // Get URL if set, otherwise generate from tiddler data
+        var url = window.__tiddlyDesktopDragData['URL'] || tiddlerDataUri;
+
+        var data = {
+            text_plain: window.__tiddlyDesktopDragData['text/plain'] || null,
+            text_html: window.__tiddlyDesktopDragData['text/html'] || null,
+            text_vnd_tiddler: tiddlerJson,
+            text_uri_list: window.__tiddlyDesktopDragData['text/uri-list'] || null,
+            text_x_moz_url: mozUrl,
+            url: url
+        };
+
+        // DON'T release pointer capture - we want to keep receiving pointermove events
+        // so we can detect when the pointer re-enters the window
+        // The pointer capture allows us to track the pointer even outside the window
+
+        // Save state for potential re-entry
+        nativeDragFromSelf = true;
+        nativeDragData = window.__tiddlyDesktopDragData;
+        savedDragInProgress = (typeof $tw !== "undefined") ? $tw.dragInProgress : null;
+        savedDragSource = internalDragSource;
+
+        log('startNativeDrag: Saved state for re-entry:' +
+            ' nativeDragFromSelf=' + nativeDragFromSelf +
+            ', hasDragData=' + !!nativeDragData +
+            ', hasSavedDragInProgress=' + !!savedDragInProgress +
+            ', hasSavedDragSource=' + !!savedDragSource +
+            ', hasInternalDragImage=' + !!internalDragImage);
+
+        // Mark that we're transitioning to native drag BEFORE async operations
+        // This prevents pointerup handler from calling cleanup
+        internalDragActive = false;
+        pointerDragStarted = false;
+
+        // Dispatch dragleave to current target before leaving
+        if (lastDragOverTarget && pointerDragDataTransfer) {
+            var leaveEvent = createSyntheticDragEvent("dragleave", {
+                relatedTarget: null
+            }, pointerDragDataTransfer);
+            lastDragOverTarget.dispatchEvent(leaveEvent);
+            lastDragOverTarget = null;
+        }
+
+        // NOTE: Do NOT dispatch dragend here - TiddlyWiki should still think the drag is active
+        // This preserves the original position so Escape can cancel properly after re-entry
+
+        // Capture the drag image FIRST while it's still in the DOM
+        log('[TiddlyDesktop] About to capture drag image, internalDragImage=' + !!internalDragImage);
+
+        captureDragImageAsPng(function(imageData) {
+            log('[TiddlyDesktop] captureDragImageAsPng callback called, imageData=' + (imageData ? imageData.length + ' bytes' : 'null'));
+
+            // Now save and detach the drag image for re-entry
+            // Do this INSIDE the callback so it happens after capture completes
+            if (internalDragImage && internalDragImage.parentNode) {
+                savedDragImage = internalDragImage;
+                savedDragImage.parentNode.removeChild(savedDragImage);
+                log('[TiddlyDesktop] Drag image detached from DOM (after capture)');
+            }
+            internalDragImage = null;
+
+            // Call Tauri command to start native drag
+            if (window.__TAURI__ && window.__TAURI__.core && window.__TAURI__.core.invoke) {
+                var params = {
+                    data: data,
+                    x: Math.round(x),
+                    y: Math.round(y),
+                    imageData: imageData, // May be null if capture failed
+                    // Pass drag image offset so GTK can position its icon identically to JS
+                    imageOffsetX: Math.round(dragImageOffsetX),
+                    imageOffsetY: Math.round(dragImageOffsetY)
+                };
+                log('[TiddlyDesktop] Starting native drag with image=' + (imageData ? imageData.length + ' bytes' : 'none') +
+                    ', offset=(' + dragImageOffsetX + ', ' + dragImageOffsetY + ')');
+
+                window.__TAURI__.core.invoke('start_native_drag', params)
+                    .then(function() {
+                        log('[TiddlyDesktop] Native drag started, tracking for re-entry');
+                    })
+                    .catch(function(err) {
+                        console.error('[TiddlyDesktop] Failed to start native drag:', err);
+                        // Native drag failed - clean up completely
+                        nativeDragFromSelf = false;
+                        nativeDragData = null;
+                        nativeDragText = null;
+                        cleanupDragState();
+                    });
+            } else {
+                console.warn('[TiddlyDesktop] Tauri invoke not available for native drag');
+                nativeDragFromSelf = false;
+                nativeDragData = null;
+                nativeDragText = null;
+                cleanupDragState();
+            }
+        });
+    }
+
+    // Clean up drag state without dispatching events
+    function cleanupDragState() {
+        window.__tiddlyDesktopDragData = null;
+        window.__tiddlyDesktopEffectAllowed = null;
+        internalDragSource = null;
+        internalDragActive = false;
+        pointerDownTarget = null;
+        pointerDownPos = null;
+        pointerDragStarted = false;
+        nativeDragFromSelf = false;
+        nativeDragData = null;
+        savedDragInProgress = null;
+        savedDragSource = null;
+        pollingActive = false;
+        // Destroy saved drag image
+        if (savedDragImage && savedDragImage.parentNode) {
+            savedDragImage.parentNode.removeChild(savedDragImage);
+        }
+        savedDragImage = null;
+        pointerDragDataTransfer = null;
+        lastDragOverTarget = null;
+        capturedSelection = null;
+        capturedSelectionHtml = null;
+        capturedPointerId = null;
+        nativeDragStarting = false;
+        removeDragImage();
+        document.body.style.userSelect = "";
+        document.body.style.webkitUserSelect = "";
+    }
 
     // Handle escape to cancel drag
+    // Use bubbling mode (no capture) so TiddlyWiki's handlers can run first
     document.addEventListener("keydown", function(event) {
         if (event.key === "Escape") {
-            cancelDrag("escape pressed");
+            // Set flag to prevent td-pointer-up from triggering a drop
+            dragCancelledByEscape = true;
+
+            // If we're in a re-entry scenario, don't dispatch synthetic events
+            // Just clean up our state and let TiddlyWiki handle it
+            if (nativeDragFromSelf && internalDragActive) {
+                log('[TiddlyDesktop] Escape during re-entry - cleaning up without dispatching events');
+                // Just clean up our internal state without triggering TiddlyWiki's droppables
+                if (lastDragOverTarget) {
+                    lastDragOverTarget = null;
+                }
+                // Remove visual feedback classes
+                document.querySelectorAll(".tc-dragover").forEach(function(el) {
+                    el.classList.remove("tc-dragover");
+                });
+                document.querySelectorAll(".tc-dragging").forEach(function(el) {
+                    el.classList.remove("tc-dragging");
+                });
+                // Clear TiddlyWiki state
+                if (typeof $tw !== "undefined") {
+                    $tw.dragInProgress = null;
+                }
+                // Clean up native drag state on Rust side
+                cleanupNativeDrag();
+                // Reset all our state
+                window.__tiddlyDesktopDragData = null;
+                window.__tiddlyDesktopEffectAllowed = null;
+                internalDragSource = null;
+                internalDragActive = false;
+                pointerDownTarget = null;
+                pointerDownPos = null;
+                pointerDragStarted = false;
+                pointerDragDataTransfer = null;
+                lastDragOverTarget = null;
+                capturedSelection = null;
+                capturedSelectionHtml = null;
+                capturedPointerId = null;
+                nativeDragStarting = false;
+                nativeDragFromSelf = false;
+                nativeDragData = null;
+                savedDragInProgress = null;
+                savedDragSource = null;
+                pollingActive = false;
+                if (savedDragImage && savedDragImage.parentNode) {
+                    savedDragImage.parentNode.removeChild(savedDragImage);
+                }
+                savedDragImage = null;
+                removeDragImage();
+                document.body.style.userSelect = "";
+                document.body.style.webkitUserSelect = "";
+            } else {
+                cancelDrag("escape pressed");
+            }
         }
     }, true);
 
     // Handle window blur
     window.addEventListener("blur", function(event) {
+        // Don't cancel if transitioning to or in native drag mode
+        if (nativeDragStarting || nativeDragFromSelf) {
+            return;
+        }
         if (internalDragActive || pointerDragStarted) {
             setTimeout(function() {
+                // Re-check native drag state in case it changed
+                if (nativeDragStarting || nativeDragFromSelf) {
+                    return;
+                }
                 if ((internalDragActive || pointerDragStarted) && !document.hasFocus()) {
                     cancelDrag("window lost focus");
                 }
@@ -885,9 +1536,518 @@
         }
     }, true);
 
+    // Set up Tauri event listeners for native drag events from Rust
+    // These events are emitted by the Rust drag_drop module
+    // Use window-level guard to prevent double registration even if script is loaded twice
+    function setupTauriEventListeners() {
+        if (window.__tiddlyDesktopInternalDragListenersSetUp) {
+            log('Tauri event listeners already set up (window guard), skipping');
+            return;
+        }
+
+        setupTauriListen();
+        if (!tauriListen) {
+            // Tauri not available yet, retry later
+            setTimeout(setupTauriEventListeners, 100);
+            return;
+        }
+
+        window.__tiddlyDesktopInternalDragListenersSetUp = true;
+        log('Setting up Tauri event listeners for native drag events');
+
+        // Handle native drag re-entering window (td-drag-motion from Rust)
+        // This fires when a native drag (including one we started) enters our window
+        tauriListen("td-drag-motion", function(event) {
+            var payload = event.payload || {};
+            // Check if Rust says this is our drag (has outgoing data stored)
+            var isOurDragFromRust = payload.isOurDrag;
+            // Check if this event came from GDK pointer polling (not GTK drag signals)
+            var fromPolling = payload.fromPolling || false;
+
+            var eventWindowLabel = payload.windowLabel || '';
+
+            log('td-drag-motion received: x=' + payload.x + ', y=' + payload.y +
+                ', isOurDragFromRust=' + isOurDragFromRust +
+                ', nativeDragFromSelf=' + nativeDragFromSelf +
+                ', internalDragActive=' + internalDragActive +
+                ', fromPolling=' + fromPolling +
+                ', eventWindowLabel=' + eventWindowLabel +
+                ', currentWindowLabel=' + currentWindowLabel);
+
+            // Only process polling events if they're for THIS window
+            // This ensures re-entry only works for the window where the drag originated
+            if (fromPolling && eventWindowLabel && eventWindowLabel !== currentWindowLabel) {
+                log('Ignoring polling event for different window: ' + eventWindowLabel);
+                return;
+            }
+
+            // If this came from polling, mark that polling is active
+            // This tells pointermove to not interfere
+            if (fromPolling && isOurDragFromRust) {
+                pollingActive = true;
+            }
+
+            // Check if this is our drag coming back (either JS knows, or Rust tells us)
+            // GTK may fire drag-end immediately, clearing nativeDragFromSelf, but Rust still knows
+            var isOurDragReentry = (nativeDragFromSelf || isOurDragFromRust) && !internalDragActive;
+
+            if (isOurDragReentry) {
+                log('[TiddlyDesktop] Native drag re-entered window (nativeDragFromSelf=' + nativeDragFromSelf + ', isOurDragFromRust=' + isOurDragFromRust + ')');
+
+                // Restore nativeDragFromSelf if Rust says it's our drag
+                if (isOurDragFromRust && !nativeDragFromSelf) {
+                    log('[TiddlyDesktop] Re-enabling nativeDragFromSelf based on Rust flag');
+                    nativeDragFromSelf = true;
+                }
+
+                // Focus the window so it can receive events properly
+                if (window.__TAURI__ && window.__TAURI__.window) {
+                    window.__TAURI__.window.getCurrentWindow().setFocus().catch(function(err) {
+                        log('[TiddlyDesktop] Failed to focus window on re-entry: ' + err);
+                    });
+                }
+
+                // Restore the drag data if we still have it
+                if (nativeDragData) {
+                    window.__tiddlyDesktopDragData = nativeDragData;
+                }
+
+                // Restore drag source element
+                if (savedDragSource) {
+                    internalDragSource = savedDragSource;
+                }
+
+                // Restore the saved drag image if it's not currently in the DOM
+                // First, clean up any existing drag image to prevent duplicates
+                log('[TiddlyDesktop] Re-entry drag image state: savedDragImage=' + !!savedDragImage +
+                    ', inDOM=' + !!(savedDragImage && savedDragImage.parentNode) +
+                    ', internalDragImage=' + !!internalDragImage +
+                    ', internalInDOM=' + !!(internalDragImage && internalDragImage.parentNode));
+
+                // Remove any existing internalDragImage that's different from savedDragImage
+                if (internalDragImage && internalDragImage !== savedDragImage && internalDragImage.parentNode) {
+                    log('[TiddlyDesktop] Re-entry: removing old internalDragImage from DOM');
+                    internalDragImage.parentNode.removeChild(internalDragImage);
+                    internalDragImage = null;
+                }
+
+                if (savedDragImage && !savedDragImage.parentNode) {
+                    document.body.appendChild(savedDragImage);
+                    internalDragImage = savedDragImage;
+                    savedDragImage = null;  // Clear to prevent duplicates
+                    log('[TiddlyDesktop] Re-entry: restored drag image to DOM');
+                } else if (savedDragImage && savedDragImage.parentNode) {
+                    // Element is already in DOM (e.g., during async capture) - just use it
+                    internalDragImage = savedDragImage;
+                    savedDragImage = null;
+                    log('[TiddlyDesktop] Re-entry: drag image already in DOM, using it');
+                }
+
+                // Create a DataTransfer with our data for synthetic events
+                pointerDragDataTransfer = new DataTransfer();
+                var dataToUse = nativeDragData || window.__tiddlyDesktopDragData;
+                if (dataToUse) {
+                    for (var type in dataToUse) {
+                        if (dataToUse[type]) {
+                            try {
+                                pointerDragDataTransfer.setData(type, dataToUse[type]);
+                            } catch (e) {}
+                        }
+                    }
+                }
+
+                // Update position from event
+                var x = payload.x !== undefined ? payload.x : 0;
+                var y = payload.y !== undefined ? payload.y : 0;
+                if (internalDragImage) {
+                    internalDragImage.style.left = (x - dragImageOffsetX) + "px";
+                    internalDragImage.style.top = (y - dragImageOffsetY) + "px";
+                }
+
+                // Restore TiddlyWiki's drag state
+                var dragElement = null;
+                if (typeof $tw !== "undefined") {
+                    dragElement = savedDragInProgress || savedDragSource || internalDragSource;
+                    if (dragElement) {
+                        $tw.dragInProgress = dragElement;
+                        $tw.utils.addClass(dragElement, "tc-dragging");
+                        log('[TiddlyDesktop] Re-entry: restored $tw.dragInProgress to ' + (dragElement.tagName || 'element'));
+                    }
+                }
+
+                // Note: We don't dispatch dragstart here - the drag was already started before leaving.
+                // We just need to continue with dragenter/dragover to activate drop zones.
+
+                // Dispatch dragenter and dragover to the element under cursor
+                var elementInfo = getElementAtPoint(x, y);
+                log('[TiddlyDesktop] Re-entry: dispatching dragenter to ' + (elementInfo.target ? elementInfo.target.tagName + '.' + elementInfo.target.className : 'null'));
+                if (elementInfo.target) {
+                    var enterEvent = createSyntheticDragEvent("dragenter", {
+                        clientX: x,
+                        clientY: y,
+                        relatedTarget: null
+                    }, pointerDragDataTransfer);
+                    elementInfo.target.dispatchEvent(enterEvent);
+                    log('[TiddlyDesktop] Re-entry: dragenter dispatched');
+                    lastDragOverTarget = elementInfo.target;
+
+                    // Also dispatch dragover - this is what TiddlyWiki listens to for drop zones
+                    var overEvent = createSyntheticDragEvent("dragover", {
+                        clientX: x,
+                        clientY: y
+                    }, pointerDragDataTransfer);
+                    elementInfo.target.dispatchEvent(overEvent);
+
+                    // Update caret position for text inputs and contenteditable
+                    if (isTextInput(elementInfo.target)) {
+                        setInputCaretFromPoint(elementInfo.target, elementInfo.adjustedX, elementInfo.adjustedY);
+                    } else if (isContentEditable(elementInfo.target)) {
+                        setContentEditableCaretFromPoint(elementInfo.target, elementInfo.adjustedX, elementInfo.adjustedY);
+                    }
+                }
+
+                // Mark as active again so drag_drop.js knows this is internal
+                internalDragActive = true;
+            } else if ((nativeDragFromSelf || isOurDragFromRust) && internalDragActive) {
+                // Update drag image position during re-entry drag
+                var x = payload.x !== undefined ? payload.x : 0;
+                var y = payload.y !== undefined ? payload.y : 0;
+                if (internalDragImage) {
+                    internalDragImage.style.left = (x - dragImageOffsetX) + "px";
+                    internalDragImage.style.top = (y - dragImageOffsetY) + "px";
+                }
+
+                // Dispatch dragover/dragleave/dragenter as needed
+                var elementInfo = getElementAtPoint(x, y);
+                var target = elementInfo.target;
+
+                if (target && lastDragOverTarget && lastDragOverTarget !== target) {
+                    // Left one element, entered another
+                    var leaveEvent = createSyntheticDragEvent("dragleave", {
+                        clientX: x,
+                        clientY: y,
+                        relatedTarget: target
+                    }, pointerDragDataTransfer);
+                    lastDragOverTarget.dispatchEvent(leaveEvent);
+
+                    var enterEvent = createSyntheticDragEvent("dragenter", {
+                        clientX: x,
+                        clientY: y,
+                        relatedTarget: lastDragOverTarget
+                    }, pointerDragDataTransfer);
+                    target.dispatchEvent(enterEvent);
+                }
+                lastDragOverTarget = target;
+
+                // Always dispatch dragover
+                if (target) {
+                    var overEvent = createSyntheticDragEvent("dragover", {
+                        clientX: x,
+                        clientY: y
+                    }, pointerDragDataTransfer);
+                    target.dispatchEvent(overEvent);
+
+                    // Update caret position for text inputs and contenteditable
+                    if (isTextInput(target)) {
+                        setInputCaretFromPoint(target, elementInfo.adjustedX, elementInfo.adjustedY);
+                    } else if (isContentEditable(target)) {
+                        setContentEditableCaretFromPoint(target, elementInfo.adjustedX, elementInfo.adjustedY);
+                    }
+                }
+            }
+        });
+
+        // Handle native drag leaving window again
+        tauriListen("td-drag-leave", function(event) {
+            var payload = event.payload || {};
+            // Check if Rust says this is our drag
+            var isOurDragFromRust = payload.isOurDrag;
+
+            if ((nativeDragFromSelf || isOurDragFromRust) && internalDragActive) {
+                log('[TiddlyDesktop] Native drag left window again (nativeDragFromSelf=' + nativeDragFromSelf + ', isOurDragFromRust=' + isOurDragFromRust + ')');
+
+                // Make sure nativeDragFromSelf is set if Rust says it's our drag
+                if (isOurDragFromRust && !nativeDragFromSelf) {
+                    nativeDragFromSelf = true;
+                }
+
+                // Dispatch dragleave to the last target
+                if (lastDragOverTarget && pointerDragDataTransfer) {
+                    var leaveEvent = createSyntheticDragEvent("dragleave", {
+                        relatedTarget: null
+                    }, pointerDragDataTransfer);
+                    lastDragOverTarget.dispatchEvent(leaveEvent);
+                    lastDragOverTarget = null;
+                }
+
+                // Dispatch dragend to the source element so TiddlyWiki cleans up its state
+                if (internalDragSource && pointerDragDataTransfer) {
+                    var endEvent = createSyntheticDragEvent("dragend", {}, pointerDragDataTransfer);
+                    internalDragSource.dispatchEvent(endEvent);
+                }
+
+                // Detach the drag image (keep it saved for potential re-entry)
+                if (internalDragImage && internalDragImage.parentNode) {
+                    internalDragImage.parentNode.removeChild(internalDragImage);
+                    // Keep savedDragImage pointing to it
+                    savedDragImage = internalDragImage;
+                    internalDragImage = null;
+                }
+                internalDragActive = false;
+                // Keep nativeDragFromSelf true - drag might re-enter again
+            }
+        });
+
+        // Handle drop completion - clean up native drag state
+        tauriListen("td-drag-drop-start", function(event) {
+            if (nativeDragFromSelf) {
+                log('[TiddlyDesktop] Drop completed, cleaning up native drag state');
+                // The drop will be handled by drag_drop.js
+                // Clean up our tracking state (TiddlyWiki state was already cleaned up by dragend event)
+                nativeDragFromSelf = false;
+                nativeDragData = null;
+                savedDragInProgress = null;
+                savedDragSource = null;
+                pollingActive = false;
+                removeDragImage();
+                // Also destroy the saved drag image
+                if (savedDragImage && savedDragImage.parentNode) {
+                    savedDragImage.parentNode.removeChild(savedDragImage);
+                }
+                savedDragImage = null;
+                internalDragActive = false;
+                nativeDragStarting = false;
+                cleanupNativeDrag();
+            }
+        });
+
+        // Handle pointer up detected via Rust polling (for re-entry while dragging)
+        // This fires when Rust's GDK pointer polling detects the button was released
+        tauriListen("td-pointer-up", function(event) {
+            var payload = event.payload || {};
+            var x = payload.x || 0;
+            var y = payload.y || 0;
+            var inside = payload.inside || false;
+            var eventWindowLabel = payload.windowLabel || '';
+
+            log('[TiddlyDesktop] td-pointer-up received: x=' + x + ', y=' + y + ', inside=' + inside +
+                ', nativeDragFromSelf=' + nativeDragFromSelf + ', internalDragActive=' + internalDragActive +
+                ', eventWindowLabel=' + eventWindowLabel + ', currentWindowLabel=' + currentWindowLabel);
+
+            // Only process if this event is for THIS window
+            if (eventWindowLabel && eventWindowLabel !== currentWindowLabel) {
+                log('Ignoring pointer-up event for different window: ' + eventWindowLabel);
+                return;
+            }
+
+            // If we're tracking a native drag from self and button was released
+            if (nativeDragFromSelf) {
+                // Check if drag was cancelled by Escape - don't trigger drop
+                if (dragCancelledByEscape) {
+                    log('[TiddlyDesktop] Button released but drag was cancelled by Escape - skipping drop');
+                    dragCancelledByEscape = false;  // Reset the flag
+                    // Remove visual feedback classes
+                    document.querySelectorAll(".tc-dragover").forEach(function(el) {
+                        el.classList.remove("tc-dragover");
+                    });
+                    document.querySelectorAll(".tc-dragging").forEach(function(el) {
+                        el.classList.remove("tc-dragging");
+                    });
+                    // Fall through to cleanup below
+                } else if (inside && internalDragActive) {
+                    // Button released inside window while drag was active - this is a drop
+                    log('[TiddlyDesktop] Button released inside window - triggering drop');
+
+                    // Get the drop target
+                    var elementInfo = getElementAtPoint(x, y);
+                    var target = elementInfo.target;
+
+                    if (lastDragOverTarget) {
+                        var leaveEvent = createSyntheticDragEvent("dragleave", {
+                            clientX: x,
+                            clientY: y,
+                            relatedTarget: null
+                        }, pointerDragDataTransfer);
+                        lastDragOverTarget.dispatchEvent(leaveEvent);
+                    }
+
+                    if (target) {
+                        var dropDt = new DataTransfer();
+                        // Copy captured data to drop dataTransfer
+                        if (window.__tiddlyDesktopDragData) {
+                            for (var type in window.__tiddlyDesktopDragData) {
+                                try {
+                                    dropDt.setData(type, window.__tiddlyDesktopDragData[type]);
+                                } catch(e) {}
+                            }
+                        }
+
+                        // Special handling for text inputs and textareas
+                        var textData = window.__tiddlyDesktopDragData && window.__tiddlyDesktopDragData['text/plain'];
+                        var htmlData = window.__tiddlyDesktopDragData && window.__tiddlyDesktopDragData['text/html'];
+
+                        if (isTextInput(target)) {
+                            insertTextAtPoint(target, elementInfo.adjustedX, elementInfo.adjustedY, textData);
+                        } else if (isContentEditable(target)) {
+                            insertIntoContentEditableAtPoint(target, elementInfo.adjustedX, elementInfo.adjustedY, textData, htmlData);
+                        } else {
+                            // Standard drop event for other elements
+                            var dropEvent = createSyntheticDragEvent("drop", {
+                                clientX: x,
+                                clientY: y
+                            }, dropDt);
+                            target.dispatchEvent(dropEvent);
+                        }
+                    }
+
+                    // Dispatch dragend
+                    if (internalDragSource && pointerDragDataTransfer) {
+                        var endEvent = createSyntheticDragEvent("dragend", {
+                            clientX: x,
+                            clientY: y
+                        }, pointerDragDataTransfer);
+                        internalDragSource.dispatchEvent(endEvent);
+                    }
+                }
+
+                // Clean up all state
+                cleanupNativeDrag();
+
+                window.__tiddlyDesktopDragData = null;
+                window.__tiddlyDesktopEffectAllowed = null;
+                internalDragSource = null;
+                internalDragActive = false;
+                lastDragOverTarget = null;
+                pointerDragDataTransfer = null;
+                nativeDragFromSelf = false;
+                nativeDragData = null;
+                savedDragInProgress = null;
+                savedDragSource = null;
+                pointerDownTarget = null;
+                pointerDownPos = null;
+                pointerDragStarted = false;
+                capturedPointerId = null;
+                nativeDragStarting = false;
+                pollingActive = false;
+                if (savedDragImage && savedDragImage.parentNode) {
+                    savedDragImage.parentNode.removeChild(savedDragImage);
+                }
+                savedDragImage = null;
+                removeDragImage();
+                document.body.style.userSelect = "";
+                document.body.style.webkitUserSelect = "";
+
+                log('[TiddlyDesktop] Cleaned up after td-pointer-up');
+            }
+        });
+
+        // Handle native drag end signal from GTK
+        // GTK may fire drag-end in two cases:
+        // 1. Prematurely - no valid GDK event, drag didn't really start (data_was_requested=false)
+        // 2. Real drop - data was transferred to external app (data_was_requested=true)
+        // If data was requested, we know a real drop happened and should clean up
+        tauriListen("td-drag-end", function(event) {
+            var payload = event.payload || {};
+            var dataWasRequested = payload.data_was_requested || false;
+            log('[TiddlyDesktop] td-drag-end received (GTK signal), nativeDragFromSelf=' + nativeDragFromSelf +
+                ', internalDragActive=' + internalDragActive + ', dataWasRequested=' + dataWasRequested);
+
+            // If data was NOT requested and we're in native drag mode, this is a cancellation (e.g., Escape pressed)
+            // Set the flag so td-pointer-up knows not to trigger a drop
+            if (!dataWasRequested && nativeDragFromSelf) {
+                log('[TiddlyDesktop] GTK drag ended without data transfer - marking as cancelled');
+                dragCancelledByEscape = true;
+            }
+
+            // If data was actually transferred to an external app, this is a real drop - clean up
+            if (dataWasRequested && nativeDragFromSelf) {
+                log('[TiddlyDesktop] Real drop to external app detected - cleaning up');
+
+                // Release pointer capture if we still have it
+                if (savedDragSource && capturedPointerId !== null) {
+                    try {
+                        savedDragSource.releasePointerCapture(capturedPointerId);
+                    } catch (e) {}
+                }
+
+                // Clean up native drag on Rust side
+                cleanupNativeDrag();
+
+                // Reset all state
+                window.__tiddlyDesktopDragData = null;
+                window.__tiddlyDesktopEffectAllowed = null;
+                internalDragSource = null;
+                internalDragActive = false;
+                lastDragOverTarget = null;
+                pointerDragDataTransfer = null;
+                nativeDragFromSelf = false;
+                nativeDragData = null;
+                savedDragInProgress = null;
+                savedDragSource = null;
+                pointerDownTarget = null;
+                pointerDownPos = null;
+                pointerDragStarted = false;
+                capturedPointerId = null;
+                nativeDragStarting = false;
+                pollingActive = false;
+                // Destroy saved drag image
+                if (savedDragImage && savedDragImage.parentNode) {
+                    savedDragImage.parentNode.removeChild(savedDragImage);
+                }
+                savedDragImage = null;
+                removeDragImage();
+                document.body.style.userSelect = "";
+                document.body.style.webkitUserSelect = "";
+            }
+            // If data was NOT requested, this is a premature drag-end - don't clean up
+            // Rust's isOurDrag flag will handle re-entry detection
+        });
+
+        // Safety: If we receive td-drag-content while nativeDragFromSelf but we're not active,
+        // this is external content and our state is stale - clean up
+        tauriListen("td-drag-content", function(event) {
+            // If we're tracking a native drag from self but receive external content,
+            // it means our drag ended without us knowing - clean up
+            if (nativeDragFromSelf && !internalDragActive) {
+                log('[TiddlyDesktop] Received external drag content while nativeDragFromSelf - resetting stale state');
+                nativeDragFromSelf = false;
+                nativeDragData = null;
+                savedDragInProgress = null;
+                savedDragSource = null;
+                pollingActive = false;
+                if (savedDragImage && savedDragImage.parentNode) {
+                    savedDragImage.parentNode.removeChild(savedDragImage);
+                }
+                savedDragImage = null;
+                nativeDragStarting = false;
+                cleanupNativeDrag();
+            }
+        });
+
+        log('Tauri event listeners for native drag events set up successfully');
+    }
+
+    // Initialize Tauri event listeners when ready
+    if (window.__TAURI__) {
+        setupTauriEventListeners();
+    } else {
+        // Wait for Tauri to be available
+        var tauriWaitCount = 0;
+        var tauriWaitInterval = setInterval(function() {
+            tauriWaitCount++;
+            if (window.__TAURI__) {
+                clearInterval(tauriWaitInterval);
+                setupTauriEventListeners();
+            } else if (tauriWaitCount > 50) {
+                clearInterval(tauriWaitInterval);
+                log('Tauri not available after 5 seconds, native drag events will not work');
+            }
+        }, 100);
+    }
+
     // Export for use by drag_drop.js
     TD.isInternalDragActive = function() {
-        return internalDragActive;
+        return internalDragActive || nativeDragFromSelf;
     };
 
 })(window.TiddlyDesktop = window.TiddlyDesktop || {});

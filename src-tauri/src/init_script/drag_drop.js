@@ -192,12 +192,14 @@
             return;
         }
 
-        var listen = window.__TAURI__.event.listen;
+        // Use window-specific listen to avoid receiving events from other windows
+        var currentWindow = window.__TAURI__.window.getCurrentWindow();
+        var listen = currentWindow.listen.bind(currentWindow);
         var invoke = window.__TAURI__.core.invoke;
         var wikiPath = window.__WIKI_PATH__;
         var windowLabel = window.__WINDOW_LABEL__ || 'unknown';
 
-        invoke("js_log", { message: "Setting up drag-drop listeners for: " + wikiPath + " window: " + windowLabel });
+        invoke("js_log", { message: "Setting up drag-drop listeners for: " + wikiPath + " window: " + windowLabel + " (window-specific)" });
 
         // ========================================
         // Drag State Variables
@@ -536,6 +538,8 @@
         });
 
         listen("td-drag-content", function(event) {
+            invoke("js_log", { message: "td-drag-content received on window: " + windowLabel + ", types: " + JSON.stringify(event.payload && event.payload.types) });
+
             // Skip if internal drag is active (handled by internal_drag.js)
             if (TD.isInternalDragActive && TD.isInternalDragActive()) return;
             if (event.payload) {
@@ -577,6 +581,8 @@
         });
 
         listen("td-file-drop", function(event) {
+            invoke("js_log", { message: "td-file-drop received on window: " + windowLabel + ", paths: " + JSON.stringify(event.payload && event.payload.paths) });
+
             // Skip if internal drag is active (handled by internal_drag.js)
             if (TD.isInternalDragActive && TD.isInternalDragActive()) return;
             if (!event.payload || !event.payload.paths || event.payload.paths.length === 0) return;
@@ -933,6 +939,8 @@
         // ========================================
 
         listen("tauri://drag-drop", function(event) {
+            invoke("js_log", { message: "tauri://drag-drop received on window: " + windowLabel + ", paths: " + JSON.stringify(event.payload.paths || []) });
+
             if (nativeDragActive) return;
 
             var paths = event.payload.paths || [];
@@ -1001,6 +1009,8 @@
                 var validFiles = files.filter(function(f) { return f !== null; });
                 if (validFiles.length === 0) return;
 
+                invoke("js_log", { message: "Processing " + validFiles.length + " files on window: " + windowLabel });
+
                 var dt = new DataTransfer();
                 validFiles.forEach(function(file) { dt.items.add(file); });
 
@@ -1010,6 +1020,7 @@
                 }
 
                 var dropEvent = createSyntheticDragEvent("drop", pos, dt);
+                invoke("js_log", { message: "Dispatching drop event on window: " + windowLabel + " to target: " + dropTarget.tagName });
                 dropTarget.dispatchEvent(dropEvent);
 
                 var endEvent = createSyntheticDragEvent("dragend", pos, dt);

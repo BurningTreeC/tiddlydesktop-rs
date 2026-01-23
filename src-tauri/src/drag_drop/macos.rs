@@ -17,13 +17,14 @@
 use std::collections::HashMap;
 use std::ffi::c_void;
 use std::sync::{Arc, Mutex, Once};
+use std::sync::OnceLock;
 
 use objc2::msg_send;
 use objc2::rc::Retained;
 use objc2::runtime::{AnyClass, AnyObject, Bool, Sel};
 use objc2::sel;
-use objc2_app_kit::{NSPasteboard, NSView, NSWindow};
-use objc2_foundation::{NSArray, NSData, NSPoint, NSString};
+use objc2_app_kit::{NSPasteboard, NSView, NSWindow, NSDraggingSession, NSEvent, NSImage, NSPasteboardItem};
+use objc2_foundation::{NSArray, NSData, NSPoint, NSRect, NSSize, NSString};
 use tauri::{Emitter, WebviewWindow};
 
 /// Data captured from a drag operation
@@ -784,5 +785,421 @@ fn emit_drop_with_files(window_label: &str, x: f64, y: f64, paths: Vec<String>) 
                 "paths": paths
             }),
         );
+    }
+}
+
+// ============================================================================
+// Outgoing drag support (TiddlyWiki → external apps)
+// ============================================================================
+
+/// Data to be provided during an outgoing drag operation
+#[derive(Clone, Debug, Default)]
+pub struct OutgoingDragData {
+    pub text_plain: Option<String>,
+    pub text_html: Option<String>,
+    pub text_vnd_tiddler: Option<String>,
+    pub text_uri_list: Option<String>,
+    pub text_x_moz_url: Option<String>,
+    pub url: Option<String>,
+}
+
+/// State for tracking outgoing drag operations
+struct OutgoingDragState {
+    data: OutgoingDragData,
+    source_window_label: String,
+    data_was_requested: bool,
+    last_inside_window: bool,
+}
+
+fn outgoing_drag_state() -> &'static Mutex<Option<OutgoingDragState>> {
+    static INSTANCE: OnceLock<Mutex<Option<OutgoingDragState>>> = OnceLock::new();
+    INSTANCE.get_or_init(|| Mutex::new(None))
+}
+
+/// Original NSDraggingSource methods (stored after first swizzle)
+static mut ORIGINAL_SOURCE_OPERATION_MASK: Option<unsafe extern "C" fn(*mut AnyObject, Sel, *mut AnyObject, isize) -> usize> = None;
+static mut ORIGINAL_DRAGGING_SESSION_MOVED: Option<unsafe extern "C" fn(*mut AnyObject, Sel, *mut AnyObject, NSPoint)> = None;
+static mut ORIGINAL_DRAGGING_SESSION_ENDED: Option<unsafe extern "C" fn(*mut AnyObject, Sel, *mut AnyObject, NSPoint, usize)> = None;
+
+static SOURCE_SWIZZLE_ONCE: Once = Once::new();
+
+/// Swizzle NSDraggingSource methods for outgoing drag tracking
+unsafe fn swizzle_drag_source_methods(webview: &NSView) {
+    SOURCE_SWIZZLE_ONCE.call_once(|| {
+        let class: *const AnyClass = msg_send![webview, class];
+        if class.is_null() {
+            eprintln!("[TiddlyDesktop] macOS: Failed to get WKWebView class for source swizzle");
+            return;
+        }
+
+        eprintln!("[TiddlyDesktop] macOS: Swizzling NSDraggingSource methods");
+
+        // Swizzle draggingSession:sourceOperationMaskForDraggingContext:
+        swizzle_method(
+            class as *mut AnyClass,
+            sel!(draggingSession:sourceOperationMaskForDraggingContext:),
+            swizzled_source_operation_mask as *mut c_void,
+            &mut ORIGINAL_SOURCE_OPERATION_MASK,
+        );
+
+        // Swizzle draggingSession:movedToPoint:
+        swizzle_method(
+            class as *mut AnyClass,
+            sel!(draggingSession:movedToPoint:),
+            swizzled_dragging_session_moved as *mut c_void,
+            &mut ORIGINAL_DRAGGING_SESSION_MOVED,
+        );
+
+        // Swizzle draggingSession:endedAtPoint:operation:
+        swizzle_method(
+            class as *mut AnyClass,
+            sel!(draggingSession:endedAtPoint:operation:),
+            swizzled_dragging_session_ended as *mut c_void,
+            &mut ORIGINAL_DRAGGING_SESSION_ENDED,
+        );
+
+        eprintln!("[TiddlyDesktop] macOS: NSDraggingSource swizzling complete");
+    });
+}
+
+/// NSDragOperation constants for source
+const NS_DRAG_OPERATION_COPY_MOVE_LINK: usize = 1 | 16 | 2; // Copy | Move | Link
+
+/// Swizzled draggingSession:sourceOperationMaskForDraggingContext:
+extern "C" fn swizzled_source_operation_mask(
+    this: *mut AnyObject,
+    _sel: Sel,
+    session: *mut AnyObject,
+    context: isize,
+) -> usize {
+    unsafe {
+        // Check if we have outgoing drag data
+        let has_outgoing = outgoing_drag_state()
+            .lock()
+            .map(|g| g.is_some())
+            .unwrap_or(false);
+
+        if has_outgoing {
+            // For our drags, allow all operations
+            return NS_DRAG_OPERATION_COPY_MOVE_LINK;
+        }
+
+        // Call original for other drags
+        if let Some(original) = ORIGINAL_SOURCE_OPERATION_MASK {
+            original(this, _sel, session, context)
+        } else {
+            NS_DRAG_OPERATION_COPY_MOVE_LINK
+        }
+    }
+}
+
+/// Swizzled draggingSession:movedToPoint:
+extern "C" fn swizzled_dragging_session_moved(
+    this: *mut AnyObject,
+    _sel: Sel,
+    session: *mut AnyObject,
+    screen_point: NSPoint,
+) {
+    unsafe {
+        // Check if this is our outgoing drag
+        let state_info = outgoing_drag_state().lock().ok().and_then(|guard| {
+            guard.as_ref().map(|s| (s.source_window_label.clone(), s.last_inside_window))
+        });
+
+        if let Some((window_label, was_inside)) = state_info {
+            // Get window label from webview and check if it matches
+            if let Some(label) = get_window_label(this) {
+                if label == window_label {
+                    // Convert screen point to view coordinates
+                    let view_point: NSPoint = msg_send![this, convertPoint:screen_point fromView:std::ptr::null::<AnyObject>()];
+                    let bounds: NSRect = msg_send![this, bounds];
+                    let flipped_y = bounds.size.height - view_point.y;
+
+                    // Check if inside window
+                    let inside = view_point.x >= 0.0
+                        && view_point.x < bounds.size.width
+                        && flipped_y >= 0.0
+                        && flipped_y < bounds.size.height;
+
+                    // Update state and emit events
+                    if let Ok(mut guard) = outgoing_drag_state().lock() {
+                        if let Some(state) = guard.as_mut() {
+                            state.last_inside_window = inside;
+
+                            if inside {
+                                if !was_inside {
+                                    eprintln!("[TiddlyDesktop] macOS: Drag re-entered window at ({}, {})", view_point.x, flipped_y);
+                                }
+
+                                // Emit motion event
+                                if let Some(drag_state) = DRAG_STATES.lock().unwrap().get(&label) {
+                                    let ds = drag_state.lock().unwrap();
+                                    let _ = ds.window.emit(
+                                        "td-drag-motion",
+                                        serde_json::json!({
+                                            "x": view_point.x,
+                                            "y": flipped_y,
+                                            "isOurDrag": true,
+                                            "fromPolling": true,
+                                            "windowLabel": label
+                                        }),
+                                    );
+                                }
+                            } else if was_inside {
+                                // Just left window
+                                eprintln!("[TiddlyDesktop] macOS: Drag left window");
+                                if let Some(drag_state) = DRAG_STATES.lock().unwrap().get(&label) {
+                                    let ds = drag_state.lock().unwrap();
+                                    let _ = ds.window.emit(
+                                        "td-drag-leave",
+                                        serde_json::json!({
+                                            "isOurDrag": true,
+                                            "windowLabel": label
+                                        }),
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Call original
+        if let Some(original) = ORIGINAL_DRAGGING_SESSION_MOVED {
+            original(this, _sel, session, screen_point);
+        }
+    }
+}
+
+/// Swizzled draggingSession:endedAtPoint:operation:
+extern "C" fn swizzled_dragging_session_ended(
+    this: *mut AnyObject,
+    _sel: Sel,
+    session: *mut AnyObject,
+    screen_point: NSPoint,
+    operation: usize,
+) {
+    unsafe {
+        // Check if this is our outgoing drag
+        let state_info = outgoing_drag_state().lock().ok().and_then(|guard| {
+            guard.as_ref().map(|s| (s.source_window_label.clone(), s.data_was_requested))
+        });
+
+        if let Some((window_label, data_was_requested)) = state_info {
+            if let Some(label) = get_window_label(this) {
+                if label == window_label {
+                    eprintln!(
+                        "[TiddlyDesktop] macOS: Drag ended at ({}, {}), operation: {}, data_was_requested: {}",
+                        screen_point.x, screen_point.y, operation, data_was_requested
+                    );
+
+                    // Emit drag end event
+                    if let Some(drag_state) = DRAG_STATES.lock().unwrap().get(&label) {
+                        let ds = drag_state.lock().unwrap();
+                        let _ = ds.window.emit(
+                            "td-drag-end",
+                            serde_json::json!({
+                                "data_was_requested": operation != NS_DRAG_OPERATION_NONE || data_was_requested
+                            }),
+                        );
+                    }
+
+                    // Clear outgoing drag state
+                    if let Ok(mut guard) = outgoing_drag_state().lock() {
+                        *guard = None;
+                    }
+                }
+            }
+        }
+
+        // Call original
+        if let Some(original) = ORIGINAL_DRAGGING_SESSION_ENDED {
+            original(this, _sel, session, screen_point, operation);
+        }
+    }
+}
+
+/// Start a native drag operation
+pub fn start_native_drag(
+    window: &WebviewWindow,
+    data: OutgoingDragData,
+    x: i32,
+    y: i32,
+    image_data: Option<Vec<u8>>,
+    image_offset_x: Option<i32>,
+    image_offset_y: Option<i32>,
+) -> Result<(), String> {
+    let label = window.label().to_string();
+    eprintln!(
+        "[TiddlyDesktop] macOS: start_native_drag called for window '{}' at ({}, {})",
+        label, x, y
+    );
+
+    // Store outgoing drag state
+    {
+        let mut guard = outgoing_drag_state().lock().map_err(|e| e.to_string())?;
+        *guard = Some(OutgoingDragState {
+            data: data.clone(),
+            source_window_label: label.clone(),
+            data_was_requested: false,
+            last_inside_window: true,
+        });
+    }
+
+    // Clone window for use in closure
+    let window_clone = window.clone();
+    let data_clone = data.clone();
+
+    // Run on main thread since we need to access Cocoa APIs
+    let _ = window.run_on_main_thread(move || {
+        if let Err(e) = start_native_drag_on_main_thread(&window_clone, data_clone, x, y, image_data, image_offset_x, image_offset_y) {
+            eprintln!("[TiddlyDesktop] macOS: start_native_drag failed: {}", e);
+            // Clear state on failure
+            if let Ok(mut guard) = outgoing_drag_state().lock() {
+                *guard = None;
+            }
+        }
+    });
+
+    Ok(())
+}
+
+fn start_native_drag_on_main_thread(
+    window: &WebviewWindow,
+    data: OutgoingDragData,
+    x: i32,
+    y: i32,
+    image_data: Option<Vec<u8>>,
+    image_offset_x: Option<i32>,
+    image_offset_y: Option<i32>,
+) -> Result<(), String> {
+    let label = window.label().to_string();
+
+    // Get NSWindow
+    let ns_window = window.ns_window().map_err(|e| format!("Failed to get NSWindow: {}", e))?;
+    let ns_window_ptr = ns_window as *mut c_void as *mut AnyObject;
+
+    unsafe {
+        let ns_window: &NSWindow = &*(ns_window_ptr as *const NSWindow);
+
+        let content_view = ns_window.contentView()
+            .ok_or("Failed to get content view")?;
+
+        let webview = find_wkwebview(&content_view)
+            .ok_or("Failed to find WKWebView")?;
+
+        // Swizzle source methods if not already done
+        swizzle_drag_source_methods(&webview);
+
+        // Create pasteboard item with our data
+        let pasteboard_item: Retained<NSPasteboardItem> = msg_send![objc2::class!(NSPasteboardItem), new];
+
+        // Add data to pasteboard item
+        if let Some(ref text) = data.text_plain {
+            let type_str = NSString::from_str(NS_PASTEBOARD_TYPE_STRING);
+            let text_str = NSString::from_str(text);
+            let _: Bool = msg_send![&pasteboard_item, setString:&*text_str forType:&*type_str];
+        }
+
+        if let Some(ref html) = data.text_html {
+            let type_str = NSString::from_str(NS_PASTEBOARD_TYPE_HTML);
+            let html_str = NSString::from_str(html);
+            let _: Bool = msg_send![&pasteboard_item, setString:&*html_str forType:&*type_str];
+        }
+
+        if let Some(ref tiddler) = data.text_vnd_tiddler {
+            let type_str = NSString::from_str(NS_PASTEBOARD_TYPE_TIDDLER);
+            let tiddler_str = NSString::from_str(tiddler);
+            let _: Bool = msg_send![&pasteboard_item, setString:&*tiddler_str forType:&*type_str];
+        }
+
+        if let Some(ref url) = data.url {
+            let type_str = NSString::from_str(NS_PASTEBOARD_TYPE_URL);
+            let url_str = NSString::from_str(url);
+            let _: Bool = msg_send![&pasteboard_item, setString:&*url_str forType:&*type_str];
+        }
+
+        // Create dragging item
+        let dragging_item: Retained<AnyObject> = msg_send![
+            objc2::class!(NSDraggingItem),
+            alloc
+        ];
+        let dragging_item: Retained<AnyObject> = msg_send![
+            dragging_item,
+            initWithPasteboardWriter: &*pasteboard_item
+        ];
+
+        // Set dragging frame (required)
+        let offset_x = image_offset_x.unwrap_or(0);
+        let offset_y = image_offset_y.unwrap_or(0);
+        let frame = NSRect {
+            origin: NSPoint {
+                x: x as f64 - offset_x as f64,
+                y: y as f64 - offset_y as f64,
+            },
+            size: NSSize { width: 100.0, height: 50.0 },
+        };
+
+        // Try to create drag image from PNG data
+        if let Some(img_bytes) = image_data {
+            let ns_data = NSData::from_vec(img_bytes);
+            let image: Option<Retained<NSImage>> = msg_send![objc2::class!(NSImage), alloc];
+            if let Some(image) = image {
+                let image: Option<Retained<NSImage>> = msg_send![image, initWithData: &*ns_data];
+                if let Some(image) = image {
+                    let size: NSSize = msg_send![&image, size];
+                    let image_frame = NSRect {
+                        origin: NSPoint {
+                            x: x as f64 - offset_x as f64,
+                            y: y as f64 - offset_y as f64,
+                        },
+                        size,
+                    };
+                    let _: () = msg_send![&dragging_item, setDraggingFrame: image_frame contents: &*image];
+                    eprintln!("[TiddlyDesktop] macOS: Set drag image {}x{}", size.width, size.height);
+                } else {
+                    let _: () = msg_send![&dragging_item, setDraggingFrame: frame contents: std::ptr::null::<AnyObject>()];
+                }
+            } else {
+                let _: () = msg_send![&dragging_item, setDraggingFrame: frame contents: std::ptr::null::<AnyObject>()];
+            }
+        } else {
+            let _: () = msg_send![&dragging_item, setDraggingFrame: frame contents: std::ptr::null::<AnyObject>()];
+        }
+
+        // Create items array
+        let items: Retained<NSArray<AnyObject>> = NSArray::from_retained_slice(&[dragging_item]);
+
+        // Get current event for drag initiation (required by beginDraggingSession)
+        let current_event: Option<Retained<NSEvent>> = msg_send![objc2::class!(NSApp), currentEvent];
+        let event = current_event.ok_or("No current event available for drag")?;
+
+        // Start dragging session
+        // Note: beginDraggingSession:fromPoint:event: is on NSView
+        let start_point = NSPoint { x: x as f64, y: y as f64 };
+
+        eprintln!(
+            "[TiddlyDesktop] macOS: Calling beginDraggingSession at ({}, {})",
+            start_point.x, start_point.y
+        );
+
+        let session: Option<Retained<NSDraggingSession>> = msg_send![
+            &webview,
+            beginDraggingSessionWithItems: &*items
+            event: &*event
+            source: &*webview
+        ];
+
+        if session.is_some() {
+            eprintln!("[TiddlyDesktop] macOS: Native drag session started for window '{}'", label);
+            Ok(())
+        } else {
+            // Clear state on failure
+            if let Ok(mut guard) = outgoing_drag_state().lock() {
+                *guard = None;
+            }
+            Err("beginDraggingSession returned nil".to_string())
+        }
     }
 }

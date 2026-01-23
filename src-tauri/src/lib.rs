@@ -510,7 +510,7 @@ mod windows_drag {
     use std::sync::atomic::{AtomicU32, Ordering};
     use tauri::{Emitter, WebviewWindow};
     use windows::core::{GUID, HRESULT, BOOL};
-    use windows::Win32::Foundation::{HWND, LPARAM, POINTL, S_OK, E_NOINTERFACE, E_POINTER};
+    use windows::Win32::Foundation::{HWND, POINTL, S_OK, E_NOINTERFACE, E_POINTER};
     use windows::Win32::System::Com::{IDataObject, TYMED_HGLOBAL, FORMATETC, DVASPECT_CONTENT};
     use windows::Win32::System::Ole::{
         IDropTarget, OleInitialize, RegisterDragDrop, RevokeDragDrop,
@@ -518,8 +518,9 @@ mod windows_drag {
     };
     use windows::Win32::System::Memory::{GlobalLock, GlobalUnlock, GlobalSize};
     use windows::Win32::UI::Shell::{DragQueryFileW, HDROP};
-    use windows::Win32::UI::WindowsAndMessaging::{EnumChildWindows, GetClassNameW};
-    use webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2Controller4;
+    use windows::Win32::UI::WindowsAndMessaging::ScreenToClient;
+    use windows::Win32::Foundation::POINT;
+    use webview2_com::Microsoft::Web::WebView2::Win32::{ICoreWebView2Controller4, ICoreWebView2CompositionController3};
 
     #[allow(dead_code)]
     struct SendDropTarget(*mut DropTargetImpl);
@@ -595,6 +596,8 @@ mod windows_drag {
         vtbl: *const IDropTargetVtbl,
         ref_count: AtomicU32,
         window: WebviewWindow,
+        composition_controller: Option<ICoreWebView2CompositionController3>,
+        parent_hwnd: HWND,
         drag_active: Mutex<bool>,
         is_internal_drag: Mutex<bool>,
     }
@@ -610,14 +613,25 @@ mod windows_drag {
     };
 
     impl DropTargetImpl {
-        fn new(window: WebviewWindow) -> *mut Self {
+        fn new(window: WebviewWindow, composition_controller: Option<ICoreWebView2CompositionController3>, parent_hwnd: HWND) -> *mut Self {
             Box::into_raw(Box::new(Self {
                 vtbl: &DROPTARGET_VTBL,
                 ref_count: AtomicU32::new(1),
                 window,
+                composition_controller,
+                parent_hwnd,
                 drag_active: Mutex::new(false),
                 is_internal_drag: Mutex::new(false),
             }))
+        }
+
+        /// Convert screen coordinates to WebView client coordinates
+        fn screen_to_client(&self, pt: POINTL) -> POINT {
+            let mut point = POINT { x: pt.x, y: pt.y };
+            unsafe {
+                let _ = ScreenToClient(self.parent_hwnd, &mut point);
+            }
+            point
         }
 
         unsafe fn as_idroptarget(ptr: *mut Self) -> IDropTarget {
@@ -666,7 +680,7 @@ mod windows_drag {
             }
         }
 
-        unsafe extern "system" fn drag_enter(this: *mut Self, p_data_obj: *mut std::ffi::c_void, _key: u32, pt: POINTL, pdw_effect: *mut u32) -> HRESULT {
+        unsafe extern "system" fn drag_enter(this: *mut Self, p_data_obj: *mut std::ffi::c_void, key: u32, pt: POINTL, pdw_effect: *mut u32) -> HRESULT {
             let obj = &*this;
             eprintln!("[TiddlyDesktop] Windows: drag_enter called at ({}, {})", pt.x, pt.y);
             *obj.drag_active.lock().unwrap() = true;
@@ -691,9 +705,20 @@ mod windows_drag {
             eprintln!("[TiddlyDesktop] Windows: drag_enter - is_internal={}", is_internal);
             *obj.is_internal_drag.lock().unwrap() = is_internal;
 
-            // For internal drags, accept but let native HTML5 handle it
+            // For internal drags, forward to CompositionController and let WebView2 handle it
             if is_internal {
-                if !pdw_effect.is_null() { *pdw_effect = DROPEFFECT_COPY.0 as u32; }
+                eprintln!("[TiddlyDesktop] Windows: drag_enter - internal drag detected");
+                if let Some(ref cc) = obj.composition_controller {
+                    let client_pt = obj.screen_to_client(pt);
+                    let data_object: IDataObject = std::mem::transmute_copy(&p_data_obj);
+                    let mut effect = DROPEFFECT_COPY.0 as u32;
+                    let result = cc.DragEnter(&data_object, key, client_pt, &mut effect);
+                    eprintln!("[TiddlyDesktop] Windows: drag_enter - internal drag forwarded: {:?}", result);
+                    if !pdw_effect.is_null() { *pdw_effect = effect; }
+                } else {
+                    eprintln!("[TiddlyDesktop] Windows: drag_enter - internal drag but no CompositionController, accepting anyway");
+                    if !pdw_effect.is_null() { *pdw_effect = DROPEFFECT_COPY.0 as u32; }
+                }
                 return S_OK;
             }
 
@@ -702,14 +727,34 @@ mod windows_drag {
                 "x": pt.x, "y": pt.y, "screenCoords": true
             }));
 
-            if !pdw_effect.is_null() { *pdw_effect = DROPEFFECT_COPY.0 as u32; }
+            // Forward to CompositionController so WebView2 knows about the drag
+            if let Some(ref cc) = obj.composition_controller {
+                let client_pt = obj.screen_to_client(pt);
+                let data_object: IDataObject = std::mem::transmute_copy(&p_data_obj);
+                let mut effect = DROPEFFECT_COPY.0 as u32;
+                let result = cc.DragEnter(&data_object, key, client_pt, &mut effect);
+                eprintln!("[TiddlyDesktop] Windows: drag_enter - forwarded to CompositionController: {:?}", result);
+                if !pdw_effect.is_null() { *pdw_effect = effect; }
+            } else {
+                eprintln!("[TiddlyDesktop] Windows: drag_enter - no CompositionController, using td-* events only");
+                if !pdw_effect.is_null() { *pdw_effect = DROPEFFECT_COPY.0 as u32; }
+            }
             S_OK
         }
 
-        unsafe extern "system" fn drag_over(this: *mut Self, _key: u32, pt: POINTL, pdw_effect: *mut u32) -> HRESULT {
+        unsafe extern "system" fn drag_over(this: *mut Self, key: u32, pt: POINTL, pdw_effect: *mut u32) -> HRESULT {
             let obj = &*this;
+
+            // For internal drags, forward to CompositionController
             if *obj.is_internal_drag.lock().unwrap() {
-                if !pdw_effect.is_null() { *pdw_effect = DROPEFFECT_COPY.0 as u32; }
+                if let Some(ref cc) = obj.composition_controller {
+                    let client_pt = obj.screen_to_client(pt);
+                    let mut effect = DROPEFFECT_COPY.0 as u32;
+                    let _ = cc.DragOver(key, client_pt, &mut effect);
+                    if !pdw_effect.is_null() { *pdw_effect = effect; }
+                } else {
+                    if !pdw_effect.is_null() { *pdw_effect = DROPEFFECT_COPY.0 as u32; }
+                }
                 return S_OK;
             }
 
@@ -717,7 +762,15 @@ mod windows_drag {
                 "x": pt.x, "y": pt.y, "screenCoords": true
             }));
 
-            if !pdw_effect.is_null() { *pdw_effect = DROPEFFECT_COPY.0 as u32; }
+            // Forward to CompositionController
+            if let Some(ref cc) = obj.composition_controller {
+                let client_pt = obj.screen_to_client(pt);
+                let mut effect = DROPEFFECT_COPY.0 as u32;
+                let _ = cc.DragOver(key, client_pt, &mut effect);
+                if !pdw_effect.is_null() { *pdw_effect = effect; }
+            } else {
+                if !pdw_effect.is_null() { *pdw_effect = DROPEFFECT_COPY.0 as u32; }
+            }
             S_OK
         }
 
@@ -732,6 +785,11 @@ mod windows_drag {
             };
             *obj.drag_active.lock().unwrap() = false;
 
+            // Forward to CompositionController
+            if let Some(ref cc) = obj.composition_controller {
+                let _ = cc.DragLeave();
+            }
+
             if !was_internal {
                 eprintln!("[TiddlyDesktop] Windows: drag_leave - emitting td-drag-leave");
                 let _ = obj.window.emit("td-drag-leave", ());
@@ -741,7 +799,7 @@ mod windows_drag {
             S_OK
         }
 
-        unsafe extern "system" fn drop_impl(this: *mut Self, p_data_obj: *mut std::ffi::c_void, _key: u32, pt: POINTL, pdw_effect: *mut u32) -> HRESULT {
+        unsafe extern "system" fn drop_impl(this: *mut Self, p_data_obj: *mut std::ffi::c_void, key: u32, pt: POINTL, pdw_effect: *mut u32) -> HRESULT {
             let obj = &*this;
             eprintln!("[TiddlyDesktop] Windows: drop_impl called at ({}, {})", pt.x, pt.y);
             *obj.drag_active.lock().unwrap() = false;
@@ -753,10 +811,18 @@ mod windows_drag {
                 was
             };
 
-            // Internal drags handled by native HTML5
+            // Internal drags - forward to CompositionController and let WebView2 handle it
             if was_internal {
-                eprintln!("[TiddlyDesktop] Windows: drop_impl - internal drag, letting native handle it");
-                if !pdw_effect.is_null() { *pdw_effect = DROPEFFECT_COPY.0 as u32; }
+                eprintln!("[TiddlyDesktop] Windows: drop_impl - internal drag, forwarding to WebView2");
+                if let Some(ref cc) = obj.composition_controller {
+                    let client_pt = obj.screen_to_client(pt);
+                    let data_object: IDataObject = std::mem::transmute_copy(&p_data_obj);
+                    let mut effect = DROPEFFECT_COPY.0 as u32;
+                    let _ = cc.Drop(&data_object, key, client_pt, &mut effect);
+                    if !pdw_effect.is_null() { *pdw_effect = effect; }
+                } else {
+                    if !pdw_effect.is_null() { *pdw_effect = DROPEFFECT_COPY.0 as u32; }
+                }
                 return S_OK;
             }
 
@@ -1002,40 +1068,6 @@ mod windows_drag {
         }
     }
 
-    fn find_webview2_content_hwnd(parent: HWND) -> Option<HWND> {
-        fn find_deepest_chrome(hwnd: HWND, depth: usize) -> Option<(HWND, usize)> {
-            struct EnumData { chrome_windows: Vec<HWND> }
-
-            unsafe extern "system" fn callback(hwnd: HWND, lparam: LPARAM) -> BOOL {
-                let data = &mut *(lparam.0 as *mut EnumData);
-                let mut class_name = [0u16; 256];
-                let len = GetClassNameW(hwnd, &mut class_name);
-                if len > 0 {
-                    let name = OsString::from_wide(&class_name[..len as usize]).to_string_lossy().to_string();
-                    if name.starts_with("Chrome_WidgetWin") {
-                        data.chrome_windows.push(hwnd);
-                    }
-                }
-                BOOL(1)
-            }
-
-            let mut data = EnumData { chrome_windows: Vec::new() };
-            unsafe { let _ = EnumChildWindows(Some(hwnd), Some(callback), LPARAM(&mut data as *mut _ as isize)); }
-
-            let mut deepest: Option<(HWND, usize)> = None;
-            for chrome in &data.chrome_windows {
-                if let Some((child, d)) = find_deepest_chrome(*chrome, depth + 1) {
-                    if deepest.is_none() || d > deepest.unwrap().1 { deepest = Some((child, d)); }
-                } else if deepest.is_none() || depth > deepest.unwrap().1 {
-                    deepest = Some((*chrome, depth));
-                }
-            }
-            deepest
-        }
-
-        find_deepest_chrome(parent, 0).map(|(hwnd, _)| hwnd)
-    }
-
     pub fn setup_drag_handlers(window: &WebviewWindow) {
         let window_for_drop = window.clone();
         eprintln!("[TiddlyDesktop] Windows: setup_drag_handlers called for window '{}'", window.label());
@@ -1045,13 +1077,24 @@ mod windows_drag {
             unsafe {
                 use windows::core::Interface;
 
-                // Disable WebView2's external drop handling so we can intercept content drops
                 let controller = webview.controller();
+
+                // Enable WebView2's external drop handling - we'll intercept and forward events
                 if let Ok(controller4) = controller.cast::<ICoreWebView2Controller4>() {
-                    let result = controller4.SetAllowExternalDrop(false);
-                    eprintln!("[TiddlyDesktop] Windows: SetAllowExternalDrop(false) result: {:?}", result);
+                    let result = controller4.SetAllowExternalDrop(true);
+                    eprintln!("[TiddlyDesktop] Windows: SetAllowExternalDrop(true) result: {:?}", result);
                 } else {
                     eprintln!("[TiddlyDesktop] Windows: Failed to get ICoreWebView2Controller4");
+                }
+
+                // Try to get CompositionController3 for forwarding drag events to WebView2
+                let composition_controller: Option<ICoreWebView2CompositionController3> =
+                    controller.cast::<ICoreWebView2CompositionController3>().ok();
+
+                if composition_controller.is_some() {
+                    eprintln!("[TiddlyDesktop] Windows: Got ICoreWebView2CompositionController3 for drag forwarding");
+                } else {
+                    eprintln!("[TiddlyDesktop] Windows: ICoreWebView2CompositionController3 not available - drag forwarding disabled");
                 }
 
                 let _ = OleInitialize(None);
@@ -1060,30 +1103,24 @@ mod windows_drag {
                     let parent = HWND(parent_hwnd.0 as *mut _);
                     eprintln!("[TiddlyDesktop] Windows: Parent HWND = {:?}", parent);
 
-                    // Find WebView2 content window with retry
-                    let mut target = None;
-                    for i in 0..10 {
-                        if let Some(hwnd) = find_webview2_content_hwnd(parent) {
-                            eprintln!("[TiddlyDesktop] Windows: Found WebView2 content window {:?} on attempt {}", hwnd, i + 1);
-                            target = Some(hwnd);
-                            break;
-                        }
-                        std::thread::sleep(std::time::Duration::from_millis(50));
-                    }
-                    let target = target.unwrap_or_else(|| {
-                        eprintln!("[TiddlyDesktop] Windows: WebView2 content window NOT FOUND, using parent");
+                    // Register on the PARENT window, not the WebView2 content window
+                    // This ensures we receive OLE drag events before WebView2's internal handling
+                    let drop_target_ptr = DropTargetImpl::new(
+                        window_for_drop.clone(),
+                        composition_controller,
                         parent
-                    });
-
-                    let drop_target_ptr = DropTargetImpl::new(window_for_drop.clone());
+                    );
                     let drop_target = DropTargetImpl::as_idroptarget(drop_target_ptr);
 
-                    DROP_TARGET_MAP.lock().unwrap().insert(target.0 as isize, SendDropTarget(drop_target_ptr));
+                    DROP_TARGET_MAP.lock().unwrap().insert(parent.0 as isize, SendDropTarget(drop_target_ptr));
 
-                    let revoke_result = RevokeDragDrop(target);
-                    eprintln!("[TiddlyDesktop] Windows: RevokeDragDrop result: {:?}", revoke_result);
-                    let register_result = RegisterDragDrop(target, &drop_target);
-                    eprintln!("[TiddlyDesktop] Windows: RegisterDragDrop on {:?} result: {:?}", target, register_result);
+                    // Revoke any existing drop target on the parent window
+                    let revoke_result = RevokeDragDrop(parent);
+                    eprintln!("[TiddlyDesktop] Windows: RevokeDragDrop on parent result: {:?}", revoke_result);
+
+                    // Register our drop target on the parent window
+                    let register_result = RegisterDragDrop(parent, &drop_target);
+                    eprintln!("[TiddlyDesktop] Windows: RegisterDragDrop on parent {:?} result: {:?}", parent, register_result);
                 }
             }
         });

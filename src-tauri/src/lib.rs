@@ -3619,13 +3619,6 @@ async fn run_command(
 // instead, which works in the webview. For a better UX, consider implementing a custom
 // TiddlyWiki-based modal dialog for text input.
 
-/// JavaScript initialization script - provides confirm modal and close handling for wiki windows
-fn get_init_script_with_path(wiki_path: &str) -> String {
-    format!(r#"
-    window.__WIKI_PATH__ = "{}";
-    "#, wiki_path.replace('\\', "\\\\").replace('"', "\\\"")) + get_dialog_init_script()
-}
-
 /// Full JavaScript initialization script for wiki windows - sets all necessary variables early
 /// This ensures __WIKI_PATH__, __WINDOW_LABEL__, and __IS_MAIN_WIKI__ are available before
 /// setupExternalAttachments runs, avoiding race conditions with protocol handler injection.

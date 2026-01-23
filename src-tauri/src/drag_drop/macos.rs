@@ -35,6 +35,12 @@ const NS_PASTEBOARD_TYPE_STRING: &str = "public.utf8-plain-text";
 const NS_PASTEBOARD_TYPE_HTML: &str = "public.html";
 const NS_PASTEBOARD_TYPE_URL: &str = "public.url";
 const NS_PASTEBOARD_TYPE_FILE_URL: &str = "public.file-url";
+/// TiddlyWiki tiddler JSON format
+const NS_PASTEBOARD_TYPE_TIDDLER: &str = "text/vnd.tiddler";
+const NS_PASTEBOARD_TYPE_JSON: &str = "public.json";
+/// Browser custom data formats (may contain text/vnd.tiddler)
+const NS_PASTEBOARD_TYPE_MOZ_CUSTOM: &str = "org.mozilla.custom-clipdata";
+const NS_PASTEBOARD_TYPE_CHROME_CUSTOM: &str = "org.chromium.web-custom-data";
 
 /// State for tracking drag operations per window
 struct DragState {
@@ -148,6 +154,12 @@ fn get_class_name(obj: &NSView) -> String {
 /// Create an NSArray of pasteboard types we accept
 fn create_drag_types_array() -> Retained<NSArray<NSString>> {
     let types = vec![
+        // Browser custom data formats - highest priority (may contain text/vnd.tiddler)
+        NSString::from_str(NS_PASTEBOARD_TYPE_MOZ_CUSTOM),
+        NSString::from_str(NS_PASTEBOARD_TYPE_CHROME_CUSTOM),
+        // TiddlyWiki tiddler JSON - highest priority for cross-wiki drag
+        NSString::from_str(NS_PASTEBOARD_TYPE_TIDDLER),
+        NSString::from_str(NS_PASTEBOARD_TYPE_JSON),
         NSString::from_str(NS_PASTEBOARD_TYPE_STRING),
         NSString::from_str(NS_PASTEBOARD_TYPE_HTML),
         NSString::from_str(NS_PASTEBOARD_TYPE_URL),
@@ -162,16 +174,212 @@ fn create_drag_types_array() -> Retained<NSArray<NSString>> {
     NSArray::from_retained_slice(&types)
 }
 
+/// Decode UTF-16LE bytes to a String
+fn decode_utf16le(data: &[u8]) -> String {
+    if data.len() < 2 {
+        return String::new();
+    }
+    let u16_vec: Vec<u16> = data
+        .chunks_exact(2)
+        .map(|chunk| u16::from_le_bytes([chunk[0], chunk[1]]))
+        .collect();
+    String::from_utf16_lossy(&u16_vec)
+}
+
+/// Parse Mozilla's custom clipdata format
+fn parse_moz_custom_clipdata(data: &[u8]) -> Option<HashMap<String, String>> {
+    if data.len() < 8 {
+        return None;
+    }
+
+    let mut result = HashMap::new();
+    let mut offset = 0;
+
+    let num_entries = u32::from_be_bytes([data[0], data[1], data[2], data[3]]) as usize;
+    offset += 4;
+
+    for _ in 0..num_entries {
+        if offset + 4 > data.len() { break; }
+
+        let mime_len = u32::from_be_bytes([
+            data[offset], data[offset + 1], data[offset + 2], data[offset + 3],
+        ]) as usize;
+        offset += 4;
+
+        if offset + mime_len > data.len() { break; }
+        let mime_type = decode_utf16le(&data[offset..offset + mime_len]);
+        offset += mime_len;
+
+        if offset + 4 > data.len() { break; }
+        let content_len = u32::from_be_bytes([
+            data[offset], data[offset + 1], data[offset + 2], data[offset + 3],
+        ]) as usize;
+        offset += 4;
+
+        if offset + content_len > data.len() {
+            let content = decode_utf16le(&data[offset..]);
+            if !mime_type.is_empty() && !content.is_empty() {
+                result.insert(mime_type, content);
+            }
+            break;
+        }
+
+        let content = decode_utf16le(&data[offset..offset + content_len]);
+        offset += content_len;
+
+        if !mime_type.is_empty() {
+            result.insert(mime_type, content);
+        }
+    }
+
+    if result.is_empty() { None } else { Some(result) }
+}
+
+/// Parse Chrome's custom data format (Pickle)
+fn parse_chromium_custom_data(data: &[u8]) -> Option<HashMap<String, String>> {
+    if data.len() < 12 {
+        return None;
+    }
+
+    let mut result = HashMap::new();
+    let mut offset = 4; // Skip payload size
+
+    let num_entries = u64::from_le_bytes([
+        data[offset], data[offset + 1], data[offset + 2], data[offset + 3],
+        data[offset + 4], data[offset + 5], data[offset + 6], data[offset + 7],
+    ]) as usize;
+    offset += 8;
+
+    for _ in 0..num_entries {
+        if offset + 4 > data.len() { break; }
+
+        let mime_char_len = u32::from_le_bytes([
+            data[offset], data[offset + 1], data[offset + 2], data[offset + 3],
+        ]) as usize;
+        offset += 4;
+
+        let mime_byte_len = mime_char_len * 2;
+        if offset + mime_byte_len > data.len() { break; }
+
+        let mime_type = decode_utf16le(&data[offset..offset + mime_byte_len]);
+        offset += mime_byte_len;
+        offset += (4 - (mime_byte_len % 4)) % 4;
+
+        if offset + 4 > data.len() { break; }
+
+        let content_char_len = u32::from_le_bytes([
+            data[offset], data[offset + 1], data[offset + 2], data[offset + 3],
+        ]) as usize;
+        offset += 4;
+
+        let content_byte_len = content_char_len * 2;
+        if offset + content_byte_len > data.len() {
+            let content = decode_utf16le(&data[offset..]);
+            if !mime_type.is_empty() && !content.is_empty() {
+                result.insert(mime_type, content);
+            }
+            break;
+        }
+
+        let content = decode_utf16le(&data[offset..offset + content_byte_len]);
+        offset += content_byte_len;
+        offset += (4 - (content_byte_len % 4)) % 4;
+
+        if !mime_type.is_empty() {
+            result.insert(mime_type, content);
+        }
+    }
+
+    if result.is_empty() { None } else { Some(result) }
+}
+
 /// Extract content from a drag pasteboard
 pub fn extract_pasteboard_content(pasteboard: &NSPasteboard) -> Option<DragContentData> {
     let mut types = Vec::new();
     let mut data = HashMap::new();
 
-    // Try to get plain text
+    // 0a. Try Mozilla custom clipdata format first
+    let moz_type = NSString::from_str(NS_PASTEBOARD_TYPE_MOZ_CUSTOM);
+    if let Some(moz_data) = pasteboard.dataForType(&moz_type) {
+        let bytes: Vec<u8> = moz_data.bytes().to_vec();
+        if let Some(moz_entries) = parse_moz_custom_clipdata(&bytes) {
+            eprintln!("[TiddlyDesktop] macOS: Parsed Mozilla custom clipdata, found {} entries", moz_entries.len());
+            if let Some(tiddler_json) = moz_entries.get("text/vnd.tiddler") {
+                eprintln!("[TiddlyDesktop] macOS: Found text/vnd.tiddler in Mozilla clipdata!");
+                types.push("text/vnd.tiddler".to_string());
+                data.insert("text/vnd.tiddler".to_string(), tiddler_json.clone());
+            }
+            for (mime_type, content) in moz_entries {
+                if !data.contains_key(&mime_type) {
+                    types.push(mime_type.clone());
+                    data.insert(mime_type, content);
+                }
+            }
+        }
+    }
+
+    // 0b. Try Chrome custom data format
+    if !data.contains_key("text/vnd.tiddler") {
+        let chrome_type = NSString::from_str(NS_PASTEBOARD_TYPE_CHROME_CUSTOM);
+        if let Some(chrome_data) = pasteboard.dataForType(&chrome_type) {
+            let bytes: Vec<u8> = chrome_data.bytes().to_vec();
+            if let Some(chrome_entries) = parse_chromium_custom_data(&bytes) {
+                eprintln!("[TiddlyDesktop] macOS: Parsed Chrome custom clipdata, found {} entries", chrome_entries.len());
+                if let Some(tiddler_json) = chrome_entries.get("text/vnd.tiddler") {
+                    eprintln!("[TiddlyDesktop] macOS: Found text/vnd.tiddler in Chrome clipdata!");
+                    types.push("text/vnd.tiddler".to_string());
+                    data.insert("text/vnd.tiddler".to_string(), tiddler_json.clone());
+                }
+                for (mime_type, content) in chrome_entries {
+                    if !data.contains_key(&mime_type) {
+                        types.push(mime_type.clone());
+                        data.insert(mime_type, content);
+                    }
+                }
+            }
+        }
+    }
+
+    // 1. Try to get TiddlyWiki tiddler JSON (highest priority for cross-wiki drag)
+    let tiddler_type = NSString::from_str(NS_PASTEBOARD_TYPE_TIDDLER);
+    if let Some(tiddler) = pasteboard.stringForType(&tiddler_type) {
+        let tiddler_str = tiddler.to_string();
+        if !tiddler_str.is_empty() {
+            eprintln!("[TiddlyDesktop] macOS: Got tiddler data!");
+            types.push("text/vnd.tiddler".to_string());
+            data.insert("text/vnd.tiddler".to_string(), tiddler_str.clone());
+            // Also include as text/plain for fallback
+            types.push("text/plain".to_string());
+            data.insert("text/plain".to_string(), tiddler_str);
+        }
+    }
+
+    // 2. Try to get JSON
+    let json_type = NSString::from_str(NS_PASTEBOARD_TYPE_JSON);
+    if let Some(json) = pasteboard.stringForType(&json_type) {
+        let json_str = json.to_string();
+        if !json_str.is_empty() && !data.contains_key("application/json") {
+            types.push("application/json".to_string());
+            data.insert("application/json".to_string(), json_str);
+        }
+    }
+
+    // 3. Try to get plain text
     let text_type = NSString::from_str(NS_PASTEBOARD_TYPE_STRING);
     if let Some(text) = pasteboard.stringForType(&text_type) {
         let text_str = text.to_string();
-        if !text_str.is_empty() {
+        if !text_str.is_empty() && !data.contains_key("text/plain") {
+            // Check if plain text looks like tiddler JSON (browser may not expose text/vnd.tiddler)
+            let looks_like_tiddler_json = text_str.trim_start().starts_with('[')
+                && text_str.contains("\"title\"")
+                && (text_str.contains("\"text\"") || text_str.contains("\"fields\""));
+
+            if looks_like_tiddler_json && !data.contains_key("text/vnd.tiddler") {
+                eprintln!("[TiddlyDesktop] macOS: Detected tiddler JSON in plain text!");
+                types.push("text/vnd.tiddler".to_string());
+                data.insert("text/vnd.tiddler".to_string(), text_str.clone());
+            }
+
             types.push("text/plain".to_string());
             data.insert("text/plain".to_string(), text_str.clone());
 
@@ -185,7 +393,7 @@ pub fn extract_pasteboard_content(pasteboard: &NSPasteboard) -> Option<DragConte
         }
     }
 
-    // Try to get HTML
+    // 4. Try to get HTML
     let html_type = NSString::from_str(NS_PASTEBOARD_TYPE_HTML);
     if let Some(html) = pasteboard.stringForType(&html_type) {
         let html_str = html.to_string();
@@ -195,7 +403,7 @@ pub fn extract_pasteboard_content(pasteboard: &NSPasteboard) -> Option<DragConte
         }
     }
 
-    // Try to get URL
+    // 5. Try to get URL
     let url_type = NSString::from_str(NS_PASTEBOARD_TYPE_URL);
     if let Some(url) = pasteboard.stringForType(&url_type) {
         let url_str = url.to_string();

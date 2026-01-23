@@ -99,6 +99,20 @@ fn get_cf_moz_url() -> u16 {
     unsafe { RegisterClipboardFormatW(w!("text/x-moz-url")) as u16 }
 }
 
+/// Mozilla custom clipdata format (contains custom MIME types like text/vnd.tiddler)
+fn get_cf_moz_custom_clipdata() -> u16 {
+    use windows::core::w;
+    use windows::Win32::System::DataExchange::RegisterClipboardFormatW;
+    unsafe { RegisterClipboardFormatW(w!("application/x-moz-custom-clipdata")) as u16 }
+}
+
+/// Chrome custom data format (Pickle format with custom MIME types)
+fn get_cf_chromium_custom_data() -> u16 {
+    use windows::core::w;
+    use windows::Win32::System::DataExchange::RegisterClipboardFormatW;
+    unsafe { RegisterClipboardFormatW(w!("Chromium Web Custom MIME Data Format")) as u16 }
+}
+
 /// Data captured from a drag operation
 #[derive(Clone, Debug, serde::Serialize)]
 pub struct DragContentData {
@@ -476,11 +490,59 @@ impl DropTargetImpl {
         let mut types = Vec::new();
         let mut data = HashMap::new();
 
-        // 1. text/vnd.tiddler
-        let cf_tiddler = get_cf_tiddler();
-        if let Some(tiddler) = self.get_string_data(data_object, cf_tiddler) {
-            types.push("text/vnd.tiddler".to_string());
-            data.insert("text/vnd.tiddler".to_string(), tiddler);
+        // 0a. Try Mozilla custom clipdata format first (contains custom MIME types)
+        let cf_moz_custom = get_cf_moz_custom_clipdata();
+        if let Some(raw_data) = self.get_raw_data(data_object, cf_moz_custom) {
+            if let Some(moz_data) = parse_moz_custom_clipdata(&raw_data) {
+                eprintln!(
+                    "[TiddlyDesktop] Windows: Parsed Mozilla custom clipdata, found {} entries",
+                    moz_data.len()
+                );
+                if let Some(tiddler_json) = moz_data.get("text/vnd.tiddler") {
+                    eprintln!("[TiddlyDesktop] Windows: Found text/vnd.tiddler in Mozilla clipdata!");
+                    types.push("text/vnd.tiddler".to_string());
+                    data.insert("text/vnd.tiddler".to_string(), tiddler_json.clone());
+                }
+                for (mime_type, content) in moz_data {
+                    if !data.contains_key(&mime_type) {
+                        types.push(mime_type.clone());
+                        data.insert(mime_type, content);
+                    }
+                }
+            }
+        }
+
+        // 0b. Try Chrome custom data format (Pickle format)
+        if !data.contains_key("text/vnd.tiddler") {
+            let cf_chrome_custom = get_cf_chromium_custom_data();
+            if let Some(raw_data) = self.get_raw_data(data_object, cf_chrome_custom) {
+                if let Some(chrome_data) = parse_chromium_custom_data(&raw_data) {
+                    eprintln!(
+                        "[TiddlyDesktop] Windows: Parsed Chrome custom clipdata, found {} entries",
+                        chrome_data.len()
+                    );
+                    if let Some(tiddler_json) = chrome_data.get("text/vnd.tiddler") {
+                        eprintln!("[TiddlyDesktop] Windows: Found text/vnd.tiddler in Chrome clipdata!");
+                        types.push("text/vnd.tiddler".to_string());
+                        data.insert("text/vnd.tiddler".to_string(), tiddler_json.clone());
+                    }
+                    for (mime_type, content) in chrome_data {
+                        if !data.contains_key(&mime_type) {
+                            types.push(mime_type.clone());
+                            data.insert(mime_type, content);
+                        }
+                    }
+                }
+            }
+        }
+
+        // 1. text/vnd.tiddler (direct format, if not already found)
+        if !data.contains_key("text/vnd.tiddler") {
+            let cf_tiddler = get_cf_tiddler();
+            if let Some(tiddler) = self.get_string_data(data_object, cf_tiddler) {
+                types.push("text/vnd.tiddler".to_string());
+                data.insert("text/vnd.tiddler".to_string(), tiddler);
+            }
         }
 
         // 2. URL (UniformResourceLocator)
@@ -520,12 +582,34 @@ impl DropTargetImpl {
 
         // 5. text/plain (CF_UNICODETEXT)
         if let Some(text) = self.get_unicode_text(data_object) {
+            // Check if plain text looks like tiddler JSON (browser may not expose text/vnd.tiddler)
+            let looks_like_tiddler_json = text.trim_start().starts_with('[')
+                && text.contains("\"title\"")
+                && (text.contains("\"text\"") || text.contains("\"fields\""));
+
+            if looks_like_tiddler_json && !data.contains_key("text/vnd.tiddler") {
+                eprintln!("[TiddlyDesktop] Windows: Detected tiddler JSON in plain text!");
+                types.push("text/vnd.tiddler".to_string());
+                data.insert("text/vnd.tiddler".to_string(), text.clone());
+            }
+
             types.push("text/plain".to_string());
             data.insert("text/plain".to_string(), text);
         }
 
         // 6. Text (CF_TEXT fallback)
         if let Some(text) = self.get_ansi_text(data_object) {
+            // Check if ANSI text looks like tiddler JSON
+            let looks_like_tiddler_json = text.trim_start().starts_with('[')
+                && text.contains("\"title\"")
+                && (text.contains("\"text\"") || text.contains("\"fields\""));
+
+            if looks_like_tiddler_json && !data.contains_key("text/vnd.tiddler") {
+                eprintln!("[TiddlyDesktop] Windows: Detected tiddler JSON in ANSI text!");
+                types.push("text/vnd.tiddler".to_string());
+                data.insert("text/vnd.tiddler".to_string(), text.clone());
+            }
+
             types.push("Text".to_string());
             data.insert("Text".to_string(), text);
         }
@@ -678,6 +762,32 @@ impl DropTargetImpl {
         None
     }
 
+    fn get_raw_data(&self, data_object: &IDataObject, cf: u16) -> Option<Vec<u8>> {
+        let format = FORMATETC {
+            cfFormat: cf,
+            ptd: std::ptr::null_mut(),
+            dwAspect: DVASPECT_CONTENT.0 as u32,
+            lindex: -1,
+            tymed: TYMED_HGLOBAL.0 as u32,
+        };
+
+        unsafe {
+            if let Ok(medium) = data_object.GetData(&format) {
+                if !medium.u.hGlobal.0.is_null() {
+                    let ptr = GlobalLock(medium.u.hGlobal) as *const u8;
+                    if !ptr.is_null() {
+                        let size = GlobalSize(medium.u.hGlobal);
+                        let slice = std::slice::from_raw_parts(ptr, size);
+                        let data = slice.to_vec();
+                        let _ = GlobalUnlock(medium.u.hGlobal);
+                        return Some(data);
+                    }
+                }
+            }
+        }
+        None
+    }
+
     fn get_file_paths(&self, data_object: &IDataObject) -> Vec<String> {
         let mut paths = Vec::new();
         let format = FORMATETC {
@@ -718,6 +828,141 @@ fn choose_drop_effect(allowed: DROPEFFECT) -> DROPEFFECT {
     } else {
         DROPEFFECT_COPY
     }
+}
+
+/// Decode UTF-16LE bytes to a String
+fn decode_utf16le(data: &[u8]) -> String {
+    if data.len() < 2 {
+        return String::new();
+    }
+    let u16_vec: Vec<u16> = data
+        .chunks_exact(2)
+        .map(|chunk| u16::from_le_bytes([chunk[0], chunk[1]]))
+        .collect();
+    String::from_utf16_lossy(&u16_vec)
+}
+
+/// Parse Mozilla's application/x-moz-custom-clipdata format
+fn parse_moz_custom_clipdata(data: &[u8]) -> Option<HashMap<String, String>> {
+    if data.len() < 8 {
+        return None;
+    }
+
+    let mut result = HashMap::new();
+    let mut offset = 0;
+
+    let num_entries = u32::from_be_bytes([data[0], data[1], data[2], data[3]]) as usize;
+    offset += 4;
+
+    for _ in 0..num_entries {
+        if offset + 4 > data.len() {
+            break;
+        }
+
+        let mime_len = u32::from_be_bytes([
+            data[offset], data[offset + 1], data[offset + 2], data[offset + 3],
+        ]) as usize;
+        offset += 4;
+
+        if offset + mime_len > data.len() {
+            break;
+        }
+
+        let mime_type = decode_utf16le(&data[offset..offset + mime_len]);
+        offset += mime_len;
+
+        if offset + 4 > data.len() {
+            break;
+        }
+
+        let content_len = u32::from_be_bytes([
+            data[offset], data[offset + 1], data[offset + 2], data[offset + 3],
+        ]) as usize;
+        offset += 4;
+
+        if offset + content_len > data.len() {
+            let available = data.len() - offset;
+            let content = decode_utf16le(&data[offset..offset + available]);
+            if !mime_type.is_empty() && !content.is_empty() {
+                result.insert(mime_type, content);
+            }
+            break;
+        }
+
+        let content = decode_utf16le(&data[offset..offset + content_len]);
+        offset += content_len;
+
+        if !mime_type.is_empty() {
+            result.insert(mime_type, content);
+        }
+    }
+
+    if result.is_empty() { None } else { Some(result) }
+}
+
+/// Parse Chrome's custom data format (Pickle)
+fn parse_chromium_custom_data(data: &[u8]) -> Option<HashMap<String, String>> {
+    if data.len() < 12 {
+        return None;
+    }
+
+    let mut result = HashMap::new();
+    let mut offset = 4; // Skip payload size
+
+    let num_entries = u64::from_le_bytes([
+        data[offset], data[offset + 1], data[offset + 2], data[offset + 3],
+        data[offset + 4], data[offset + 5], data[offset + 6], data[offset + 7],
+    ]) as usize;
+    offset += 8;
+
+    for _ in 0..num_entries {
+        if offset + 4 > data.len() {
+            break;
+        }
+
+        let mime_char_len = u32::from_le_bytes([
+            data[offset], data[offset + 1], data[offset + 2], data[offset + 3],
+        ]) as usize;
+        offset += 4;
+
+        let mime_byte_len = mime_char_len * 2;
+        if offset + mime_byte_len > data.len() {
+            break;
+        }
+
+        let mime_type = decode_utf16le(&data[offset..offset + mime_byte_len]);
+        offset += mime_byte_len;
+        offset += (4 - (mime_byte_len % 4)) % 4; // Align to 4-byte boundary
+
+        if offset + 4 > data.len() {
+            break;
+        }
+
+        let content_char_len = u32::from_le_bytes([
+            data[offset], data[offset + 1], data[offset + 2], data[offset + 3],
+        ]) as usize;
+        offset += 4;
+
+        let content_byte_len = content_char_len * 2;
+        if offset + content_byte_len > data.len() {
+            let available = data.len() - offset;
+            let content = decode_utf16le(&data[offset..offset + available]);
+            if !mime_type.is_empty() && !content.is_empty() {
+                result.insert(mime_type, content);
+            }
+            break;
+        }
+
+        let content = decode_utf16le(&data[offset..offset + content_byte_len]);
+        offset += content_byte_len;
+        offset += (4 - (content_byte_len % 4)) % 4; // Align to 4-byte boundary
+
+        if !mime_type.is_empty() {
+            result.insert(mime_type, content);
+        }
+    }
+
+    if result.is_empty() { None } else { Some(result) }
 }
 
 /// Find the WebView2 content window (deepest Chrome_WidgetWin_*)

@@ -167,13 +167,21 @@ fn setup_widget_drag_handlers(widget: &gtk::Widget, state: Rc<RefCell<DragState>
     );
 
     // Define target types we accept - include both OTHER_APP and SAME_WIDGET
+    // Custom data containers (may contain text/vnd.tiddler):
+    // - Firefox: application/x-moz-custom-clipdata
+    // - Chrome: chromium/x-web-custom-data
     let targets = vec![
-        TargetEntry::new("text/plain", TargetFlags::OTHER_APP | TargetFlags::OTHER_WIDGET, 0),
-        TargetEntry::new("text/html", TargetFlags::OTHER_APP | TargetFlags::OTHER_WIDGET, 1),
-        TargetEntry::new("text/uri-list", TargetFlags::OTHER_APP | TargetFlags::OTHER_WIDGET, 2),
-        TargetEntry::new("STRING", TargetFlags::OTHER_APP | TargetFlags::OTHER_WIDGET, 3),
-        TargetEntry::new("UTF8_STRING", TargetFlags::OTHER_APP | TargetFlags::OTHER_WIDGET, 4),
-        TargetEntry::new("TEXT", TargetFlags::OTHER_APP | TargetFlags::OTHER_WIDGET, 5),
+        TargetEntry::new("application/x-moz-custom-clipdata", TargetFlags::OTHER_APP | TargetFlags::OTHER_WIDGET, 0),
+        TargetEntry::new("chromium/x-web-custom-data", TargetFlags::OTHER_APP | TargetFlags::OTHER_WIDGET, 1),
+        TargetEntry::new("text/vnd.tiddler", TargetFlags::OTHER_APP | TargetFlags::OTHER_WIDGET, 2),
+        TargetEntry::new("application/json", TargetFlags::OTHER_APP | TargetFlags::OTHER_WIDGET, 3),
+        TargetEntry::new("text/x-moz-url", TargetFlags::OTHER_APP | TargetFlags::OTHER_WIDGET, 4),
+        TargetEntry::new("text/plain", TargetFlags::OTHER_APP | TargetFlags::OTHER_WIDGET, 5),
+        TargetEntry::new("text/html", TargetFlags::OTHER_APP | TargetFlags::OTHER_WIDGET, 6),
+        TargetEntry::new("text/uri-list", TargetFlags::OTHER_APP | TargetFlags::OTHER_WIDGET, 7),
+        TargetEntry::new("STRING", TargetFlags::OTHER_APP | TargetFlags::OTHER_WIDGET, 8),
+        TargetEntry::new("UTF8_STRING", TargetFlags::OTHER_APP | TargetFlags::OTHER_WIDGET, 9),
+        TargetEntry::new("TEXT", TargetFlags::OTHER_APP | TargetFlags::OTHER_WIDGET, 10),
     ];
 
     // Set up the widget as a drop destination
@@ -259,7 +267,10 @@ fn setup_widget_drag_handlers(widget: &gtk::Widget, state: Rc<RefCell<DragState>
         );
 
         // Find the best target to request
-        let preferred_targets = ["text/html", "text/uri-list", "UTF8_STRING", "text/plain", "STRING"];
+        // Browser custom data containers that may contain text/vnd.tiddler:
+        // - Firefox: application/x-moz-custom-clipdata
+        // - Chrome: chromium/x-web-custom-data (Pickle format)
+        let preferred_targets = ["application/x-moz-custom-clipdata", "chromium/x-web-custom-data", "text/vnd.tiddler", "application/json", "text/x-moz-url", "text/html", "text/uri-list", "UTF8_STRING", "text/plain", "STRING"];
         let mut requested = false;
 
         for pref in &preferred_targets {
@@ -302,13 +313,21 @@ fn setup_widget_drag_handlers(widget: &gtk::Widget, state: Rc<RefCell<DragState>
 /// Set up drag handlers on WebKit widget (overrides WebKitGTK's internal handling)
 fn setup_webkit_drag_handlers(widget: &gtk::Widget, state: Rc<RefCell<DragState>>) {
     // Define target types we accept
+    // Custom data containers (may contain text/vnd.tiddler):
+    // - Firefox: application/x-moz-custom-clipdata
+    // - Chrome: chromium/x-web-custom-data
     let targets = vec![
-        TargetEntry::new("text/plain", TargetFlags::OTHER_APP | TargetFlags::OTHER_WIDGET, 0),
-        TargetEntry::new("text/html", TargetFlags::OTHER_APP | TargetFlags::OTHER_WIDGET, 1),
-        TargetEntry::new("text/uri-list", TargetFlags::OTHER_APP | TargetFlags::OTHER_WIDGET, 2),
-        TargetEntry::new("STRING", TargetFlags::OTHER_APP | TargetFlags::OTHER_WIDGET, 3),
-        TargetEntry::new("UTF8_STRING", TargetFlags::OTHER_APP | TargetFlags::OTHER_WIDGET, 4),
-        TargetEntry::new("TEXT", TargetFlags::OTHER_APP | TargetFlags::OTHER_WIDGET, 5),
+        TargetEntry::new("application/x-moz-custom-clipdata", TargetFlags::OTHER_APP | TargetFlags::OTHER_WIDGET, 0),
+        TargetEntry::new("chromium/x-web-custom-data", TargetFlags::OTHER_APP | TargetFlags::OTHER_WIDGET, 1),
+        TargetEntry::new("text/vnd.tiddler", TargetFlags::OTHER_APP | TargetFlags::OTHER_WIDGET, 2),
+        TargetEntry::new("application/json", TargetFlags::OTHER_APP | TargetFlags::OTHER_WIDGET, 3),
+        TargetEntry::new("text/x-moz-url", TargetFlags::OTHER_APP | TargetFlags::OTHER_WIDGET, 4),
+        TargetEntry::new("text/plain", TargetFlags::OTHER_APP | TargetFlags::OTHER_WIDGET, 5),
+        TargetEntry::new("text/html", TargetFlags::OTHER_APP | TargetFlags::OTHER_WIDGET, 6),
+        TargetEntry::new("text/uri-list", TargetFlags::OTHER_APP | TargetFlags::OTHER_WIDGET, 7),
+        TargetEntry::new("STRING", TargetFlags::OTHER_APP | TargetFlags::OTHER_WIDGET, 8),
+        TargetEntry::new("UTF8_STRING", TargetFlags::OTHER_APP | TargetFlags::OTHER_WIDGET, 9),
+        TargetEntry::new("TEXT", TargetFlags::OTHER_APP | TargetFlags::OTHER_WIDGET, 10),
     ];
 
     // Override WebKitGTK's drag handling by setting our own destination
@@ -420,7 +439,13 @@ fn setup_webkit_drag_handlers(widget: &gtk::Widget, state: Rc<RefCell<DragState>
 
         // Request data
         let targets = context.list_targets();
-        let preferred_targets = ["text/html", "text/uri-list", "UTF8_STRING", "text/plain", "STRING"];
+        eprintln!(
+            "[TiddlyDesktop] Linux: WebKit available targets: {:?}",
+            targets.iter().map(|a| a.name()).collect::<Vec<_>>()
+        );
+        // application/x-moz-custom-clipdata may contain custom MIME types like text/vnd.tiddler
+        // text/x-moz-url contains URL + title in Mozilla format
+        let preferred_targets = ["application/x-moz-custom-clipdata", "text/vnd.tiddler", "application/json", "text/x-moz-url", "text/html", "text/uri-list", "UTF8_STRING", "text/plain", "STRING"];
         let mut requested = false;
 
         for pref in &preferred_targets {
@@ -459,6 +484,257 @@ fn setup_webkit_drag_handlers(widget: &gtk::Widget, state: Rc<RefCell<DragState>
     );
 
     eprintln!("[TiddlyDesktop] Linux: WebKit drag handlers set up");
+}
+
+/// Parse Mozilla's application/x-moz-custom-clipdata format
+/// Format:
+/// - 4 bytes big-endian: number of entries
+/// - For each entry:
+///   - 4 bytes big-endian: length of MIME type in bytes (UTF-16LE)
+///   - MIME type as UTF-16LE
+///   - 4 bytes big-endian: length of data in bytes (UTF-16LE)
+///   - Data as UTF-16LE
+fn parse_moz_custom_clipdata(data: &[u8]) -> Option<HashMap<String, String>> {
+    if data.len() < 8 {
+        return None;
+    }
+
+    let mut result = HashMap::new();
+    let mut offset = 0;
+
+    // Read number of entries (4 bytes big-endian)
+    let num_entries = u32::from_be_bytes([data[0], data[1], data[2], data[3]]) as usize;
+    offset += 4;
+
+    eprintln!(
+        "[TiddlyDesktop] Linux: Mozilla clipdata: {} entries",
+        num_entries
+    );
+
+    for i in 0..num_entries {
+        if offset + 4 > data.len() {
+            eprintln!(
+                "[TiddlyDesktop] Linux: Mozilla clipdata: truncated at entry {} (mime type length)",
+                i
+            );
+            break;
+        }
+
+        // Read MIME type length (4 bytes big-endian, in bytes)
+        let mime_len = u32::from_be_bytes([
+            data[offset],
+            data[offset + 1],
+            data[offset + 2],
+            data[offset + 3],
+        ]) as usize;
+        offset += 4;
+
+        if offset + mime_len > data.len() {
+            eprintln!(
+                "[TiddlyDesktop] Linux: Mozilla clipdata: truncated at entry {} (mime type data)",
+                i
+            );
+            break;
+        }
+
+        // Read MIME type as UTF-16LE
+        let mime_bytes = &data[offset..offset + mime_len];
+        let mime_type = decode_utf16le(mime_bytes);
+        offset += mime_len;
+
+        if offset + 4 > data.len() {
+            eprintln!(
+                "[TiddlyDesktop] Linux: Mozilla clipdata: truncated at entry {} (content length)",
+                i
+            );
+            break;
+        }
+
+        // Read content length (4 bytes big-endian, in bytes)
+        let content_len = u32::from_be_bytes([
+            data[offset],
+            data[offset + 1],
+            data[offset + 2],
+            data[offset + 3],
+        ]) as usize;
+        offset += 4;
+
+        if offset + content_len > data.len() {
+            eprintln!(
+                "[TiddlyDesktop] Linux: Mozilla clipdata: truncated at entry {} (content data, need {} have {})",
+                i, content_len, data.len() - offset
+            );
+            // Try to read what we can
+            let available = data.len() - offset;
+            let content_bytes = &data[offset..offset + available];
+            let content = decode_utf16le(content_bytes);
+            if !mime_type.is_empty() && !content.is_empty() {
+                result.insert(mime_type, content);
+            }
+            break;
+        }
+
+        // Read content as UTF-16LE
+        let content_bytes = &data[offset..offset + content_len];
+        let content = decode_utf16le(content_bytes);
+        offset += content_len;
+
+        eprintln!(
+            "[TiddlyDesktop] Linux: Mozilla clipdata entry {}: {} = {} bytes -> {} chars",
+            i,
+            mime_type,
+            content_len,
+            content.len()
+        );
+
+        if !mime_type.is_empty() {
+            result.insert(mime_type, content);
+        }
+    }
+
+    if result.is_empty() {
+        None
+    } else {
+        Some(result)
+    }
+}
+
+/// Decode UTF-16LE bytes to a String
+fn decode_utf16le(data: &[u8]) -> String {
+    if data.len() < 2 {
+        return String::new();
+    }
+
+    // Convert bytes to u16 array (little-endian)
+    let u16_vec: Vec<u16> = data
+        .chunks_exact(2)
+        .map(|chunk| u16::from_le_bytes([chunk[0], chunk[1]]))
+        .collect();
+
+    // Decode UTF-16
+    String::from_utf16_lossy(&u16_vec)
+}
+
+/// Parse Chrome's chromium/x-web-custom-data format (Pickle)
+/// Format (all little-endian):
+/// - 4 bytes: payload size
+/// - 8 bytes: number of entries (64-bit)
+/// - For each entry:
+///   - 4 bytes: MIME type length (in chars, not bytes)
+///   - MIME type as UTF-16LE (padded to 4-byte boundary)
+///   - 4 bytes: data length (in chars, not bytes)
+///   - Data as UTF-16LE (padded to 4-byte boundary)
+fn parse_chromium_custom_data(data: &[u8]) -> Option<HashMap<String, String>> {
+    if data.len() < 12 {
+        return None;
+    }
+
+    let mut result = HashMap::new();
+    let mut offset = 0;
+
+    // Skip payload size (4 bytes)
+    offset += 4;
+
+    // Read number of entries (8 bytes little-endian, but usually small)
+    if offset + 8 > data.len() {
+        return None;
+    }
+    let num_entries = u64::from_le_bytes([
+        data[offset],
+        data[offset + 1],
+        data[offset + 2],
+        data[offset + 3],
+        data[offset + 4],
+        data[offset + 5],
+        data[offset + 6],
+        data[offset + 7],
+    ]) as usize;
+    offset += 8;
+
+    eprintln!(
+        "[TiddlyDesktop] Linux: Chrome clipdata: {} entries",
+        num_entries
+    );
+
+    for i in 0..num_entries {
+        if offset + 4 > data.len() {
+            break;
+        }
+
+        // Read MIME type length (in UTF-16 chars)
+        let mime_char_len = u32::from_le_bytes([
+            data[offset],
+            data[offset + 1],
+            data[offset + 2],
+            data[offset + 3],
+        ]) as usize;
+        offset += 4;
+
+        let mime_byte_len = mime_char_len * 2;
+        if offset + mime_byte_len > data.len() {
+            break;
+        }
+
+        // Read MIME type as UTF-16LE
+        let mime_bytes = &data[offset..offset + mime_byte_len];
+        let mime_type = decode_utf16le(mime_bytes);
+        offset += mime_byte_len;
+
+        // Align to 4-byte boundary
+        let padding = (4 - (mime_byte_len % 4)) % 4;
+        offset += padding;
+
+        if offset + 4 > data.len() {
+            break;
+        }
+
+        // Read content length (in UTF-16 chars)
+        let content_char_len = u32::from_le_bytes([
+            data[offset],
+            data[offset + 1],
+            data[offset + 2],
+            data[offset + 3],
+        ]) as usize;
+        offset += 4;
+
+        let content_byte_len = content_char_len * 2;
+        if offset + content_byte_len > data.len() {
+            // Try to read what we can
+            let available = data.len() - offset;
+            let content_bytes = &data[offset..offset + available];
+            let content = decode_utf16le(content_bytes);
+            if !mime_type.is_empty() && !content.is_empty() {
+                result.insert(mime_type, content);
+            }
+            break;
+        }
+
+        // Read content as UTF-16LE
+        let content_bytes = &data[offset..offset + content_byte_len];
+        let content = decode_utf16le(content_bytes);
+        offset += content_byte_len;
+
+        // Align to 4-byte boundary
+        let padding = (4 - (content_byte_len % 4)) % 4;
+        offset += padding;
+
+        eprintln!(
+            "[TiddlyDesktop] Linux: Chrome clipdata entry {}: {} = {} chars",
+            i,
+            mime_type,
+            content.len()
+        );
+
+        if !mime_type.is_empty() {
+            result.insert(mime_type, content);
+        }
+    }
+
+    if result.is_empty() {
+        None
+    } else {
+        Some(result)
+    }
 }
 
 /// Handle received drag data
@@ -550,32 +826,74 @@ fn handle_drag_data_received(
         );
     }
 
-    // Try to decode raw data with proper encoding detection
-    let text = if !raw_data.is_empty() {
+    // Variable to track if we found tiddler data
+    let mut tiddler_json: Option<String> = None;
+    let mut other_content: HashMap<String, String> = HashMap::new();
+
+    // 1. Check browser custom clipdata formats for tiddler data
+    if data_type == "application/x-moz-custom-clipdata" && raw_data.len() >= 8 {
+        if let Some(moz_data) = parse_moz_custom_clipdata(&raw_data) {
+            eprintln!(
+                "[TiddlyDesktop] Linux: Parsed Mozilla custom clipdata, found {} entries",
+                moz_data.len()
+            );
+            for (mime_type, content) in &moz_data {
+                eprintln!(
+                    "[TiddlyDesktop] Linux: Mozilla clipdata entry: {} ({} chars)",
+                    mime_type,
+                    content.len()
+                );
+                if mime_type == "text/vnd.tiddler" {
+                    tiddler_json = Some(content.clone());
+                } else {
+                    other_content.insert(mime_type.clone(), content.clone());
+                }
+            }
+        }
+    } else if data_type == "chromium/x-web-custom-data" && raw_data.len() >= 12 {
+        if let Some(chrome_data) = parse_chromium_custom_data(&raw_data) {
+            eprintln!(
+                "[TiddlyDesktop] Linux: Parsed Chrome custom clipdata, found {} entries",
+                chrome_data.len()
+            );
+            for (mime_type, content) in &chrome_data {
+                eprintln!(
+                    "[TiddlyDesktop] Linux: Chrome clipdata entry: {} ({} chars)",
+                    mime_type,
+                    content.len()
+                );
+                if mime_type == "text/vnd.tiddler" {
+                    tiddler_json = Some(content.clone());
+                } else {
+                    other_content.insert(mime_type.clone(), content.clone());
+                }
+            }
+        }
+    }
+
+    // 2. Try to decode the raw data as text (for non-browser-custom types)
+    let text = if tiddler_json.is_none() && !raw_data.is_empty() {
         let decoded = decode_string(&raw_data);
         if !decoded.is_empty() && !decoded.contains('\u{FFFD}') {
-            eprintln!(
-                "[TiddlyDesktop] Linux: Decoded raw data: {} chars",
-                decoded.len()
-            );
             Some(decoded)
         } else {
             selection_data.text().map(|t| t.to_string())
         }
     } else {
-        selection_data.text().map(|t| t.to_string())
+        None
     };
 
-    if let Some(text) = text {
+    // 3. Check if the received data IS tiddler data (direct type or content detection)
+    if let Some(ref text_content) = text {
         eprintln!(
             "[TiddlyDesktop] Linux: Got text content: {} chars, preview: {:?}",
-            text.len(),
-            &text[..std::cmp::min(200, text.len())]
+            text_content.len(),
+            &text_content[..std::cmp::min(200, text_content.len())]
         );
 
-        // Check if it's a file URI list
-        if text.starts_with("file://") || data_type == "text/uri-list" {
-            let paths: Vec<String> = text
+        // Check for file URIs first (not tiddler data)
+        if text_content.starts_with("file://") || data_type == "text/uri-list" {
+            let paths: Vec<String> = text_content
                 .lines()
                 .filter(|line| !line.is_empty() && !line.starts_with('#'))
                 .filter_map(|line| {
@@ -610,7 +928,6 @@ fn handle_drag_data_received(
                     }),
                 );
 
-                // Finish the drag
                 context.drag_finish(true, false, time);
                 s.drag_active = false;
                 s.drop_in_progress = false;
@@ -618,28 +935,52 @@ fn handle_drag_data_received(
             }
         }
 
-        // Check if it looks like a URL
-        if text.starts_with("http://") || text.starts_with("https://") {
-            types.push("text/uri-list".to_string());
-            data.insert("text/uri-list".to_string(), text.clone());
-            types.push("URL".to_string());
-            data.insert("URL".to_string(), text.clone());
+        // Check if this is tiddler data (by type or content)
+        if data_type == "text/vnd.tiddler" {
+            tiddler_json = Some(text_content.clone());
+        } else if tiddler_json.is_none() {
+            // Content-based detection: looks like tiddler JSON array?
+            let looks_like_tiddler = text_content.trim_start().starts_with('[')
+                && text_content.contains("\"title\"")
+                && (text_content.contains("\"text\"") || text_content.contains("\"fields\""));
+            if looks_like_tiddler {
+                eprintln!("[TiddlyDesktop] Linux: Detected tiddler JSON by content!");
+                tiddler_json = Some(text_content.clone());
+            }
         }
 
-        // Check if it looks like HTML
-        let trimmed = text.trim_start();
-        if trimmed.starts_with('<') || trimmed.starts_with("&lt;") || data_type == "text/html" {
-            types.push("text/html".to_string());
-            data.insert("text/html".to_string(), text.clone());
+        // Store other content types
+        if tiddler_json.is_none() {
+            if text_content.starts_with("http://") || text_content.starts_with("https://") {
+                other_content.insert("text/uri-list".to_string(), text_content.clone());
+                other_content.insert("URL".to_string(), text_content.clone());
+            } else if text_content.trim_start().starts_with('<') || data_type == "text/html" {
+                other_content.insert("text/html".to_string(), text_content.clone());
+            }
+            other_content.insert("text/plain".to_string(), text_content.clone());
         }
-
-        // Always include as text/plain
-        types.push("text/plain".to_string());
-        data.insert("text/plain".to_string(), text);
     }
 
-    let has_content = !types.is_empty();
+    // 4. Build final types/data - prioritize tiddler data if found
+    if let Some(ref tiddler) = tiddler_json {
+        eprintln!("[TiddlyDesktop] Linux: Using tiddler data ({} chars)", tiddler.len());
+        types.push("text/vnd.tiddler".to_string());
+        data.insert("text/vnd.tiddler".to_string(), tiddler.clone());
+        // Also add as text/plain for fallback
+        types.push("text/plain".to_string());
+        data.insert("text/plain".to_string(), tiddler.clone());
+    } else {
+        // No tiddler data - use other content
+        for (mime_type, content) in other_content {
+            if !data.contains_key(&mime_type) {
+                types.push(mime_type.clone());
+                data.insert(mime_type, content);
+            }
+        }
+    }
 
+    // 5. Emit the final content
+    let has_content = !types.is_empty();
     if has_content {
         eprintln!(
             "[TiddlyDesktop] Linux: Content drop with types: {:?}",
@@ -659,9 +1000,8 @@ fn handle_drag_data_received(
         let _ = s.window.emit("td-drag-content", &content_data);
     }
 
-    // Finish the drag operation
     context.drag_finish(has_content, false, time);
-
     s.drag_active = false;
     s.drop_in_progress = false;
 }
+

@@ -326,9 +326,23 @@ fn setup_outgoing_drag_handlers(widget: &gtk::Widget, window: WebviewWindow) {
     // NOTE: We do NOT clear outgoing_drag_data here because GTK may fire drag-end
     // immediately if there's no valid GDK event (e.g., when starting drag from JS).
     // The data is cleared by cleanup_native_drag() called from JavaScript.
-    widget.connect_drag_end(move |_widget, _context| {
+    widget.connect_drag_end(move |_widget, context| {
         let data_was_requested = was_data_requested();
         eprintln!("[TiddlyDesktop] Linux: Outgoing drag-end signal received, data_was_requested={}", data_was_requested);
+
+        // Signal that the drag operation is complete
+        // This tells GTK/GDK that all drag-related operations are done
+        context.drag_drop_done(true);
+        eprintln!("[TiddlyDesktop] Linux: Called drag_drop_done(true) to finalize drag");
+
+        // Try to reset pointer state by ungrabbing the seat
+        // This may help WebKitGTK resume generating pointer events after a GTK drag
+        if let Some(display) = gdk::Display::default() {
+            if let Some(seat) = display.default_seat() {
+                seat.ungrab();
+                eprintln!("[TiddlyDesktop] Linux: Ungrabbed seat in drag-end to reset pointer state");
+            }
+        }
 
         // Notify JavaScript that GTK thinks the drag ended
         // Include whether data was actually requested - if true, it's a real drop to external app
@@ -1359,6 +1373,8 @@ fn outgoing_drag_image() -> &'static Mutex<Option<Vec<u8>>> {
 struct PointerPollState {
     window: WebviewWindow,
     window_label: String,
+    /// The WebKit GTK widget - needed for pointer state reset
+    webkit_widget: gtk::Widget,
     /// The WebKit widget's GDK window - for getting coordinates relative to web content
     webkit_gdk_window: gdk::Window,
     window_width: i32,
@@ -1431,6 +1447,7 @@ fn start_pointer_polling(window: &WebviewWindow) {
     let state = Rc::new(RefCell::new(PointerPollState {
         window: window_clone,
         window_label: label.clone(),
+        webkit_widget,
         webkit_gdk_window,
         window_width,
         window_height,
@@ -1455,6 +1472,95 @@ fn stop_pointer_polling() {
             source_id.remove();
         }
     });
+}
+
+/// Aggressively reset WebKitGTK's pointer event state after a re-entry + drop
+/// This is called when the user drags out, re-enters, and drops inside the window.
+/// WebKitGTK has a bug where pointer events stop being generated after GTK drag operations.
+/// This version works on both X11 and Wayland.
+/// Reset WebKitGTK's pointer state after a re-entry + drop scenario.
+/// Returns true if reset succeeded, false if JS mousedown fallback is needed.
+fn reset_webkit_pointer_state(widget: &gtk::Widget, gdk_window: &gdk::Window, local_x: i32, local_y: i32) -> bool {
+    eprintln!("[TiddlyDesktop] Linux: Resetting WebKitGTK pointer state at local ({}, {})", local_x, local_y);
+
+    // Get display and seat
+    let display = match gdk::Display::default() {
+        Some(d) => d,
+        None => {
+            eprintln!("[TiddlyDesktop] Linux: No display for pointer reset");
+            return false;
+        }
+    };
+    let seat = match display.default_seat() {
+        Some(s) => s,
+        None => {
+            eprintln!("[TiddlyDesktop] Linux: No seat for pointer reset");
+            return false;
+        }
+    };
+
+    // Ungrab the seat first
+    seat.ungrab();
+    eprintln!("[TiddlyDesktop] Linux: Ungrabbed seat");
+
+    // Check for any active GTK grab and release it
+    if let Some(grab_widget) = gtk::grab_get_current() {
+        eprintln!("[TiddlyDesktop] Linux: Found active GTK grab on {:?}, removing", grab_widget.type_().name());
+        grab_widget.grab_remove();
+    }
+
+    // Tell GTK the drag is completely done
+    widget.drag_unhighlight();
+    eprintln!("[TiddlyDesktop] Linux: Called drag_unhighlight");
+
+    // Convert local coordinates to screen coordinates for input injection
+    // origin() returns (x, y, success_bool) - we ignore the success flag
+    let (origin_x, origin_y, _) = gdk_window.origin();
+    let screen_x = origin_x + local_x;
+    let screen_y = origin_y + local_y;
+    eprintln!("[TiddlyDesktop] Linux: Screen coordinates for injection: ({}, {})", screen_x, screen_y);
+
+    // Detect if we're on Wayland
+    let is_wayland = std::env::var("WAYLAND_DISPLAY").is_ok()
+        || std::env::var("XDG_SESSION_TYPE").map(|v| v == "wayland").unwrap_or(false);
+
+    let injection_succeeded = if is_wayland {
+        // On Wayland, try using webkit2gtk's run_javascript to directly execute
+        // synthetic pointer events in WebKit's JS engine. This might trigger
+        // different code paths than dispatching through Tauri events.
+        eprintln!("[TiddlyDesktop] Linux: Wayland detected, trying webkit2gtk run_javascript approach");
+        try_webkit_js_reset(widget, local_x, local_y)
+    } else {
+        // On X11, use XTest to inject real input events
+        eprintln!("[TiddlyDesktop] Linux: X11 detected, trying XTest input injection");
+        !super::input_inject::inject_click_or_need_fallback(screen_x, screen_y)
+    };
+
+    // Also do the standard GTK cleanup
+    let widget_clone = widget.clone();
+    glib::idle_add_local_once(move || {
+        // Ungrab seat again
+        if let Some(display) = gdk::Display::default() {
+            if let Some(seat) = display.default_seat() {
+                seat.ungrab();
+            }
+        }
+
+        // Remove any GTK grab
+        if let Some(grab_widget) = gtk::grab_get_current() {
+            grab_widget.grab_remove();
+        }
+
+        // Queue redraw and grab focus
+        widget_clone.queue_draw();
+        if widget_clone.can_focus() {
+            widget_clone.grab_focus();
+        }
+
+        eprintln!("[TiddlyDesktop] Linux: GTK cleanup complete");
+    });
+
+    injection_succeeded
 }
 
 /// Poll the pointer position and emit events
@@ -1524,6 +1630,8 @@ fn poll_pointer_position(state: &Rc<RefCell<PointerPollState>>) -> glib::Control
     let window = state_ref.window.clone();
     let window_label = state_ref.window_label.clone();
     let was_inside = state_ref.last_inside;
+    let webkit_widget = state_ref.webkit_widget.clone();
+    let webkit_gdk_window = state_ref.webkit_gdk_window.clone();
 
     drop(state_ref); // Release borrow before mutating
 
@@ -1556,6 +1664,41 @@ fn poll_pointer_position(state: &Rc<RefCell<PointerPollState>>) -> glib::Control
             window_label: window_label.clone(),
         });
 
+        // If button was released inside the window (re-entry + drop scenario),
+        // aggressively reset WebKitGTK's pointer state to fix the bug where
+        // pointer events stop being generated after GTK drag operations
+        if inside {
+            eprintln!("[TiddlyDesktop] Linux: Re-entry drop detected, aborting GTK drag and resetting pointer state");
+
+            // First, explicitly abort the GTK drag context
+            // This might give WebKitGTK a cleaner signal that the drag is completely over
+            ACTIVE_DRAG_CONTEXT.with(|ctx| {
+                if let Some(context) = ctx.borrow().as_ref() {
+                    // Get current timestamp for the abort
+                    let time = gtk::current_event_time();
+                    context.drag_abort(time);
+                    eprintln!("[TiddlyDesktop] Linux: Called drag_abort() on context");
+                }
+            });
+
+            let injection_succeeded = reset_webkit_pointer_state(&webkit_widget, &webkit_gdk_window, local_x, local_y);
+
+            // Emit event to JavaScript with info about whether fallback is needed
+            // If input injection succeeded, no JS fallback needed
+            // If it failed (e.g., wlroots without libei), JS needs to enable mousedown fallback
+            let _ = window.emit("td-reset-pointer-state", serde_json::json!({
+                "x": local_x,
+                "y": local_y,
+                "needsFallback": !injection_succeeded
+            }));
+            eprintln!("[TiddlyDesktop] Linux: Emitted td-reset-pointer-state, needsFallback={}", !injection_succeeded);
+        }
+
+        // Also ungrab the seat as a baseline reset
+        // This may help WebKitGTK resume generating pointer events after a GTK drag
+        seat.ungrab();
+        eprintln!("[TiddlyDesktop] Linux: Ungrabbed seat to reset pointer state");
+
         POLLING_SOURCE_ID.with(|id| {
             *id.borrow_mut() = None;
         });
@@ -1572,6 +1715,11 @@ fn poll_pointer_position(state: &Rc<RefCell<PointerPollState>>) -> glib::Control
                 local_x, local_y
             );
             hide_gtk_drag_icon();
+
+            // Ungrab seat immediately on re-entry to reset WebKitGTK's pointer state
+            // This helps ensure pointerdown events work for the next interaction
+            seat.ungrab();
+            eprintln!("[TiddlyDesktop] Linux: Ungrabbed seat on re-entry to reset pointer state");
         }
 
         // Emit motion event - keep polling to track drag
@@ -1841,6 +1989,16 @@ fn set_drag_icon_from_png(context: &gdk::DragContext, png_data: &[u8], hot_x: i3
             false
         }
     }
+}
+
+/// On Wayland, we can't inject real input events without libei permissions.
+/// Return false to signal that JavaScript should handle the reset via synthetic events.
+/// The JS code will dispatch a full click cycle at off-screen coordinates (-1000, -1000).
+fn try_webkit_js_reset(_widget: &gtk::Widget, local_x: i32, local_y: i32) -> bool {
+    eprintln!("[TiddlyDesktop] Linux: Wayland - delegating pointer reset to JavaScript at ({}, {})", local_x, local_y);
+    // Return false so needsFallback=true is sent to JS
+    // JS will then dispatch synthetic pointer events at off-screen coordinates
+    false
 }
 
 /// Apply opacity to a pixbuf by multiplying the alpha channel

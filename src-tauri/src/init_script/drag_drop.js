@@ -153,6 +153,163 @@
     }
 
     // ========================================
+    // Text Input/ContentEditable Helpers
+    // ========================================
+
+    // Check if element is a text input or textarea
+    function isTextInput(el) {
+        if (!el || !el.tagName) return false;
+        var tag = el.tagName.toLowerCase();
+        if (tag === 'textarea') return true;
+        if (tag === 'input') {
+            var type = (el.type || 'text').toLowerCase();
+            return type === 'text' || type === 'search' || type === 'url' || type === 'email' || type === 'password';
+        }
+        return false;
+    }
+
+    // Check if element is contenteditable
+    function isContentEditable(el) {
+        if (!el) return false;
+        // Check if the element itself is contenteditable
+        if (el.isContentEditable) return true;
+        // Check for contenteditable attribute
+        if (el.getAttribute && el.getAttribute('contenteditable') === 'true') return true;
+        return false;
+    }
+
+    // Get element at point, handling iframes
+    function getElementAtPointForCaret(x, y) {
+        var el = document.elementFromPoint(x, y);
+        if (!el) return { element: null, adjustedX: x, adjustedY: y };
+
+        // Check if it's an iframe
+        if (el.tagName && el.tagName.toLowerCase() === 'iframe') {
+            try {
+                var rect = el.getBoundingClientRect();
+                var iframeX = x - rect.left;
+                var iframeY = y - rect.top;
+                var iframeDoc = el.contentDocument || el.contentWindow.document;
+                var iframeEl = iframeDoc.elementFromPoint(iframeX, iframeY);
+                if (iframeEl) {
+                    return { element: iframeEl, adjustedX: iframeX, adjustedY: iframeY, iframe: el };
+                }
+            } catch (e) {
+                // Cross-origin iframe, can't access
+            }
+        }
+        return { element: el, adjustedX: x, adjustedY: y };
+    }
+
+    // Set caret position in input/textarea from coordinates
+    function setInputCaretFromPoint(el, clientX, clientY) {
+        if (!el || !isTextInput(el)) return;
+
+        // Ensure the browser window is focused before focusing the element
+        // This is needed during native drags when the OS drag system had focus
+        window.focus();
+        el.focus();
+
+        // Try to get caret position from click coordinates
+        // This is an approximation - we measure character widths
+        var text = el.value || '';
+        if (!text.length) {
+            el.setSelectionRange(0, 0);
+            return;
+        }
+
+        // Create a temporary span to measure text
+        var style = window.getComputedStyle(el);
+        var span = document.createElement('span');
+        span.style.font = style.font;
+        span.style.fontSize = style.fontSize;
+        span.style.fontFamily = style.fontFamily;
+        span.style.fontWeight = style.fontWeight;
+        span.style.letterSpacing = style.letterSpacing;
+        span.style.whiteSpace = 'pre';
+        span.style.position = 'absolute';
+        span.style.visibility = 'hidden';
+        document.body.appendChild(span);
+
+        var rect = el.getBoundingClientRect();
+        var paddingLeft = parseFloat(style.paddingLeft) || 0;
+        var relativeX = clientX - rect.left - paddingLeft + el.scrollLeft;
+
+        // Binary search for the character position
+        var pos = 0;
+        for (var i = 0; i <= text.length; i++) {
+            span.textContent = text.substring(0, i);
+            if (span.offsetWidth >= relativeX) {
+                // Check if we're closer to this position or the previous
+                if (i > 0) {
+                    span.textContent = text.substring(0, i - 1);
+                    var prevWidth = span.offsetWidth;
+                    span.textContent = text.substring(0, i);
+                    var currWidth = span.offsetWidth;
+                    pos = (relativeX - prevWidth) < (currWidth - relativeX) ? i - 1 : i;
+                } else {
+                    pos = 0;
+                }
+                break;
+            }
+            pos = i;
+        }
+
+        document.body.removeChild(span);
+        el.setSelectionRange(pos, pos);
+    }
+
+    // Set caret position in contenteditable from coordinates
+    function setContentEditableCaretFromPoint(el, clientX, clientY) {
+        if (!el) return;
+
+        // Use the document that owns the element (important for iframes)
+        var doc = el.ownerDocument || document;
+        var win = doc.defaultView || window;
+
+        // Ensure the browser window is focused before focusing the element
+        // This is needed during native drags when the OS drag system had focus
+        window.focus();
+        // For iframes, also focus the iframe's window
+        if (win !== window) {
+            win.focus();
+        }
+        el.focus();
+
+        if (doc.caretRangeFromPoint) {
+            var range = doc.caretRangeFromPoint(clientX, clientY);
+            if (range) {
+                var sel = win.getSelection();
+                sel.removeAllRanges();
+                sel.addRange(range);
+            }
+        } else if (doc.caretPositionFromPoint) {
+            var pos = doc.caretPositionFromPoint(clientX, clientY);
+            if (pos) {
+                var range = doc.createRange();
+                range.setStart(pos.offsetNode, pos.offset);
+                range.collapse(true);
+                var sel = win.getSelection();
+                sel.removeAllRanges();
+                sel.addRange(range);
+            }
+        }
+    }
+
+    // Update caret position for text inputs during drag
+    function updateCaretForDrag(x, y) {
+        var info = getElementAtPointForCaret(x, y);
+        var el = info.element;
+        if (!el) return;
+
+        if (isTextInput(el)) {
+            setInputCaretFromPoint(el, info.adjustedX, info.adjustedY);
+        } else if (isContentEditable(el)) {
+            setContentEditableCaretFromPoint(el, info.adjustedX, info.adjustedY);
+        }
+    }
+
+    // ========================================
     // Main Setup Function
     // ========================================
 
@@ -451,13 +608,17 @@
             if (!event.payload) return;
             // Skip if internal drag is active (handled by internal_drag.js)
             if (TD.isInternalDragActive && TD.isInternalDragActive()) return;
-            
+
             var pos;
             if (event.payload.screenCoords) {
                 pos = screenToClient(event.payload.x, event.payload.y);
-            } else {
+            } else if (event.payload.physicalPixels) {
+                // Windows sends physical pixels that need dpr scaling
                 var dpr = window.devicePixelRatio || 1;
                 pos = { x: event.payload.x / dpr, y: event.payload.y / dpr };
+            } else {
+                // Linux GTK and macOS send CSS pixels, no scaling needed
+                pos = { x: event.payload.x, y: event.payload.y };
             }
             var target = getTargetElement(pos);
 
@@ -491,6 +652,9 @@
             var overEvent = createSyntheticDragEvent("dragover", pos, dt);
             overEvent.__tiddlyDesktopSynthetic = true;
             target.dispatchEvent(overEvent);
+
+            // Update caret position for text inputs and contenteditable elements
+            updateCaretForDrag(pos.x, pos.y);
         });
 
         listen("td-drag-drop-start", function(event) {
@@ -500,9 +664,13 @@
             if (event.payload) {
                 if (event.payload.screenCoords) {
                     pendingContentDropPos = screenToClient(event.payload.x, event.payload.y);
-                } else {
+                } else if (event.payload.physicalPixels) {
+                    // Windows sends physical pixels that need dpr scaling
                     var dpr = window.devicePixelRatio || 1;
                     pendingContentDropPos = { x: event.payload.x / dpr, y: event.payload.y / dpr };
+                } else {
+                    // Linux GTK and macOS send CSS pixels, no scaling needed
+                    pendingContentDropPos = { x: event.payload.x, y: event.payload.y };
                 }
             }
         });
@@ -571,9 +739,13 @@
                 var pos;
                 if (event.payload.screenCoords) {
                     pos = screenToClient(event.payload.x, event.payload.y);
-                } else {
+                } else if (event.payload.physicalPixels) {
+                    // Windows sends physical pixels that need dpr scaling
                     var dpr = window.devicePixelRatio || 1;
                     pos = { x: event.payload.x / dpr, y: event.payload.y / dpr };
+                } else {
+                    // Linux GTK and macOS send CSS pixels, no scaling needed
+                    pos = { x: event.payload.x, y: event.payload.y };
                 }
                 pendingContentDropPos = pos;
                 if (pendingContentDropData) {

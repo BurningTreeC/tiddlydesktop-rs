@@ -41,6 +41,11 @@ gtk = "0.18"
 gdk = "0.18"
 glib = "0.18"
 webkit2gtk = "2.0.1"
+# Input emulation for resetting WebKitGTK pointer state after GTK drag
+# - x11rb: for X11 (uses XTest) - works without user permission
+# Note: libei on Wayland requires RemoteDesktop portal permission dialog - too intrusive!
+# So on Wayland we use the mousedown fallback in JavaScript instead.
+enigo = { version = "0.6", default-features = false, features = ["x11rb"] }
 
 # Windows content drag-drop handling via OLE APIs (for external app content drops)
 [target.'cfg(target_os = "windows")'.dependencies]

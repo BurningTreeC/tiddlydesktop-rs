@@ -1116,9 +1116,9 @@ unsafe fn apply_opacity_to_nsimage(image: *mut AnyObject, size: NSSize, opacity:
     // NSCompositingOperationSourceOver = 2
     let _: () = msg_send![
         image,
-        drawInRect: dest_rect
-        fromRect: zero_rect
-        operation: 2u64  // NSCompositingOperationSourceOver
+        drawInRect: dest_rect,
+        fromRect: zero_rect,
+        operation: 2u64,  // NSCompositingOperationSourceOver
         fraction: opacity
     ];
 

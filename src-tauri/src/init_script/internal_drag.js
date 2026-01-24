@@ -22,6 +22,31 @@
         }
     }
 
+    // Global error handler to catch and log JavaScript errors to terminal
+    window.addEventListener("error", function(event) {
+        log('[JS ERROR] ' + event.message + ' at ' + event.filename + ':' + event.lineno + ':' + event.colno);
+        if (event.error && event.error.stack) {
+            log('[JS ERROR STACK] ' + event.error.stack);
+        }
+    });
+
+    // Also catch unhandled promise rejections
+    window.addEventListener("unhandledrejection", function(event) {
+        log('[JS UNHANDLED REJECTION] ' + (event.reason ? event.reason.toString() : 'unknown'));
+        if (event.reason && event.reason.stack) {
+            log('[JS REJECTION STACK] ' + event.reason.stack);
+        }
+    });
+
+    // DEBUG: Very early window-level pointerdown handler to detect if events are firing
+    window.addEventListener("pointerdown", function(event) {
+        if (event.button === 0 && !event.__tiddlyDesktopSynthetic) {
+            var targetTag = event.target && event.target.tagName ? event.target.tagName : 'unknown';
+            log('[WINDOW pointerdown] fired on ' + targetTag +
+                ', pointerType=' + event.pointerType + ', pointerId=' + event.pointerId);
+        }
+    }, true);  // Capture phase - runs before document handlers
+
     // Set up window-specific Tauri event listener
     // This ensures we only receive events for THIS window, not all windows
     var tauriListen = null;
@@ -61,6 +86,19 @@
     var savedDragSource = null;  // Saved internalDragSource element for re-entry
     var pollingActive = false;  // True when Rust GDK polling is handling drag tracking
     var dragCancelledByEscape = false;  // True when Escape was pressed to cancel drag
+
+    // Convert payload coordinates from native events
+    // Windows sends physical pixels (needs dpr scaling), Linux/macOS send CSS pixels
+    function getPayloadCoordinates(payload) {
+        var x = payload.x !== undefined ? payload.x : 0;
+        var y = payload.y !== undefined ? payload.y : 0;
+        if (payload.physicalPixels) {
+            var dpr = window.devicePixelRatio || 1;
+            x = x / dpr;
+            y = y / dpr;
+        }
+        return { x: x, y: y };
+    }
 
     // Extract background color from element or its ancestors
     function getBackgroundColor(element) {
@@ -355,6 +393,9 @@
     // Set caret position in input/textarea from coordinates (for visual feedback during drag)
     function setInputCaretFromPoint(el, clientX, clientY) {
         var pos = getInputCaretPositionFromPoint(el, clientX, clientY);
+        // Ensure the browser window is focused before focusing the element
+        // This is needed during re-entry when the OS drag system had focus
+        window.focus();
         el.focus();
         el.setSelectionRange(pos, pos);
         return pos;
@@ -364,11 +405,20 @@
     function setContentEditableCaretFromPoint(el, clientX, clientY) {
         // Use the document that owns the element (important for iframes)
         var doc = el.ownerDocument || document;
+        var win = doc.defaultView || window;
+
+        // Ensure the browser window is focused before focusing the element
+        // This is needed during re-entry when the OS drag system had focus
+        window.focus();
+        // For iframes, also focus the iframe's window
+        if (win !== window) {
+            win.focus();
+        }
 
         if (doc.caretRangeFromPoint) {
             var range = doc.caretRangeFromPoint(clientX, clientY);
             if (range) {
-                var sel = doc.defaultView.getSelection();
+                var sel = win.getSelection();
                 sel.removeAllRanges();
                 sel.addRange(range);
                 el.focus();
@@ -380,7 +430,7 @@
                 var range = doc.createRange();
                 range.setStart(pos.offsetNode, pos.offset);
                 range.collapse(true);
-                var sel = doc.defaultView.getSelection();
+                var sel = win.getSelection();
                 sel.removeAllRanges();
                 sel.addRange(range);
                 el.focus();
@@ -572,6 +622,19 @@
             $tw.dragInProgress = null;
         }
 
+        // Remove visual feedback classes
+        document.querySelectorAll(".tc-dragover").forEach(function(el) {
+            el.classList.remove("tc-dragover");
+        });
+        document.querySelectorAll(".tc-dragging").forEach(function(el) {
+            el.classList.remove("tc-dragging");
+        });
+
+        // Remove any leftover TiddlyWiki drag image elements
+        document.querySelectorAll(".tc-tiddler-dragger").forEach(function(el) {
+            el.parentNode.removeChild(el);
+        });
+
         // Clean up native drag state on Rust side
         if (nativeDragFromSelf || nativeDragStarting) {
             cleanupNativeDrag();
@@ -702,13 +765,111 @@
         document.body.style.webkitUserSelect = "";
     }, true);
 
+    // Flag set when native input injection fails on Wayland + wlroots
+    // When true, mousedown fallback is enabled for the next interaction
+    var webkitPointerBroken = false;
+
+    // Mousedown fallback handler - only active when webkitPointerBroken is true
+    // This is needed on Wayland + wlroots where libei is not available
+    // On X11 and Wayland + GNOME/KDE, native input injection should work
+    document.addEventListener("mousedown", function(event) {
+        try {
+            if (event.button !== 0) return;
+
+            // Only use fallback if webkitPointerBroken flag is set
+            if (!webkitPointerBroken) {
+                return;
+            }
+
+            var targetTag = event.target && event.target.tagName ? event.target.tagName : 'unknown';
+            log('[mousedown] FALLBACK active: button=' + event.button + ', capturedPointerId=' + capturedPointerId +
+                ', target=' + targetTag);
+
+            // Use mousedown as fallback to start drag tracking
+            if (capturedPointerId === null && !pointerDragStarted && !internalDragActive && !nativeDragFromSelf) {
+                log('[mousedown] FALLBACK: using mousedown because webkitPointerBroken=true');
+
+                // Capture any existing text selection
+                capturedSelection = getSelectedText();
+                capturedSelectionHtml = getSelectedHtml();
+
+                var target = findDraggableAncestor(event.target);
+                if (target) {
+                    pointerDownTarget = target;
+                    pointerDownPos = { x: event.clientX, y: event.clientY };
+                    pointerDragStarted = false;
+                    // Use pointerId 1 as fallback (standard mouse pointer)
+                    capturedPointerId = 1;
+                    log('[mousedown] FALLBACK: Started tracking drag on ' + target.tagName);
+                } else if (capturedSelection) {
+                    pointerDownTarget = null;
+                    pointerDownPos = { x: event.clientX, y: event.clientY };
+                    pointerDragStarted = false;
+                    capturedPointerId = 1;
+                    log('[mousedown] FALLBACK: Started tracking text selection drag');
+                }
+
+                // Clear the broken flag after using the fallback once
+                // The next pointerdown (if it fires) will work normally
+                webkitPointerBroken = false;
+            }
+        } catch (e) {
+            log('[mousedown] ERROR: ' + e.message + ' | ' + e.stack);
+        }
+    }, true);
+
     // Pointerdown to track potential drag
     document.addEventListener("pointerdown", function(event) {
+        // Skip synthetic events we dispatched ourselves (for pointer state reset)
+        if (event.__tiddlyDesktopSynthetic) {
+            log('[pointerdown] Skipping synthetic event');
+            return;
+        }
+
+        // If pointerdown fires naturally, WebKitGTK is working again
+        // Reset the fallback flag
+        if (webkitPointerBroken) {
+            log('[pointerdown] WebKitGTK pointer events recovered - disabling fallback');
+            webkitPointerBroken = false;
+        }
+
+        // Debug: log state at pointerdown
+        var targetTag = event.target && event.target.tagName ? event.target.tagName : 'unknown';
+        log('[pointerdown] button=' + event.button + ', capturedPointerId=' + capturedPointerId +
+            ', nativeDragFromSelf=' + nativeDragFromSelf + ', internalDragActive=' + internalDragActive +
+            ', pointerDragStarted=' + pointerDragStarted + ', target=' + targetTag);
+
         // Only handle primary button (left click / touch / pen tip)
         if (event.button !== 0) return;
 
-        // Don't handle if already tracking a pointer
-        if (capturedPointerId !== null) return;
+        // Safety: if capturedPointerId is set but no drag is active, we have stale state
+        // This can happen if lostpointercapture didn't fire or we missed it
+        if (capturedPointerId !== null) {
+            if (!internalDragActive && !nativeDragFromSelf && !pointerDragStarted) {
+                log('[pointerdown] Detected stale capturedPointerId=' + capturedPointerId + ' - resetting');
+                var stalePointerId = capturedPointerId;
+                // Try to release capture from any element that might have it
+                [savedDragSource, internalDragSource, pointerDownTarget, document.body].forEach(function(el) {
+                    if (el) {
+                        try {
+                            el.releasePointerCapture(stalePointerId);
+                        } catch (e) {}
+                    }
+                });
+                // Reset all stale state
+                capturedPointerId = null;
+                savedDragSource = null;
+                nativeDragData = null;
+                savedDragInProgress = null;
+                internalDragSource = null;
+                pointerDownTarget = null;
+                pointerDownPos = null;
+            } else {
+                // Legitimate block - there's an active drag
+                log('[pointerdown] BLOCKED: capturedPointerId is not null: ' + capturedPointerId);
+                return;
+            }
+        }
 
         // Capture any existing text selection (for potential text selection drag)
         capturedSelection = getSelectedText();
@@ -761,12 +922,27 @@
             if (insideWindow) {
                 log('[TiddlyDesktop] Re-entry detected via pointer capture at ' + event.clientX + ', ' + event.clientY);
 
+                // Release pointer capture - it can prevent focus on other elements
+                // We've detected re-entry, so we don't need capture anymore
+                if (capturedPointerId !== null) {
+                    var captureElement = savedDragSource || internalDragSource;
+                    if (captureElement) {
+                        try {
+                            captureElement.releasePointerCapture(capturedPointerId);
+                            log('[TiddlyDesktop] Re-entry via capture: released pointer capture');
+                        } catch (e) {}
+                    }
+                    capturedPointerId = null;
+                }
+
                 // Focus the window so it can receive events properly
                 if (window.__TAURI__ && window.__TAURI__.window) {
                     window.__TAURI__.window.getCurrentWindow().setFocus().catch(function(err) {
                         log('[TiddlyDesktop] Failed to focus window on re-entry: ' + err);
                     });
                 }
+                // Also call browser's window.focus() for immediate effect
+                window.focus();
 
                 // Restore the drag data if we still have it
                 if (nativeDragData) {
@@ -893,8 +1069,25 @@
             // Set pointer capture to receive all pointer events
             try {
                 internalDragSource.setPointerCapture(event.pointerId);
+                log('[TiddlyDesktop] Pointer capture set on: ' + internalDragSource.tagName);
+
+                // Add lostpointercapture handler to this element
+                // This is CRITICAL - lostpointercapture fires on the element, not document
+                // Capture the element in a local variable since internalDragSource may be nulled
+                // before lostpointercapture fires (it can fire async after releasePointerCapture)
+                var captureElement = internalDragSource;
+                var lostCaptureHandler = function(lostEvent) {
+                    log('[TiddlyDesktop] lostpointercapture on element: pointerId=' + lostEvent.pointerId +
+                        ', capturedPointerId=' + capturedPointerId);
+                    if (capturedPointerId === lostEvent.pointerId) {
+                        capturedPointerId = null;
+                    }
+                    // Remove this handler after it fires
+                    captureElement.removeEventListener('lostpointercapture', lostCaptureHandler);
+                };
+                captureElement.addEventListener('lostpointercapture', lostCaptureHandler);
             } catch (e) {
-                // Element may not support pointer capture
+                log('[TiddlyDesktop] Failed to set pointer capture: ' + e);
             }
 
             document.body.style.userSelect = "none";
@@ -934,7 +1127,11 @@
 
             var isTextDrag = !pointerDownTarget && selectedText;
             window.__tiddlyDesktopEffectAllowed = pointerDragDataTransfer.effectAllowed || "all";
+
+            log('[TiddlyDesktop] Drag threshold exceeded - creating drag image for: ' +
+                (internalDragSource ? internalDragSource.tagName : 'null'));
             createDragImage(internalDragSource, event.clientX, event.clientY, isTextDrag ? selectedText : null);
+            log('[TiddlyDesktop] Drag image created: ' + !!internalDragImage);
 
             // Prepare native drag in case pointer leaves window
             // Do this AFTER dragstart event so TiddlyWiki has set the data
@@ -1008,6 +1205,9 @@
 
     // Pointerup to complete drop
     document.addEventListener("pointerup", function(event) {
+        // Ignore synthetic events we dispatched ourselves
+        if (event.__tiddlyDesktopSynthetic) return;
+
         // Debug: log all pointerup events when relevant
         if (nativeDragFromSelf || pointerDragStarted) {
             log('[pointerup] x=' + event.clientX + ', y=' + event.clientY +
@@ -1098,10 +1298,11 @@
             removeDragImage();
             document.body.style.userSelect = "";
             document.body.style.webkitUserSelect = "";
-        } else if (nativeDragFromSelf) {
-            // User released mouse button while in native drag mode (dropped outside window)
-            // Clean up all drag state
-            log('[TiddlyDesktop] pointerup during nativeDragFromSelf - cleaning up (dropped outside)');
+        } else if (nativeDragFromSelf && !internalDragActive) {
+            // User released mouse button while in native drag mode AND we haven't re-entered
+            // This means the drop happened outside the window
+            // If internalDragActive is true, we've re-entered and td-pointer-up will handle the drop
+            log('[TiddlyDesktop] pointerup during nativeDragFromSelf (outside window) - cleaning up');
 
             // Release pointer capture if we still have it
             if (savedDragSource) {
@@ -1163,6 +1364,8 @@
 
     // Note: pointerleave doesn't fire when pointer capture is active
     // We detect window boundary crossing in pointermove instead
+    // Note: lostpointercapture doesn't bubble, so we add element-level handlers
+    // when setting pointer capture (see pointermove handler)
 
     // Prepare for potential native drag (called when internal drag starts)
     function prepareNativeDrag() {
@@ -1385,6 +1588,10 @@
             // Now save and detach the drag image for re-entry
             // Do this INSIDE the callback so it happens after capture completes
             if (internalDragImage && internalDragImage.parentNode) {
+                // Clean up any existing savedDragImage first to prevent orphans
+                if (savedDragImage && savedDragImage !== internalDragImage && savedDragImage.parentNode) {
+                    savedDragImage.parentNode.removeChild(savedDragImage);
+                }
                 savedDragImage = internalDragImage;
                 savedDragImage.parentNode.removeChild(savedDragImage);
                 log('[TiddlyDesktop] Drag image detached from DOM (after capture)');
@@ -1558,6 +1765,7 @@
         // Handle native drag re-entering window (td-drag-motion from Rust)
         // This fires when a native drag (including one we started) enters our window
         tauriListen("td-drag-motion", function(event) {
+            try {
             var payload = event.payload || {};
             // Check if Rust says this is our drag (has outgoing data stored)
             var isOurDragFromRust = payload.isOurDrag;
@@ -1600,12 +1808,29 @@
                     nativeDragFromSelf = true;
                 }
 
+                // Release pointer capture - it can prevent focus on other elements
+                // During re-entry, Rust is polling the pointer so we don't need browser capture
+                if (capturedPointerId !== null) {
+                    var captureElement = savedDragSource || internalDragSource;
+                    if (captureElement) {
+                        try {
+                            captureElement.releasePointerCapture(capturedPointerId);
+                            log('[TiddlyDesktop] Re-entry: released pointer capture');
+                        } catch (e) {
+                            log('[TiddlyDesktop] Re-entry: failed to release pointer capture: ' + e);
+                        }
+                    }
+                    capturedPointerId = null;
+                }
+
                 // Focus the window so it can receive events properly
                 if (window.__TAURI__ && window.__TAURI__.window) {
                     window.__TAURI__.window.getCurrentWindow().setFocus().catch(function(err) {
                         log('[TiddlyDesktop] Failed to focus window on re-entry: ' + err);
                     });
                 }
+                // Also call browser's window.focus() for immediate effect
+                window.focus();
 
                 // Restore the drag data if we still have it
                 if (nativeDragData) {
@@ -1656,9 +1881,10 @@
                     }
                 }
 
-                // Update position from event
-                var x = payload.x !== undefined ? payload.x : 0;
-                var y = payload.y !== undefined ? payload.y : 0;
+                // Update position from event (Windows sends physical pixels, Linux/macOS send CSS pixels)
+                var coords = getPayloadCoordinates(payload);
+                var x = coords.x;
+                var y = coords.y;
                 if (internalDragImage) {
                     internalDragImage.style.left = (x - dragImageOffsetX) + "px";
                     internalDragImage.style.top = (y - dragImageOffsetY) + "px";
@@ -1708,10 +1934,17 @@
 
                 // Mark as active again so drag_drop.js knows this is internal
                 internalDragActive = true;
+
+                // Note: WebKitGTK pointer state reset is now handled by native input injection
+                // from Rust (via XTest on X11 or libei on Wayland). The td-reset-pointer-state
+                // event will set webkitPointerBroken=true only if injection fails (wlroots).
+
             } else if ((nativeDragFromSelf || isOurDragFromRust) && internalDragActive) {
                 // Update drag image position during re-entry drag
-                var x = payload.x !== undefined ? payload.x : 0;
-                var y = payload.y !== undefined ? payload.y : 0;
+                // (Windows sends physical pixels, Linux/macOS send CSS pixels)
+                var coords = getPayloadCoordinates(payload);
+                var x = coords.x;
+                var y = coords.y;
                 if (internalDragImage) {
                     internalDragImage.style.left = (x - dragImageOffsetX) + "px";
                     internalDragImage.style.top = (y - dragImageOffsetY) + "px";
@@ -1755,6 +1988,9 @@
                     }
                 }
             }
+            } catch (e) {
+                log('[td-drag-motion] ERROR: ' + e.message + ' | ' + (e.stack || ''));
+            }
         });
 
         // Handle native drag leaving window again
@@ -1789,6 +2025,10 @@
                 // Detach the drag image (keep it saved for potential re-entry)
                 if (internalDragImage && internalDragImage.parentNode) {
                     internalDragImage.parentNode.removeChild(internalDragImage);
+                    // Clean up any existing savedDragImage first to prevent orphans
+                    if (savedDragImage && savedDragImage !== internalDragImage && savedDragImage.parentNode) {
+                        savedDragImage.parentNode.removeChild(savedDragImage);
+                    }
                     // Keep savedDragImage pointing to it
                     savedDragImage = internalDragImage;
                     internalDragImage = null;
@@ -1804,8 +2044,10 @@
             var payload = event.payload || {};
             var isOurDrag = payload.isOurDrag;
             var eventWindowLabel = payload.windowLabel || '';
-            var x = payload.x || 0;
-            var y = payload.y || 0;
+            // Convert coordinates (Windows sends physical pixels, Linux/macOS send CSS pixels)
+            var coords = getPayloadCoordinates(payload);
+            var x = coords.x;
+            var y = coords.y;
 
             // Only handle if this is our own drag
             if (!isOurDrag) return;
@@ -1929,9 +2171,12 @@
         // Handle pointer up detected via Rust polling (for re-entry while dragging)
         // This fires when Rust's GDK pointer polling detects the button was released
         tauriListen("td-pointer-up", function(event) {
+            try {
             var payload = event.payload || {};
-            var x = payload.x || 0;
-            var y = payload.y || 0;
+            // Convert coordinates (Windows sends physical pixels, Linux/macOS send CSS pixels)
+            var coords = getPayloadCoordinates(payload);
+            var x = coords.x;
+            var y = coords.y;
             var inside = payload.inside || false;
             var eventWindowLabel = payload.windowLabel || '';
 
@@ -2015,8 +2260,149 @@
                     }
                 }
 
+                // Dispatch synthetic pointerup on the original drag source element
+                // This completes the pointer interaction cycle so the browser allows new pointerdown events
+                var originalSource = savedDragSource || internalDragSource || pointerDownTarget;
+                if (originalSource) {
+                    try {
+                        var syntheticPointerUp = new PointerEvent('pointerup', {
+                            pointerId: capturedPointerId || 1,
+                            bubbles: true,
+                            cancelable: true,
+                            pointerType: 'mouse',
+                            button: 0,
+                            buttons: 0,
+                            clientX: x,
+                            clientY: y
+                        });
+                        syntheticPointerUp.__tiddlyDesktopSynthetic = true;
+                        originalSource.dispatchEvent(syntheticPointerUp);
+                        log('[td-pointer-up] Dispatched synthetic pointerup on ' + originalSource.tagName);
+                    } catch (e) {
+                        log('[td-pointer-up] Failed to dispatch synthetic pointerup: ' + e);
+                    }
+                }
+
+                // Release pointer capture before cleaning up state
+                // This is critical - we must release capture while we still have the element references
+                if (capturedPointerId !== null) {
+                    var releasePointerId = capturedPointerId;
+                    [savedDragSource, internalDragSource, pointerDownTarget].forEach(function(el) {
+                        if (el) {
+                            try {
+                                el.releasePointerCapture(releasePointerId);
+                                log('[td-pointer-up] Released pointer capture from ' + el.tagName);
+                            } catch (e) {
+                                // Element may not have capture, that's OK
+                            }
+                        }
+                    });
+                }
+
                 // Clean up all state
                 cleanupNativeDrag();
+
+                // Clear TiddlyWiki's drag state
+                if (typeof $tw !== "undefined") {
+                    $tw.dragInProgress = null;
+                }
+
+                // Remove visual feedback classes
+                document.querySelectorAll(".tc-dragover").forEach(function(el) {
+                    el.classList.remove("tc-dragover");
+                });
+                document.querySelectorAll(".tc-dragging").forEach(function(el) {
+                    el.classList.remove("tc-dragging");
+                });
+
+                // Remove any leftover TiddlyWiki drag image elements
+                document.querySelectorAll(".tc-tiddler-dragger").forEach(function(el) {
+                    el.parentNode.removeChild(el);
+                });
+
+                // Blur any focused element to ensure clean state for next interaction
+                if (document.activeElement && document.activeElement !== document.body) {
+                    try {
+                        document.activeElement.blur();
+                    } catch (e) {}
+                }
+
+                // Cancel any lingering browser drag state by dispatching dragend on document
+                // This helps reset the browser's internal state that might be blocking pointer events
+                try {
+                    var cancelDragEvent = new DragEvent('dragend', {
+                        bubbles: true,
+                        cancelable: true
+                    });
+                    document.dispatchEvent(cancelDragEvent);
+                    log('[TiddlyDesktop] Dispatched document-level dragend to reset browser drag state');
+                } catch (e) {
+                    log('[TiddlyDesktop] Failed to dispatch dragend: ' + e);
+                }
+
+                // Reset pointer-events CSS in case something set it to none
+                document.body.style.pointerEvents = '';
+                document.documentElement.style.pointerEvents = '';
+
+                // WebKitGTK workaround: After a GTK drag, pointer events may be stuck.
+                // Dispatch a full click cycle (pointerdown + pointerup) at off-screen coordinates
+                // to reset WebKitGTK's internal pointer tracking state.
+                // Using coordinates far outside viewport (-1000, -1000) to avoid triggering any UI.
+                setTimeout(function() {
+                    try {
+                        // First dispatch pointerdown at off-screen position
+                        var resetDown = new PointerEvent('pointerdown', {
+                            pointerId: 1,
+                            bubbles: true,
+                            cancelable: true,
+                            pointerType: 'mouse',
+                            button: 0,
+                            buttons: 1,
+                            clientX: -1000,
+                            clientY: -1000,
+                            screenX: -1000,
+                            screenY: -1000,
+                            isPrimary: true
+                        });
+                        resetDown.__tiddlyDesktopSynthetic = true;
+                        document.dispatchEvent(resetDown);
+                        log('[TiddlyDesktop] Dispatched synthetic pointerdown at (-1000, -1000)');
+
+                        // Then dispatch pointerup at same position
+                        var resetUp = new PointerEvent('pointerup', {
+                            pointerId: 1,
+                            bubbles: true,
+                            cancelable: true,
+                            pointerType: 'mouse',
+                            button: 0,
+                            buttons: 0,
+                            clientX: -1000,
+                            clientY: -1000,
+                            screenX: -1000,
+                            screenY: -1000,
+                            isPrimary: true
+                        });
+                        resetUp.__tiddlyDesktopSynthetic = true;
+                        document.dispatchEvent(resetUp);
+                        log('[TiddlyDesktop] Dispatched synthetic pointerup at (-1000, -1000)');
+
+                        // Also try click event for good measure
+                        var resetClick = new MouseEvent('click', {
+                            bubbles: true,
+                            cancelable: true,
+                            button: 0,
+                            clientX: -1000,
+                            clientY: -1000,
+                            screenX: -1000,
+                            screenY: -1000
+                        });
+                        resetClick.__tiddlyDesktopSynthetic = true;
+                        document.dispatchEvent(resetClick);
+                        log('[TiddlyDesktop] Dispatched synthetic click at (-1000, -1000) to reset pointer state');
+                    } catch (e) {
+                        log('[TiddlyDesktop] Pointer reset error: ' + e);
+                    }
+                }, 10);
 
                 window.__tiddlyDesktopDragData = null;
                 window.__tiddlyDesktopEffectAllowed = null;
@@ -2042,15 +2428,45 @@
                 document.body.style.userSelect = "";
                 document.body.style.webkitUserSelect = "";
 
-                log('[TiddlyDesktop] Cleaned up after td-pointer-up');
+                log('[TiddlyDesktop] Cleaned up after td-pointer-up, capturedPointerId=' + capturedPointerId +
+                    ', nativeDragFromSelf=' + nativeDragFromSelf + ', internalDragActive=' + internalDragActive);
+            }
+            } catch (e) {
+                log('[td-pointer-up] ERROR: ' + e.message + ' | ' + (e.stack || ''));
+            }
+        });
+
+        // Handle pointer state reset request from Rust
+        // This fires after a re-entry + drop to reset WebKitGTK's pointer event state
+        // Rust will attempt native input injection (XTest on X11, libei on Wayland)
+        // If injection fails (e.g., wlroots without libei), needsFallback will be true
+        tauriListen("td-reset-pointer-state", function(event) {
+            var payload = event.payload || {};
+            var x = payload.x || 0;
+            var y = payload.y || 0;
+            var needsFallback = payload.needsFallback || false;
+            log('[TiddlyDesktop] td-reset-pointer-state received at (' + x + ', ' + y + '), needsFallback=' + needsFallback);
+
+            if (needsFallback) {
+                // Native input injection failed (e.g., Wayland + wlroots)
+                // Enable the mousedown fallback for subsequent interactions
+                webkitPointerBroken = true;
+                log('[TiddlyDesktop] Enabled mousedown fallback (native injection unavailable)');
+            } else {
+                // Native input injection succeeded
+                // The injected click should reset WebKitGTK's pointer tracking
+                // No fallback needed
+                webkitPointerBroken = false;
+                log('[TiddlyDesktop] Native injection succeeded, no fallback needed');
             }
         });
 
         // Handle native drag end signal from GTK
         // GTK may fire drag-end in two cases:
-        // 1. Prematurely - no valid GDK event, drag didn't really start (data_was_requested=false)
+        // 1. Prematurely - drag left the window but user might re-enter (data_was_requested=false)
         // 2. Real drop - data was transferred to external app (data_was_requested=true)
-        // If data was requested, we know a real drop happened and should clean up
+        // We only clean up if data was actually requested (real external drop).
+        // For premature end, we keep state so re-entry works.
         tauriListen("td-drag-end", function(event) {
             var payload = event.payload || {};
             var dataWasRequested = payload.data_was_requested || false;
@@ -2062,15 +2478,17 @@
                 return;
             }
 
-            // Native drag has ended - clean up regardless of whether data was requested
-            // dataWasRequested=true means drop was accepted (by external app or another wiki)
-            // dataWasRequested=false means drag was cancelled (Escape key or rejected)
-            if (dataWasRequested) {
-                log('[TiddlyDesktop] Native drag completed with drop - cleaning up');
-            } else {
-                log('[TiddlyDesktop] Native drag cancelled/rejected - cleaning up');
-                dragCancelledByEscape = true;  // Mark as cancelled so any stale pointerup doesn't trigger drop
+            // Only clean up if data was actually requested (real drop to external app)
+            // If data was NOT requested, GTK is just signaling drag-end because the pointer
+            // left the window - but the user might re-enter, so we preserve state
+            if (!dataWasRequested) {
+                log('[TiddlyDesktop] GTK drag-end without data request - preserving state for potential re-entry');
+                // Don't clean up - user might re-enter
+                // The state will be cleaned up by td-pointer-up when button is released
+                return;
             }
+
+            log('[TiddlyDesktop] Native drag completed with external drop - cleaning up');
 
             // Remove visual feedback classes
             document.querySelectorAll(".tc-dragover").forEach(function(el) {
@@ -2080,11 +2498,19 @@
                 el.classList.remove("tc-dragging");
             });
 
-            // Release pointer capture if we still have it
-            if (savedDragSource && capturedPointerId !== null) {
-                try {
-                    savedDragSource.releasePointerCapture(capturedPointerId);
-                } catch (e) {}
+            // Release pointer capture before cleaning up state
+            if (capturedPointerId !== null) {
+                var releasePointerId = capturedPointerId;
+                [savedDragSource, internalDragSource, pointerDownTarget].forEach(function(el) {
+                    if (el) {
+                        try {
+                            el.releasePointerCapture(releasePointerId);
+                            log('[td-drag-end] Released pointer capture from ' + el.tagName);
+                        } catch (e) {
+                            // Element may not have capture, that's OK
+                        }
+                    }
+                });
             }
 
             // Clean up native drag on Rust side

@@ -290,6 +290,7 @@ impl DropTargetImpl {
                 "x": client_x,
                 "y": client_y,
                 "screenCoords": false,
+                "physicalPixels": true,  // Windows sends physical pixels, needs dpr scaling in JS
                 "isOurDrag": is_our_drag,
                 "windowLabel": obj.window.label()
             }),
@@ -348,6 +349,7 @@ impl DropTargetImpl {
                 "x": client_x,
                 "y": client_y,
                 "screenCoords": false,
+                "physicalPixels": true,  // Windows sends physical pixels, needs dpr scaling in JS
                 "isOurDrag": is_our_drag,
                 "windowLabel": obj.window.label()
             }),
@@ -420,6 +422,7 @@ impl DropTargetImpl {
                     "x": client_x,
                     "y": client_y,
                     "screenCoords": false,
+                    "physicalPixels": true,
                     "isOurDrag": true,
                     "windowLabel": obj.window.label()
                 }),
@@ -440,7 +443,8 @@ impl DropTargetImpl {
                 serde_json::json!({
                     "x": client_x,
                     "y": client_y,
-                    "screenCoords": false
+                    "screenCoords": false,
+                    "physicalPixels": true
                 }),
             );
 
@@ -458,7 +462,8 @@ impl DropTargetImpl {
                     serde_json::json!({
                         "x": client_x,
                         "y": client_y,
-                        "screenCoords": false
+                        "screenCoords": false,
+                        "physicalPixels": true
                     }),
                 );
                 let _ = obj.window.emit(
@@ -484,7 +489,8 @@ impl DropTargetImpl {
                     serde_json::json!({
                         "x": client_x,
                         "y": client_y,
-                        "screenCoords": false
+                        "screenCoords": false,
+                        "physicalPixels": true
                     }),
                 );
                 let _ = obj.window.emit("td-drag-content", &content_data);
@@ -1804,6 +1810,7 @@ impl DropSourceImpl {
                 serde_json::json!({
                     "x": client_pos.x,
                     "y": client_pos.y,
+                    "physicalPixels": true,  // Windows sends physical pixels
                     "isOurDrag": true,
                     "fromPolling": true,
                     "windowLabel": obj.window.label()
@@ -1865,7 +1872,7 @@ fn create_hbitmap_from_png(png_data: &[u8]) -> Option<(windows::Win32::Graphics:
 
         let mut bits: *mut std::ffi::c_void = std::ptr::null_mut();
         let hbitmap = CreateDIBSection(
-            hdc,
+            Some(hdc),
             &bmi,
             DIB_RGB_COLORS,
             &mut bits,
@@ -1911,7 +1918,7 @@ fn create_hbitmap_from_png(png_data: &[u8]) -> Option<(windows::Win32::Graphics:
             }
         }
 
-        let _ = SelectObject(hdc, hbitmap);
+        let _ = SelectObject(hdc, hbitmap.into());
         let _ = DeleteDC(hdc);
 
         eprintln!("[TiddlyDesktop] Windows: Created HBITMAP {}x{} from PNG", width, height);
@@ -1926,9 +1933,8 @@ fn setup_drag_image(
     offset_x: i32,
     offset_y: i32,
 ) -> bool {
-    use windows::core::Interface;
     use windows::Win32::System::Com::{CoCreateInstance, CLSCTX_INPROC_SERVER};
-    use windows::Win32::UI::Shell::{IDragSourceHelper, DragDropHelper, SHDRAGIMAGE};
+    use windows::Win32::UI::Shell::{IDragSourceHelper, SHDRAGIMAGE, CLSID_DragDropHelper};
 
     // Create the bitmap from PNG
     let (hbitmap, width, height) = match create_hbitmap_from_png(png_data) {
@@ -1939,7 +1945,7 @@ fn setup_drag_image(
     unsafe {
         // Create IDragSourceHelper
         let helper: Result<IDragSourceHelper, _> = CoCreateInstance(
-            &DragDropHelper,
+            &CLSID_DragDropHelper,
             None,
             CLSCTX_INPROC_SERVER,
         );
@@ -1959,7 +1965,7 @@ fn setup_drag_image(
         drag_image.ptOffset.x = offset_x;
         drag_image.ptOffset.y = offset_y;
         drag_image.hbmpDragImage = hbitmap;
-        drag_image.crColorKey = 0xFFFFFFFF; // No color key (we use alpha)
+        drag_image.crColorKey = windows::Win32::Foundation::COLORREF(0xFFFFFFFF); // No color key (we use alpha)
 
         // Initialize from bitmap
         match helper.InitializeFromBitmap(&drag_image, data_object) {

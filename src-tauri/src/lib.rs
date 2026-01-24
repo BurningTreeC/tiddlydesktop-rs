@@ -3001,6 +3001,7 @@ fn reveal_or_create_main_window(app_handle: &tauri::AppHandle) {
 
     if let Ok(icon) = Image::from_bytes(include_bytes!("../icons/icon.png")) {
         // Use full init script with is_main_wiki=true
+        #[allow(unused_mut)]  // mut needed on Windows for disable_drag_drop_handler()
         let mut builder = WebviewWindowBuilder::new(
             app_handle,
             "main",
@@ -3142,6 +3143,7 @@ pub fn run() {
             // Create the main window programmatically with initialization script
             // Use full init script with is_main_wiki=true so setupExternalAttachments knows to skip
             let icon = Image::from_bytes(include_bytes!("../icons/icon.png"))?;
+            #[allow(unused_mut)]  // mut needed on Windows for disable_drag_drop_handler()
             let mut builder = WebviewWindowBuilder::new(app, "main", WebviewUrl::External(wiki_url.parse().unwrap()))
                 .title("TiddlyDesktopRS")
                 .inner_size(800.0, 600.0)

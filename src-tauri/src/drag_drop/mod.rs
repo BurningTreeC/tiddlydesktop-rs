@@ -48,6 +48,9 @@ pub mod windows_job;
 #[cfg(target_os = "linux")]
 mod linux;
 
+#[cfg(target_os = "linux")]
+mod input_inject;
+
 
 #[cfg(target_os = "macos")]
 mod macos;

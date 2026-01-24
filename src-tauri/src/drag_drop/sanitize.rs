@@ -24,6 +24,7 @@ pub fn is_dangerous_url(url: &str) -> bool {
 
 /// Sanitize a list of URLs (e.g., text/uri-list format)
 /// Removes any dangerous URLs from the list
+#[allow(dead_code)]
 pub fn sanitize_uri_list(uri_list: &str) -> String {
     uri_list
         .lines()
@@ -100,7 +101,6 @@ pub fn validate_file_path(path: &str) -> Option<String> {
     // On Windows, also check for alternate data streams and device names
     #[cfg(target_os = "windows")]
     {
-        let path_upper = path.to_uppercase();
         // Block alternate data streams
         if path.contains(':') && !path.chars().nth(1).map(|c| c == ':').unwrap_or(false) {
             // Allow drive letters (C:) but block ADS (file.txt:stream)

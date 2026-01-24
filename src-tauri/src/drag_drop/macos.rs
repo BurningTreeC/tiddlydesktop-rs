@@ -23,11 +23,11 @@ use objc2::msg_send;
 use objc2::rc::Retained;
 use objc2::runtime::{AnyClass, AnyObject, Bool, Sel};
 use objc2::sel;
-use objc2_app_kit::{NSPasteboard, NSView, NSWindow, NSDraggingSession, NSEvent, NSPasteboardItem};
+use objc2_app_kit::{NSPasteboard, NSView, NSWindow, NSEvent, NSPasteboardItem};
 use objc2_foundation::{NSArray, NSData, NSPoint, NSRect, NSSize, NSString};
 use tauri::{Emitter, WebviewWindow};
 
-use super::sanitize::{sanitize_html, sanitize_uri_list, sanitize_file_paths, is_dangerous_url};
+use super::sanitize::{sanitize_html, sanitize_file_paths, is_dangerous_url};
 
 /// Data captured from a drag operation
 #[derive(Clone, Debug, serde::Serialize)]
@@ -158,7 +158,7 @@ unsafe fn swizzle_drag_methods(webview: &NSView) {
             class as *mut AnyClass,
             sel!(draggingEntered:),
             swizzled_dragging_entered as *mut c_void,
-            &mut ORIGINAL_DRAGGING_ENTERED,
+            &raw mut ORIGINAL_DRAGGING_ENTERED,
         );
 
         // Swizzle draggingUpdated:
@@ -166,7 +166,7 @@ unsafe fn swizzle_drag_methods(webview: &NSView) {
             class as *mut AnyClass,
             sel!(draggingUpdated:),
             swizzled_dragging_updated as *mut c_void,
-            &mut ORIGINAL_DRAGGING_UPDATED,
+            &raw mut ORIGINAL_DRAGGING_UPDATED,
         );
 
         // Swizzle draggingExited:
@@ -174,7 +174,7 @@ unsafe fn swizzle_drag_methods(webview: &NSView) {
             class as *mut AnyClass,
             sel!(draggingExited:),
             swizzled_dragging_exited as *mut c_void,
-            &mut ORIGINAL_DRAGGING_EXITED,
+            &raw mut ORIGINAL_DRAGGING_EXITED,
         );
 
         // Swizzle performDragOperation:
@@ -182,7 +182,7 @@ unsafe fn swizzle_drag_methods(webview: &NSView) {
             class as *mut AnyClass,
             sel!(performDragOperation:),
             swizzled_perform_drag_operation as *mut c_void,
-            &mut ORIGINAL_PERFORM_DRAG,
+            &raw mut ORIGINAL_PERFORM_DRAG,
         );
 
         eprintln!("[TiddlyDesktop] macOS: Method swizzling complete");
@@ -194,7 +194,7 @@ unsafe fn swizzle_method<F>(
     class: *mut AnyClass,
     selector: Sel,
     new_impl: *mut c_void,
-    original_storage: &mut Option<F>,
+    original_storage: *mut Option<F>,
 ) {
     // Use libc to call the Objective-C runtime functions directly
     extern "C" {
@@ -812,6 +812,7 @@ fn emit_drop_with_files(window_label: &str, x: f64, y: f64, paths: Vec<String>) 
 
 /// Data to be provided during an outgoing drag operation
 #[derive(Clone, Debug, Default)]
+#[allow(dead_code)]
 pub struct OutgoingDragData {
     pub text_plain: Option<String>,
     pub text_html: Option<String>,
@@ -822,6 +823,7 @@ pub struct OutgoingDragData {
 }
 
 /// State for tracking outgoing drag operations
+#[allow(dead_code)]
 struct OutgoingDragState {
     data: OutgoingDragData,
     source_window_label: String,
@@ -857,7 +859,7 @@ unsafe fn swizzle_drag_source_methods(webview: &NSView) {
             class as *mut AnyClass,
             sel!(draggingSession:sourceOperationMaskForDraggingContext:),
             swizzled_source_operation_mask as *mut c_void,
-            &mut ORIGINAL_SOURCE_OPERATION_MASK,
+            &raw mut ORIGINAL_SOURCE_OPERATION_MASK,
         );
 
         // Swizzle draggingSession:movedToPoint:
@@ -865,7 +867,7 @@ unsafe fn swizzle_drag_source_methods(webview: &NSView) {
             class as *mut AnyClass,
             sel!(draggingSession:movedToPoint:),
             swizzled_dragging_session_moved as *mut c_void,
-            &mut ORIGINAL_DRAGGING_SESSION_MOVED,
+            &raw mut ORIGINAL_DRAGGING_SESSION_MOVED,
         );
 
         // Swizzle draggingSession:endedAtPoint:operation:
@@ -873,7 +875,7 @@ unsafe fn swizzle_drag_source_methods(webview: &NSView) {
             class as *mut AnyClass,
             sel!(draggingSession:endedAtPoint:operation:),
             swizzled_dragging_session_ended as *mut c_void,
-            &mut ORIGINAL_DRAGGING_SESSION_ENDED,
+            &raw mut ORIGINAL_DRAGGING_SESSION_ENDED,
         );
 
         eprintln!("[TiddlyDesktop] macOS: NSDraggingSource swizzling complete");

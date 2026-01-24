@@ -1570,29 +1570,17 @@ fn poll_pointer_position(state: &Rc<RefCell<PointerPollState>>) -> glib::Control
         Err(_) => return glib::ControlFlow::Continue,
     };
 
-    // Check if we still have outgoing drag data and if data was requested (dropped outside)
-    let (has_drag_data, data_was_requested) = outgoing_drag_state()
+    // Check if we still have outgoing drag data
+    // Note: We do NOT check data_was_requested here. Some applications (especially browsers)
+    // request drag data just to preview/inspect it, without actually completing a drop.
+    // We must keep polling until the button is released to properly detect re-entry scenarios.
+    let has_drag_data = outgoing_drag_state()
         .lock()
-        .map(|g| {
-            if let Some(drag_state) = g.as_ref() {
-                (true, drag_state.data_was_requested)
-            } else {
-                (false, false)
-            }
-        })
-        .unwrap_or((false, false));
+        .map(|g| g.is_some())
+        .unwrap_or(false);
 
     if !has_drag_data {
         eprintln!("[TiddlyDesktop] Linux: No drag data, stopping pointer polling");
-        POLLING_SOURCE_ID.with(|id| {
-            *id.borrow_mut() = None;
-        });
-        return glib::ControlFlow::Break;
-    }
-
-    // If data was requested, it means an external app received the drop - stop polling
-    if data_was_requested {
-        eprintln!("[TiddlyDesktop] Linux: Data was requested (dropped outside), stopping pointer polling");
         POLLING_SOURCE_ID.with(|id| {
             *id.borrow_mut() = None;
         });

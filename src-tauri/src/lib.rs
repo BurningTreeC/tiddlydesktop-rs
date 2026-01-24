@@ -1248,9 +1248,15 @@ async fn open_wiki_folder(app: tauri::AppHandle, path: String) -> Result<WikiEnt
         builder = builder.data_directory(dir);
     }
 
+    // On Windows, Tauri's drag/drop handler steals events from the DOM.
+    // We disable it and handle all drag/drop via our custom IDropTarget (windows.rs)
+    // which emits td-* events that JavaScript handles.
+    #[cfg(target_os = "windows")]
+    {
+        builder = builder.disable_drag_drop_handler();
+    }
+
     let window = builder
-        // NOT calling disable_drag_drop_handler() - we need tauri://drag-drop events
-        // for external attachments support. File drops are handled via Tauri events.
         .build()
         .map_err(|e| format!("Failed to create window: {}", e))?;
 
@@ -2073,9 +2079,15 @@ async fn open_wiki_window(app: tauri::AppHandle, path: String) -> Result<WikiEnt
         builder = builder.data_directory(dir);
     }
 
+    // On Windows, Tauri's drag/drop handler steals events from the DOM.
+    // We disable it and handle all drag/drop via our custom IDropTarget (windows.rs)
+    // which emits td-* events that JavaScript handles.
+    #[cfg(target_os = "windows")]
+    {
+        builder = builder.disable_drag_drop_handler();
+    }
+
     let window = builder
-        // NOT calling disable_drag_drop_handler() - we need tauri://drag-drop events
-        // for external attachments support. File drops are handled via Tauri events.
         .build()
         .map_err(|e| format!("Failed to create window: {}", e))?;
 
@@ -2206,6 +2218,13 @@ async fn open_tiddler_window(
     // Set window position if specified
     if let (Some(x), Some(y)) = (left, top) {
         builder = builder.position(x, y);
+    }
+
+    // On Windows, Tauri's drag/drop handler steals events from the DOM.
+    // We disable it and handle all drag/drop via our custom IDropTarget (windows.rs)
+    #[cfg(target_os = "windows")]
+    {
+        builder = builder.disable_drag_drop_handler();
     }
 
     let window = builder
@@ -2982,7 +3001,7 @@ fn reveal_or_create_main_window(app_handle: &tauri::AppHandle) {
 
     if let Ok(icon) = Image::from_bytes(include_bytes!("../icons/icon.png")) {
         // Use full init script with is_main_wiki=true
-        if let Ok(main_window) = WebviewWindowBuilder::new(
+        let mut builder = WebviewWindowBuilder::new(
             app_handle,
             "main",
             WebviewUrl::External(wiki_url.parse().unwrap())
@@ -2991,8 +3010,16 @@ fn reveal_or_create_main_window(app_handle: &tauri::AppHandle) {
             .inner_size(800.0, 600.0)
             .icon(icon)
             .expect("Failed to set icon")
-            .initialization_script(&init_script::get_wiki_init_script(&main_wiki_path.to_string_lossy(), "main", true))
-            .build()
+            .initialization_script(&init_script::get_wiki_init_script(&main_wiki_path.to_string_lossy(), "main", true));
+
+        // On Windows, Tauri's drag/drop handler steals events from the DOM.
+        // We disable it and handle all drag/drop via our custom IDropTarget (windows.rs)
+        #[cfg(target_os = "windows")]
+        {
+            builder = builder.disable_drag_drop_handler();
+        }
+
+        if let Ok(main_window) = builder.build()
         {
             // Set up platform-specific drag handlers for content drops from external apps
             drag_drop::setup_drag_handlers(&main_window);
@@ -3115,14 +3142,22 @@ pub fn run() {
             // Create the main window programmatically with initialization script
             // Use full init script with is_main_wiki=true so setupExternalAttachments knows to skip
             let icon = Image::from_bytes(include_bytes!("../icons/icon.png"))?;
-            let main_window = WebviewWindowBuilder::new(app, "main", WebviewUrl::External(wiki_url.parse().unwrap()))
+            let mut builder = WebviewWindowBuilder::new(app, "main", WebviewUrl::External(wiki_url.parse().unwrap()))
                 .title("TiddlyDesktopRS")
                 .inner_size(800.0, 600.0)
                 .icon(icon)?
                 .window_classname("tiddlydesktop-rs")
                 .initialization_script(&init_script::get_wiki_init_script(&main_wiki_path.to_string_lossy(), "main", true))
-                .devtools(false)
-                .build()?;
+                .devtools(false);
+
+            // On Windows, Tauri's drag/drop handler steals events from the DOM.
+            // We disable it and handle all drag/drop via our custom IDropTarget (windows.rs)
+            #[cfg(target_os = "windows")]
+            {
+                builder = builder.disable_drag_drop_handler();
+            }
+
+            let main_window = builder.build()?;
 
             // Set up platform-specific drag handlers for content drops from external apps
             drag_drop::setup_drag_handlers(&main_window);

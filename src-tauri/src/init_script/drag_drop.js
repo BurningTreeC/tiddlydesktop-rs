@@ -565,6 +565,8 @@
         listen("td-drag-drop-position", function(event) {
             // Skip if internal drag is active (handled by internal_drag.js)
             if (TD.isInternalDragActive && TD.isInternalDragActive()) return;
+            // Skip if this is our own drag re-entering (handled by internal_drag.js)
+            if (event.payload && event.payload.isOurDrag) return;
             if (event.payload) {
                 var pos;
                 if (event.payload.screenCoords) {

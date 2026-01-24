@@ -249,13 +249,24 @@ unsafe fn get_dragging_pasteboard(dragging_info: *mut AnyObject) -> Option<Retai
 // Swizzled method implementations
 // ============================================================================
 
+/// Check if there's an active outgoing drag from this window
+fn is_our_outgoing_drag(window_label: &str) -> bool {
+    if let Ok(guard) = outgoing_drag_state().lock() {
+        if let Some(state) = guard.as_ref() {
+            return state.source_window_label == window_label;
+        }
+    }
+    false
+}
+
 /// Swizzled draggingEntered: - called when drag enters the view
 extern "C" fn swizzled_dragging_entered(this: *mut AnyObject, _sel: Sel, dragging_info: *mut AnyObject) -> usize {
     unsafe {
-        eprintln!("[TiddlyDesktop] macOS: draggingEntered");
-
         if let Some(label) = get_window_label(this) {
             let (x, y) = get_dragging_location(dragging_info, this);
+            let is_our_drag = is_our_outgoing_drag(&label);
+
+            eprintln!("[TiddlyDesktop] macOS: draggingEntered, isOurDrag={}", is_our_drag);
 
             if let Some(state) = DRAG_STATES.lock().unwrap().get(&label) {
                 let mut state = state.lock().unwrap();
@@ -267,7 +278,9 @@ extern "C" fn swizzled_dragging_entered(this: *mut AnyObject, _sel: Sel, draggin
                     serde_json::json!({
                         "x": x,
                         "y": y,
-                        "screenCoords": false
+                        "screenCoords": false,
+                        "isOurDrag": is_our_drag,
+                        "windowLabel": label
                     }),
                 );
             }
@@ -287,6 +300,7 @@ extern "C" fn swizzled_dragging_updated(this: *mut AnyObject, _sel: Sel, draggin
     unsafe {
         if let Some(label) = get_window_label(this) {
             let (x, y) = get_dragging_location(dragging_info, this);
+            let is_our_drag = is_our_outgoing_drag(&label);
 
             if let Some(state) = DRAG_STATES.lock().unwrap().get(&label) {
                 let mut state = state.lock().unwrap();
@@ -297,7 +311,9 @@ extern "C" fn swizzled_dragging_updated(this: *mut AnyObject, _sel: Sel, draggin
                     serde_json::json!({
                         "x": x,
                         "y": y,
-                        "screenCoords": false
+                        "screenCoords": false,
+                        "isOurDrag": is_our_drag,
+                        "windowLabel": label
                     }),
                 );
             }
@@ -315,15 +331,20 @@ extern "C" fn swizzled_dragging_updated(this: *mut AnyObject, _sel: Sel, draggin
 /// Swizzled draggingExited: - called when drag leaves the view
 extern "C" fn swizzled_dragging_exited(this: *mut AnyObject, _sel: Sel, dragging_info: *mut AnyObject) {
     unsafe {
-        eprintln!("[TiddlyDesktop] macOS: draggingExited");
-
         if let Some(label) = get_window_label(this) {
+            let is_our_drag = is_our_outgoing_drag(&label);
+
+            eprintln!("[TiddlyDesktop] macOS: draggingExited, isOurDrag={}", is_our_drag);
+
             if let Some(state) = DRAG_STATES.lock().unwrap().get(&label) {
                 let mut state = state.lock().unwrap();
                 state.drag_active = false;
                 state.last_position = None;
 
-                let _ = state.window.emit("td-drag-leave", ());
+                let _ = state.window.emit("td-drag-leave", serde_json::json!({
+                    "isOurDrag": is_our_drag,
+                    "windowLabel": label
+                }));
             }
         }
 
@@ -337,14 +358,34 @@ extern "C" fn swizzled_dragging_exited(this: *mut AnyObject, _sel: Sel, dragging
 /// Swizzled performDragOperation: - called when drop occurs
 extern "C" fn swizzled_perform_drag_operation(this: *mut AnyObject, _sel: Sel, dragging_info: *mut AnyObject) -> Bool {
     unsafe {
-        eprintln!("[TiddlyDesktop] macOS: performDragOperation");
-
         let mut handled = false;
 
         if let Some(label) = get_window_label(this) {
             let (x, y) = get_dragging_location(dragging_info, this);
+            let is_our_drag = is_our_outgoing_drag(&label);
 
-            if let Some(pasteboard) = get_dragging_pasteboard(dragging_info) {
+            eprintln!("[TiddlyDesktop] macOS: performDragOperation, isOurDrag={}", is_our_drag);
+
+            // If this is our own drag, don't process it as an external drop.
+            // The JavaScript internal drag system will handle the drop.
+            // Just emit a position update so JS knows where the drop occurred.
+            if is_our_drag {
+                eprintln!("[TiddlyDesktop] macOS: performDragOperation - our own drag, letting JS handle it");
+                if let Some(state) = DRAG_STATES.lock().unwrap().get(&label) {
+                    let state = state.lock().unwrap();
+                    let _ = state.window.emit(
+                        "td-drag-drop-position",
+                        serde_json::json!({
+                            "x": x,
+                            "y": y,
+                            "screenCoords": false,
+                            "isOurDrag": true,
+                            "windowLabel": label
+                        }),
+                    );
+                }
+                handled = true;
+            } else if let Some(pasteboard) = get_dragging_pasteboard(dragging_info) {
                 // Check for file drops first
                 let file_paths = extract_file_paths(&pasteboard);
 
@@ -1040,6 +1081,53 @@ extern "C" fn swizzled_dragging_session_ended(
     }
 }
 
+/// Apply opacity to an NSImage by drawing it into a new image with reduced alpha
+/// Returns a new NSImage with the opacity applied, or null on failure
+unsafe fn apply_opacity_to_nsimage(image: *mut AnyObject, size: NSSize, opacity: f64) -> *mut AnyObject {
+    // Create a new NSImage with the same size
+    let new_image_class: *const AnyObject = msg_send![objc2::class!(NSImage), alloc];
+    if new_image_class.is_null() {
+        return std::ptr::null_mut();
+    }
+
+    let new_image: *mut AnyObject = msg_send![new_image_class, initWithSize: size];
+    if new_image.is_null() {
+        return std::ptr::null_mut();
+    }
+
+    // Lock focus on the new image to draw into it
+    let locked: Bool = msg_send![new_image, lockFocus];
+    if !locked.as_bool() {
+        eprintln!("[TiddlyDesktop] macOS: Failed to lock focus on new image");
+        return std::ptr::null_mut();
+    }
+
+    // Draw the original image with reduced opacity
+    // drawInRect:fromRect:operation:fraction: draws with the specified alpha (fraction)
+    let dest_rect = NSRect {
+        origin: NSPoint { x: 0.0, y: 0.0 },
+        size,
+    };
+    let zero_rect = NSRect {
+        origin: NSPoint { x: 0.0, y: 0.0 },
+        size: NSSize { width: 0.0, height: 0.0 },
+    };
+
+    // NSCompositingOperationSourceOver = 2
+    let _: () = msg_send![
+        image,
+        drawInRect: dest_rect
+        fromRect: zero_rect
+        operation: 2u64  // NSCompositingOperationSourceOver
+        fraction: opacity
+    ];
+
+    // Unlock focus
+    let _: () = msg_send![new_image, unlockFocus];
+
+    new_image
+}
+
 /// Start a native drag operation
 pub fn start_native_drag(
     window: &WebviewWindow,
@@ -1161,7 +1249,7 @@ fn start_native_drag_on_main_thread(
             size: NSSize { width: 100.0, height: 50.0 },
         };
 
-        // Try to create drag image from PNG data
+        // Try to create drag image from PNG data with 0.7 opacity (matching Linux/Windows)
         if let Some(img_bytes) = image_data {
             let ns_data = NSData::from_vec(img_bytes);
             // Use raw pointers to avoid objc2 type issues with alloc/init pattern
@@ -1170,6 +1258,12 @@ fn start_native_drag_on_main_thread(
                 let image: *mut AnyObject = msg_send![image_class, initWithData: &*ns_data];
                 if !image.is_null() {
                     let size: NSSize = msg_send![image, size];
+
+                    // Apply 0.7 opacity to match JS drag image styling
+                    // Create a new image and draw the original with reduced alpha
+                    let faded_image = apply_opacity_to_nsimage(image, size, 0.7);
+                    let final_image = if !faded_image.is_null() { faded_image } else { image };
+
                     let image_frame = NSRect {
                         origin: NSPoint {
                             x: x as f64 - offset_x as f64,
@@ -1177,8 +1271,8 @@ fn start_native_drag_on_main_thread(
                         },
                         size,
                     };
-                    let _: () = msg_send![dragging_item, setDraggingFrame: image_frame, contents: image];
-                    eprintln!("[TiddlyDesktop] macOS: Set drag image {}x{}", size.width, size.height);
+                    let _: () = msg_send![dragging_item, setDraggingFrame: image_frame, contents: final_image];
+                    eprintln!("[TiddlyDesktop] macOS: Set drag image {}x{} with 0.7 opacity", size.width, size.height);
                 } else {
                     let _: () = msg_send![dragging_item, setDraggingFrame: frame, contents: std::ptr::null::<AnyObject>()];
                 }

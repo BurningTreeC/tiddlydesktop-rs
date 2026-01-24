@@ -243,6 +243,16 @@ impl DropTargetImpl {
         count
     }
 
+    /// Check if there's an active outgoing drag from this window
+    fn is_our_outgoing_drag(&self) -> bool {
+        if let Ok(guard) = OUTGOING_DRAG_STATE.lock() {
+            if let Some(state) = guard.as_ref() {
+                return state.source_window_label == self.window.label();
+            }
+        }
+        false
+    }
+
     // IDropTarget::DragEnter - always emit events, JS checks TD.isInternalDragActive()
     unsafe extern "system" fn drag_enter(
         this: *mut Self,
@@ -257,9 +267,12 @@ impl DropTargetImpl {
         // Convert screen coordinates to client coordinates
         let (client_x, client_y) = obj.screen_to_client_coords(pt);
 
+        // Check if this is our own drag re-entering the window
+        let is_our_drag = obj.is_our_outgoing_drag();
+
         eprintln!(
-            "[TiddlyDesktop] Windows IDropTarget::DragEnter at screen({}, {}) -> client({}, {})",
-            pt.x, pt.y, client_x, client_y
+            "[TiddlyDesktop] Windows IDropTarget::DragEnter at screen({}, {}) -> client({}, {}), isOurDrag={}",
+            pt.x, pt.y, client_x, client_y, is_our_drag
         );
 
         // Log available formats for debugging
@@ -270,12 +283,15 @@ impl DropTargetImpl {
 
         // Always emit td-drag-motion - JavaScript will filter internal drags
         // using TD.isInternalDragActive() check
+        // If this is our own drag re-entering, mark it so JS knows
         let _ = obj.window.emit(
             "td-drag-motion",
             serde_json::json!({
                 "x": client_x,
                 "y": client_y,
-                "screenCoords": false
+                "screenCoords": false,
+                "isOurDrag": is_our_drag,
+                "windowLabel": obj.window.label()
             }),
         );
 
@@ -306,6 +322,9 @@ impl DropTargetImpl {
         // Convert screen coordinates to client coordinates
         let (client_x, client_y) = obj.screen_to_client_coords(pt);
 
+        // Check if this is our own drag
+        let is_our_drag = obj.is_our_outgoing_drag();
+
         // Rate-limited logging
         static LAST_LOG: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let now = std::time::SystemTime::now()
@@ -316,18 +335,21 @@ impl DropTargetImpl {
         if now - last > 500 {
             LAST_LOG.store(now, std::sync::atomic::Ordering::Relaxed);
             eprintln!(
-                "[TiddlyDesktop] Windows IDropTarget::DragOver at screen({}, {}) -> client({}, {})",
-                pt.x, pt.y, client_x, client_y
+                "[TiddlyDesktop] Windows IDropTarget::DragOver at screen({}, {}) -> client({}, {}), isOurDrag={}",
+                pt.x, pt.y, client_x, client_y, is_our_drag
             );
         }
 
         // Always emit - JS checks TD.isInternalDragActive()
+        // If this is our own drag, mark it so JS knows
         let _ = obj.window.emit(
             "td-drag-motion",
             serde_json::json!({
                 "x": client_x,
                 "y": client_y,
-                "screenCoords": false
+                "screenCoords": false,
+                "isOurDrag": is_our_drag,
+                "windowLabel": obj.window.label()
             }),
         );
 
@@ -342,7 +364,11 @@ impl DropTargetImpl {
     // IDropTarget::DragLeave
     unsafe extern "system" fn drag_leave(this: *mut Self) -> HRESULT {
         let obj = &*this;
-        eprintln!("[TiddlyDesktop] Windows IDropTarget::DragLeave");
+
+        // Check if this is our own drag
+        let is_our_drag = obj.is_our_outgoing_drag();
+
+        eprintln!("[TiddlyDesktop] Windows IDropTarget::DragLeave, isOurDrag={}", is_our_drag);
 
         let was_active = {
             let mut active = obj.drag_active.lock().unwrap();
@@ -352,7 +378,10 @@ impl DropTargetImpl {
         };
 
         if was_active {
-            let _ = obj.window.emit("td-drag-leave", ());
+            let _ = obj.window.emit("td-drag-leave", serde_json::json!({
+                "isOurDrag": is_our_drag,
+                "windowLabel": obj.window.label()
+            }));
         }
 
         S_OK
@@ -372,10 +401,34 @@ impl DropTargetImpl {
         // Convert screen coordinates to client coordinates
         let (client_x, client_y) = obj.screen_to_client_coords(pt);
 
+        // Check if this is our own drag being dropped back on our window
+        let is_our_drag = obj.is_our_outgoing_drag();
+
         eprintln!(
-            "[TiddlyDesktop] Windows IDropTarget::Drop at screen({}, {}) -> client({}, {})",
-            pt.x, pt.y, client_x, client_y
+            "[TiddlyDesktop] Windows IDropTarget::Drop at screen({}, {}) -> client({}, {}), isOurDrag={}",
+            pt.x, pt.y, client_x, client_y, is_our_drag
         );
+
+        // If this is our own drag, don't process it as an external drop.
+        // The JavaScript internal drag system will handle the drop via pointer events.
+        // Just emit a position update so JS knows where the drop occurred.
+        if is_our_drag {
+            eprintln!("[TiddlyDesktop] Windows IDropTarget::Drop - our own drag, letting JS handle it");
+            let _ = obj.window.emit(
+                "td-drag-drop-position",
+                serde_json::json!({
+                    "x": client_x,
+                    "y": client_y,
+                    "screenCoords": false,
+                    "isOurDrag": true,
+                    "windowLabel": obj.window.label()
+                }),
+            );
+            if !pdw_effect.is_null() {
+                *pdw_effect = DROPEFFECT_COPY.0 as u32;
+            }
+            return S_OK;
+        }
 
         if !p_data_obj.is_null() {
             let data_object: &IDataObject = std::mem::transmute(&p_data_obj);
@@ -1774,14 +1827,163 @@ impl DropSourceImpl {
 
 use std::sync::atomic::AtomicBool;
 
+/// Create an HBITMAP from PNG data with premultiplied alpha (required for drag images)
+/// Applies 0.7 opacity to match the JS drag image styling
+fn create_hbitmap_from_png(png_data: &[u8]) -> Option<(windows::Win32::Graphics::Gdi::HBITMAP, i32, i32)> {
+    use windows::Win32::Graphics::Gdi::{
+        CreateCompatibleDC, CreateDIBSection, DeleteDC, SelectObject,
+        BITMAPINFO, BITMAPINFOHEADER, BI_RGB, DIB_RGB_COLORS,
+    };
+
+    // Decode PNG using the image crate
+    let img = match image::load_from_memory(png_data) {
+        Ok(img) => img.to_rgba8(),
+        Err(e) => {
+            eprintln!("[TiddlyDesktop] Windows: Failed to decode PNG: {}", e);
+            return None;
+        }
+    };
+
+    let width = img.width() as i32;
+    let height = img.height() as i32;
+
+    unsafe {
+        // Create a DIB section for the bitmap
+        let mut bmi: BITMAPINFO = std::mem::zeroed();
+        bmi.bmiHeader.biSize = std::mem::size_of::<BITMAPINFOHEADER>() as u32;
+        bmi.bmiHeader.biWidth = width;
+        bmi.bmiHeader.biHeight = -height; // Negative for top-down DIB
+        bmi.bmiHeader.biPlanes = 1;
+        bmi.bmiHeader.biBitCount = 32;
+        bmi.bmiHeader.biCompression = BI_RGB.0;
+
+        let hdc = CreateCompatibleDC(None);
+        if hdc.is_invalid() {
+            eprintln!("[TiddlyDesktop] Windows: CreateCompatibleDC failed");
+            return None;
+        }
+
+        let mut bits: *mut std::ffi::c_void = std::ptr::null_mut();
+        let hbitmap = CreateDIBSection(
+            hdc,
+            &bmi,
+            DIB_RGB_COLORS,
+            &mut bits,
+            None,
+            0,
+        );
+
+        if hbitmap.is_err() || bits.is_null() {
+            eprintln!("[TiddlyDesktop] Windows: CreateDIBSection failed");
+            let _ = DeleteDC(hdc);
+            return None;
+        }
+        let hbitmap = hbitmap.unwrap();
+
+        // Copy pixels with premultiplied alpha and 0.7 opacity
+        let pixel_count = (width * height) as usize;
+        let dst = std::slice::from_raw_parts_mut(bits as *mut u8, pixel_count * 4);
+
+        for y in 0..height as usize {
+            for x in 0..width as usize {
+                let src_idx = (y * width as usize + x) * 4;
+                let dst_idx = src_idx;
+
+                let r = img.as_raw()[src_idx];
+                let g = img.as_raw()[src_idx + 1];
+                let b = img.as_raw()[src_idx + 2];
+                let a = img.as_raw()[src_idx + 3];
+
+                // Apply 0.7 opacity
+                let a = ((a as f32) * 0.7) as u8;
+
+                // Premultiply alpha (required for Windows drag images)
+                let af = a as f32 / 255.0;
+                let pr = ((r as f32) * af) as u8;
+                let pg = ((g as f32) * af) as u8;
+                let pb = ((b as f32) * af) as u8;
+
+                // Windows uses BGRA format
+                dst[dst_idx] = pb;
+                dst[dst_idx + 1] = pg;
+                dst[dst_idx + 2] = pr;
+                dst[dst_idx + 3] = a;
+            }
+        }
+
+        let _ = SelectObject(hdc, hbitmap);
+        let _ = DeleteDC(hdc);
+
+        eprintln!("[TiddlyDesktop] Windows: Created HBITMAP {}x{} from PNG", width, height);
+        Some((hbitmap, width, height))
+    }
+}
+
+/// Set up the drag image using IDragSourceHelper
+fn setup_drag_image(
+    data_object: &IDataObject,
+    png_data: &[u8],
+    offset_x: i32,
+    offset_y: i32,
+) -> bool {
+    use windows::core::Interface;
+    use windows::Win32::System::Com::{CoCreateInstance, CLSCTX_INPROC_SERVER};
+    use windows::Win32::UI::Shell::{IDragSourceHelper, DragDropHelper, SHDRAGIMAGE};
+
+    // Create the bitmap from PNG
+    let (hbitmap, width, height) = match create_hbitmap_from_png(png_data) {
+        Some(result) => result,
+        None => return false,
+    };
+
+    unsafe {
+        // Create IDragSourceHelper
+        let helper: Result<IDragSourceHelper, _> = CoCreateInstance(
+            &DragDropHelper,
+            None,
+            CLSCTX_INPROC_SERVER,
+        );
+
+        let helper = match helper {
+            Ok(h) => h,
+            Err(e) => {
+                eprintln!("[TiddlyDesktop] Windows: Failed to create IDragSourceHelper: {:?}", e);
+                return false;
+            }
+        };
+
+        // Set up the SHDRAGIMAGE structure
+        let mut drag_image: SHDRAGIMAGE = std::mem::zeroed();
+        drag_image.sizeDragImage.cx = width;
+        drag_image.sizeDragImage.cy = height;
+        drag_image.ptOffset.x = offset_x;
+        drag_image.ptOffset.y = offset_y;
+        drag_image.hbmpDragImage = hbitmap;
+        drag_image.crColorKey = 0xFFFFFFFF; // No color key (we use alpha)
+
+        // Initialize from bitmap
+        match helper.InitializeFromBitmap(&drag_image, data_object) {
+            Ok(()) => {
+                eprintln!("[TiddlyDesktop] Windows: Drag image set successfully ({}x{}, offset {}, {})",
+                    width, height, offset_x, offset_y);
+                true
+            }
+            Err(e) => {
+                eprintln!("[TiddlyDesktop] Windows: InitializeFromBitmap failed: {:?}", e);
+                false
+            }
+        }
+    }
+}
+
 /// Start a native drag operation (called from JavaScript when pointer leaves window during internal drag)
-pub fn start_native_drag(window: &WebviewWindow, data: OutgoingDragData, _x: i32, _y: i32, _image_data: Option<Vec<u8>>, _image_offset_x: Option<i32>, _image_offset_y: Option<i32>) -> Result<(), String> {
+pub fn start_native_drag(window: &WebviewWindow, data: OutgoingDragData, _x: i32, _y: i32, image_data: Option<Vec<u8>>, image_offset_x: Option<i32>, image_offset_y: Option<i32>) -> Result<(), String> {
     use windows::Win32::System::Ole::DoDragDrop;
 
     let label = window.label().to_string();
     eprintln!(
-        "[TiddlyDesktop] Windows: start_native_drag called for window '{}'",
-        label
+        "[TiddlyDesktop] Windows: start_native_drag called for window '{}', has image: {}, offset: ({:?}, {:?})",
+        label, image_data.is_some(), image_offset_x, image_offset_y
     );
 
     // Store drag state
@@ -1811,6 +2013,13 @@ pub fn start_native_drag(window: &WebviewWindow, data: OutgoingDragData, _x: i32
     let result = unsafe {
         let data_object: IDataObject = std::mem::transmute(data_object_ptr);
         let drop_source: windows::Win32::System::Ole::IDropSource = std::mem::transmute(drop_source_ptr);
+
+        // Set up the drag image if provided
+        if let Some(ref img_data) = image_data {
+            let offset_x = image_offset_x.unwrap_or(0);
+            let offset_y = image_offset_y.unwrap_or(0);
+            setup_drag_image(&data_object, img_data, offset_x, offset_y);
+        }
 
         let mut effect: DROPEFFECT = DROPEFFECT_NONE;
         let hr = DoDragDrop(

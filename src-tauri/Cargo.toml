@@ -53,9 +53,11 @@ windows = { version = "0.61", features = [
     "Win32_UI_WindowsAndMessaging",
     "Win32_System_Memory",
     "Win32_Globalization",
+    "Win32_Graphics_Gdi",
 ] }
 lazy_static = "1.5"
 webview2-com = "0.38"
+image = { version = "0.25", default-features = false, features = ["png"] }
 
 # macOS drag-drop handling via objc2 (versions must match Tauri's objc2 dependency)
 [target.'cfg(target_os = "macos")'.dependencies]

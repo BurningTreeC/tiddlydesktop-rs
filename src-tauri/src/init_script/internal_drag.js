@@ -1798,6 +1798,111 @@
             }
         });
 
+        // Handle drop position for our own drag re-entering (Windows native DoDragDrop)
+        // This fires when IDropTarget::Drop is called but it's our own drag
+        tauriListen("td-drag-drop-position", function(event) {
+            var payload = event.payload || {};
+            var isOurDrag = payload.isOurDrag;
+            var eventWindowLabel = payload.windowLabel || '';
+            var x = payload.x || 0;
+            var y = payload.y || 0;
+
+            // Only handle if this is our own drag
+            if (!isOurDrag) return;
+
+            // Only process if this event is for THIS window
+            if (eventWindowLabel && eventWindowLabel !== currentWindowLabel) {
+                log('Ignoring drop-position event for different window: ' + eventWindowLabel);
+                return;
+            }
+
+            log('[TiddlyDesktop] td-drag-drop-position (our drag) at x=' + x + ', y=' + y +
+                ', nativeDragFromSelf=' + nativeDragFromSelf + ', internalDragActive=' + internalDragActive);
+
+            // If this is our drag re-entering and being dropped, handle the drop
+            if (nativeDragFromSelf || internalDragActive) {
+                // Get the drop target
+                var elementInfo = getElementAtPoint(x, y);
+                var target = elementInfo.target;
+
+                if (lastDragOverTarget) {
+                    var leaveEvent = createSyntheticDragEvent("dragleave", {
+                        clientX: x,
+                        clientY: y,
+                        relatedTarget: null
+                    }, pointerDragDataTransfer);
+                    lastDragOverTarget.dispatchEvent(leaveEvent);
+                }
+
+                if (target) {
+                    var dropDt = new DataTransfer();
+                    // Copy captured data to drop dataTransfer
+                    if (window.__tiddlyDesktopDragData) {
+                        for (var type in window.__tiddlyDesktopDragData) {
+                            try {
+                                dropDt.setData(type, window.__tiddlyDesktopDragData[type]);
+                            } catch(e) {}
+                        }
+                    }
+
+                    // Special handling for text inputs and textareas
+                    var textData = window.__tiddlyDesktopDragData && window.__tiddlyDesktopDragData['text/plain'];
+                    var htmlData = window.__tiddlyDesktopDragData && window.__tiddlyDesktopDragData['text/html'];
+
+                    if (isTextInput(target)) {
+                        insertTextAtPoint(target, elementInfo.adjustedX, elementInfo.adjustedY, textData);
+                    } else if (isContentEditable(target)) {
+                        insertIntoContentEditableAtPoint(target, elementInfo.adjustedX, elementInfo.adjustedY, textData, htmlData);
+                    } else {
+                        // Standard drop event for other elements
+                        var dropEvent = createSyntheticDragEvent("drop", {
+                            clientX: x,
+                            clientY: y
+                        }, dropDt);
+                        target.dispatchEvent(dropEvent);
+                    }
+                }
+
+                // Dispatch dragend to source
+                if (savedDragSource || internalDragSource) {
+                    var endEvent = createSyntheticDragEvent("dragend", {
+                        clientX: x,
+                        clientY: y
+                    }, pointerDragDataTransfer);
+                    (savedDragSource || internalDragSource).dispatchEvent(endEvent);
+                }
+
+                // Remove visual feedback classes
+                document.querySelectorAll(".tc-dragover").forEach(function(el) {
+                    el.classList.remove("tc-dragover");
+                });
+                document.querySelectorAll(".tc-dragging").forEach(function(el) {
+                    el.classList.remove("tc-dragging");
+                });
+
+                // Clean up all state
+                cleanupNativeDrag();
+                window.__tiddlyDesktopDragData = null;
+                window.__tiddlyDesktopEffectAllowed = null;
+                internalDragSource = null;
+                internalDragActive = false;
+                lastDragOverTarget = null;
+                pointerDragDataTransfer = null;
+                nativeDragFromSelf = false;
+                nativeDragData = null;
+                savedDragInProgress = null;
+                savedDragSource = null;
+                pollingActive = false;
+                if (savedDragImage && savedDragImage.parentNode) {
+                    savedDragImage.parentNode.removeChild(savedDragImage);
+                }
+                savedDragImage = null;
+                removeDragImage();
+                document.body.style.userSelect = "";
+                document.body.style.webkitUserSelect = "";
+            }
+        });
+
         // Handle drop completion - clean up native drag state
         tauriListen("td-drag-drop-start", function(event) {
             if (nativeDragFromSelf) {
@@ -1949,58 +2054,67 @@
         tauriListen("td-drag-end", function(event) {
             var payload = event.payload || {};
             var dataWasRequested = payload.data_was_requested || false;
-            log('[TiddlyDesktop] td-drag-end received (GTK signal), nativeDragFromSelf=' + nativeDragFromSelf +
+            log('[TiddlyDesktop] td-drag-end received, nativeDragFromSelf=' + nativeDragFromSelf +
                 ', internalDragActive=' + internalDragActive + ', dataWasRequested=' + dataWasRequested);
 
-            // If data was NOT requested and we're in native drag mode, this is a cancellation (e.g., Escape pressed)
-            // Set the flag so td-pointer-up knows not to trigger a drop
-            if (!dataWasRequested && nativeDragFromSelf) {
-                log('[TiddlyDesktop] GTK drag ended without data transfer - marking as cancelled');
-                dragCancelledByEscape = true;
+            // If we're not tracking an outgoing native drag, ignore this event
+            if (!nativeDragFromSelf) {
+                return;
             }
 
-            // If data was actually transferred to an external app, this is a real drop - clean up
-            if (dataWasRequested && nativeDragFromSelf) {
-                log('[TiddlyDesktop] Real drop to external app detected - cleaning up');
-
-                // Release pointer capture if we still have it
-                if (savedDragSource && capturedPointerId !== null) {
-                    try {
-                        savedDragSource.releasePointerCapture(capturedPointerId);
-                    } catch (e) {}
-                }
-
-                // Clean up native drag on Rust side
-                cleanupNativeDrag();
-
-                // Reset all state
-                window.__tiddlyDesktopDragData = null;
-                window.__tiddlyDesktopEffectAllowed = null;
-                internalDragSource = null;
-                internalDragActive = false;
-                lastDragOverTarget = null;
-                pointerDragDataTransfer = null;
-                nativeDragFromSelf = false;
-                nativeDragData = null;
-                savedDragInProgress = null;
-                savedDragSource = null;
-                pointerDownTarget = null;
-                pointerDownPos = null;
-                pointerDragStarted = false;
-                capturedPointerId = null;
-                nativeDragStarting = false;
-                pollingActive = false;
-                // Destroy saved drag image
-                if (savedDragImage && savedDragImage.parentNode) {
-                    savedDragImage.parentNode.removeChild(savedDragImage);
-                }
-                savedDragImage = null;
-                removeDragImage();
-                document.body.style.userSelect = "";
-                document.body.style.webkitUserSelect = "";
+            // Native drag has ended - clean up regardless of whether data was requested
+            // dataWasRequested=true means drop was accepted (by external app or another wiki)
+            // dataWasRequested=false means drag was cancelled (Escape key or rejected)
+            if (dataWasRequested) {
+                log('[TiddlyDesktop] Native drag completed with drop - cleaning up');
+            } else {
+                log('[TiddlyDesktop] Native drag cancelled/rejected - cleaning up');
+                dragCancelledByEscape = true;  // Mark as cancelled so any stale pointerup doesn't trigger drop
             }
-            // If data was NOT requested, this is a premature drag-end - don't clean up
-            // Rust's isOurDrag flag will handle re-entry detection
+
+            // Remove visual feedback classes
+            document.querySelectorAll(".tc-dragover").forEach(function(el) {
+                el.classList.remove("tc-dragover");
+            });
+            document.querySelectorAll(".tc-dragging").forEach(function(el) {
+                el.classList.remove("tc-dragging");
+            });
+
+            // Release pointer capture if we still have it
+            if (savedDragSource && capturedPointerId !== null) {
+                try {
+                    savedDragSource.releasePointerCapture(capturedPointerId);
+                } catch (e) {}
+            }
+
+            // Clean up native drag on Rust side
+            cleanupNativeDrag();
+
+            // Reset all state
+            window.__tiddlyDesktopDragData = null;
+            window.__tiddlyDesktopEffectAllowed = null;
+            internalDragSource = null;
+            internalDragActive = false;
+            lastDragOverTarget = null;
+            pointerDragDataTransfer = null;
+            nativeDragFromSelf = false;
+            nativeDragData = null;
+            savedDragInProgress = null;
+            savedDragSource = null;
+            pointerDownTarget = null;
+            pointerDownPos = null;
+            pointerDragStarted = false;
+            capturedPointerId = null;
+            nativeDragStarting = false;
+            pollingActive = false;
+            // Destroy saved drag image
+            if (savedDragImage && savedDragImage.parentNode) {
+                savedDragImage.parentNode.removeChild(savedDragImage);
+            }
+            savedDragImage = null;
+            removeDragImage();
+            document.body.style.userSelect = "";
+            document.body.style.webkitUserSelect = "";
         });
 
         // Safety: If we receive td-drag-content while nativeDragFromSelf but we're not active,

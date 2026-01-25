@@ -12,7 +12,7 @@ static GLOBAL_APP_HANDLE: OnceLock<tauri::AppHandle> = OnceLock::new();
 /// Title starts empty - JavaScript will set the real title once TiddlyWiki loads
 #[cfg(target_os = "linux")]
 fn setup_header_bar(window: &tauri::WebviewWindow) {
-    use gtk::prelude::{ButtonExt, ContainerExt, EventBoxExt, GtkWindowExt, HeaderBarExt, LabelExt, OverlayExt, StyleContextExt, WidgetExt, WidgetExtManual};
+    use gtk::prelude::{ButtonExt, ContainerExt, EventBoxExt, GtkSettingsExt, GtkWindowExt, HeaderBarExt, LabelExt, OverlayExt, StyleContextExt, WidgetExt, WidgetExtManual};
     use gtk::glib;
 
     if let Ok(gtk_window) = window.gtk_window() {
@@ -65,15 +65,29 @@ fn setup_header_bar(window: &tauri::WebviewWindow) {
 
         // Enable events on the event box for dragging
         event_box.add_events(
-            gdk::EventMask::BUTTON_PRESS_MASK | gdk::EventMask::BUTTON_RELEASE_MASK
+            gdk::EventMask::BUTTON_PRESS_MASK
+            | gdk::EventMask::BUTTON_RELEASE_MASK
+            | gdk::EventMask::POINTER_MOTION_MASK
         );
 
+        // Get drag threshold from GTK settings (typically 8 pixels)
+        let drag_threshold = gtk::Settings::default()
+            .and_then(|s| Some(s.gtk_dnd_drag_threshold()))
+            .unwrap_or(8);
+
+        // Track drag state: (start_x, start_y, button, time)
+        let drag_start: std::rc::Rc<std::cell::RefCell<Option<(f64, f64, u32, u32)>>> =
+            std::rc::Rc::new(std::cell::RefCell::new(None));
+
         let win_weak = glib::object::ObjectExt::downgrade(&gtk_window);
+        let drag_start_press = drag_start.clone();
         event_box.connect_button_press_event(move |_widget, event| {
             if event.button() == 1 {
                 if let Some(win) = win_weak.upgrade() {
                     match event.event_type() {
                         gdk::EventType::DoubleButtonPress => {
+                            // Clear any pending drag
+                            *drag_start_press.borrow_mut() = None;
                             if win.is_maximized() {
                                 win.unmaximize();
                             } else {
@@ -82,18 +96,49 @@ fn setup_header_bar(window: &tauri::WebviewWindow) {
                             return glib::Propagation::Stop;
                         }
                         gdk::EventType::ButtonPress => {
+                            // Store press position, don't start drag yet
                             let (root_x, root_y) = event.root();
-                            win.begin_move_drag(
-                                event.button() as i32,
-                                root_x as i32,
-                                root_y as i32,
-                                event.time(),
-                            );
+                            *drag_start_press.borrow_mut() = Some((root_x, root_y, event.button(), event.time()));
                             return glib::Propagation::Stop;
                         }
                         _ => {}
                     }
                 }
+            }
+            glib::Propagation::Proceed
+        });
+
+        // Handle motion - start drag only after threshold exceeded
+        let win_weak_motion = glib::object::ObjectExt::downgrade(&gtk_window);
+        let drag_start_motion = drag_start.clone();
+        event_box.connect_motion_notify_event(move |_widget, event| {
+            if let Some((start_x, start_y, button, time)) = *drag_start_motion.borrow() {
+                let (current_x, current_y) = event.root();
+                let dx = (current_x - start_x).abs();
+                let dy = (current_y - start_y).abs();
+
+                if dx > drag_threshold as f64 || dy > drag_threshold as f64 {
+                    // Threshold exceeded, start the drag
+                    *drag_start_motion.borrow_mut() = None;
+                    if let Some(win) = win_weak_motion.upgrade() {
+                        win.begin_move_drag(
+                            button as i32,
+                            start_x as i32,
+                            start_y as i32,
+                            time,
+                        );
+                    }
+                    return glib::Propagation::Stop;
+                }
+            }
+            glib::Propagation::Proceed
+        });
+
+        // Clear drag state on button release
+        let drag_start_release = drag_start.clone();
+        event_box.connect_button_release_event(move |_widget, event| {
+            if event.button() == 1 {
+                *drag_start_release.borrow_mut() = None;
             }
             glib::Propagation::Proceed
         });

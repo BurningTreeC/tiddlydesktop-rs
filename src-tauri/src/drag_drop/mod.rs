@@ -36,7 +36,12 @@
 //! - HTML: Script tags and event handlers are stripped
 //! - File paths: Path traversal sequences are rejected
 
+// Encoding utilities - only needed on Windows and Linux
+#[cfg(any(target_os = "windows", target_os = "linux"))]
 mod encoding;
+
+// Sanitization utilities - needed on all platforms with drag-drop
+#[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
 mod sanitize;
 
 #[cfg(target_os = "windows")]

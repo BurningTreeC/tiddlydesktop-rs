@@ -112,7 +112,10 @@ fn setup_header_bar(window: &tauri::WebviewWindow) {
         let win_weak_motion = glib::object::ObjectExt::downgrade(&gtk_window);
         let drag_start_motion = drag_start.clone();
         event_box.connect_motion_notify_event(move |_widget, event| {
-            if let Some((start_x, start_y, button, time)) = *drag_start_motion.borrow() {
+            // Copy the data out of the RefCell to avoid holding the borrow
+            // while we later need to borrow_mut
+            let drag_data = *drag_start_motion.borrow();
+            if let Some((start_x, start_y, button, time)) = drag_data {
                 let (current_x, current_y) = event.root();
                 let dx = (current_x - start_x).abs();
                 let dy = (current_y - start_y).abs();

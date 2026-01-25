@@ -249,8 +249,8 @@ unsafe fn get_dragging_pasteboard(dragging_info: *mut AnyObject) -> Option<Retai
 // Swizzled method implementations
 // ============================================================================
 
-/// Check if there's an active outgoing drag from this window
-fn is_our_outgoing_drag(window_label: &str) -> bool {
+/// Check if there's an active outgoing drag from this specific window (same-window drag)
+fn is_same_window_drag(window_label: &str) -> bool {
     if let Ok(guard) = outgoing_drag_state().lock() {
         if let Some(state) = guard.as_ref() {
             return state.source_window_label == window_label;
@@ -259,20 +259,46 @@ fn is_our_outgoing_drag(window_label: &str) -> bool {
     false
 }
 
-/// Swizzled draggingEntered: - called when drag enters the view
+/// Check if there's any active outgoing drag from our app (cross-wiki or same-window)
+fn is_any_outgoing_drag() -> bool {
+    if let Ok(guard) = outgoing_drag_state().lock() {
+        return guard.is_some();
+    }
+    false
+}
+
+/// Get the source window label if there's an active outgoing drag
+fn get_source_window_label() -> Option<String> {
+    if let Ok(guard) = outgoing_drag_state().lock() {
+        if let Some(state) = guard.as_ref() {
+            return Some(state.source_window_label.clone());
+        }
+    }
+    None
+}
+
+/// Swizzled draggingEntered: - native event when drag enters the view
 extern "C" fn swizzled_dragging_entered(this: *mut AnyObject, _sel: Sel, dragging_info: *mut AnyObject) -> usize {
     unsafe {
         if let Some(label) = get_window_label(this) {
             let (x, y) = get_dragging_location(dragging_info, this);
-            let is_our_drag = is_our_outgoing_drag(&label);
 
-            eprintln!("[TiddlyDesktop] macOS: draggingEntered, isOurDrag={}", is_our_drag);
+            // Check if this drag is from our app (any window) - for cross-wiki detection
+            let is_our_drag = is_any_outgoing_drag();
+            let source_window_label = get_source_window_label();
+            let is_same_window = is_same_window_drag(&label);
+
+            eprintln!(
+                "[TiddlyDesktop] macOS: draggingEntered, isOurDrag={}, sourceWindow={:?}, isSameWindow={}",
+                is_our_drag, source_window_label, is_same_window
+            );
 
             if let Some(state) = DRAG_STATES.lock().unwrap().get(&label) {
                 let mut state = state.lock().unwrap();
                 state.drag_active = true;
                 state.last_position = Some((x, y));
 
+                // Emit td-drag-motion with full context for cross-wiki support
                 let _ = state.window.emit(
                     "td-drag-motion",
                     serde_json::json!({
@@ -280,6 +306,8 @@ extern "C" fn swizzled_dragging_entered(this: *mut AnyObject, _sel: Sel, draggin
                         "y": y,
                         "screenCoords": false,
                         "isOurDrag": is_our_drag,
+                        "isSameWindow": is_same_window,
+                        "sourceWindowLabel": source_window_label,
                         "windowLabel": label
                     }),
                 );
@@ -295,17 +323,22 @@ extern "C" fn swizzled_dragging_entered(this: *mut AnyObject, _sel: Sel, draggin
     }
 }
 
-/// Swizzled draggingUpdated: - called as drag moves over the view
+/// Swizzled draggingUpdated: - native event when drag moves over the view
 extern "C" fn swizzled_dragging_updated(this: *mut AnyObject, _sel: Sel, dragging_info: *mut AnyObject) -> usize {
     unsafe {
         if let Some(label) = get_window_label(this) {
             let (x, y) = get_dragging_location(dragging_info, this);
-            let is_our_drag = is_our_outgoing_drag(&label);
+
+            // Check if this drag is from our app (any window) - for cross-wiki detection
+            let is_our_drag = is_any_outgoing_drag();
+            let source_window_label = get_source_window_label();
+            let is_same_window = is_same_window_drag(&label);
 
             if let Some(state) = DRAG_STATES.lock().unwrap().get(&label) {
                 let mut state = state.lock().unwrap();
                 state.last_position = Some((x, y));
 
+                // Emit td-drag-motion with full context for cross-wiki support
                 let _ = state.window.emit(
                     "td-drag-motion",
                     serde_json::json!({
@@ -313,6 +346,8 @@ extern "C" fn swizzled_dragging_updated(this: *mut AnyObject, _sel: Sel, draggin
                         "y": y,
                         "screenCoords": false,
                         "isOurDrag": is_our_drag,
+                        "isSameWindow": is_same_window,
+                        "sourceWindowLabel": source_window_label,
                         "windowLabel": label
                     }),
                 );
@@ -328,13 +363,19 @@ extern "C" fn swizzled_dragging_updated(this: *mut AnyObject, _sel: Sel, draggin
     }
 }
 
-/// Swizzled draggingExited: - called when drag leaves the view
+/// Swizzled draggingExited: - native event when drag leaves the view
 extern "C" fn swizzled_dragging_exited(this: *mut AnyObject, _sel: Sel, dragging_info: *mut AnyObject) {
     unsafe {
         if let Some(label) = get_window_label(this) {
-            let is_our_drag = is_our_outgoing_drag(&label);
+            // Check if this drag is from our app (any window) - for cross-wiki detection
+            let is_our_drag = is_any_outgoing_drag();
+            let source_window_label = get_source_window_label();
+            let is_same_window = is_same_window_drag(&label);
 
-            eprintln!("[TiddlyDesktop] macOS: draggingExited, isOurDrag={}", is_our_drag);
+            eprintln!(
+                "[TiddlyDesktop] macOS: draggingExited, isOurDrag={}, sourceWindow={:?}, isSameWindow={}",
+                is_our_drag, source_window_label, is_same_window
+            );
 
             if let Some(state) = DRAG_STATES.lock().unwrap().get(&label) {
                 let mut state = state.lock().unwrap();
@@ -343,6 +384,8 @@ extern "C" fn swizzled_dragging_exited(this: *mut AnyObject, _sel: Sel, dragging
 
                 let _ = state.window.emit("td-drag-leave", serde_json::json!({
                     "isOurDrag": is_our_drag,
+                    "isSameWindow": is_same_window,
+                    "sourceWindowLabel": source_window_label,
                     "windowLabel": label
                 }));
             }
@@ -355,22 +398,28 @@ extern "C" fn swizzled_dragging_exited(this: *mut AnyObject, _sel: Sel, dragging
     }
 }
 
-/// Swizzled performDragOperation: - called when drop occurs
+/// Swizzled performDragOperation: - native event when drop occurs
 extern "C" fn swizzled_perform_drag_operation(this: *mut AnyObject, _sel: Sel, dragging_info: *mut AnyObject) -> Bool {
     unsafe {
         let mut handled = false;
 
         if let Some(label) = get_window_label(this) {
             let (x, y) = get_dragging_location(dragging_info, this);
-            let is_our_drag = is_our_outgoing_drag(&label);
 
-            eprintln!("[TiddlyDesktop] macOS: performDragOperation, isOurDrag={}", is_our_drag);
+            // Check if this drag is from our app (any window) - for cross-wiki detection
+            let is_our_drag = is_any_outgoing_drag();
+            let source_window_label = get_source_window_label();
+            let is_same_window = is_same_window_drag(&label);
 
-            // If this is our own drag, don't process it as an external drop.
-            // The JavaScript internal drag system will handle the drop.
-            // Just emit a position update so JS knows where the drop occurred.
-            if is_our_drag {
-                eprintln!("[TiddlyDesktop] macOS: performDragOperation - our own drag, letting JS handle it");
+            eprintln!(
+                "[TiddlyDesktop] macOS: performDragOperation, isOurDrag={}, sourceWindow={:?}, isSameWindow={}",
+                is_our_drag, source_window_label, is_same_window
+            );
+
+            // If this is a same-window drag (not cross-wiki), let JS handle it
+            // Cross-wiki drops (different source window) are handled below
+            if is_same_window {
+                eprintln!("[TiddlyDesktop] macOS: performDragOperation - same-window drag, letting JS handle it");
                 if let Some(state) = DRAG_STATES.lock().unwrap().get(&label) {
                     let state = state.lock().unwrap();
                     let _ = state.window.emit(
@@ -380,6 +429,8 @@ extern "C" fn swizzled_perform_drag_operation(this: *mut AnyObject, _sel: Sel, d
                             "y": y,
                             "screenCoords": false,
                             "isOurDrag": true,
+                            "isSameWindow": true,
+                            "sourceWindowLabel": source_window_label,
                             "windowLabel": label
                         }),
                     );
@@ -869,7 +920,6 @@ struct OutgoingDragState {
     data: OutgoingDragData,
     source_window_label: String,
     data_was_requested: bool,
-    last_inside_window: bool,
 }
 
 fn outgoing_drag_state() -> &'static Mutex<Option<OutgoingDragState>> {
@@ -962,69 +1012,8 @@ extern "C" fn swizzled_dragging_session_moved(
     screen_point: NSPoint,
 ) {
     unsafe {
-        // Check if this is our outgoing drag
-        let state_info = outgoing_drag_state().lock().ok().and_then(|guard| {
-            guard.as_ref().map(|s| (s.source_window_label.clone(), s.last_inside_window))
-        });
-
-        if let Some((window_label, was_inside)) = state_info {
-            // Get window label from webview and check if it matches
-            if let Some(label) = get_window_label(this) {
-                if label == window_label {
-                    // Convert screen point to view coordinates
-                    let view_point: NSPoint = msg_send![this, convertPoint: screen_point, fromView: std::ptr::null::<AnyObject>()];
-                    let bounds: NSRect = msg_send![this, bounds];
-                    let flipped_y = bounds.size.height - view_point.y;
-
-                    // Check if inside window
-                    let inside = view_point.x >= 0.0
-                        && view_point.x < bounds.size.width
-                        && flipped_y >= 0.0
-                        && flipped_y < bounds.size.height;
-
-                    // Update state and emit events
-                    if let Ok(mut guard) = outgoing_drag_state().lock() {
-                        if let Some(state) = guard.as_mut() {
-                            state.last_inside_window = inside;
-
-                            if inside {
-                                if !was_inside {
-                                    eprintln!("[TiddlyDesktop] macOS: Drag re-entered window at ({}, {})", view_point.x, flipped_y);
-                                }
-
-                                // Emit motion event
-                                if let Some(drag_state) = DRAG_STATES.lock().unwrap().get(&label) {
-                                    let ds = drag_state.lock().unwrap();
-                                    let _ = ds.window.emit(
-                                        "td-drag-motion",
-                                        serde_json::json!({
-                                            "x": view_point.x,
-                                            "y": flipped_y,
-                                            "isOurDrag": true,
-                                            "fromPolling": true,
-                                            "windowLabel": label
-                                        }),
-                                    );
-                                }
-                            } else if was_inside {
-                                // Just left window
-                                eprintln!("[TiddlyDesktop] macOS: Drag left window");
-                                if let Some(drag_state) = DRAG_STATES.lock().unwrap().get(&label) {
-                                    let ds = drag_state.lock().unwrap();
-                                    let _ = ds.window.emit(
-                                        "td-drag-leave",
-                                        serde_json::json!({
-                                            "isOurDrag": true,
-                                            "windowLabel": label
-                                        }),
-                                    );
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
+        // No tracking needed here - NSDraggingDestination on each window handles enter/leave/motion natively
+        // This matches the Linux approach where GTK signals handle all drag events
 
         // Call original
         if let Some(original) = ORIGINAL_DRAGGING_SESSION_MOVED {
@@ -1151,7 +1140,6 @@ pub fn start_native_drag(
             data: data.clone(),
             source_window_label: label.clone(),
             data_was_requested: false,
-            last_inside_window: true,
         });
     }
 

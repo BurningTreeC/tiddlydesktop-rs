@@ -152,16 +152,26 @@ pub fn set_wiki_backup_dir(app: tauri::AppHandle, path: String, backup_dir: Opti
 /// Update favicon for a wiki (used after decryption when favicon wasn't available initially)
 #[tauri::command]
 pub fn update_wiki_favicon(app: tauri::AppHandle, path: String, favicon: Option<String>) -> Result<(), String> {
+    use tauri::Emitter;
+
     let mut entries = load_recent_files_from_disk(&app);
 
     for entry in entries.iter_mut() {
         if utils::paths_equal(&entry.path, &path) {
-            entry.favicon = favicon;
+            entry.favicon = favicon.clone();
             break;
         }
     }
 
-    save_recent_files_to_disk(&app, &entries)
+    save_recent_files_to_disk(&app, &entries)?;
+
+    // Emit event to update just this favicon in the landing page
+    let _ = app.emit("wiki-favicon-updated", serde_json::json!({
+        "path": path,
+        "favicon": favicon
+    }));
+
+    Ok(())
 }
 
 /// Set group for a wiki (None to move to "Ungrouped")

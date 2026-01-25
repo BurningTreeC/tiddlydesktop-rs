@@ -243,8 +243,8 @@ impl DropTargetImpl {
         count
     }
 
-    /// Check if there's an active outgoing drag from this window
-    fn is_our_outgoing_drag(&self) -> bool {
+    /// Check if there's an active outgoing drag from this specific window (same-window drag)
+    fn is_same_window_drag(&self) -> bool {
         if let Ok(guard) = OUTGOING_DRAG_STATE.lock() {
             if let Some(state) = guard.as_ref() {
                 return state.source_window_label == self.window.label();
@@ -253,7 +253,25 @@ impl DropTargetImpl {
         false
     }
 
-    // IDropTarget::DragEnter - always emit events, JS checks TD.isInternalDragActive()
+    /// Check if there's any active outgoing drag from our app (cross-wiki or same-window)
+    fn is_any_outgoing_drag() -> bool {
+        if let Ok(guard) = OUTGOING_DRAG_STATE.lock() {
+            return guard.is_some();
+        }
+        false
+    }
+
+    /// Get the source window label if there's an active outgoing drag
+    fn get_source_window_label() -> Option<String> {
+        if let Ok(guard) = OUTGOING_DRAG_STATE.lock() {
+            if let Some(state) = guard.as_ref() {
+                return Some(state.source_window_label.clone());
+            }
+        }
+        None
+    }
+
+    // IDropTarget::DragEnter - native event when drag enters this window
     unsafe extern "system" fn drag_enter(
         this: *mut Self,
         p_data_obj: *mut std::ffi::c_void,
@@ -267,12 +285,14 @@ impl DropTargetImpl {
         // Convert screen coordinates to client coordinates
         let (client_x, client_y) = obj.screen_to_client_coords(pt);
 
-        // Check if this is our own drag re-entering the window
-        let is_our_drag = obj.is_our_outgoing_drag();
+        // Check if this drag is from our app (any window) - for cross-wiki detection
+        let is_our_drag = Self::is_any_outgoing_drag();
+        let source_window_label = Self::get_source_window_label();
+        let is_same_window = obj.is_same_window_drag();
 
         eprintln!(
-            "[TiddlyDesktop] Windows IDropTarget::DragEnter at screen({}, {}) -> client({}, {}), isOurDrag={}",
-            pt.x, pt.y, client_x, client_y, is_our_drag
+            "[TiddlyDesktop] Windows IDropTarget::DragEnter at ({}, {}), isOurDrag={}, sourceWindow={:?}, isSameWindow={}",
+            client_x, client_y, is_our_drag, source_window_label, is_same_window
         );
 
         // Log available formats for debugging
@@ -281,17 +301,17 @@ impl DropTargetImpl {
             obj.log_available_formats(data_object);
         }
 
-        // Always emit td-drag-motion - JavaScript will filter internal drags
-        // using TD.isInternalDragActive() check
-        // If this is our own drag re-entering, mark it so JS knows
+        // Emit td-drag-motion with full context for cross-wiki support
         let _ = obj.window.emit(
             "td-drag-motion",
             serde_json::json!({
                 "x": client_x,
                 "y": client_y,
                 "screenCoords": false,
-                "physicalPixels": true,  // Windows sends physical pixels, needs dpr scaling in JS
+                "physicalPixels": true,
                 "isOurDrag": is_our_drag,
+                "isSameWindow": is_same_window,
+                "sourceWindowLabel": source_window_label,
                 "windowLabel": obj.window.label()
             }),
         );
@@ -305,7 +325,7 @@ impl DropTargetImpl {
         S_OK
     }
 
-    // IDropTarget::DragOver - always emit events
+    // IDropTarget::DragOver - native event when drag moves over this window
     unsafe extern "system" fn drag_over(
         this: *mut Self,
         _grf_key_state: u32,
@@ -323,8 +343,10 @@ impl DropTargetImpl {
         // Convert screen coordinates to client coordinates
         let (client_x, client_y) = obj.screen_to_client_coords(pt);
 
-        // Check if this is our own drag
-        let is_our_drag = obj.is_our_outgoing_drag();
+        // Check if this drag is from our app (any window) - for cross-wiki detection
+        let is_our_drag = Self::is_any_outgoing_drag();
+        let source_window_label = Self::get_source_window_label();
+        let is_same_window = obj.is_same_window_drag();
 
         // Rate-limited logging
         static LAST_LOG: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
@@ -336,21 +358,22 @@ impl DropTargetImpl {
         if now - last > 500 {
             LAST_LOG.store(now, std::sync::atomic::Ordering::Relaxed);
             eprintln!(
-                "[TiddlyDesktop] Windows IDropTarget::DragOver at screen({}, {}) -> client({}, {}), isOurDrag={}",
-                pt.x, pt.y, client_x, client_y, is_our_drag
+                "[TiddlyDesktop] Windows IDropTarget::DragOver at ({}, {}), isOurDrag={}, isSameWindow={}",
+                client_x, client_y, is_our_drag, is_same_window
             );
         }
 
-        // Always emit - JS checks TD.isInternalDragActive()
-        // If this is our own drag, mark it so JS knows
+        // Emit td-drag-motion with full context for cross-wiki support
         let _ = obj.window.emit(
             "td-drag-motion",
             serde_json::json!({
                 "x": client_x,
                 "y": client_y,
                 "screenCoords": false,
-                "physicalPixels": true,  // Windows sends physical pixels, needs dpr scaling in JS
+                "physicalPixels": true,
                 "isOurDrag": is_our_drag,
+                "isSameWindow": is_same_window,
+                "sourceWindowLabel": source_window_label,
                 "windowLabel": obj.window.label()
             }),
         );
@@ -363,14 +386,19 @@ impl DropTargetImpl {
         S_OK
     }
 
-    // IDropTarget::DragLeave
+    // IDropTarget::DragLeave - native event when drag leaves this window
     unsafe extern "system" fn drag_leave(this: *mut Self) -> HRESULT {
         let obj = &*this;
 
-        // Check if this is our own drag
-        let is_our_drag = obj.is_our_outgoing_drag();
+        // Check if this drag is from our app (any window) - for cross-wiki detection
+        let is_our_drag = Self::is_any_outgoing_drag();
+        let source_window_label = Self::get_source_window_label();
+        let is_same_window = obj.is_same_window_drag();
 
-        eprintln!("[TiddlyDesktop] Windows IDropTarget::DragLeave, isOurDrag={}", is_our_drag);
+        eprintln!(
+            "[TiddlyDesktop] Windows IDropTarget::DragLeave, isOurDrag={}, sourceWindow={:?}, isSameWindow={}",
+            is_our_drag, source_window_label, is_same_window
+        );
 
         let was_active = {
             let mut active = obj.drag_active.lock().unwrap();
@@ -382,6 +410,8 @@ impl DropTargetImpl {
         if was_active {
             let _ = obj.window.emit("td-drag-leave", serde_json::json!({
                 "isOurDrag": is_our_drag,
+                "isSameWindow": is_same_window,
+                "sourceWindowLabel": source_window_label,
                 "windowLabel": obj.window.label()
             }));
         }
@@ -389,7 +419,7 @@ impl DropTargetImpl {
         S_OK
     }
 
-    // IDropTarget::Drop - extract content and emit events
+    // IDropTarget::Drop - native event when drop occurs on this window
     unsafe extern "system" fn drop_impl(
         this: *mut Self,
         p_data_obj: *mut std::ffi::c_void,
@@ -403,19 +433,20 @@ impl DropTargetImpl {
         // Convert screen coordinates to client coordinates
         let (client_x, client_y) = obj.screen_to_client_coords(pt);
 
-        // Check if this is our own drag being dropped back on our window
-        let is_our_drag = obj.is_our_outgoing_drag();
+        // Check if this drag is from our app (any window) - for cross-wiki detection
+        let is_our_drag = Self::is_any_outgoing_drag();
+        let source_window_label = Self::get_source_window_label();
+        let is_same_window = obj.is_same_window_drag();
 
         eprintln!(
-            "[TiddlyDesktop] Windows IDropTarget::Drop at screen({}, {}) -> client({}, {}), isOurDrag={}",
-            pt.x, pt.y, client_x, client_y, is_our_drag
+            "[TiddlyDesktop] Windows IDropTarget::Drop at ({}, {}), isOurDrag={}, sourceWindow={:?}, isSameWindow={}",
+            client_x, client_y, is_our_drag, source_window_label, is_same_window
         );
 
-        // If this is our own drag, don't process it as an external drop.
-        // The JavaScript internal drag system will handle the drop via pointer events.
-        // Just emit a position update so JS knows where the drop occurred.
-        if is_our_drag {
-            eprintln!("[TiddlyDesktop] Windows IDropTarget::Drop - our own drag, letting JS handle it");
+        // If this is a same-window drag (not cross-wiki), let JS handle it
+        // Cross-wiki drops (different source window) are handled below
+        if is_same_window {
+            eprintln!("[TiddlyDesktop] Windows IDropTarget::Drop - same-window drag, letting JS handle it");
             let _ = obj.window.emit(
                 "td-drag-drop-position",
                 serde_json::json!({
@@ -424,6 +455,8 @@ impl DropTargetImpl {
                     "screenCoords": false,
                     "physicalPixels": true,
                     "isOurDrag": true,
+                    "isSameWindow": true,
+                    "sourceWindowLabel": source_window_label,
                     "windowLabel": obj.window.label()
                 }),
             );
@@ -1691,9 +1724,10 @@ const MK_LBUTTON: u32 = 0x0001;
 struct DropSourceImpl {
     vtbl: *const IDropSourceVtbl,
     ref_count: AtomicU32,
+    #[allow(dead_code)]
     window: WebviewWindow,
+    #[allow(dead_code)]
     window_hwnd: HWND,
-    last_inside_window: AtomicBool,
 }
 
 static DROPSOURCE_VTBL: IDropSourceVtbl = IDropSourceVtbl {
@@ -1711,7 +1745,6 @@ impl DropSourceImpl {
             ref_count: AtomicU32::new(1),
             window,
             window_hwnd,
-            last_inside_window: AtomicBool::new(true),
         });
         Box::into_raw(obj)
     }
@@ -1768,71 +1801,14 @@ impl DropSourceImpl {
     }
 
     unsafe extern "system" fn give_feedback(
-        this: *mut Self,
+        _this: *mut Self,
         _dw_effect: u32,
     ) -> HRESULT {
-        use windows::Win32::UI::WindowsAndMessaging::{GetCursorPos, GetWindowRect};
-
-        let obj = &*this;
-
-        // Get current cursor position
-        let mut cursor_pos = POINT { x: 0, y: 0 };
-        if GetCursorPos(&mut cursor_pos).is_err() {
-            return DRAGDROP_S_USEDEFAULTCURSORS;
-        }
-
-        // Get window rect
-        let mut window_rect: windows::Win32::Foundation::RECT = std::mem::zeroed();
-        if GetWindowRect(obj.window_hwnd, &mut window_rect).is_err() {
-            return DRAGDROP_S_USEDEFAULTCURSORS;
-        }
-
-        // Check if cursor is inside window
-        let inside = cursor_pos.x >= window_rect.left
-            && cursor_pos.x < window_rect.right
-            && cursor_pos.y >= window_rect.top
-            && cursor_pos.y < window_rect.bottom;
-
-        let was_inside = obj.last_inside_window.swap(inside, Ordering::SeqCst);
-
-        if inside {
-            // Convert to client coordinates
-            let mut client_pos = cursor_pos;
-            let _ = ScreenToClient(obj.window_hwnd, &mut client_pos);
-
-            if !was_inside {
-                eprintln!("[TiddlyDesktop] Windows IDropSource: Re-entered window at ({}, {})", client_pos.x, client_pos.y);
-            }
-
-            // Emit motion event
-            let _ = obj.window.emit(
-                "td-drag-motion",
-                serde_json::json!({
-                    "x": client_pos.x,
-                    "y": client_pos.y,
-                    "physicalPixels": true,  // Windows sends physical pixels
-                    "isOurDrag": true,
-                    "fromPolling": true,
-                    "windowLabel": obj.window.label()
-                }),
-            );
-        } else if was_inside {
-            // Just left the window
-            eprintln!("[TiddlyDesktop] Windows IDropSource: Left window");
-            let _ = obj.window.emit(
-                "td-drag-leave",
-                serde_json::json!({
-                    "isOurDrag": true,
-                    "windowLabel": obj.window.label()
-                }),
-            );
-        }
-
+        // No polling needed - IDropTarget on each window handles enter/leave/motion natively
+        // This matches the Linux approach where GTK signals handle all drag events
         DRAGDROP_S_USEDEFAULTCURSORS
     }
 }
-
-use std::sync::atomic::AtomicBool;
 
 /// Create an HBITMAP from PNG data with premultiplied alpha (required for drag images)
 /// Applies 0.7 opacity to match the JS drag image styling

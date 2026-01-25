@@ -18,6 +18,13 @@
             // Always prevent close first, then decide what to do
             event.preventDefault();
 
+            // Tiddler windows (single-tiddler view) should close without prompting
+            // The source wiki handles saving, not the tiddler window
+            if (window.__SINGLE_TIDDLER_TITLE__) {
+                invoke('close_window');
+                return;
+            }
+
             // Check if TiddlyWiki has unsaved changes
             var isDirty = false;
             if (typeof $tw !== 'undefined' && $tw.wiki) {

@@ -3,8 +3,6 @@
 //! Handles detection and conversion of various text encodings commonly
 //! found in clipboard/drag-drop data across platforms.
 
-#![allow(dead_code)]
-
 /// Decode string data with proper encoding detection
 /// Handles UTF-8, UTF-16 LE/BE (with or without BOM), and falls back to lossy UTF-8
 pub fn decode_string(data: &[u8]) -> String {

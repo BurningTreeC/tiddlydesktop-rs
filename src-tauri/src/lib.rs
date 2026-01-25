@@ -1,8 +1,108 @@
-use std::{collections::HashMap, path::PathBuf, process::{Child, Command}, sync::Mutex};
+use std::{collections::HashMap, path::PathBuf, process::{Child, Command}, sync::{Arc, Mutex, OnceLock}};
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
 #[cfg(target_os = "linux")]
 use std::os::unix::process::CommandExt as UnixCommandExt;
+
+/// Global AppHandle for IPC callbacks that need Tauri access
+static GLOBAL_APP_HANDLE: OnceLock<tauri::AppHandle> = OnceLock::new();
+
+/// Linux: Set up a GtkHeaderBar on a window for reliable title display
+/// This works around WebKitGTK's broken title propagation
+/// Title starts empty - JavaScript will set the real title once TiddlyWiki loads
+#[cfg(target_os = "linux")]
+fn setup_header_bar(window: &tauri::WebviewWindow) {
+    use gtk::prelude::{ButtonExt, ContainerExt, EventBoxExt, GtkWindowExt, HeaderBarExt, LabelExt, OverlayExt, StyleContextExt, WidgetExt, WidgetExtManual};
+    use gtk::glib;
+
+    if let Ok(gtk_window) = window.gtk_window() {
+        let header_bar = gtk::HeaderBar::new();
+        header_bar.set_show_close_button(false); // We'll add our own
+        header_bar.set_has_subtitle(false);
+
+        // Create an EventBox that spans the full width and height for dragging
+        let event_box = gtk::EventBox::new();
+        event_box.set_visible_window(false);
+        event_box.set_above_child(false); // Let child buttons receive clicks
+        event_box.set_hexpand(true);
+        event_box.set_vexpand(true);
+        event_box.set_halign(gtk::Align::Fill);
+        event_box.set_valign(gtk::Align::Fill);
+        // Force minimum height to fill HeaderBar (typically ~46px on GNOME)
+        event_box.set_size_request(-1, 46);
+
+        // Use an Overlay: title label centered, close button overlaid on right
+        let overlay = gtk::Overlay::new();
+        overlay.set_hexpand(true);
+        overlay.set_vexpand(true);
+        overlay.set_valign(gtk::Align::Fill);
+
+        // Title label - truly centered in the full width, styled as a titlebar title
+        let title_label = gtk::Label::new(None);
+        title_label.set_ellipsize(pango::EllipsizeMode::End);
+        title_label.set_halign(gtk::Align::Center);
+        title_label.set_valign(gtk::Align::Center);
+        title_label.set_hexpand(true);
+        title_label.style_context().add_class("title");
+        overlay.add(&title_label); // Base widget
+
+        // Close button overlaid on the right
+        let close_button = gtk::Button::from_icon_name(Some("window-close-symbolic"), gtk::IconSize::Menu);
+        close_button.set_halign(gtk::Align::End);
+        close_button.set_valign(gtk::Align::Center);
+        close_button.set_margin_end(4);
+        close_button.style_context().add_class("titlebutton");
+        close_button.style_context().add_class("close");
+        let win_weak_close = glib::object::ObjectExt::downgrade(&gtk_window);
+        close_button.connect_clicked(move |_| {
+            if let Some(win) = win_weak_close.upgrade() {
+                win.close();
+            }
+        });
+        overlay.add_overlay(&close_button);
+
+        event_box.add(&overlay);
+
+        // Enable events on the event box for dragging
+        event_box.add_events(
+            gdk::EventMask::BUTTON_PRESS_MASK | gdk::EventMask::BUTTON_RELEASE_MASK
+        );
+
+        let win_weak = glib::object::ObjectExt::downgrade(&gtk_window);
+        event_box.connect_button_press_event(move |_widget, event| {
+            if event.button() == 1 {
+                if let Some(win) = win_weak.upgrade() {
+                    match event.event_type() {
+                        gdk::EventType::DoubleButtonPress => {
+                            if win.is_maximized() {
+                                win.unmaximize();
+                            } else {
+                                win.maximize();
+                            }
+                            return glib::Propagation::Stop;
+                        }
+                        gdk::EventType::ButtonPress => {
+                            let (root_x, root_y) = event.root();
+                            win.begin_move_drag(
+                                event.button() as i32,
+                                root_x as i32,
+                                root_y as i32,
+                                event.time(),
+                            );
+                            return glib::Propagation::Stop;
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            glib::Propagation::Proceed
+        });
+
+        header_bar.set_custom_title(Some(&event_box));
+        gtk_window.set_titlebar(Some(&header_bar));
+        header_bar.show_all();
+    }
+}
 
 /// Windows flag to prevent console window from appearing
 #[cfg(target_os = "windows")]
@@ -10,6 +110,9 @@ const CREATE_NO_WINDOW: u32 = 0x08000000;
 
 /// Platform-specific drag-drop handling
 mod drag_drop;
+
+/// Inter-process communication for multi-process wiki architecture
+mod ipc;
 
 /// JavaScript initialization scripts for wiki windows
 mod init_script;
@@ -80,12 +183,22 @@ struct WikiFolderServer {
     path: String,
 }
 
+/// A running wiki child process (separate process per wiki)
+/// Fields stored for potential future use (process management, cleanup)
+#[allow(dead_code)]
+struct WikiProcess {
+    pid: u32,
+    path: String,
+}
+
 /// App state
 struct AppState {
     /// Mapping of encoded paths to actual file paths
     wiki_paths: Mutex<HashMap<String, PathBuf>>,
-    /// Mapping of window labels to wiki paths (for duplicate detection)
+    /// Mapping of window labels to wiki paths (for duplicate detection in same-process mode)
     open_wikis: Mutex<HashMap<String, String>>,
+    /// Running wiki child processes (keyed by wiki path for duplicate detection)
+    wiki_processes: Mutex<HashMap<String, WikiProcess>>,
     /// Running wiki folder servers (keyed by window label)
     wiki_servers: Mutex<HashMap<String, WikiFolderServer>>,
     /// Next available port for wiki folder servers
@@ -277,11 +390,42 @@ async fn save_wiki(app: tauri::AppHandle, path: String, content: String) -> Resu
     Ok(())
 }
 
-/// Set window title (works on Windows/macOS, not Linux due to WebKitGTK limitations)
+/// Set window title
+/// On Linux, navigates the HeaderBar widget tree to find and update the title label
 #[tauri::command]
 async fn set_window_title(app: tauri::AppHandle, label: String, title: String) -> Result<(), String> {
     if let Some(window) = app.get_webview_window(&label) {
-        window.set_title(&title).map_err(|e| e.to_string())?;
+        #[cfg(target_os = "linux")]
+        {
+            use gtk::prelude::{BinExt, GtkWindowExt, HeaderBarExt, LabelExt};
+            use gtk::glib::Cast;
+
+            if let Ok(gtk_window) = window.gtk_window() {
+                // Navigate: GtkWindow → HeaderBar → EventBox → Overlay → Label
+                if let Some(titlebar) = gtk_window.titlebar() {
+                    if let Some(header_bar) = titlebar.downcast_ref::<gtk::HeaderBar>() {
+                        if let Some(custom_title) = header_bar.custom_title() {
+                            if let Some(event_box) = custom_title.downcast_ref::<gtk::EventBox>() {
+                                if let Some(overlay) = event_box.child() {
+                                    if let Some(overlay) = overlay.downcast_ref::<gtk::Overlay>() {
+                                        if let Some(label) = overlay.child() {
+                                            if let Some(title_label) = label.downcast_ref::<gtk::Label>() {
+                                                title_label.set_text(&title);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        #[cfg(not(target_os = "linux"))]
+        {
+            window.set_title(&title).map_err(|e| e.to_string())?;
+        }
     }
     Ok(())
 }
@@ -703,6 +847,49 @@ fn prepare_native_drag(
 #[tauri::command]
 fn cleanup_native_drag() -> Result<(), String> {
     drag_drop::cleanup_native_drag_impl()
+}
+
+/// Update the drag icon during an active native drag operation
+/// Called from JavaScript to change the drag image mid-drag
+#[tauri::command]
+fn update_drag_icon(
+    image_data: Vec<u8>,
+    offset_x: i32,
+    offset_y: i32,
+) -> Result<(), String> {
+    drag_drop::update_drag_icon_impl(image_data, offset_x, offset_y)
+}
+
+/// Set the pending drag icon before a drag starts
+/// Called from JavaScript during drag preparation so the icon is ready for drag-begin
+#[cfg(target_os = "linux")]
+#[tauri::command]
+fn set_pending_drag_icon(image_data: Vec<u8>, offset_x: i32, offset_y: i32) -> Result<(), String> {
+    drag_drop::set_pending_drag_icon_impl(image_data, offset_x, offset_y)
+}
+
+#[cfg(not(target_os = "linux"))]
+#[tauri::command]
+fn set_pending_drag_icon(_image_data: Vec<u8>, _offset_x: i32, _offset_y: i32) -> Result<(), String> {
+    Ok(()) // No-op on other platforms
+}
+
+/// Toggle drag destination handling on WebKitWebView
+/// When disabled, WebKitGTK's native handling takes over (shows caret in editables)
+/// When enabled, our custom handling intercepts drags
+/// Called from JavaScript when entering/leaving editable elements during drag
+#[tauri::command]
+fn set_drag_dest_enabled(window: tauri::Window, enabled: bool) -> Result<(), String> {
+    drag_drop::set_drag_dest_enabled_impl(window.label(), enabled);
+    Ok(())
+}
+
+/// Temporarily ungrab the seat to allow focus changes during drag
+/// Called from JavaScript when hovering over an editable element
+#[tauri::command]
+fn ungrab_seat_for_focus(window: tauri::Window) -> Result<(), String> {
+    drag_drop::ungrab_seat_for_focus_impl(window.label());
+    Ok(())
 }
 
 /// Run a shell command with optional confirmation dialog
@@ -1241,7 +1428,7 @@ async fn open_wiki_folder(app: tauri::AppHandle, path: String) -> Result<WikiEnt
         .map_err(|e| format!("Failed to set icon: {}", e))?
         .window_classname("tiddlydesktop-rs")
         .initialization_script(&init_script::get_wiki_init_script(&path, &label, false))
-        .devtools(false);
+        .devtools(true); // TEMP: enabled for debugging
 
     // Apply isolated session if available
     if let Some(dir) = session_dir {
@@ -1262,6 +1449,10 @@ async fn open_wiki_folder(app: tauri::AppHandle, path: String) -> Result<WikiEnt
 
     // Set up platform-specific drag handlers for content drops from external apps
     drag_drop::setup_drag_handlers(&window);
+
+    // Linux: Set up HeaderBar for reliable title display (works around WebKitGTK bug)
+    #[cfg(target_os = "linux")]
+    setup_header_bar(&window);
 
     // Handle window close - JS onCloseRequested handles unsaved changes confirmation
     let app_handle = app.clone();
@@ -1966,7 +2157,8 @@ async fn open_auth_window(app: tauri::AppHandle, wiki_path: String, url: String,
     Ok(())
 }
 
-/// Open a wiki file in a new window
+/// Open a wiki file in a separate process
+/// Each wiki runs in its own process for true isolation (better drag-drop, crash isolation)
 /// Returns WikiEntry so frontend can update its wiki list
 #[tauri::command]
 async fn open_wiki_window(app: tauri::AppHandle, path: String) -> Result<WikiEntry, String> {
@@ -1984,26 +2176,22 @@ async fn open_wiki_window(app: tauri::AppHandle, path: String) -> Result<WikiEnt
         .unwrap_or("Unknown")
         .to_string();
 
-    // Check if this wiki is already open
+    // Check if this wiki is already open in a separate process
     {
-        let open_wikis = state.open_wikis.lock().unwrap();
-        for (label, wiki_path) in open_wikis.iter() {
-            if wiki_path == &path {
-                // Focus existing window
-                if let Some(window) = app.get_webview_window(label) {
-                    let _ = window.set_focus();
-                    // Return entry even when focusing existing window
-                    return Ok(WikiEntry {
-                        path: path.clone(),
-                        filename,
-                        favicon: None,
-                        is_folder: false,
-                        backups_enabled: true,
-                        backup_dir: None,
-                        group: None,
-                    });
-                }
-            }
+        let wiki_processes = state.wiki_processes.lock().unwrap();
+        if wiki_processes.contains_key(&path) {
+            // Wiki already open - we can't easily focus a window in another process
+            // Just return success so the UI knows it's open
+            eprintln!("[TiddlyDesktop] Wiki already open in separate process: {}", path);
+            return Ok(WikiEntry {
+                path: path.clone(),
+                filename,
+                favicon: None,
+                is_folder: false,
+                backups_enabled: true,
+                backup_dir: None,
+                group: None,
+            });
         }
     }
 
@@ -2016,92 +2204,63 @@ async fn open_wiki_window(app: tauri::AppHandle, path: String) -> Result<WikiEnt
         }
     };
 
-    // Create a unique key for this wiki path
-    let path_key = utils::base64_url_encode(&path);
+    // Get the path to our own executable
+    let exe_path = std::env::current_exe()
+        .map_err(|e| format!("Failed to get executable path: {}", e))?;
 
-    // Store the path mapping
-    state.wiki_paths.lock().unwrap().insert(path_key.clone(), path_buf.clone());
+    // Spawn the wiki process
+    eprintln!("[TiddlyDesktop] Spawning wiki process: {} --wiki {}", exe_path.display(), path);
 
-    // Generate a unique window label
-    let base_label = path_buf
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("unknown")
-        .replace(|c: char| !c.is_alphanumeric(), "-");
+    let mut cmd = Command::new(&exe_path);
+    cmd.arg("--wiki").arg(&path);
 
-    // Ensure unique label
-    let label = {
-        let open_wikis = state.open_wikis.lock().unwrap();
-        let mut label = format!("wiki-{}", base_label);
-        let mut counter = 1;
-        while open_wikis.contains_key(&label) {
-            label = format!("wiki-{}-{}", base_label, counter);
-            counter += 1;
-        }
-        label
-    };
-
-    // Track this wiki as open
-    state.open_wikis.lock().unwrap().insert(label.clone(), path.clone());
-
-    // Store label for this path so protocol handler can inject it
-    state.wiki_paths.lock().unwrap().insert(format!("{}_label", path_key), PathBuf::from(&label));
-
-    let title = path_buf
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("TiddlyWiki")
-        .to_string();
-
-    // Use wikifile:// protocol directly
-    let wiki_url = format!("wikifile://localhost/{}", path_key);
-
-    let icon = Image::from_bytes(include_bytes!("../icons/icon.png"))
-        .map_err(|e| format!("Failed to load icon: {}", e))?;
-
-    // Get isolated session directory for this wiki
-    let session_dir = get_wiki_session_dir(&app, &path);
-
-    // Use full init script that sets __WIKI_PATH__, __WINDOW_LABEL__, __IS_MAIN_WIKI__ early
-    // This ensures these variables are available before setupExternalAttachments runs,
-    // avoiding race conditions with the protocol handler's HTML injection
-    let mut builder = WebviewWindowBuilder::new(&app, &label, WebviewUrl::External(wiki_url.parse().unwrap()))
-        .title(&title)
-        .inner_size(1200.0, 800.0)
-        .icon(icon)
-        .map_err(|e| format!("Failed to set icon: {}", e))?
-        .window_classname("tiddlydesktop-rs")
-        .initialization_script(&init_script::get_wiki_init_script(&path, &label, false))
-        .devtools(false);
-
-    // Apply isolated session if available
-    if let Some(dir) = session_dir {
-        builder = builder.data_directory(dir);
-    }
-
-    // On Windows, Tauri's drag/drop handler steals events from the DOM.
-    // We disable it and handle all drag/drop via our custom IDropTarget (windows.rs)
-    // which emits td-* events that JavaScript handles.
+    // Platform-specific process configuration
     #[cfg(target_os = "windows")]
     {
-        builder = builder.disable_drag_drop_handler();
+        cmd.creation_flags(CREATE_NO_WINDOW);
     }
 
-    let window = builder
-        .build()
-        .map_err(|e| format!("Failed to create window: {}", e))?;
-
-    // Set up platform-specific drag handlers for content drops from external apps
-    drag_drop::setup_drag_handlers(&window);
-
-    // Handle window close - JS onCloseRequested handles unsaved changes confirmation
-    let app_handle = app.clone();
-    let label_clone = label.clone();
-    window.on_window_event(move |event| {
-        if let tauri::WindowEvent::Destroyed = event {
-            let state = app_handle.state::<AppState>();
-            state.open_wikis.lock().unwrap().remove(&label_clone);
+    #[cfg(target_os = "linux")]
+    {
+        // Set the child to die when parent dies
+        unsafe {
+            cmd.pre_exec(|| {
+                libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGTERM);
+                Ok(())
+            });
         }
+    }
+
+    let child = cmd.spawn()
+        .map_err(|e| format!("Failed to spawn wiki process: {}", e))?;
+
+    let pid = child.id();
+    eprintln!("[TiddlyDesktop] Wiki process spawned with PID: {}", pid);
+
+    // Track the process
+    state.wiki_processes.lock().unwrap().insert(path.clone(), WikiProcess {
+        pid,
+        path: path.clone(),
+    });
+
+    // Spawn a thread to wait for the process to exit and clean up
+    let app_handle = app.clone();
+    let path_clone = path.clone();
+    std::thread::spawn(move || {
+        let mut child = child;
+        match child.wait() {
+            Ok(status) => {
+                eprintln!("[TiddlyDesktop] Wiki process (PID {}) exited with status: {}", pid, status);
+            }
+            Err(e) => {
+                eprintln!("[TiddlyDesktop] Error waiting for wiki process: {}", e);
+            }
+        }
+
+        // Clean up tracking
+        let state = app_handle.state::<AppState>();
+        state.wiki_processes.lock().unwrap().remove(&path_clone);
+        eprintln!("[TiddlyDesktop] Removed wiki process from tracking: {}", path_clone);
     });
 
     // Create the wiki entry
@@ -2208,7 +2367,7 @@ async fn open_tiddler_window(
         .map_err(|e| format!("Failed to set icon: {}", e))?
         .window_classname("tiddlydesktop-rs")
         .initialization_script(&init_script::get_wiki_init_script(&wiki_path, &label, false))
-        .devtools(false);
+        .devtools(true); // TEMP: enabled for debugging
 
     // Apply isolated session if available (shares with parent wiki)
     if let Some(dir) = session_dir {
@@ -2234,6 +2393,10 @@ async fn open_tiddler_window(
     // Set up platform-specific drag handlers for content drops from external apps
     drag_drop::setup_drag_handlers(&window);
 
+    // Linux: Set up HeaderBar for reliable title display (works around WebKitGTK bug)
+    #[cfg(target_os = "linux")]
+    setup_header_bar(&window);
+
     // Handle window close
     let app_handle = app.clone();
     let label_clone = label.clone();
@@ -2245,6 +2408,203 @@ async fn open_tiddler_window(
     });
 
     Ok(label)
+}
+
+/// Spawn a wiki window as a separate process (sync version for IPC callbacks)
+/// This doesn't track the process in AppState - used for IPC-triggered spawns
+fn spawn_wiki_process_sync(wiki_path: &str) -> Result<u32, String> {
+    let exe_path = std::env::current_exe()
+        .map_err(|e| format!("Failed to get executable path: {}", e))?;
+
+    eprintln!("[TiddlyDesktop] Spawning wiki process via IPC: {} --wiki {}", exe_path.display(), wiki_path);
+
+    let mut cmd = Command::new(&exe_path);
+    cmd.arg("--wiki").arg(wiki_path);
+
+    // Platform-specific process configuration
+    #[cfg(target_os = "windows")]
+    {
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        unsafe {
+            cmd.pre_exec(|| {
+                libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGTERM);
+                Ok(())
+            });
+        }
+    }
+
+    let child = cmd.spawn()
+        .map_err(|e| format!("Failed to spawn wiki process: {}", e))?;
+
+    let pid = child.id();
+    eprintln!("[TiddlyDesktop] Wiki process spawned with PID: {}", pid);
+
+    // Spawn a thread to wait for the process to exit (cleanup)
+    std::thread::spawn(move || {
+        let mut child = child;
+        let _ = child.wait();
+    });
+
+    Ok(pid)
+}
+
+/// Spawn a tiddler window as a separate process
+/// This is used by both the main process and via IPC from wiki processes
+fn spawn_tiddler_process(wiki_path: &str, tiddler_title: &str, startup_tiddler: Option<&str>) -> Result<u32, String> {
+    let exe_path = std::env::current_exe()
+        .map_err(|e| format!("Failed to get executable path: {}", e))?;
+
+    eprintln!("[TiddlyDesktop] Spawning tiddler process: {} --wiki {} --tiddler {}",
+        exe_path.display(), wiki_path, tiddler_title);
+
+    let mut cmd = Command::new(&exe_path);
+    cmd.arg("--wiki").arg(wiki_path);
+    cmd.arg("--tiddler").arg(tiddler_title);
+
+    if let Some(startup) = startup_tiddler {
+        cmd.arg("--startup-tiddler").arg(startup);
+    }
+
+    // Platform-specific process configuration
+    #[cfg(target_os = "windows")]
+    {
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        // Set the child to die when parent dies
+        unsafe {
+            cmd.pre_exec(|| {
+                libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGTERM);
+                Ok(())
+            });
+        }
+    }
+
+    let child = cmd.spawn()
+        .map_err(|e| format!("Failed to spawn tiddler process: {}", e))?;
+
+    let pid = child.id();
+    eprintln!("[TiddlyDesktop] Tiddler process spawned with PID: {}", pid);
+
+    // Spawn a thread to wait for the process to exit (cleanup)
+    std::thread::spawn(move || {
+        let mut child = child;
+        match child.wait() {
+            Ok(status) => {
+                eprintln!("[TiddlyDesktop] Tiddler process (PID {}) exited with status: {}", pid, status);
+            }
+            Err(e) => {
+                eprintln!("[TiddlyDesktop] Error waiting for tiddler process: {}", e);
+            }
+        }
+    });
+
+    Ok(pid)
+}
+
+/// IPC command: Notify other windows about a tiddler change
+/// Called from JavaScript when a tiddler is modified
+#[tauri::command]
+fn ipc_notify_tiddler_changed(
+    state: tauri::State<WikiModeState>,
+    tiddler_title: String,
+    tiddler_json: String,
+) -> Result<(), String> {
+    let mut client_guard = state.ipc_client.lock().unwrap();
+    if let Some(ref mut client) = *client_guard {
+        client.notify_tiddler_changed(&tiddler_title, &tiddler_json)
+            .map_err(|e| format!("IPC error: {}", e))?;
+    }
+    Ok(())
+}
+
+/// IPC command: Notify other windows about a tiddler deletion
+#[tauri::command]
+fn ipc_notify_tiddler_deleted(
+    state: tauri::State<WikiModeState>,
+    tiddler_title: String,
+) -> Result<(), String> {
+    let mut client_guard = state.ipc_client.lock().unwrap();
+    if let Some(ref mut client) = *client_guard {
+        client.notify_tiddler_deleted(&tiddler_title)
+            .map_err(|e| format!("IPC error: {}", e))?;
+    }
+    Ok(())
+}
+
+/// IPC command: Request to open a tiddler in a new window process
+/// This sends a message to the main process which spawns the tiddler window
+#[tauri::command]
+fn ipc_open_tiddler_window(
+    state: tauri::State<WikiModeState>,
+    tiddler_title: String,
+    startup_tiddler: Option<String>,
+) -> Result<(), String> {
+    let mut client_guard = state.ipc_client.lock().unwrap();
+    if let Some(ref mut client) = *client_guard {
+        client.request_open_tiddler(&tiddler_title, startup_tiddler.as_deref())
+            .map_err(|e| format!("IPC error: {}", e))?;
+    } else {
+        return Err("Not connected to IPC server".to_string());
+    }
+    Ok(())
+}
+
+/// IPC command: Check if this is a tiddler window
+#[tauri::command]
+fn ipc_is_tiddler_window(state: tauri::State<WikiModeState>) -> bool {
+    state.is_tiddler_window
+}
+
+/// IPC command: Get the tiddler title if this is a tiddler window
+#[tauri::command]
+fn ipc_get_tiddler_title(state: tauri::State<WikiModeState>) -> Option<String> {
+    state.tiddler_title.clone()
+}
+
+/// IPC command: Request sync from source wiki (for tiddler windows)
+#[tauri::command]
+fn ipc_request_sync(state: tauri::State<WikiModeState>) -> Result<(), String> {
+    let mut client_guard = state.ipc_client.lock().unwrap();
+    if let Some(ref mut client) = *client_guard {
+        client.request_sync()
+            .map_err(|e| format!("IPC error: {}", e))?;
+    }
+    Ok(())
+}
+
+/// IPC command: Send current wiki state (response to sync request from tiddler windows)
+#[tauri::command]
+fn ipc_send_sync_state(
+    state: tauri::State<WikiModeState>,
+    tiddlers_json: String,
+) -> Result<(), String> {
+    let mut client_guard = state.ipc_client.lock().unwrap();
+    if let Some(ref mut client) = *client_guard {
+        client.send_sync_state(&tiddlers_json)
+            .map_err(|e| format!("IPC error: {}", e))?;
+    }
+    Ok(())
+}
+
+/// IPC command: Update wiki favicon (sends to main process via IPC)
+#[tauri::command]
+fn ipc_update_favicon(
+    state: tauri::State<WikiModeState>,
+    favicon: Option<String>,
+) -> Result<(), String> {
+    let mut client_guard = state.ipc_client.lock().unwrap();
+    if let Some(ref mut client) = *client_guard {
+        client.send_update_favicon(&state.wiki_path.to_string_lossy(), favicon)
+            .map_err(|e| format!("IPC error: {}", e))?;
+    }
+    Ok(())
 }
 
 /// Get the resource directory, preferring paths relative to executable for tarball installs
@@ -2586,13 +2946,48 @@ fn wiki_protocol_handler(app: &tauri::AppHandle, request: Request<Vec<u8>>) -> R
         Ok(content) => {
             // Inject saver and additional functionality for TiddlyWiki
             // Note: __WIKI_PATH__, __WINDOW_LABEL__, __IS_MAIN_WIKI__ are already set by initialization_script()
+
+            // For single-tiddler windows, inject preload tiddlers to use single-tiddler layout
+            // This must run BEFORE TiddlyWiki's boot.js to configure the layout
+            let single_tiddler_preload = if let Some(ref tiddler) = single_tiddler {
+                let template = single_template.as_deref()
+                    .unwrap_or("$:/core/templates/single.tiddler.window");
+                let escaped_tiddler = tiddler.replace('\\', "\\\\").replace('"', "\\\"").replace('\n', "\\n");
+                let escaped_template = template.replace('\\', "\\\\").replace('"', "\\\"");
+                format!(r##"<script>
+// TiddlyDesktop: Configure single-tiddler layout BEFORE boot
+(function() {{
+    window.$tw = window.$tw || {{}};
+    $tw.preloadTiddlers = $tw.preloadTiddlers || [];
+
+    // Set layout to use single-tiddler wrapper
+    $tw.preloadTiddlers.push({{
+        title: "$:/layout",
+        text: "$:/TiddlyDesktop/SingleTiddlerLayout"
+    }});
+
+    // Inject a custom wrapper template that sets currentTiddler
+    $tw.preloadTiddlers.push({{
+        title: "$:/TiddlyDesktop/SingleTiddlerLayout",
+        text: '<$set name="currentTiddler" value="{escaped_tiddler}"><$transclude tiddler="{escaped_template}" mode="block"/></$set>'
+    }});
+
+    // Store the tiddler title for reference
+    window.__SINGLE_TIDDLER_TITLE__ = "{escaped_tiddler}";
+}})();
+</script>"##, escaped_tiddler=escaped_tiddler, escaped_template=escaped_template)
+            } else {
+                String::new()
+            };
+
             let script_injection = format!(
-                r##"<script>
-window.__SAVE_URL__ = "{}";
-{}
-{}
-{}
-{}
+                r##"{single_tiddler_preload}
+<script>
+window.__SAVE_URL__ = "{save_url}";
+{single_tiddler_js}
+{single_template_js}
+{parent_window_js}
+{single_variables_js}
 
 // TiddlyDesktop initialization - handles both normal and encrypted wikis
 (function() {{
@@ -2603,7 +2998,7 @@ window.__SAVE_URL__ = "{}";
     }}
     window.__TD_PROTOCOL_SCRIPT_LOADED__ = true;
 
-    var SAVE_URL = "{}";
+    var SAVE_URL = "{save_url_inner}";
 
     // Check if this is an encrypted wiki
     function isEncryptedWiki() {{
@@ -2735,55 +3130,100 @@ window.__SAVE_URL__ = "{}";
 
     registerWithTiddlyWiki();
 
-    // Title sync - update window title when document title changes
+    // Title sync - mirror document.title to native window titlebar (GtkHeaderBar on Linux)
+    // Uses MutationObserver on <title> element, like original TiddlyDesktop
+    // TiddlyWiki5's render.js updates document.title from $:/core/wiki/title template
     (function() {{
         var windowLabel = window.__WINDOW_LABEL__;
         var lastTitle = '';
 
         function syncTitle() {{
-            var title = document.title;
-            if (title && title !== lastTitle && window.__TAURI__ && window.__TAURI__.core) {{
-                lastTitle = title;
+            var title = document.title || '';
+
+            // Skip if title hasn't changed or is empty/generic
+            if (!title || title === lastTitle || title === 'Loading...') {{
+                return;
+            }}
+
+            lastTitle = title;
+
+            // Update native window titlebar (HeaderBar on Linux) via Tauri
+            if (window.__TAURI__ && window.__TAURI__.core) {{
                 window.__TAURI__.core.invoke('set_window_title', {{
                     label: windowLabel,
                     title: title
-                }}).catch(function() {{}});
-            }}
-        }}
-
-        // Sync when DOM is ready
-        if (document.readyState === 'loading') {{
-            document.addEventListener('DOMContentLoaded', syncTitle);
-        }} else {{
-            syncTitle();
-        }}
-
-        // Hook into TiddlyWiki's change system when available
-        function hookTiddlyWiki() {{
-            if (typeof $tw !== 'undefined' && $tw.wiki) {{
-                $tw.wiki.addEventListener('change', function() {{
-                    setTimeout(syncTitle, 10);
+                }}).catch(function(e) {{
+                    console.error('TiddlyDesktop: Failed to set window title:', e);
                 }});
-            }} else {{
-                setTimeout(hookTiddlyWiki, 100);
             }}
         }}
-        hookTiddlyWiki();
 
-        // Fallback: periodic sync
-        setInterval(syncTitle, 2000);
+        // Set up MutationObserver on <title> element
+        function setupTitleObserver() {{
+            var titleElement = document.querySelector('title');
+            if (!titleElement) {{
+                // Title element not in DOM yet, retry
+                setTimeout(setupTitleObserver, 100);
+                return;
+            }}
+
+            // Initial sync
+            syncTitle();
+
+            // Observe changes to the title element (like original TiddlyDesktop)
+            var observer = new MutationObserver(function() {{
+                syncTitle();
+            }});
+
+            observer.observe(titleElement, {{
+                childList: true,      // Text node added/removed
+                characterData: true,  // Text content changes
+                subtree: true         // Descendants (the text node)
+            }});
+        }}
+
+        setupTitleObserver();
     }})();
 
-    // Favicon extraction for encrypted wikis
-    // When the wiki is encrypted, we can't extract the favicon from the HTML during load
-    // After decryption, extract it from $:/favicon.ico and send to Rust
+    // Favicon sync - extract from $:/favicon.ico and update landing page
+    // Also watches for changes so favicon updates are reflected instantly
     (function() {{
         var wikiPath = window.__WIKI_PATH__;
+        var lastFavicon = '';
+
+        function sendFaviconUpdate(dataUri) {{
+            // Skip if favicon hasn't changed
+            if (dataUri === lastFavicon) {{
+                return;
+            }}
+            lastFavicon = dataUri;
+
+            // Send to Rust to update the wiki list entry
+            // In main wiki mode (main process), use update_wiki_favicon directly
+            // In wiki mode (child process), use IPC to send to main process
+            if (window.__TAURI__ && window.__TAURI__.core) {{
+                if (window.__IS_MAIN_WIKI__) {{
+                    // Main process - direct command
+                    window.__TAURI__.core.invoke('update_wiki_favicon', {{
+                        path: wikiPath,
+                        favicon: dataUri
+                    }}).catch(function(err) {{
+                        console.error('TiddlyDesktop: Failed to update favicon:', err);
+                    }});
+                }} else {{
+                    // Wiki child process - use IPC
+                    window.__TAURI__.core.invoke('ipc_update_favicon', {{
+                        favicon: dataUri
+                    }}).catch(function(err) {{
+                        console.error('TiddlyDesktop: Failed to update favicon via IPC:', err);
+                    }});
+                }}
+            }}
+        }}
 
         function extractAndUpdateFavicon() {{
             if (typeof $tw === 'undefined' || !$tw.wiki) {{
-                setTimeout(extractAndUpdateFavicon, 100);
-                return;
+                return; // TiddlyWiki not ready
             }}
 
             // Get the favicon tiddler
@@ -2804,110 +3244,31 @@ window.__SAVE_URL__ = "{}";
                 dataUri = 'data:' + type + ';base64,' + text;
             }}
 
-            // Send to Rust to update the wiki list entry
-            if (window.__TAURI__ && window.__TAURI__.core) {{
-                window.__TAURI__.core.invoke('update_wiki_favicon', {{
-                    path: wikiPath,
-                    favicon: dataUri
-                }}).catch(function(err) {{
-                    console.error('TiddlyDesktop: Failed to update favicon:', err);
-                }});
-            }}
+            sendFaviconUpdate(dataUri);
         }}
 
-        // Run once TiddlyWiki is ready
-        extractAndUpdateFavicon();
-    }})();
-
-    // Single-tiddler window mode
-    if (window.__SINGLE_TIDDLER__) {{
-        (function() {{
-            var tiddlerTitle = window.__SINGLE_TIDDLER__;
-            var templateTitle = window.__SINGLE_TEMPLATE__ || '$:/core/templates/single.tiddler.window';
-            var parentWindow = window.__PARENT_WINDOW__;
-
-            function renderSingleTiddler() {{
-                if (typeof $tw === 'undefined' || !$tw.wiki || !$tw.rootWidget) {{
-                    setTimeout(renderSingleTiddler, 50);
-                    return;
-                }}
-
-                // Hide the normal TiddlyWiki UI
-                var pageContainer = document.querySelector('.tc-page-container');
-                if (pageContainer) {{
-                    pageContainer.style.display = 'none';
-                }}
-
-                // Create container for single tiddler view
-                var container = document.createElement('div');
-                container.className = 'tc-single-tiddler-window tc-body';
-                document.body.appendChild(container);
-
-                // Set up variables for the template
-                var variables = {{
-                    currentTiddler: tiddlerTitle,
-                    'tv-window-id': window.__WINDOW_LABEL__
-                }};
-
-                // Merge any additional variables passed via paramObject
-                if (window.__SINGLE_VARIABLES__) {{
-                    var extraVars = window.__SINGLE_VARIABLES__;
-                    for (var key in extraVars) {{
-                        if (extraVars.hasOwnProperty(key)) {{
-                            variables[key] = extraVars[key];
-                        }}
-                    }}
-                }}
-
-                // Render styles
-                var styleWidgetNode = $tw.wiki.makeTranscludeWidget('$:/core/ui/PageStylesheet', {{
-                    document: $tw.fakeDocument,
-                    variables: variables,
-                    importPageMacros: true
-                }});
-                var styleContainer = $tw.fakeDocument.createElement('style');
-                styleWidgetNode.render(styleContainer, null);
-                var styleElement = document.createElement('style');
-                styleElement.innerHTML = styleContainer.textContent;
-                document.head.appendChild(styleElement);
-
-                // Render the tiddler using the template
-                var parser = $tw.wiki.parseTiddler(templateTitle);
-                var widgetNode = $tw.wiki.makeWidget(parser, {{
-                    document: document,
-                    parentWidget: $tw.rootWidget,
-                    variables: variables
-                }});
-                widgetNode.render(container, null);
-
-                // Set up refresh handler
-                $tw.wiki.addEventListener('change', function(changes) {{
-                    if (styleWidgetNode.refresh(changes, styleContainer, null)) {{
-                        styleElement.innerHTML = styleContainer.textContent;
-                    }}
-                    widgetNode.refresh(changes);
-                }});
-
-                // Listen for keyboard shortcuts
-                document.addEventListener('keydown', function(event) {{
-                    if ($tw.keyboardManager) {{
-                        $tw.keyboardManager.handleKeydownEvent(event);
-                    }}
-                }});
-
-                // Handle popups
-                document.documentElement.addEventListener('click', function(event) {{
-                    if ($tw.popup) {{
-                        $tw.popup.handleEvent(event);
-                    }}
-                }}, true);
-
-                console.log('Single-tiddler window initialized for:', tiddlerTitle);
+        function setupFaviconSync() {{
+            if (typeof $tw === 'undefined' || !$tw.wiki || !$tw.wiki.addEventListener) {{
+                setTimeout(setupFaviconSync, 100);
+                return;
             }}
 
-            renderSingleTiddler();
-        }})();
-    }}
+            // Initial extraction
+            extractAndUpdateFavicon();
+
+            // Watch for changes to $:/favicon.ico
+            $tw.wiki.addEventListener('change', function(changes) {{
+                if (changes['$:/favicon.ico']) {{
+                    extractAndUpdateFavicon();
+                }}
+            }});
+        }}
+
+        setupFaviconSync();
+    }})();
+
+    // Single-tiddler window mode is now handled via preload tiddlers
+    // The $:/layout tiddler is set before boot to use $:/TiddlyDesktop/SingleTiddlerLayout
 
     }} // End of initializeTiddlyDesktop
 
@@ -2937,12 +3298,13 @@ window.__SAVE_URL__ = "{}";
     // External attachments support is provided by the initialization script (get_dialog_init_script)
 }})();
 </script>"##,
-                save_url,
-                single_tiddler_js,
-                single_template_js,
-                parent_window_js,
-                single_variables_js,
-                save_url
+                single_tiddler_preload = single_tiddler_preload,
+                save_url = save_url,
+                single_tiddler_js = single_tiddler_js,
+                single_template_js = single_template_js,
+                parent_window_js = parent_window_js,
+                single_variables_js = single_variables_js,
+                save_url_inner = save_url
             );
 
             // Find <head> tag position - only search first 4KB, don't lowercase the whole file
@@ -3025,6 +3387,10 @@ fn reveal_or_create_main_window(app_handle: &tauri::AppHandle) {
             // Set up platform-specific drag handlers for content drops from external apps
             drag_drop::setup_drag_handlers(&main_window);
 
+            // Linux: Set up HeaderBar for reliable title display
+            #[cfg(target_os = "linux")]
+            setup_header_bar(&main_window);
+
             let _ = main_window.set_focus();
         }
     }
@@ -3066,7 +3432,371 @@ fn setup_system_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>>
     Ok(())
 }
 
+/// Command-line arguments for wiki mode
+struct WikiModeArgs {
+    /// Path to the wiki file
+    wiki_path: PathBuf,
+    /// If this is a tiddler window, the tiddler title
+    tiddler_title: Option<String>,
+    /// Startup tiddler (for tm-open-window)
+    startup_tiddler: Option<String>,
+}
+
+/// Parse command-line arguments and return wiki mode args if in wiki mode
+fn parse_wiki_mode_args() -> Option<WikiModeArgs> {
+    let args: Vec<String> = std::env::args().collect();
+
+    let mut wiki_path: Option<PathBuf> = None;
+    let mut tiddler_title: Option<String> = None;
+    let mut startup_tiddler: Option<String> = None;
+
+    let mut i = 1;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--wiki" if i + 1 < args.len() => {
+                wiki_path = Some(PathBuf::from(&args[i + 1]));
+                i += 2;
+            }
+            "--tiddler" if i + 1 < args.len() => {
+                tiddler_title = Some(args[i + 1].clone());
+                i += 2;
+            }
+            "--startup-tiddler" if i + 1 < args.len() => {
+                startup_tiddler = Some(args[i + 1].clone());
+                i += 2;
+            }
+            _ => {
+                i += 1;
+            }
+        }
+    }
+
+    wiki_path.map(|path| WikiModeArgs {
+        wiki_path: path,
+        tiddler_title,
+        startup_tiddler,
+    })
+}
+
+/// Simplified app state for wiki-only mode (single wiki process)
+#[allow(dead_code)]
+struct WikiModeState {
+    wiki_path: PathBuf,
+    path_key: String,
+    is_tiddler_window: bool,
+    tiddler_title: Option<String>,
+    ipc_client: Arc<Mutex<Option<ipc::IpcClient>>>,
+}
+
+/// Run in wiki-only mode - a single wiki window in its own process
+/// This is called when the app is started with --wiki <path> [--tiddler <title>]
+fn run_wiki_mode(args: WikiModeArgs) {
+    let wiki_path = args.wiki_path;
+    let is_tiddler_window = args.tiddler_title.is_some();
+    let tiddler_title = args.tiddler_title.clone();
+    let startup_tiddler = args.startup_tiddler.clone();
+
+    eprintln!("[TiddlyDesktop] Wiki mode: {:?}, tiddler: {:?}", wiki_path, tiddler_title);
+
+    // Validate the wiki file exists
+    if !wiki_path.exists() {
+        eprintln!("[TiddlyDesktop] Error: Wiki file not found: {:?}", wiki_path);
+        std::process::exit(1);
+    }
+
+    // Connect to IPC server (main process)
+    let wiki_path_str = wiki_path.to_string_lossy().to_string();
+    let ipc_client = Arc::new(Mutex::new(
+        ipc::try_connect(&wiki_path_str, is_tiddler_window, tiddler_title.clone())
+    ));
+
+    if ipc_client.lock().unwrap().is_some() {
+        eprintln!("[TiddlyDesktop] Connected to IPC server");
+    } else {
+        eprintln!("[TiddlyDesktop] Warning: Could not connect to IPC server (main process not running?)");
+    }
+
+    // Linux: Configure WebKitGTK hardware acceleration (same as main mode)
+    #[cfg(target_os = "linux")]
+    {
+        fn set_env_if_unset(key: &str, value: &str) {
+            if std::env::var(key).is_err() {
+                std::env::set_var(key, value);
+            }
+        }
+
+        if std::env::var("TIDDLYDESKTOP_DISABLE_GPU").map(|v| v == "1" || v.to_lowercase() == "true").unwrap_or(false) {
+            set_env_if_unset("WEBKIT_DISABLE_COMPOSITING_MODE", "1");
+            set_env_if_unset("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
+            set_env_if_unset("LIBGL_ALWAYS_SOFTWARE", "1");
+        } else {
+            set_env_if_unset("WEBKIT_DISABLE_COMPOSITING_MODE", "0");
+            set_env_if_unset("WEBKIT_DISABLE_DMABUF_RENDERER", "0");
+        }
+    }
+
+    // Create window label from filename
+    let filename = wiki_path.file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| "wiki".to_string());
+
+    // For tiddler windows, include tiddler name in label
+    let label = if let Some(ref tiddler) = tiddler_title {
+        let safe_tiddler = tiddler.replace(|c: char| !c.is_alphanumeric(), "-");
+        format!("tiddler-{}-{}", filename.replace(|c: char| !c.is_alphanumeric(), "-"), safe_tiddler)
+    } else {
+        format!("wiki-{}", filename.replace(|c: char| !c.is_alphanumeric(), "-"))
+    };
+
+    // Window title
+    let title = if let Some(ref tiddler) = tiddler_title {
+        format!("{} - {}", tiddler, filename.trim_end_matches(".html").trim_end_matches(".htm"))
+    } else {
+        filename.trim_end_matches(".html").trim_end_matches(".htm").to_string()
+    };
+
+    // Create path key for protocol handler
+    let path_key = utils::base64_url_encode(&wiki_path.to_string_lossy());
+
+    // Move IPC client into the closure
+    let ipc_client_for_state = ipc_client.clone();
+    let is_tiddler_window_for_state = is_tiddler_window;
+    let tiddler_title_for_state = tiddler_title.clone();
+    let startup_tiddler_for_state = startup_tiddler.clone();
+
+    tauri::Builder::default()
+        .setup(move |app| {
+            // Store state for this wiki process
+            let wiki_path_clone = wiki_path.clone();
+            let path_key_clone = path_key.clone();
+
+            app.manage(WikiModeState {
+                wiki_path: wiki_path_clone.clone(),
+                path_key: path_key_clone.clone(),
+                is_tiddler_window: is_tiddler_window_for_state,
+                tiddler_title: tiddler_title_for_state.clone(),
+                ipc_client: ipc_client_for_state.clone(),
+            });
+
+            // Also need minimal AppState for commands that expect it
+            app.manage(AppState {
+                wiki_paths: Mutex::new({
+                    let mut m = HashMap::new();
+                    m.insert(path_key_clone.clone(), wiki_path_clone.clone());
+                    m.insert(format!("{}_label", path_key_clone), PathBuf::from(&label));
+                    m
+                }),
+                open_wikis: Mutex::new({
+                    let mut m = HashMap::new();
+                    m.insert(label.clone(), wiki_path_clone.to_string_lossy().to_string());
+                    m
+                }),
+                wiki_processes: Mutex::new(HashMap::new()), // Not used in wiki mode
+                wiki_servers: Mutex::new(HashMap::new()),
+                next_port: Mutex::new(8080),
+                main_wiki_path: wiki_path_clone.clone(), // Use wiki path as "main" for this process
+            });
+
+            // Build the wiki URL using our protocol
+            // For tiddler windows, include tiddler and template query parameters
+            let wiki_url = if let Some(ref tiddler) = tiddler_title_for_state {
+                let encoded_tiddler = urlencoding::encode(tiddler);
+                let template = startup_tiddler_for_state.as_deref()
+                    .unwrap_or("$:/core/templates/single.tiddler.window");
+                let encoded_template = urlencoding::encode(template);
+                format!("wikifile://localhost/{}?tiddler={}&template={}",
+                    path_key_clone, encoded_tiddler, encoded_template)
+            } else {
+                format!("wikifile://localhost/{}", path_key_clone)
+            };
+
+            // Create the wiki window
+            let icon = Image::from_bytes(include_bytes!("../icons/icon.png"))?;
+            // Tiddler windows are smaller than main wiki windows
+            let (win_width, win_height) = if is_tiddler_window_for_state {
+                (700.0, 600.0)
+            } else {
+                (1200.0, 800.0)
+            };
+            #[allow(unused_mut)]
+            let mut builder = WebviewWindowBuilder::new(app, &label, WebviewUrl::External(wiki_url.parse().unwrap()))
+                .title(&title)
+                .inner_size(win_width, win_height)
+                .icon(icon)?
+                .window_classname("tiddlydesktop-rs-wiki")
+                .initialization_script(&init_script::get_wiki_init_script(&wiki_path_clone.to_string_lossy(), &label, false))
+                .devtools(true);
+
+            #[cfg(target_os = "windows")]
+            {
+                builder = builder.disable_drag_drop_handler();
+            }
+
+            let window = builder.build()?;
+
+            // Set up drag handlers
+            drag_drop::setup_drag_handlers(&window);
+
+            // Linux: Set up HeaderBar for reliable title display (works around WebKitGTK bug)
+            #[cfg(target_os = "linux")]
+            setup_header_bar(&window);
+
+            eprintln!("[TiddlyDesktop] Wiki window created: {}", label);
+
+            // Start IPC listener thread to receive messages from other wiki windows
+            let client_guard = ipc_client_for_state.lock().unwrap();
+            if let Some(ref client) = *client_guard {
+                if let Some(listener_stream) = client.get_listener_stream() {
+                    let app_handle = app.handle().clone();
+                    std::thread::spawn(move || {
+                        ipc::run_listener(listener_stream, |msg| {
+                            match msg {
+                                ipc::IpcMessage::TiddlerChanged { tiddler_title, tiddler_json, .. } => {
+                                    eprintln!("[IPC Listener] Tiddler changed: {}", tiddler_title);
+                                    // Emit event to JavaScript to update the tiddler
+                                    let _ = app_handle.emit("ipc-tiddler-changed", serde_json::json!({
+                                        "title": tiddler_title,
+                                        "tiddler": tiddler_json
+                                    }));
+                                }
+                                ipc::IpcMessage::TiddlerDeleted { tiddler_title, .. } => {
+                                    eprintln!("[IPC Listener] Tiddler deleted: {}", tiddler_title);
+                                    // Emit event to JavaScript to delete the tiddler
+                                    let _ = app_handle.emit("ipc-tiddler-deleted", serde_json::json!({
+                                        "title": tiddler_title
+                                    }));
+                                }
+                                ipc::IpcMessage::SyncState { tiddlers_json, .. } => {
+                                    eprintln!("[IPC Listener] Received sync state");
+                                    // Emit event to JavaScript to sync all tiddlers
+                                    let _ = app_handle.emit("ipc-sync-state", serde_json::json!({
+                                        "tiddlers": tiddlers_json
+                                    }));
+                                }
+                                ipc::IpcMessage::RequestSync { requester_pid, .. } => {
+                                    eprintln!("[IPC Listener] Sync request from pid {}", requester_pid);
+                                    // Emit event to JavaScript to send current state
+                                    let _ = app_handle.emit("ipc-sync-request", serde_json::json!({
+                                        "requester_pid": requester_pid
+                                    }));
+                                }
+                                ipc::IpcMessage::Ack { success, message } => {
+                                    if !success {
+                                        if let Some(msg) = message {
+                                            eprintln!("[IPC Listener] Server error: {}", msg);
+                                        }
+                                    }
+                                }
+                                _ => {}
+                            }
+                        });
+                    });
+                    eprintln!("[TiddlyDesktop] IPC listener thread started");
+                }
+            }
+            drop(client_guard);
+
+            Ok(())
+        })
+        .register_uri_scheme_protocol("wikifile", |ctx, request| {
+            wiki_protocol_handler(ctx.app_handle(), request)
+        })
+        .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_fs::init())
+        .invoke_handler(tauri::generate_handler![
+            // Core wiki commands needed for operation
+            load_wiki,
+            save_wiki,
+            set_window_title,
+            get_window_label,
+            get_main_wiki_path,
+            reveal_in_folder,
+            show_alert,
+            show_confirm,
+            close_window,
+            read_file_as_data_uri,
+            read_file_as_binary,
+            pick_files_for_import,
+            wiki_storage::get_external_attachments_config,
+            wiki_storage::set_external_attachments_config,
+            wiki_storage::js_log,
+            clipboard::get_clipboard_content,
+            // Drag-drop commands
+            start_native_drag,
+            prepare_native_drag,
+            cleanup_native_drag,
+            update_drag_icon,
+            set_pending_drag_icon,
+            set_drag_dest_enabled,
+            ungrab_seat_for_focus,
+            // Tiddler window commands (same process, shares $tw.wiki)
+            open_tiddler_window,
+            close_window_by_label,
+            // IPC commands for multi-process wiki sync (between different wiki files)
+            ipc_notify_tiddler_changed,
+            ipc_notify_tiddler_deleted,
+            ipc_open_tiddler_window,
+            ipc_is_tiddler_window,
+            ipc_get_tiddler_title,
+            ipc_request_sync,
+            ipc_send_sync_state,
+            ipc_update_favicon
+        ])
+        .build(tauri::generate_context!())
+        .expect("error while building wiki-mode application")
+        .run(|_app, _event| {
+            // Wiki mode doesn't need special event handling
+        });
+}
+
 pub fn run() {
+    // Check if we're running in wiki-only mode (--wiki <path>)
+    if let Some(args) = parse_wiki_mode_args() {
+        run_wiki_mode(args);
+        return;
+    }
+
+    // Main process: Start the IPC server for wiki process coordination
+    std::thread::spawn(|| {
+        let server = ipc::IpcServer::new();
+
+        // Set up callback for opening wikis (from tiddler windows or other sources)
+        server.on_open_wiki(|path| {
+            eprintln!("[IPC] Open wiki request received: {}", path);
+            // Spawn a wiki process for this path
+            if let Err(e) = spawn_wiki_process_sync(&path) {
+                eprintln!("[IPC] Failed to open wiki: {}", e);
+            }
+        });
+
+        // Set up callback for opening tiddler windows
+        server.on_open_tiddler(|wiki_path, tiddler_title, startup_tiddler| {
+            eprintln!("[IPC] Open tiddler window request: wiki={}, tiddler={}", wiki_path, tiddler_title);
+            if let Err(e) = spawn_tiddler_process(&wiki_path, &tiddler_title, startup_tiddler.as_deref()) {
+                eprintln!("[IPC] Failed to spawn tiddler window: {}", e);
+            }
+        });
+
+        // Set up callback for updating wiki favicon
+        server.on_update_favicon(|wiki_path, favicon| {
+            eprintln!("[IPC] Update favicon request: wiki={}", wiki_path);
+            if let Some(app_handle) = GLOBAL_APP_HANDLE.get() {
+                if let Err(e) = wiki_storage::update_wiki_favicon(app_handle.clone(), wiki_path, favicon) {
+                    eprintln!("[IPC] Failed to update favicon: {}", e);
+                }
+            } else {
+                eprintln!("[IPC] AppHandle not available yet for favicon update");
+            }
+        });
+
+        if let Err(e) = server.start() {
+            eprintln!("[TiddlyDesktop] IPC server error: {}", e);
+        }
+    });
+
+    // Normal mode: main browser with wiki list
+
     // Linux: Configure WebKitGTK hardware acceleration
     // Users can set TIDDLYDESKTOP_DISABLE_GPU=1 to disable hardware acceleration
     // (useful for older nvidia cards with nouveau driver, or other GPU issues)
@@ -3110,6 +3840,9 @@ pub fn run() {
 
     tauri::Builder::default()
         .setup(|app| {
+            // Store global AppHandle for IPC callbacks
+            let _ = GLOBAL_APP_HANDLE.set(app.handle().clone());
+
             // Ensure main wiki exists (creates from template if needed)
             // This also handles first-run mode selection on macOS/Linux
             let main_wiki_path = ensure_main_wiki_exists(app)
@@ -3121,6 +3854,7 @@ pub fn run() {
             app.manage(AppState {
                 wiki_paths: Mutex::new(HashMap::new()),
                 open_wikis: Mutex::new(HashMap::new()),
+                wiki_processes: Mutex::new(HashMap::new()),
                 wiki_servers: Mutex::new(HashMap::new()),
                 next_port: Mutex::new(8080),
                 main_wiki_path: main_wiki_path.clone(),
@@ -3150,7 +3884,7 @@ pub fn run() {
                 .icon(icon)?
                 .window_classname("tiddlydesktop-rs")
                 .initialization_script(&init_script::get_wiki_init_script(&main_wiki_path.to_string_lossy(), "main", true))
-                .devtools(false);
+                .devtools(true); // TEMP: enabled for debugging
 
             // On Windows, Tauri's drag/drop handler steals events from the DOM.
             // We disable it and handle all drag/drop via our custom IDropTarget (windows.rs)
@@ -3163,6 +3897,10 @@ pub fn run() {
 
             // Set up platform-specific drag handlers for content drops from external apps
             drag_drop::setup_drag_handlers(&main_window);
+
+            // Linux: Set up HeaderBar for reliable title display
+            #[cfg(target_os = "linux")]
+            setup_header_bar(&main_window);
 
             setup_system_tray(app)?;
 
@@ -3240,7 +3978,11 @@ pub fn run() {
             clipboard::get_clipboard_content,
             start_native_drag,
             prepare_native_drag,
-            cleanup_native_drag
+            cleanup_native_drag,
+            update_drag_icon,
+            set_pending_drag_icon,
+            set_drag_dest_enabled,
+            ungrab_seat_for_focus
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

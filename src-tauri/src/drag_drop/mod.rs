@@ -51,6 +51,9 @@ mod linux;
 #[cfg(target_os = "linux")]
 mod input_inject;
 
+#[cfg(target_os = "linux")]
+mod native_dnd;
+
 
 #[cfg(target_os = "macos")]
 mod macos;
@@ -161,4 +164,60 @@ pub fn cleanup_native_drag_impl() -> Result<(), String> {
 #[cfg(target_os = "macos")]
 pub fn cleanup_native_drag_impl() -> Result<(), String> {
     Ok(()) // No-op for macOS currently
+}
+
+/// Update the drag icon during an active drag operation
+#[cfg(target_os = "linux")]
+pub fn update_drag_icon_impl(image_data: Vec<u8>, offset_x: i32, offset_y: i32) -> Result<(), String> {
+    linux::update_drag_icon(image_data, offset_x, offset_y)
+}
+
+#[cfg(target_os = "windows")]
+pub fn update_drag_icon_impl(_image_data: Vec<u8>, _offset_x: i32, _offset_y: i32) -> Result<(), String> {
+    Ok(()) // No-op for Windows currently
+}
+
+#[cfg(target_os = "macos")]
+pub fn update_drag_icon_impl(_image_data: Vec<u8>, _offset_x: i32, _offset_y: i32) -> Result<(), String> {
+    Ok(()) // No-op for macOS currently
+}
+
+/// Set the pending drag icon before a drag starts
+#[cfg(target_os = "linux")]
+pub fn set_pending_drag_icon_impl(image_data: Vec<u8>, offset_x: i32, offset_y: i32) -> Result<(), String> {
+    linux::set_pending_drag_icon(image_data, offset_x, offset_y)
+}
+
+/// Toggle drag destination on WebKitWebView for a window
+/// When disabled, WebKitGTK's native handling takes over (shows caret in editables)
+/// When enabled, our custom handling intercepts drags
+#[cfg(target_os = "linux")]
+pub fn set_drag_dest_enabled_impl(label: &str, enabled: bool) {
+    linux::set_drag_dest_enabled(label, enabled)
+}
+
+#[cfg(target_os = "windows")]
+pub fn set_drag_dest_enabled_impl(_label: &str, _enabled: bool) {
+    // No-op for Windows currently
+}
+
+#[cfg(target_os = "macos")]
+pub fn set_drag_dest_enabled_impl(_label: &str, _enabled: bool) {
+    // No-op for macOS currently
+}
+
+/// Temporarily ungrab the seat to allow focus changes during drag
+#[cfg(target_os = "linux")]
+pub fn ungrab_seat_for_focus_impl(label: &str) {
+    linux::ungrab_seat_for_focus(label)
+}
+
+#[cfg(target_os = "windows")]
+pub fn ungrab_seat_for_focus_impl(_label: &str) {
+    // No-op for Windows currently
+}
+
+#[cfg(target_os = "macos")]
+pub fn ungrab_seat_for_focus_impl(_label: &str) {
+    // No-op for macOS currently
 }

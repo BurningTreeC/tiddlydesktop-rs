@@ -20,7 +20,6 @@ static IS_X11: AtomicBool = AtomicBool::new(false);
 
 /// Result of attempting input injection
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(dead_code)]
 pub enum InjectResult {
     /// Successfully injected input event
     Success,
@@ -30,8 +29,6 @@ pub enum InjectResult {
     X11Unavailable,
     /// Unknown display server
     UnknownDisplayServer,
-    /// Other error during injection
-    Error,
 }
 
 /// Detect whether we're running on X11 or Wayland
@@ -84,20 +81,6 @@ fn detect_display_server() {
 
         eprintln!("[TiddlyDesktop] Input inject: Could not detect display server");
     });
-}
-
-/// Check if we're on Wayland
-#[allow(dead_code)]
-pub fn is_wayland() -> bool {
-    detect_display_server();
-    IS_WAYLAND.load(Ordering::SeqCst)
-}
-
-/// Check if we're on X11
-#[allow(dead_code)]
-pub fn is_x11() -> bool {
-    detect_display_server();
-    IS_X11.load(Ordering::SeqCst)
 }
 
 /// Inject a mouse click at the specified screen coordinates

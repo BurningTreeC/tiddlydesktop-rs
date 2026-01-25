@@ -1,5 +1,5 @@
 // TiddlyDesktop Initialization Script - Sync Module
-// Handles: tm-open-window handlers, cross-window tiddler synchronization
+// Handles: tm-open-window handlers, cross-window tiddler synchronization (via IPC for multi-process)
 
 (function(TD) {
     'use strict';
@@ -23,18 +23,23 @@
             }
 
             var invoke = window.__TAURI__.core.invoke;
+            var listen = window.__TAURI__.event.listen;
             var windowLabel = window.__WINDOW_LABEL__ || 'unknown';
+            var wikiPath = window.__WIKI_PATH__ || '';
 
-            // Store references to opened Tauri windows
+            // Check if we're in a wiki mode process (has IPC commands available)
+            var isWikiProcess = true; // Assume wiki process, will fallback gracefully
+
+            // Store references to opened tiddler windows (by windowID)
             window.__tiddlyDesktopWindows = window.__tiddlyDesktopWindows || {};
 
-            // tm-open-window handler - opens tiddler in new window
+            // tm-open-window handler - opens tiddler in new window (same process, shares $tw.wiki)
             $tw.rootWidget.addEventListener('tm-open-window', function(event) {
                 var title = event.param || event.tiddlerTitle;
                 var paramObject = event.paramObject || {};
+                var template = paramObject.template || '$:/core/templates/single.tiddler.window';
                 var windowTitle = paramObject.windowTitle || title;
                 var windowID = paramObject.windowID || title;
-                var template = paramObject.template || '$:/core/templates/single.tiddler.window';
                 var width = paramObject.width ? parseFloat(paramObject.width) : null;
                 var height = paramObject.height ? parseFloat(paramObject.height) : null;
                 var left = paramObject.left ? parseFloat(paramObject.left) : null;
@@ -51,6 +56,7 @@
                 extraVariables.currentTiddler = title;
                 extraVariables['tv-window-id'] = windowID;
 
+                // Open tiddler window in same process (shares $tw.wiki)
                 invoke('open_tiddler_window', {
                     parentLabel: windowLabel,
                     tiddlerTitle: title,
@@ -63,6 +69,7 @@
                     variables: JSON.stringify(extraVariables)
                 }).then(function(newLabel) {
                     window.__tiddlyDesktopWindows[windowID] = { label: newLabel, title: title };
+                    console.log('[TiddlyDesktop] Tiddler window opened:', newLabel);
                 }).catch(function(err) {
                     console.error('[TiddlyDesktop] Failed to open tiddler window:', err);
                 });
@@ -70,7 +77,8 @@
                 return false;
             });
 
-            // tm-close-window handler
+            // tm-close-window handler - close tiddler windows
+            // Note: In multi-process mode, tiddler windows manage their own lifecycle
             $tw.rootWidget.addEventListener('tm-close-window', function(event) {
                 var windowID = event.param;
                 var windows = window.__tiddlyDesktopWindows || {};
@@ -107,19 +115,28 @@
             });
 
             // ========================================
-            // Cross-window tiddler synchronization
+            // Cross-window tiddler synchronization (via Tauri events)
+            // Works between WebviewWindows in the same process
             // ========================================
-            var wikiPath = window.__WIKI_PATH__ || '';
-            var currentWindowLabel = window.__WINDOW_LABEL__ || 'unknown';
             var isReceivingSync = false;
             var emit = window.__TAURI__.event.emit;
-            var listen = window.__TAURI__.event.listen;
+            var isTiddlerWindow = !!window.__SINGLE_TIDDLER_TITLE__;
 
-            // Listen for tiddler changes from other windows
+            // Track tiddlers modified since last save (only for source wikis)
+            var unsavedChanges = {};
+            // Tiddler windows wait for initial sync before broadcasting
+            var initialSyncReceived = !isTiddlerWindow; // Source wikis are ready immediately
+
+            // Listen for tiddler changes from other windows (same process)
             listen('wiki-tiddler-change', function(event) {
                 var payload = event.payload;
-                if (payload.wikiPath === wikiPath && payload.sourceWindow !== currentWindowLabel) {
+                // Only apply if same wiki and different window
+                if (payload.wikiPath === wikiPath && payload.sourceWindow !== windowLabel) {
                     isReceivingSync = true;
+                    // Mark initial sync as received for tiddler windows
+                    if (isTiddlerWindow && !initialSyncReceived) {
+                        initialSyncReceived = true;
+                    }
                     try {
                         if (payload.deleted) {
                             $tw.wiki.deleteTiddler(payload.title);
@@ -132,30 +149,148 @@
                 }
             });
 
+            // Listen for sync requests from newly opened tiddler windows
+            listen('wiki-sync-request', function(event) {
+                var payload = event.payload;
+                // Only respond if same wiki, different window, and we're not a tiddler window
+                if (payload.wikiPath === wikiPath && payload.sourceWindow !== windowLabel && !isTiddlerWindow) {
+                    console.log('[TiddlyDesktop] Sync request from:', payload.sourceWindow);
+
+                    // Helper to send a tiddler
+                    function sendTiddler(title) {
+                        var tiddler = $tw.wiki.getTiddler(title);
+                        if (tiddler) {
+                            emit('wiki-tiddler-change', {
+                                wikiPath: wikiPath,
+                                sourceWindow: windowLabel,
+                                title: title,
+                                deleted: false,
+                                tiddler: tiddler.fields
+                            });
+                            return true;
+                        }
+                        return false;
+                    }
+
+                    var count = 0;
+
+                    // Always send StoryList and HistoryList (current navigation state)
+                    if (sendTiddler('$:/StoryList')) count++;
+                    if (sendTiddler('$:/HistoryList')) count++;
+
+                    // Send unsaved changes (tiddlers modified since last save)
+                    Object.keys(unsavedChanges).forEach(function(title) {
+                        // Skip StoryList/HistoryList as we already sent them
+                        if (title === '$:/StoryList' || title === '$:/HistoryList') return;
+
+                        var change = unsavedChanges[title];
+                        if (change.deleted) {
+                            emit('wiki-tiddler-change', {
+                                wikiPath: wikiPath,
+                                sourceWindow: windowLabel,
+                                title: title,
+                                deleted: true,
+                                tiddler: null
+                            });
+                            count++;
+                        } else {
+                            if (sendTiddler(title)) count++;
+                        }
+                    });
+                    console.log('[TiddlyDesktop] Sent', count, 'tiddlers (including StoryList/HistoryList)');
+                }
+            });
+
             // Watch for local tiddler changes and broadcast to other windows
             $tw.wiki.addEventListener('change', function(changes) {
                 if (isReceivingSync) return;
+                // Tiddler windows don't broadcast until initial sync is received
+                if (!initialSyncReceived) return;
 
                 Object.keys(changes).forEach(function(title) {
                     var tiddler = $tw.wiki.getTiddler(title);
-                    var payload = {
-                        wikiPath: wikiPath,
-                        sourceWindow: currentWindowLabel,
-                        title: title,
-                        deleted: changes[title].deleted,
-                        tiddler: tiddler ? tiddler.fields : null
-                    };
+                    var deleted = changes[title].deleted;
 
-                    emit('wiki-tiddler-change', payload);
+                    // Track unsaved changes (for sync requests) - only for source wikis
+                    if (!isTiddlerWindow) {
+                        unsavedChanges[title] = { deleted: deleted };
+                    }
+
+                    // Broadcast to other windows
+                    emit('wiki-tiddler-change', {
+                        wikiPath: wikiPath,
+                        sourceWindow: windowLabel,
+                        title: title,
+                        deleted: deleted,
+                        tiddler: tiddler ? tiddler.fields : null
+                    });
                 });
             });
 
-            console.log('[TiddlyDesktop] Window message handlers ready, sync enabled for:', wikiPath);
+            // Clear unsaved changes tracking when wiki is saved
+            // But keep $:/StoryList and $:/HistoryList (session state, not saved to file)
+            function clearSavedChanges() {
+                var storyList = unsavedChanges['$:/StoryList'];
+                var historyList = unsavedChanges['$:/HistoryList'];
+                unsavedChanges = {};
+                if (storyList) unsavedChanges['$:/StoryList'] = storyList;
+                if (historyList) unsavedChanges['$:/HistoryList'] = historyList;
+            }
+            $tw.rootWidget.addEventListener('tm-auto-save-wiki', clearSavedChanges);
+            $tw.rootWidget.addEventListener('tm-save-wiki', clearSavedChanges);
+
+            // If this is a tiddler window, request unsaved changes from source wiki
+            if (isTiddlerWindow) {
+                console.log('[TiddlyDesktop] Tiddler window requesting unsaved changes');
+                emit('wiki-sync-request', {
+                    wikiPath: wikiPath,
+                    sourceWindow: windowLabel
+                });
+            }
+
+            console.log('[TiddlyDesktop] Sync handlers ready for:', wikiPath);
         }
 
         waitForTiddlyWikiReady();
     }
 
     setupWindowHandlers();
+
+    // Listen for wiki favicon updates (main wiki only)
+    // This allows the landing page to update favicons in real-time
+    function setupFaviconUpdateListener() {
+        if (!window.__IS_MAIN_WIKI__) {
+            return; // Only relevant for main wiki
+        }
+
+        function waitForTauri() {
+            if (!window.__TAURI__ || !window.__TAURI__.event) {
+                setTimeout(waitForTauri, 100);
+                return;
+            }
+
+            var listen = window.__TAURI__.event.listen;
+
+            listen('wiki-favicon-updated', function(event) {
+                var payload = event.payload;
+                if (!payload || !payload.path) return;
+
+                // Dispatch a custom event for TiddlyWiki plugins to handle
+                var customEvent = new CustomEvent('td-favicon-updated', {
+                    detail: {
+                        path: payload.path,
+                        favicon: payload.favicon
+                    }
+                });
+                window.dispatchEvent(customEvent);
+
+                console.log('[TiddlyDesktop] Favicon updated for:', payload.path);
+            });
+        }
+
+        waitForTauri();
+    }
+
+    setupFaviconUpdateListener();
 
 })(window.TiddlyDesktop = window.TiddlyDesktop || {});

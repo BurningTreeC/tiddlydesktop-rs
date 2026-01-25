@@ -791,6 +791,30 @@ exports.startup = function(callback) {
 		refreshWikiList();
 	});
 
+	// Listen for favicon updates from wiki windows (updates in real-time without full refresh)
+	window.addEventListener("td-favicon-updated", function(event) {
+		var path = event.detail && event.detail.path;
+		var favicon = event.detail && event.detail.favicon;
+		if (!path) return;
+
+		// Update the persistent wiki list entry
+		var entries = getWikiListEntries();
+		var updated = false;
+		for (var i = 0; i < entries.length; i++) {
+			if (entries[i].path === path) {
+				entries[i].favicon = favicon;
+				// Also update the temp tiddler directly for immediate UI update
+				var tempTitle = "$:/temp/tiddlydesktop-rs/wikis/" + i;
+				$tw.wiki.setText(tempTitle, "favicon", null, favicon || "");
+				updated = true;
+				break;
+			}
+		}
+		if (updated) {
+			saveWikiList(entries);
+		}
+	});
+
 	// Initial load of wiki list from tiddler
 	refreshWikiList();
 

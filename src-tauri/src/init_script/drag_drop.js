@@ -549,24 +549,22 @@
 
             if (isInternalDrag) return;
 
+            // Skip content drags (empty paths) - these are handled by td-drag-motion from our
+            // custom GTK/Windows/macOS handlers which have proper window filtering.
+            // tauri://drag-enter is sent to ALL windows, which causes multiple windows to show
+            // dropzones during cross-wiki drags. Only process FILE drags here.
+            if (paths.length === 0) return;
+
             var target = getTargetElement(event.payload.position);
             enteredTarget = target;
             currentTarget = target;
 
-            if (paths.length > 0) {
-                pendingFilePaths = paths;
-                isDragging = true;
-                var dt = createDataTransferWithFiles();
-                var enterEvent = createSyntheticDragEvent("dragenter", event.payload.position, dt);
-                target.dispatchEvent(enterEvent);
-            } else {
-                contentDragActive = true;
-                contentDragTarget = target;
-                contentDragEnterCount = 1;
-                var dt = createContentDataTransfer();
-                var enterEvent = createSyntheticDragEvent("dragenter", event.payload.position, dt);
-                target.dispatchEvent(enterEvent);
-            }
+            // File drag only (paths.length > 0)
+            pendingFilePaths = paths;
+            isDragging = true;
+            var dt = createDataTransferWithFiles();
+            var enterEvent = createSyntheticDragEvent("dragenter", event.payload.position, dt);
+            target.dispatchEvent(enterEvent);
         });
 
         listen("tauri://drag-over", function(event) {
@@ -681,6 +679,12 @@
             if (nativeDropInProgress) return;
 
             if (nativeDragActive) {
+                // For cross-wiki drags from our app (isOurDrag=true), clean up immediately
+                // because Rust tracking has definitively determined the drag moved elsewhere.
+                // For external drags, use a small delay to handle quick re-entry.
+                var isOurDrag = event.payload && event.payload.isOurDrag;
+                var delay = isOurDrag ? 0 : 100;
+
                 setTimeout(function() {
                     if (nativeDropInProgress) return;
                     if (!nativeDragActive) return;
@@ -701,7 +705,7 @@
                     nativeDragTarget = null;
                     nativeDropInProgress = false;
                     currentTarget = null;
-                }, 100);
+                }, delay);
             }
         });
 
@@ -733,8 +737,9 @@
         listen("td-drag-drop-position", function(event) {
             // Skip if internal drag is active (handled by internal_drag.js)
             if (TD.isInternalDragActive && TD.isInternalDragActive()) return;
-            // Skip if this is our own drag re-entering (handled by internal_drag.js)
-            if (event.payload && event.payload.isOurDrag) return;
+            // Skip same-window drags (handled by internal_drag.js)
+            // But process cross-wiki drags (isOurDrag=true, isSameWindow=false)
+            if (event.payload && event.payload.isSameWindow) return;
             if (event.payload) {
                 var pos;
                 if (event.payload.screenCoords) {

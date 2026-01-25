@@ -24,7 +24,6 @@ pub fn is_dangerous_url(url: &str) -> bool {
 
 /// Sanitize a list of URLs (e.g., text/uri-list format)
 /// Removes any dangerous URLs from the list
-#[allow(dead_code)]
 pub fn sanitize_uri_list(uri_list: &str) -> String {
     uri_list
         .lines()

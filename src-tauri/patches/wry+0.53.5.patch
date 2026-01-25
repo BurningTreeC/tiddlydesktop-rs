@@ -1,7 +1,6 @@
-diff --git a/src/webkitgtk/drag_drop.rs b/src/webkitgtk/drag_drop.rs
 --- a/src/webkitgtk/drag_drop.rs
 +++ b/src/webkitgtk/drag_drop.rs
-@@ -104,15 +104,26 @@ pub(crate) fn connect_drag_event(webview: &WebView, handler: Box<dyn Fn(DragDrop
+@@ -104,14 +104,28 @@
    {
      let controller = controller.clone();
      webview.connect_drag_drop(move |_, ctx, x, y, time| {
@@ -31,8 +30,8 @@ diff --git a/src/webkitgtk/drag_drop.rs b/src/webkitgtk/drag_drop.rs
 +          return false;
          }
        }
+ 
 
-diff --git a/src/wkwebview/drag_drop.rs b/src/wkwebview/drag_drop.rs
 --- a/src/wkwebview/drag_drop.rs
 +++ b/src/wkwebview/drag_drop.rs
 @@ -87,12 +87,12 @@ pub(crate) fn perform_drag_operation(
@@ -54,14 +53,14 @@ diff --git a/src/wkwebview/drag_drop.rs b/src/wkwebview/drag_drop.rs
 +  unsafe { objc2::msg_send![super(this), performDragOperation: drag_info] }
  }
 
-diff --git a/src/webview2/mod.rs b/src/webview2/mod.rs
---- a/src/webview2/mod.rs
-+++ b/src/webview2/mod.rs
-@@ -146,14 +146,12 @@ impl InnerWebView {
-       pl_attrs,
+ pub(crate) fn dragging_exited(this: &WryWebView, drag_info: &ProtocolObject<dyn NSDraggingInfo>) {
+
+--- a/src/webview2/mod.rs	2006-07-24 03:21:28.000000000 +0200
++++ b/src/webview2/mod.rs	2026-01-25 18:38:04.800402036 +0100
+@@ -146,15 +146,12 @@
        is_child,
      )?;
-
+ 
 -    let drag_drop_controller = drop_handler.map(|handler| {
 -      // Disable file drops, so our handler can capture it
 -      unsafe {
@@ -77,6 +76,6 @@ diff --git a/src/webview2/mod.rs b/src/webview2/mod.rs
 +    // - File path insertion into inputs
 +    // The Tauri drag-drop events won't fire, but JS drop events still work.
 +    let drag_drop_controller: Option<DragDropController> = None;
-
+ 
      let w = Self {
        id,

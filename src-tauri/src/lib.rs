@@ -3722,6 +3722,7 @@ fn run_wiki_mode(args: WikiModeArgs) {
             wiki_storage::set_external_attachments_config,
             wiki_storage::js_log,
             clipboard::get_clipboard_content,
+            run_command,
             // Drag-drop commands
             start_native_drag,
             prepare_native_drag,

@@ -1,8 +1,6 @@
-diff --git a/src/webkitgtk/drag_drop.rs b/src/webkitgtk/drag_drop.rs
-index 5133713..931ae82 100644
 --- a/src/webkitgtk/drag_drop.rs
 +++ b/src/webkitgtk/drag_drop.rs
-@@ -104,14 +104,28 @@ pub(crate) fn connect_drag_event(webview: &WebView, handler: Box<dyn Fn(DragDrop
+@@ -104,14 +104,28 @@
    {
      let controller = controller.clone();
      webview.connect_drag_drop(move |_, ctx, x, y, time| {
@@ -33,37 +31,10 @@ index 5133713..931ae82 100644
          }
        }
  
-diff --git a/src/webview2/mod.rs b/src/webview2/mod.rs
-index a2f5d5b..ba86821 100644
---- a/src/webview2/mod.rs
-+++ b/src/webview2/mod.rs
-@@ -146,15 +146,12 @@ impl InnerWebView {
-       is_child,
-     )?;
- 
--    let drag_drop_controller = drop_handler.map(|handler| {
--      // Disable file drops, so our handler can capture it
--      unsafe {
--        let _ = controller
--          .cast::<ICoreWebView2Controller4>()
--          .and_then(|c| c.SetAllowExternalDrop(false));
--      }
--      DragDropController::new(hwnd, handler)
--    });
-+    // PATCH: Don't install custom drag-drop handler on Windows
-+    // This preserves WebView2's native drop handling, which allows:
-+    // - Text drops into inputs/textareas/contenteditables
-+    // - File path insertion into inputs
-+    // The Tauri drag-drop events won't fire, but JS drop events still work.
-+    let drag_drop_controller: Option<DragDropController> = None;
- 
-     let w = Self {
-       id,
-diff --git a/src/wkwebview/drag_drop.rs b/src/wkwebview/drag_drop.rs
-index e28364e..0301216 100644
+
 --- a/src/wkwebview/drag_drop.rs
 +++ b/src/wkwebview/drag_drop.rs
-@@ -86,15 +86,14 @@ pub(crate) fn perform_drag_operation(
+@@ -86,15 +86,14 @@
    let frame: NSRect = this.frame();
    let position = (dl.x as i32, (frame.size.height - dl.y) as i32);
  
@@ -85,3 +56,28 @@ index e28364e..0301216 100644
  pub(crate) fn dragging_exited(this: &WryWebView, drag_info: &ProtocolObject<dyn NSDraggingInfo>) {
    let listener = &this.ivars().drag_drop_handler;
    if !listener(DragDropEvent::Leave) {
+
+--- a/src/webview2/mod.rs
++++ b/src/webview2/mod.rs
+@@ -146,15 +146,12 @@
+       is_child,
+     )?;
+ 
+-    let drag_drop_controller = drop_handler.map(|handler| {
+-      // Disable file drops, so our handler can capture it
+-      unsafe {
+-        let _ = controller
+-          .cast::<ICoreWebView2Controller4>()
+-          .and_then(|c| c.SetAllowExternalDrop(false));
+-      }
+-      DragDropController::new(hwnd, handler)
+-    });
++    // PATCH: Don't install custom drag-drop handler on Windows
++    // This preserves WebView2's native drop handling, which allows:
++    // - Text drops into inputs/textareas/contenteditables
++    // - File path insertion into inputs
++    // The Tauri drag-drop events won't fire, but JS drop events still work.
++    let drag_drop_controller: Option<DragDropController> = None;
+ 
+     let w = Self {
+       id,

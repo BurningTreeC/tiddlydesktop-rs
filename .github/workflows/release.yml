@@ -237,8 +237,7 @@ jobs:
           WRY_DIR=$(find ~/.cargo/registry/src -type d -name "wry-0.53.*" | head -1)
           if [ -n "$WRY_DIR" ]; then
             echo "Applying patches to $WRY_DIR"
-            cd "$WRY_DIR"
-            git apply "$GITHUB_WORKSPACE/tiddlydesktop-rs/src-tauri/patches/wry+0.53.5.patch"
+            patch -p1 -d "$WRY_DIR" < patches/wry+0.53.5.patch
           else
             echo "ERROR: Could not find wry source directory"
             exit 1
@@ -338,8 +337,7 @@ jobs:
           WRY_DIR=$(find ~/.cargo/registry/src -type d -name "wry-0.53.*" | head -1)
           if [ -n "$WRY_DIR" ]; then
             echo "Applying patches to $WRY_DIR"
-            cd "$WRY_DIR"
-            git apply "$GITHUB_WORKSPACE/tiddlydesktop-rs/src-tauri/patches/wry+0.53.5.patch"
+            patch -p1 -d "$WRY_DIR" < patches/wry+0.53.5.patch
           else
             echo "ERROR: Could not find wry source directory"
             exit 1

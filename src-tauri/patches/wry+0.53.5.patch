@@ -1,6 +1,8 @@
+diff --git a/src/webkitgtk/drag_drop.rs b/src/webkitgtk/drag_drop.rs
+index 5133713..931ae82 100644
 --- a/src/webkitgtk/drag_drop.rs
 +++ b/src/webkitgtk/drag_drop.rs
-@@ -104,14 +104,28 @@
+@@ -104,14 +104,28 @@ pub(crate) fn connect_drag_event(webview: &WebView, handler: Box<dyn Fn(DragDrop
    {
      let controller = controller.clone();
      webview.connect_drag_drop(move |_, ctx, x, y, time| {
@@ -31,33 +33,11 @@
          }
        }
  
-
---- a/src/wkwebview/drag_drop.rs
-+++ b/src/wkwebview/drag_drop.rs
-@@ -87,12 +87,12 @@ pub(crate) fn perform_drag_operation(
-   let frame: NSRect = this.frame();
-   let position = (dl.x as i32, (frame.size.height - dl.y) as i32);
-
-+  // PATCH: Emit the event so JS knows about the drop
-   let listener = &this.ivars().drag_drop_handler;
--  if !listener(DragDropEvent::Drop { paths, position }) {
--    // Reject the Wry drop (invoke the OS default behaviour)
--    unsafe { objc2::msg_send![super(this), performDragOperation: drag_info] }
--  } else {
--    Bool::YES
--  }
-+  listener(DragDropEvent::Drop { paths, position });
-+
-+  // PATCH: Always invoke native WKWebView handling
-+  // This allows text/file paths to be inserted into inputs natively
-+  unsafe { objc2::msg_send![super(this), performDragOperation: drag_info] }
- }
-
- pub(crate) fn dragging_exited(this: &WryWebView, drag_info: &ProtocolObject<dyn NSDraggingInfo>) {
-
---- a/src/webview2/mod.rs	2006-07-24 03:21:28.000000000 +0200
-+++ b/src/webview2/mod.rs	2026-01-25 18:38:04.800402036 +0100
-@@ -146,15 +146,12 @@
+diff --git a/src/webview2/mod.rs b/src/webview2/mod.rs
+index a2f5d5b..ba86821 100644
+--- a/src/webview2/mod.rs
++++ b/src/webview2/mod.rs
+@@ -146,15 +146,12 @@ impl InnerWebView {
        is_child,
      )?;
  
@@ -79,3 +59,29 @@
  
      let w = Self {
        id,
+diff --git a/src/wkwebview/drag_drop.rs b/src/wkwebview/drag_drop.rs
+index e28364e..0301216 100644
+--- a/src/wkwebview/drag_drop.rs
++++ b/src/wkwebview/drag_drop.rs
+@@ -86,15 +86,14 @@ pub(crate) fn perform_drag_operation(
+   let frame: NSRect = this.frame();
+   let position = (dl.x as i32, (frame.size.height - dl.y) as i32);
+ 
++  // PATCH: Emit the event so JS knows about the drop
+   let listener = &this.ivars().drag_drop_handler;
+-  if !listener(DragDropEvent::Drop { paths, position }) {
+-    // Reject the Wry drop (invoke the OS default behaviour)
+-    unsafe { objc2::msg_send![super(this), performDragOperation: drag_info] }
+-  } else {
+-    Bool::YES
+-  }
+-}
++  listener(DragDropEvent::Drop { paths, position });
+ 
++  // PATCH: Always invoke native WKWebView handling
++  // This allows text/file paths to be inserted into inputs natively
++  unsafe { objc2::msg_send![super(this), performDragOperation: drag_info] }
++}
+ pub(crate) fn dragging_exited(this: &WryWebView, drag_info: &ProtocolObject<dyn NSDraggingInfo>) {
+   let listener = &this.ivars().drag_drop_handler;
+   if !listener(DragDropEvent::Leave) {

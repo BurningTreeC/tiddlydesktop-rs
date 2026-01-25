@@ -133,7 +133,7 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Apply WRY patches for native drag-drop
-        working-directory: tiddlydesktop-rs
+        working-directory: tiddlydesktop-rs/src-tauri
         run: |
           # Fetch wry crate to populate cargo cache
           cargo fetch
@@ -141,7 +141,7 @@ jobs:
           WRY_DIR=$(find ~/.cargo/registry/src -type d -name "wry-0.53.*" | head -1)
           if [ -n "$WRY_DIR" ]; then
             echo "Applying patches to $WRY_DIR"
-            patch -p1 -d "$WRY_DIR" < src-tauri/patches/wry+0.53.5.patch
+            patch -p1 -d "$WRY_DIR" < patches/wry+0.53.5.patch
           else
             echo "ERROR: Could not find wry source directory"
             exit 1
@@ -228,7 +228,7 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Apply WRY patches for native drag-drop
-        working-directory: tiddlydesktop-rs
+        working-directory: tiddlydesktop-rs/src-tauri
         shell: bash
         run: |
           # Fetch wry crate to populate cargo cache
@@ -329,7 +329,7 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Apply WRY patches for native drag-drop
-        working-directory: tiddlydesktop-rs
+        working-directory: tiddlydesktop-rs/src-tauri
         shell: bash
         run: |
           # Fetch wry crate to populate cargo cache
@@ -436,7 +436,7 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Apply WRY patches for native drag-drop
-        working-directory: tiddlydesktop-rs
+        working-directory: tiddlydesktop-rs/src-tauri
         run: |
           # Fetch wry crate to populate cargo cache
           cargo fetch
@@ -444,7 +444,7 @@ jobs:
           WRY_DIR=$(find ~/.cargo/registry/src -type d -name "wry-0.53.*" | head -1)
           if [ -n "$WRY_DIR" ]; then
             echo "Applying patches to $WRY_DIR"
-            patch -p1 -d "$WRY_DIR" < src-tauri/patches/wry+0.53.5.patch
+            patch -p1 -d "$WRY_DIR" < patches/wry+0.53.5.patch
           else
             echo "ERROR: Could not find wry source directory"
             exit 1
@@ -546,7 +546,7 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Apply WRY patches for native drag-drop
-        working-directory: tiddlydesktop-rs
+        working-directory: tiddlydesktop-rs/src-tauri
         run: |
           # Fetch wry crate to populate cargo cache
           cargo fetch
@@ -554,7 +554,7 @@ jobs:
           WRY_DIR=$(find ~/.cargo/registry/src -type d -name "wry-0.53.*" | head -1)
           if [ -n "$WRY_DIR" ]; then
             echo "Applying patches to $WRY_DIR"
-            patch -p1 -d "$WRY_DIR" < src-tauri/patches/wry+0.53.5.patch
+            patch -p1 -d "$WRY_DIR" < patches/wry+0.53.5.patch
           else
             echo "ERROR: Could not find wry source directory"
             exit 1

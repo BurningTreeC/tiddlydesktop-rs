@@ -26,7 +26,7 @@ use std::sync::OnceLock;
 use gdk::DragAction;
 use glib::prelude::*;
 use gtk::prelude::*;
-use gtk::{DestDefaults, TargetEntry, TargetFlags, TargetList};
+use gtk::TargetList;
 use tauri::{Emitter, Manager, WebviewWindow};
 
 use super::native_dnd;
@@ -831,147 +831,44 @@ fn find_webkit_widget(container: &impl IsA<gtk::Widget>) -> Option<gtk::Widget> 
 }
 
 /// Set up drag handlers on the window widget
-fn setup_widget_drag_handlers(widget: &gtk::Widget, state: Rc<RefCell<DragState>>, label: &str) {
-    let widget_type = widget.type_().name();
+fn setup_widget_drag_handlers(_widget: &gtk::Widget, _state: Rc<RefCell<DragState>>, label: &str) {
+    // NOTE: We do NOT set up any drop handling on the GtkWindow!
+    //
+    // WebKitWebView is already a fully configured drag destination and handles:
+    //   - Caret positioning during drags
+    //   - Text insertion into inputs/textareas/contenteditables
+    //   - Native DOM drop events for TiddlyWiki's dropzones
+    //
+    // Any drag handling on the parent GtkWindow interferes with WebKit's native
+    // drop handling. We only observe drags on the WebKitWebView for visual feedback
+    // (td-drag-motion, td-drag-leave events) but let WebKit handle all drops.
     eprintln!(
-        "[TiddlyDesktop] Linux: Setting up drag handlers on widget type: {} for window '{}'",
-        widget_type, label
+        "[TiddlyDesktop] Linux: Skipping GtkWindow drag handlers for '{}' - letting WebKit handle all drops natively",
+        label
     );
-
-    // Define target types we accept
-    // Custom data containers (may contain text/vnd.tiddler):
-    // - Firefox: application/x-moz-custom-clipdata
-    // - Chrome: chromium/x-web-custom-data
-    // IMPORTANT: Include SAME_WIDGET and SAME_APP to accept drags from within our own app
-    let all_flags = TargetFlags::SAME_WIDGET | TargetFlags::SAME_APP | TargetFlags::OTHER_APP | TargetFlags::OTHER_WIDGET;
-    let targets = vec![
-        TargetEntry::new("application/x-moz-custom-clipdata", all_flags, 0),
-        TargetEntry::new("chromium/x-web-custom-data", all_flags, 1),
-        TargetEntry::new("text/vnd.tiddler", all_flags, 2),
-        TargetEntry::new("application/json", all_flags, 3),
-        TargetEntry::new("text/x-moz-url", all_flags, 4),
-        TargetEntry::new("text/plain", all_flags, 5),
-        TargetEntry::new("text/html", all_flags, 6),
-        TargetEntry::new("text/uri-list", all_flags, 7),
-        TargetEntry::new("STRING", all_flags, 8),
-        TargetEntry::new("UTF8_STRING", all_flags, 9),
-        TargetEntry::new("TEXT", all_flags, 10),
-    ];
-
-    // Set up the widget as a drop destination
-    // IMPORTANT: Use DestDefaults::DROP to only intercept drops.
-    // This lets WebKit handle drag-motion for caret positioning.
-    widget.drag_dest_set(
-        DestDefaults::DROP,
-        &targets,
-        DragAction::COPY | DragAction::MOVE | DragAction::LINK,
-    );
-
-    // Connect drag-motion signal for GtkWindow (window frame area)
-    // NOTE: We do NOT emit td-drag-motion or update state here.
-    // The WebKitWebView handler manages drag_active with proper destination filtering.
-    // This handler just accepts the drag to allow propagation.
-    widget.connect_drag_motion(move |_widget, context, _x, _y, time| {
-        context.drag_status(DragAction::COPY, time);
-        // Return false to allow propagation to WebKitWebView
-        false
-    });
-
-    // Connect drag-leave signal for GtkWindow
-    // NOTE: We do NOT emit td-drag-leave or update state here.
-    // The WebKitWebView handler manages drag_active with proper destination filtering.
-    widget.connect_drag_leave(move |_widget, _context, _time| {
-        // No-op - state is managed by WebKitWebView handler
-    });
-
-    // Connect drag-drop signal to request data
-    let state_drop_signal = state.clone();
-    let widget_clone = widget.clone();
-    widget.connect_drag_drop(move |_widget, context, x, y, time| {
-        // Check if the drag source is one of our registered WebKit widgets
-        let source_window_label = get_source_window_label(context);
-        let is_our_drag = source_window_label.is_some();
-
-        eprintln!("[TiddlyDesktop] Linux: GtkWindow drag-drop signal at ({}, {}), source={:?}", x, y, source_window_label);
-
-        // For our drags, skip GtkWindow level and let WebKit widget handle it
-        // - Same-window: WebKit sees is_internal=true, returns false, JS handles
-        // - Cross-wiki: WebKit sees is_internal=false, processes the drop with GTK data transfer
-        if is_our_drag {
-            eprintln!("[TiddlyDesktop] Linux: GtkWindow skipping drop for our drag from {:?} - WebKit widget will handle", source_window_label);
-            // Don't call drag_finish here - WebKit widget's handler will do it
-            return false;
-        }
-
-        // External drop from outside our app - handle at GtkWindow level
-        // Mark that a real drop was requested (user released mouse button)
-        {
-            let mut s = state_drop_signal.borrow_mut();
-            s.drop_requested = true;
-            s.last_position = Some((x, y));
-        }
-
-        // Request data for the drop - try text/html first, then text/plain
-        let targets = context.list_targets();
-        eprintln!(
-            "[TiddlyDesktop] Linux: Available targets: {:?}",
-            targets.iter().map(|a| a.name()).collect::<Vec<_>>()
-        );
-
-        // Find the best target to request
-        // Browser custom data containers that may contain text/vnd.tiddler:
-        // - Firefox: application/x-moz-custom-clipdata
-        // - Chrome: chromium/x-web-custom-data (Pickle format)
-        let preferred_targets = ["application/x-moz-custom-clipdata", "chromium/x-web-custom-data", "text/vnd.tiddler", "application/json", "text/x-moz-url", "text/html", "text/uri-list", "UTF8_STRING", "text/plain", "STRING"];
-        let mut requested = false;
-
-        for pref in &preferred_targets {
-            for target in &targets {
-                if target.name() == *pref {
-                    eprintln!("[TiddlyDesktop] Linux: Requesting data for target: {}", pref);
-                    widget_clone.drag_get_data(context, target, time);
-                    requested = true;
-                    break;
-                }
-            }
-            if requested {
-                break;
-            }
-        }
-
-        if !requested && !targets.is_empty() {
-            // Request the first available target
-            eprintln!(
-                "[TiddlyDesktop] Linux: Requesting data for first target: {}",
-                targets[0].name()
-            );
-            widget_clone.drag_get_data(context, &targets[0], time);
-        }
-
-        true
-    });
-
-    // Connect drag-data-received signal (for the actual drop)
-    let state_drop = state.clone();
-    widget.connect_drag_data_received(
-        move |_widget, context, x, y, selection_data, _info, time| {
-            handle_drag_data_received(&state_drop, context, x, y, selection_data, time);
-        },
-    );
-
-    eprintln!("[TiddlyDesktop] Linux: GTK3 drag-drop handlers connected on window");
 }
 
 /// Set up drag handlers on WebKit widget
-fn setup_webkit_drag_handlers(widget: &gtk::Widget, state: Rc<RefCell<DragState>>) {
+fn setup_webkit_drag_handlers(_widget: &gtk::Widget, _state: Rc<RefCell<DragState>>) {
+    // EXPERIMENT: Don't connect any handlers, let vanilla WebKitGTK handle everything
+    // like Epiphany does. Testing if this allows external drops to work natively.
+    eprintln!("[TiddlyDesktop] Linux: setup_webkit_drag_handlers - NO-OP (testing vanilla WebKitGTK)");
+}
+
+#[allow(dead_code)]
+/// Set up drag handlers on WebKit widget (DISABLED for vanilla WebKitGTK test)
+fn setup_webkit_drag_handlers_disabled(widget: &gtk::Widget, state: Rc<RefCell<DragState>>) {
     // NOTE: We do NOT call drag_dest_set() on the WebView!
     // WebKitWebView is already a fully configured drag destination.
     // Calling drag_dest_set() would:
     //   1. Replace WebKit's internal target list
     //   2. Break caret updates during drags
     //   3. Interfere with WebKit's internal drop handling
-    // Instead, we just connect to signals and return false to let WebKit handle them.
-    // For cross-wiki drops, we can observe drag-data-received.
+    //
+    // We connect to signals to:
+    //   - Emit td-drag-motion/leave for JS dropzone highlighting
+    //   - Intercept external drops (WebKitGTK bug: doesn't transfer cross-process data to JS)
+    //   - Let internal drops through to WebKit for native text insertion
 
     // Connect drag-motion signal
     let state_motion = state.clone();
@@ -1126,200 +1023,58 @@ fn setup_webkit_drag_handlers(widget: &gtk::Widget, state: Rc<RefCell<DragState>
     });
 
     // Connect drag-drop signal
+    // WebKitGTK bug: It doesn't transfer cross-process drag data to JavaScript's DataTransfer.
+    // Strategy:
+    //   - Internal drops (source_widget exists): return false → WebKit handles natively
+    //     (preserves text insertion into inputs/textareas/contenteditables)
+    //   - External drops (source_widget is None): we do GTK data transfer → emit to JS
     let state_drop_signal = state.clone();
-    let widget_clone = widget.clone();
-    widget.connect_drag_drop(move |_widget, context, x, y, time| {
-        // Get window label for logging
+    widget.connect_drag_drop(move |widget, context, x, y, time| {
         let window_label = {
             let s = state_drop_signal.borrow();
             s.window.label().to_string()
         };
 
-        // Check if the drag source is one of our registered WebKit widgets
-        let source_window_label = get_source_window_label(context);
-        let is_our_drag = source_window_label.is_some();
-        let is_internal = source_window_label.as_ref() == Some(&window_label);
+        let source_widget = context.drag_get_source_widget();
+        let is_external = source_widget.is_none();
 
-        eprintln!("[TiddlyDesktop] Linux: drag-drop source={:?}, target={}, is_our_drag={}, is_internal={}",
-            source_window_label, window_label, is_our_drag, is_internal);
+        eprintln!("[TiddlyDesktop] Linux: drag-drop at ({}, {}) is_external={}, target={}",
+            x, y, is_external, window_label);
 
-        // For internal drags (same-window), let WebKit handle the drop natively
-        // This allows the browser's DOM drop events to fire correctly
-        if is_internal {
-            eprintln!("[TiddlyDesktop] Linux: Internal drop (same window) - letting WebKit handle natively");
-            // Return false to let WebKit's internal drop handling proceed
-            // WebKit will fire the DOM drop event which TiddlyWiki handles
-            return false;
-        }
+        if is_external {
+            // External drop - do GTK data transfer ourselves
+            {
+                let mut s = state_drop_signal.borrow_mut();
+                s.drop_requested = true;
+                s.last_position = Some((x, y));
+            }
 
-        // If we have outgoing data from a different window (cross-wiki), we handle the drop
-        if is_our_drag {
-            eprintln!("[TiddlyDesktop] Linux: Cross-wiki drop from {:?} - we handle it", source_window_label);
-        }
+            let targets = context.list_targets();
+            let priority = ["text/uri-list", "text/html", "text/plain", "UTF8_STRING", "STRING"];
 
-        // IMPORTANT: On multi-monitor setups, GTK may deliver drag-drop to multiple windows.
-        // Verify that the pointer is actually over THIS window.
-        // On Wayland, coordinate-based checking doesn't work (outer_position returns 0,0),
-        // so we also check our pointer tracking state.
+            let target = priority.iter()
+                .find_map(|&p| targets.iter().find(|t| t.name() == p).cloned())
+                .or_else(|| targets.first().cloned());
 
-        // FIRST: Check pointer tracking (reliable on Wayland)
-        // If pointer tracking says we're the window with the pointer, trust it
-        if let Some(tracked_window) = get_pointer_inside_window() {
-            if tracked_window == window_label {
-                eprintln!(
-                    "[TiddlyDesktop] Linux: drag-drop signal for '{}' - pointer tracking confirms this window",
-                    window_label
-                );
-                // Continue to handle the drop
+            if let Some(t) = target {
+                eprintln!("[TiddlyDesktop] Linux: Requesting external data: {}", t.name());
+                widget.drag_get_data(context, &t, time);
+                true
             } else {
-                eprintln!(
-                    "[TiddlyDesktop] Linux: drag-drop signal for '{}' but pointer tracking says '{}' - REJECTING",
-                    window_label, tracked_window
-                );
-                return false; // Different window has the pointer
+                false
             }
         } else {
-            // No pointer tracking info - fall back to coordinate check
-            let pointer_over_this_window = {
-                let s = state_drop_signal.borrow();
-                let mut over_this = true; // Default to true if we can't check
-
-                // Get pointer screen coordinates from GDK
-                if let Some(display) = gdk::Display::default() {
-                    if let Some(seat) = display.default_seat() {
-                        if let Some(pointer) = seat.pointer() {
-                            if let Some(root_window) = display.default_screen().root_window() {
-                                let (_, screen_x, screen_y, _) = root_window.device_position(&pointer);
-
-                                // Get window bounds from TAURI (note: returns 0,0 on Wayland)
-                                if let Ok(pos) = s.window.outer_position() {
-                                    if let Ok(size) = s.window.outer_size() {
-                                        let win_x = pos.x;
-                                        let win_y = pos.y;
-                                        let win_width = size.width as i32;
-                                        let win_height = size.height as i32;
-
-                                        // On Wayland, pos is (0,0) so this check is unreliable
-                                        // Only reject if we're clearly outside AND pos is not (0,0)
-                                        let pos_is_valid = win_x != 0 || win_y != 0;
-
-                                        if pos_is_valid {
-                                            over_this = screen_x >= win_x
-                                                && screen_x < win_x + win_width
-                                                && screen_y >= win_y
-                                                && screen_y < win_y + win_height;
-
-                                            if !over_this {
-                                                eprintln!(
-                                                    "[TiddlyDesktop] Linux: drag-drop signal for '{}' but pointer at ({}, {}) is outside window bounds ({}, {})-({}, {}) - REJECTING DROP",
-                                                    window_label, screen_x, screen_y, win_x, win_y, win_x + win_width, win_y + win_height
-                                                );
-                                            }
-                                        } else {
-                                            // Wayland: can't reliably check, default to accepting
-                                            eprintln!(
-                                                "[TiddlyDesktop] Linux: drag-drop signal for '{}' - Wayland position check skipped (pos=0,0)",
-                                                window_label
-                                            );
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-                over_this
-            };
-
-            if !pointer_over_this_window {
-                // Reject the drop - pointer isn't actually over this window
-                return false;
-            }
+            // Internal drop - let WebKit handle natively
+            eprintln!("[TiddlyDesktop] Linux: Internal drop - WebKit handles");
+            false
         }
-
-        eprintln!(
-            "[TiddlyDesktop] Linux: WebKit drag-drop signal at ({}, {}) for window '{}'",
-            x, y, window_label
-        );
-
-        {
-            let mut s = state_drop_signal.borrow_mut();
-            s.drop_requested = true;
-            s.last_position = Some((x, y));
-        }
-
-        // Request data
-        let targets = context.list_targets();
-        eprintln!(
-            "[TiddlyDesktop] Linux: WebKit available targets: {:?}",
-            targets.iter().map(|a| a.name()).collect::<Vec<_>>()
-        );
-
-        // For inter-wiki drops (is_our_drag but not internal), always try text/vnd.tiddler first
-        // even if not advertised - the source might provide it anyway
-        if is_our_drag && !is_internal {
-            eprintln!("[TiddlyDesktop] Linux: Cross-wiki drop - requesting text/vnd.tiddler directly");
-            let tiddler_atom = gdk::Atom::intern("text/vnd.tiddler");
-            widget_clone.drag_get_data(context, &tiddler_atom, time);
-            return true;
-        }
-
-        // For other drops, use advertised targets
-        // application/x-moz-custom-clipdata may contain custom MIME types like text/vnd.tiddler
-        // text/x-moz-url contains URL + title in Mozilla format
-        let preferred_targets = ["application/x-moz-custom-clipdata", "text/vnd.tiddler", "application/json", "text/x-moz-url", "text/html", "text/uri-list", "UTF8_STRING", "text/plain", "STRING"];
-        let mut requested = false;
-
-        for pref in &preferred_targets {
-            for target in &targets {
-                if target.name() == *pref {
-                    widget_clone.drag_get_data(context, target, time);
-                    requested = true;
-                    break;
-                }
-            }
-            if requested {
-                break;
-            }
-        }
-
-        if !requested && !targets.is_empty() {
-            widget_clone.drag_get_data(context, &targets[0], time);
-        }
-
-        true
     });
 
-    // Connect drag-data-received signal
-    let state_data = state.clone();
-    widget.connect_drag_data_received(
-        move |_widget, context, x, y, selection_data, _info, time| {
-            // Get window label for checking outgoing data
-            let window_label = {
-                let s = state_data.borrow();
-                s.window.label().to_string()
-            };
-
-            // Check if the drag source is one of our registered WebKit widgets
-            let source_window_label = get_source_window_label(context);
-            let is_our_drag = source_window_label.is_some();
-            let is_internal = source_window_label.as_ref() == Some(&window_label);
-
-            eprintln!("[TiddlyDesktop] Linux: drag-data-received source={:?}, target={}, is_our_drag={}, is_internal={}",
-                source_window_label, window_label, is_our_drag, is_internal);
-
-            // For internal drags (same-window), let WebKit handle natively
-            // This allows dropping into inputs to work
-            if is_internal {
-                eprintln!("[TiddlyDesktop] Linux: Internal drop - letting WebKit handle natively");
-                return;
-            }
-
-            // For cross-wiki drags, we handle the content
-            // Handle the drop - this includes cross-wiki drags from our app
-            handle_drag_data_received(&state_data, context, x, y, selection_data, time);
-        },
-    );
+    // Handle data from external drops
+    let state_data_received = state.clone();
+    widget.connect_drag_data_received(move |_widget, context, x, y, selection_data, _info, time| {
+        handle_drag_data_received(&state_data_received, context, x, y, selection_data, time);
+    });
 
     eprintln!("[TiddlyDesktop] Linux: WebKit drag handlers set up");
 }

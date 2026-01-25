@@ -1,0 +1,82 @@
+diff --git a/src/webkitgtk/drag_drop.rs b/src/webkitgtk/drag_drop.rs
+--- a/src/webkitgtk/drag_drop.rs
++++ b/src/webkitgtk/drag_drop.rs
+@@ -104,15 +104,26 @@ pub(crate) fn connect_drag_event(webview: &WebView, handler: Box<dyn Fn(DragDrop
+   {
+     let controller = controller.clone();
+     webview.connect_drag_drop(move |_, ctx, x, y, time| {
++      // PATCH: Let WebKit handle ALL drops natively
++      // This preserves text insertion into inputs/textareas/contenteditables
++      // for both internal AND external drops.
++      // We still emit the Tauri event for external file drops so JS can handle them,
++      // but we return false so WebKit also processes the drop.
++
++      // For internal drops, just let WebKit handle
++      if ctx.drag_get_source_widget().is_some() {
++        return false;
++      }
++
++      // For external drops with file paths, emit the event but still return false
+       if controller.state() == DragControllerState::Leaving {
+         if let Some(paths) = controller.take_paths() {
+-          ctx.drop_finish(true, time);
+           controller.leave();
+-          return controller.call(DragDropEvent::Drop {
++          // Emit the event so JS knows about the drop
++          controller.call(DragDropEvent::Drop {
+             paths,
+             position: (x, y),
+           });
++          // But return false so WebKit also handles it natively
++          return false;
+         }
+       }
+
+diff --git a/src/wkwebview/drag_drop.rs b/src/wkwebview/drag_drop.rs
+--- a/src/wkwebview/drag_drop.rs
++++ b/src/wkwebview/drag_drop.rs
+@@ -87,12 +87,12 @@ pub(crate) fn perform_drag_operation(
+   let frame: NSRect = this.frame();
+   let position = (dl.x as i32, (frame.size.height - dl.y) as i32);
+
++  // PATCH: Emit the event so JS knows about the drop
+   let listener = &this.ivars().drag_drop_handler;
+-  if !listener(DragDropEvent::Drop { paths, position }) {
+-    // Reject the Wry drop (invoke the OS default behaviour)
+-    unsafe { objc2::msg_send![super(this), performDragOperation: drag_info] }
+-  } else {
+-    Bool::YES
+-  }
++  listener(DragDropEvent::Drop { paths, position });
++
++  // PATCH: Always invoke native WKWebView handling
++  // This allows text/file paths to be inserted into inputs natively
++  unsafe { objc2::msg_send![super(this), performDragOperation: drag_info] }
+ }
+
+diff --git a/src/webview2/mod.rs b/src/webview2/mod.rs
+--- a/src/webview2/mod.rs
++++ b/src/webview2/mod.rs
+@@ -146,14 +146,12 @@ impl InnerWebView {
+       pl_attrs,
+       is_child,
+     )?;
+
+-    let drag_drop_controller = drop_handler.map(|handler| {
+-      // Disable file drops, so our handler can capture it
+-      unsafe {
+-        let _ = controller
+-          .cast::<ICoreWebView2Controller4>()
+-          .and_then(|c| c.SetAllowExternalDrop(false));
+-      }
+-      DragDropController::new(hwnd, handler)
+-    });
++    // PATCH: Don't install custom drag-drop handler on Windows
++    // This preserves WebView2's native drop handling, which allows:
++    // - Text drops into inputs/textareas/contenteditables
++    // - File path insertion into inputs
++    // The Tauri drag-drop events won't fire, but JS drop events still work.
++    let drag_drop_controller: Option<DragDropController> = None;
+
+     let w = Self {
+       id,

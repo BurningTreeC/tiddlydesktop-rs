@@ -122,7 +122,7 @@ jobs:
       - name: Install system dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev
+          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patch
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -131,6 +131,21 @@ jobs:
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
+
+      - name: Apply WRY patches for native drag-drop
+        working-directory: tiddlydesktop-rs
+        run: |
+          # Fetch wry crate to populate cargo cache
+          cargo fetch
+          # Find the wry source directory
+          WRY_DIR=$(find ~/.cargo/registry/src -type d -name "wry-0.53.*" | head -1)
+          if [ -n "$WRY_DIR" ]; then
+            echo "Applying patches to $WRY_DIR"
+            patch -p1 -d "$WRY_DIR" < src-tauri/patches/wry+0.53.5.patch
+          else
+            echo "ERROR: Could not find wry source directory"
+            exit 1
+          fi
 
       - name: Install npm dependencies
         working-directory: tiddlydesktop-rs
@@ -211,6 +226,23 @@ jobs:
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
+
+      - name: Apply WRY patches for native drag-drop
+        working-directory: tiddlydesktop-rs
+        shell: bash
+        run: |
+          # Fetch wry crate to populate cargo cache
+          cargo fetch
+          # Find the wry source directory
+          WRY_DIR=$(find ~/.cargo/registry/src -type d -name "wry-0.53.*" | head -1)
+          if [ -n "$WRY_DIR" ]; then
+            echo "Applying patches to $WRY_DIR"
+            cd "$WRY_DIR"
+            git apply "$GITHUB_WORKSPACE/tiddlydesktop-rs/src-tauri/patches/wry+0.53.5.patch"
+          else
+            echo "ERROR: Could not find wry source directory"
+            exit 1
+          fi
 
       - name: Install WiX Toolset
         run: choco install wixtoolset -y
@@ -295,6 +327,23 @@ jobs:
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
+
+      - name: Apply WRY patches for native drag-drop
+        working-directory: tiddlydesktop-rs
+        shell: bash
+        run: |
+          # Fetch wry crate to populate cargo cache
+          cargo fetch
+          # Find the wry source directory
+          WRY_DIR=$(find ~/.cargo/registry/src -type d -name "wry-0.53.*" | head -1)
+          if [ -n "$WRY_DIR" ]; then
+            echo "Applying patches to $WRY_DIR"
+            cd "$WRY_DIR"
+            git apply "$GITHUB_WORKSPACE/tiddlydesktop-rs/src-tauri/patches/wry+0.53.5.patch"
+          else
+            echo "ERROR: Could not find wry source directory"
+            exit 1
+          fi
 
       - name: Install WiX Toolset
         run: choco install wixtoolset -y
@@ -385,6 +434,21 @@ jobs:
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
+
+      - name: Apply WRY patches for native drag-drop
+        working-directory: tiddlydesktop-rs
+        run: |
+          # Fetch wry crate to populate cargo cache
+          cargo fetch
+          # Find the wry source directory
+          WRY_DIR=$(find ~/.cargo/registry/src -type d -name "wry-0.53.*" | head -1)
+          if [ -n "$WRY_DIR" ]; then
+            echo "Applying patches to $WRY_DIR"
+            patch -p1 -d "$WRY_DIR" < src-tauri/patches/wry+0.53.5.patch
+          else
+            echo "ERROR: Could not find wry source directory"
+            exit 1
+          fi
 
       - name: Install npm dependencies
         working-directory: tiddlydesktop-rs
@@ -480,6 +544,21 @@ jobs:
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
+
+      - name: Apply WRY patches for native drag-drop
+        working-directory: tiddlydesktop-rs
+        run: |
+          # Fetch wry crate to populate cargo cache
+          cargo fetch
+          # Find the wry source directory
+          WRY_DIR=$(find ~/.cargo/registry/src -type d -name "wry-0.53.*" | head -1)
+          if [ -n "$WRY_DIR" ]; then
+            echo "Applying patches to $WRY_DIR"
+            patch -p1 -d "$WRY_DIR" < src-tauri/patches/wry+0.53.5.patch
+          else
+            echo "ERROR: Could not find wry source directory"
+            exit 1
+          fi
 
       - name: Install npm dependencies
         working-directory: tiddlydesktop-rs

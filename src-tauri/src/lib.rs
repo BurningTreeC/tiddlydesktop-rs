@@ -1483,10 +1483,10 @@ async fn open_wiki_folder(app: tauri::AppHandle, path: String) -> Result<WikiEnt
         builder = builder.data_directory(dir);
     }
 
-    // On Windows, Tauri's drag/drop handler steals events from the DOM.
-    // We disable it and handle all drag/drop via our custom IDropTarget (windows.rs)
-    // which emits td-* events that JavaScript handles.
-    #[cfg(target_os = "windows")]
+    // Tauri's drag/drop handler intercepts drops before WebKit/DOM gets them.
+    // On Windows/macOS, we disable it and use custom handlers.
+    // On Linux, we're testing if vanilla WebKitGTK handles drops like Epiphany.
+    #[cfg(not(target_os = "linux"))]
     {
         builder = builder.disable_drag_drop_handler();
     }
@@ -2427,9 +2427,10 @@ async fn open_tiddler_window(
         builder = builder.position(x, y);
     }
 
-    // On Windows, Tauri's drag/drop handler steals events from the DOM.
-    // We disable it and handle all drag/drop via our custom IDropTarget (windows.rs)
-    #[cfg(target_os = "windows")]
+    // Tauri's drag/drop handler intercepts drops before WebKit/DOM gets them.
+    // On Windows/macOS, we disable it and use custom handlers.
+    // On Linux, we're testing if vanilla WebKitGTK handles drops like Epiphany.
+    #[cfg(not(target_os = "linux"))]
     {
         builder = builder.disable_drag_drop_handler();
     }
@@ -3411,7 +3412,7 @@ fn reveal_or_create_main_window(app_handle: &tauri::AppHandle) {
 
     if let Ok(icon) = Image::from_bytes(include_bytes!("../icons/icon.png")) {
         // Use full init script with is_main_wiki=true
-        #[allow(unused_mut)]  // mut needed on Windows for disable_drag_drop_handler()
+        #[allow(unused_mut)]  // mut needed for disable_drag_drop_handler()
         let mut builder = WebviewWindowBuilder::new(
             app_handle,
             "main",
@@ -3423,8 +3424,8 @@ fn reveal_or_create_main_window(app_handle: &tauri::AppHandle) {
             .expect("Failed to set icon")
             .initialization_script(&init_script::get_wiki_init_script(&main_wiki_path.to_string_lossy(), "main", true));
 
-        // On Windows, Tauri's drag/drop handler steals events from the DOM.
-        // We disable it and handle all drag/drop via our custom IDropTarget (windows.rs)
+        // Tauri's drag/drop handler intercepts drops before WebKit/DOM gets them.
+        // On Windows/macOS, we disable it. On Linux, testing vanilla WebKitGTK.
         #[cfg(target_os = "windows")]
         {
             builder = builder.disable_drag_drop_handler();
@@ -3675,6 +3676,8 @@ fn run_wiki_mode(args: WikiModeArgs) {
                 .initialization_script(&init_script::get_wiki_init_script(&wiki_path_clone.to_string_lossy(), &label, false))
                 .devtools(true);
 
+            // Tauri's drag/drop handler intercepts drops before WebKit/DOM gets them.
+            // On Windows, we disable it. On Linux, testing vanilla WebKitGTK.
             #[cfg(target_os = "windows")]
             {
                 builder = builder.disable_drag_drop_handler();
@@ -3926,7 +3929,7 @@ pub fn run() {
             // Create the main window programmatically with initialization script
             // Use full init script with is_main_wiki=true so setupExternalAttachments knows to skip
             let icon = Image::from_bytes(include_bytes!("../icons/icon.png"))?;
-            #[allow(unused_mut)]  // mut needed on Windows for disable_drag_drop_handler()
+            #[allow(unused_mut)]
             let mut builder = WebviewWindowBuilder::new(app, "main", WebviewUrl::External(wiki_url.parse().unwrap()))
                 .title("TiddlyDesktopRS")
                 .inner_size(800.0, 600.0)
@@ -3935,8 +3938,8 @@ pub fn run() {
                 .initialization_script(&init_script::get_wiki_init_script(&main_wiki_path.to_string_lossy(), "main", true))
                 .devtools(true); // TEMP: enabled for debugging
 
-            // On Windows, Tauri's drag/drop handler steals events from the DOM.
-            // We disable it and handle all drag/drop via our custom IDropTarget (windows.rs)
+            // Tauri's drag/drop handler intercepts drops before WebKit/DOM gets them.
+            // On Windows, we disable it. On Linux, testing vanilla WebKitGTK.
             #[cfg(target_os = "windows")]
             {
                 builder = builder.disable_drag_drop_handler();

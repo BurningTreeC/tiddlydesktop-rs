@@ -631,7 +631,14 @@
             var pos = window.__pendingDropPosition || { x: 0, y: 0 };
             delete window.__pendingDropPosition;
 
-            log('td-drag-content, hasText=' + !!p.text + ', hasHtml=' + !!p.html + ', hasTiddler=' + !!p.tiddler);
+            // Extract data from the correct payload structure
+            // Rust sends: { types: [...], data: { "text/plain": "...", ... }, targetWindow: "..." }
+            var dataMap = p.data || {};
+            var text = dataMap['text/plain'] || '';
+            var html = dataMap['text/html'] || '';
+            var tiddler = dataMap['text/vnd.tiddler'] || '';
+
+            log('td-drag-content, hasText=' + !!text + ', hasHtml=' + !!html + ', hasTiddler=' + !!tiddler);
 
             var editable = findEditableAt(pos.x, pos.y);
             var target = editable || getElementAt(pos.x, pos.y);
@@ -639,19 +646,19 @@
             // Create DataTransfer with drop data
             var dataTransfer = new DataTransfer();
 
-            if (p.tiddler) {
-                try { dataTransfer.setData('text/vnd.tiddler', p.tiddler); } catch (e) {}
+            if (tiddler) {
+                try { dataTransfer.setData('text/vnd.tiddler', tiddler); } catch (e) {}
             }
-            if (p.text) {
-                try { dataTransfer.setData('text/plain', p.text); } catch (e) {}
+            if (text) {
+                try { dataTransfer.setData('text/plain', text); } catch (e) {}
             }
-            if (p.html) {
-                try { dataTransfer.setData('text/html', p.html); } catch (e) {}
+            if (html) {
+                try { dataTransfer.setData('text/html', html); } catch (e) {}
             }
 
             // For INPUT/TEXTAREA, manually insert text
             if (editable && (editable.tagName === 'INPUT' || editable.tagName === 'TEXTAREA')) {
-                var textToInsert = p.text || '';
+                var textToInsert = text || '';
                 if (textToInsert) {
                     editable.focus();
                     var start = editable.selectionStart || 0;

@@ -46,6 +46,16 @@ fn setup_header_bar(window: &tauri::WebviewWindow) {
         title_label.style_context().add_class("title");
         overlay.add(&title_label); // Base widget
 
+        // Favicon icon overlaid on the left - initially hidden, shown when set via set_window_icon
+        let icon_image = gtk::Image::new();
+        icon_image.set_halign(gtk::Align::Start);
+        icon_image.set_valign(gtk::Align::Center);
+        icon_image.set_margin_start(8);
+        icon_image.set_widget_name("headerbar-favicon");
+        icon_image.set_visible(false); // Hidden until favicon is set
+        icon_image.set_no_show_all(true); // Don't show with show_all()
+        overlay.add_overlay(&icon_image);
+
         // Close button overlaid on the right
         let close_button = gtk::Button::from_icon_name(Some("window-close-symbolic"), gtk::IconSize::Menu);
         close_button.set_halign(gtk::Align::End);
@@ -476,6 +486,116 @@ async fn set_window_title(app: tauri::AppHandle, label: String, title: String) -
         }
     }
     Ok(())
+}
+
+/// Internal helper to set window icon from favicon data URI
+/// Used by both the Tauri command and window creation code
+fn set_window_icon_internal(
+    app: &tauri::AppHandle,
+    label: &str,
+    favicon_data_uri: Option<&str>,
+) -> Result<(), String> {
+    use base64::{engine::general_purpose::STANDARD, Engine};
+
+    let window = app.get_webview_window(label)
+        .ok_or_else(|| format!("Window not found: {}", label))?;
+
+    // Decode the favicon bytes (used for both window icon and headerbar on Linux)
+    let favicon_bytes = match favicon_data_uri {
+        Some(data_uri) => {
+            // Parse data URI: "data:image/png;base64,iVBOR..."
+            let base64_data = data_uri
+                .split(',')
+                .nth(1)
+                .ok_or("Invalid data URI format")?;
+
+            Some(STANDARD
+                .decode(base64_data)
+                .map_err(|e| format!("Base64 decode error: {}", e))?)
+        }
+        None => None,
+    };
+
+    // Set the window/taskbar icon
+    let icon = match &favicon_bytes {
+        Some(bytes) => {
+            Image::from_bytes(bytes)
+                .map_err(|e| format!("Image decode error: {}", e))?
+        }
+        None => {
+            // Fallback to default app icon
+            Image::from_bytes(include_bytes!("../icons/icon.png"))
+                .map_err(|e| format!("Failed to load default icon: {}", e))?
+        }
+    };
+
+    window.set_icon(icon)
+        .map_err(|e| format!("Failed to set icon: {}", e))?;
+
+    // Linux: Also update the headerbar favicon icon
+    #[cfg(target_os = "linux")]
+    {
+        use gtk::prelude::{BinExt, Cast, ContainerExt, GtkWindowExt, HeaderBarExt, ImageExt, WidgetExt};
+        use gtk::gdk_pixbuf::Pixbuf;
+        use gtk::gio::MemoryInputStream;
+        use gtk::glib::Bytes;
+
+        if let Ok(gtk_window) = window.gtk_window() {
+            // Navigate: GtkWindow → HeaderBar → EventBox → Overlay → find Image by name
+            if let Some(titlebar) = gtk_window.titlebar() {
+                if let Some(header_bar) = titlebar.downcast_ref::<gtk::HeaderBar>() {
+                    if let Some(custom_title) = header_bar.custom_title() {
+                        if let Some(event_box) = custom_title.downcast_ref::<gtk::EventBox>() {
+                            if let Some(overlay_widget) = event_box.child() {
+                                if let Some(overlay) = overlay_widget.downcast_ref::<gtk::Overlay>() {
+                                    // Find the favicon Image widget by name
+                                    for child in overlay.children() {
+                                        if child.widget_name() == "headerbar-favicon" {
+                                            if let Some(image) = child.downcast_ref::<gtk::Image>() {
+                                                match &favicon_bytes {
+                                                    Some(bytes) => {
+                                                        // Load at full resolution, then scale with highest-quality interpolation
+                                                        let glib_bytes = Bytes::from(bytes);
+                                                        let stream = MemoryInputStream::from_bytes(&glib_bytes);
+                                                        if let Ok(full_pixbuf) = Pixbuf::from_stream(&stream, gtk::gio::Cancellable::NONE) {
+                                                            // Scale to 20x20, using Hyper for sharpest result
+                                                            let scaled = full_pixbuf.scale_simple(20, 20, gtk::gdk_pixbuf::InterpType::Hyper);
+                                                            if let Some(pixbuf) = scaled {
+                                                                image.set_from_pixbuf(Some(&pixbuf));
+                                                                image.set_visible(true);
+                                                            }
+                                                        }
+                                                    }
+                                                    None => {
+                                                        // Hide the favicon icon when reset to default
+                                                        image.set_visible(false);
+                                                    }
+                                                }
+                                            }
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// Set window icon from favicon data URI
+/// Call with None to reset to default app icon
+#[tauri::command]
+fn set_window_icon(
+    app: tauri::AppHandle,
+    label: String,
+    favicon_data_uri: Option<String>,
+) -> Result<(), String> {
+    set_window_icon_internal(&app, &label, favicon_data_uri.as_deref())
 }
 
 /// Get current window label
@@ -1501,6 +1621,13 @@ async fn open_wiki_folder(app: tauri::AppHandle, path: String) -> Result<WikiEnt
     // Linux: Set up HeaderBar for reliable title display (works around WebKitGTK bug)
     #[cfg(target_os = "linux")]
     setup_header_bar(&window);
+
+    // Set window icon from favicon if available
+    if let Some(ref fav) = favicon {
+        if let Err(e) = set_window_icon_internal(&app, &label, Some(fav)) {
+            eprintln!("[TiddlyDesktop] Failed to set window icon: {}", e);
+        }
+    }
 
     // Handle window close - JS onCloseRequested handles unsaved changes confirmation
     let app_handle = app.clone();
@@ -3069,6 +3196,35 @@ window.__SAVE_URL__ = "{save_url}";
     function initializeTiddlyDesktop() {{
 
     // Define the saver module globally so TiddlyWiki can find it during boot
+    // Check if user wants to use a different saver (GitHub, GitLab, Gitea, etc.)
+    function shouldUseLocalSaver(wiki) {{
+        // Check if local saving is explicitly disabled
+        var localSaverEnabled = wiki.getTiddlerText('$:/config/TiddlyDesktop/LocalSaver', 'yes');
+        if (localSaverEnabled === 'no') {{
+            return false;
+        }}
+        // Check if GitHub saver is configured (username + repo = user wants to use it)
+        // Token is stored in localStorage, but if username/repo are set, user intends to use GitHub
+        var githubUser = wiki.getTiddlerText('$:/GitHub/Username', '');
+        var githubRepo = wiki.getTiddlerText('$:/GitHub/Repo', '');
+        if (githubUser && githubRepo) {{
+            return false; // Let GitHub saver handle it
+        }}
+        // Check if GitLab saver is configured
+        var gitlabUser = wiki.getTiddlerText('$:/GitLab/Username', '');
+        var gitlabRepo = wiki.getTiddlerText('$:/GitLab/Repo', '');
+        if (gitlabUser && gitlabRepo) {{
+            return false; // Let GitLab saver handle it
+        }}
+        // Check if Gitea saver is configured
+        var giteaUser = wiki.getTiddlerText('$:/Gitea/Username', '');
+        var giteaRepo = wiki.getTiddlerText('$:/Gitea/Repo', '');
+        if (giteaUser && giteaRepo) {{
+            return false; // Let Gitea saver handle it
+        }}
+        return true;
+    }}
+
     window.$TiddlyDesktopSaver = {{
         info: {{
             name: 'tiddlydesktop',
@@ -3076,7 +3232,7 @@ window.__SAVE_URL__ = "{save_url}";
             capabilities: ['save', 'autosave']
         }},
         canSave: function(wiki) {{
-            return true;
+            return shouldUseLocalSaver(wiki);
         }},
         create: function(wiki) {{
             return {{
@@ -3087,7 +3243,7 @@ window.__SAVE_URL__ = "{save_url}";
                     capabilities: ['save', 'autosave']
                 }},
                 canSave: function(wiki) {{
-                    return true;
+                    return shouldUseLocalSaver(wiki);
                 }},
                 save: function(text, method, callback) {{
                     var wikiPath = window.__WIKI_PATH__;
@@ -3247,10 +3403,19 @@ window.__SAVE_URL__ = "{save_url}";
             }}
             lastFavicon = dataUri;
 
-            // Send to Rust to update the wiki list entry
-            // In main wiki mode (main process), use update_wiki_favicon directly
-            // In wiki mode (child process), use IPC to send to main process
+            // Send to Rust to update the wiki list entry and window icon
             if (window.__TAURI__ && window.__TAURI__.core) {{
+                // Update window icon (titlebar/taskbar)
+                window.__TAURI__.core.invoke('set_window_icon', {{
+                    label: window.__WINDOW_LABEL__,
+                    faviconDataUri: dataUri
+                }}).catch(function(err) {{
+                    console.error('TiddlyDesktop: Failed to set window icon:', err);
+                }});
+
+                // Update wiki list entry favicon
+                // In main wiki mode (main process), use update_wiki_favicon directly
+                // In wiki mode (child process), use IPC to send to main process
                 if (window.__IS_MAIN_WIKI__) {{
                     // Main process - direct command
                     window.__TAURI__.core.invoke('update_wiki_favicon', {{
@@ -3760,6 +3925,7 @@ fn run_wiki_mode(args: WikiModeArgs) {
             load_wiki,
             save_wiki,
             set_window_title,
+            set_window_icon,
             get_window_label,
             get_main_wiki_path,
             reveal_in_folder,
@@ -3999,6 +4165,7 @@ pub fn run() {
             init_wiki_folder,
             create_wiki_file,
             set_window_title,
+            set_window_icon,
             get_window_label,
             get_main_wiki_path,
             reveal_in_folder,

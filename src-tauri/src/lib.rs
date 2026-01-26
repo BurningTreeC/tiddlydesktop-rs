@@ -360,6 +360,128 @@ fn linux_finalize_window_state(window: &tauri::WebviewWindow, saved_state: &Opti
 #[cfg(target_os = "windows")]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 
+/// Windows/macOS: Validate saved window position against current monitor configuration.
+/// Returns adjusted (x, y) position that's guaranteed to be on a visible monitor.
+///
+/// If the saved position is on a currently visible monitor, returns it unchanged.
+/// Otherwise, falls back to the monitor containing the mouse cursor and centers the window there.
+#[cfg(not(target_os = "linux"))]
+fn validate_window_position<M: tauri::Manager<tauri::Wry>>(
+    app: &M,
+    saved_state: &crate::types::WindowState,
+) -> (f64, f64) {
+
+    let saved_x = saved_state.x as f64;
+    let saved_y = saved_state.y as f64;
+    let win_width = saved_state.width as f64;
+    let win_height = saved_state.height as f64;
+
+    // Get all available monitors
+    let monitors = match app.available_monitors() {
+        Ok(m) => m,
+        Err(e) => {
+            eprintln!("[Window Position] Failed to get monitors: {}, using saved position", e);
+            return (saved_x, saved_y);
+        }
+    };
+
+    if monitors.is_empty() {
+        eprintln!("[Window Position] No monitors found, using saved position");
+        return (saved_x, saved_y);
+    }
+
+    // Check if saved position is within any monitor's bounds
+    // We check if the top-left corner of the window is on a monitor
+    for monitor in &monitors {
+        let pos = monitor.position();
+        let size = monitor.size();
+        let mon_x = pos.x as f64;
+        let mon_y = pos.y as f64;
+        let mon_width = size.width as f64;
+        let mon_height = size.height as f64;
+
+        // Check if the saved position is within this monitor
+        if saved_x >= mon_x && saved_x < mon_x + mon_width &&
+           saved_y >= mon_y && saved_y < mon_y + mon_height {
+            eprintln!("[Window Position] Saved position ({}, {}) is on monitor '{}' at ({}, {})",
+                saved_x, saved_y,
+                monitor.name().unwrap_or("unknown"),
+                mon_x, mon_y);
+            return (saved_x, saved_y);
+        }
+    }
+
+    // Saved position is not on any visible monitor - fall back to cursor position
+    eprintln!("[Window Position] Saved position ({}, {}) not on any visible monitor", saved_x, saved_y);
+
+    // Get cursor position to find the "active" monitor
+    let cursor_pos = match app.cursor_position() {
+        Ok(pos) => pos,
+        Err(e) => {
+            eprintln!("[Window Position] Failed to get cursor position: {}, using primary monitor", e);
+            // Fall back to primary monitor
+            if let Ok(Some(primary)) = app.primary_monitor() {
+                let pos = primary.position();
+                let size = primary.size();
+                let center_x = pos.x as f64 + (size.width as f64 - win_width) / 2.0;
+                let center_y = pos.y as f64 + (size.height as f64 - win_height) / 2.0;
+                eprintln!("[Window Position] Centering on primary monitor at ({}, {})", center_x, center_y);
+                return (center_x, center_y);
+            }
+            // Last resort: use first monitor
+            let monitor = &monitors[0];
+            let pos = monitor.position();
+            let size = monitor.size();
+            let center_x = pos.x as f64 + (size.width as f64 - win_width) / 2.0;
+            let center_y = pos.y as f64 + (size.height as f64 - win_height) / 2.0;
+            return (center_x, center_y);
+        }
+    };
+
+    // Find the monitor containing the cursor
+    let cursor_x = cursor_pos.x;
+    let cursor_y = cursor_pos.y;
+
+    for monitor in &monitors {
+        let pos = monitor.position();
+        let size = monitor.size();
+        let mon_x = pos.x as f64;
+        let mon_y = pos.y as f64;
+        let mon_width = size.width as f64;
+        let mon_height = size.height as f64;
+
+        if cursor_x >= mon_x && cursor_x < mon_x + mon_width &&
+           cursor_y >= mon_y && cursor_y < mon_y + mon_height {
+            // Center window on this monitor
+            let center_x = mon_x + (mon_width - win_width) / 2.0;
+            let center_y = mon_y + (mon_height - win_height) / 2.0;
+            eprintln!("[Window Position] Cursor at ({}, {}), centering on monitor '{}' at ({}, {})",
+                cursor_x, cursor_y,
+                monitor.name().unwrap_or("unknown"),
+                center_x, center_y);
+            return (center_x, center_y);
+        }
+    }
+
+    // Cursor not on any monitor (shouldn't happen), use primary or first monitor
+    eprintln!("[Window Position] Cursor position ({}, {}) not on any monitor, using primary", cursor_x, cursor_y);
+    if let Ok(Some(primary)) = app.primary_monitor() {
+        let pos = primary.position();
+        let size = primary.size();
+        let center_x = pos.x as f64 + (size.width as f64 - win_width) / 2.0;
+        let center_y = pos.y as f64 + (size.height as f64 - win_height) / 2.0;
+        return (center_x, center_y);
+    }
+
+    // Absolute fallback
+    let monitor = &monitors[0];
+    let pos = monitor.position();
+    let size = monitor.size();
+    let center_x = pos.x as f64 + (size.width as f64 - win_width) / 2.0;
+    let center_y = pos.y as f64 + (size.height as f64 - win_height) / 2.0;
+    (center_x, center_y)
+}
+
 /// Platform-specific drag-drop handling
 mod drag_drop;
 
@@ -3791,9 +3913,13 @@ fn reveal_or_create_main_window(app_handle: &tauri::AppHandle) {
             .expect("Failed to set icon")
             .initialization_script(&init_script::get_wiki_init_script(&main_wiki_path.to_string_lossy(), "main", true));
 
-        // Apply saved position if available
+        // Apply saved position if available, with monitor validation on Windows/macOS
         if let Some(ref state) = saved_state {
-            builder = builder.position(state.x as f64, state.y as f64);
+            #[cfg(not(target_os = "linux"))]
+            let (x, y) = validate_window_position(app_handle, state);
+            #[cfg(target_os = "linux")]
+            let (x, y) = (state.x as f64, state.y as f64);
+            builder = builder.position(x, y);
         }
 
         // Tauri's drag/drop handler intercepts drops before WebKit/DOM gets them.
@@ -4104,9 +4230,13 @@ fn run_wiki_mode(args: WikiModeArgs) {
                 .initialization_script(&init_script::get_wiki_init_script(&wiki_path_clone.to_string_lossy(), &label, false))
                 .devtools(true);
 
-            // Apply saved position if available
+            // Apply saved position if available, with monitor validation on Windows/macOS
             if let Some(ref state) = saved_state {
-                builder = builder.position(state.x as f64, state.y as f64);
+                #[cfg(not(target_os = "linux"))]
+                let (x, y) = validate_window_position(app, state);
+                #[cfg(target_os = "linux")]
+                let (x, y) = (state.x as f64, state.y as f64);
+                builder = builder.position(x, y);
             }
 
             // Tauri's drag/drop handler intercepts drops before WebKit/DOM gets them.
@@ -4436,9 +4566,13 @@ fn run_wiki_folder_mode(args: WikiFolderModeArgs) {
             ))
             .devtools(true);
 
-            // Apply saved position
+            // Apply saved position, with monitor validation on Windows/macOS
             if let Some(ref state) = saved_state {
-                builder = builder.position(state.x as f64, state.y as f64);
+                #[cfg(not(target_os = "linux"))]
+                let (x, y) = validate_window_position(app, state);
+                #[cfg(target_os = "linux")]
+                let (x, y) = (state.x as f64, state.y as f64);
+                builder = builder.position(x, y);
             }
 
             let window = builder.build()?;
@@ -4703,9 +4837,13 @@ pub fn run() {
                 .initialization_script(&init_script::get_wiki_init_script(&main_wiki_path.to_string_lossy(), "main", true))
                 .devtools(true); // TEMP: enabled for debugging
 
-            // Apply saved position if available
+            // Apply saved position if available, with monitor validation on Windows/macOS
             if let Some(ref state) = saved_state {
-                builder = builder.position(state.x as f64, state.y as f64);
+                #[cfg(not(target_os = "linux"))]
+                let (x, y) = validate_window_position(app, state);
+                #[cfg(target_os = "linux")]
+                let (x, y) = (state.x as f64, state.y as f64);
+                builder = builder.position(x, y);
             }
 
             // Tauri's drag/drop handler intercepts drops before WebKit/DOM gets them.

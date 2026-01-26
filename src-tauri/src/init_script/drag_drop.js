@@ -310,6 +310,137 @@
     }
 
     // ========================================
+    // Landing Page Drag-Drop Setup
+    // ========================================
+    // For the landing page (main wiki), we handle file drops by opening them
+    // as wikis. We do NOT trigger any import mechanism.
+
+    function setupLandingPageDragDrop() {
+        window.__TD_EXTERNAL_ATTACHMENTS_READY__ = true;
+
+        var currentWindow = window.__TAURI__.window.getCurrentWindow();
+        var listen = currentWindow.listen.bind(currentWindow);
+        var invoke = window.__TAURI__.core.invoke;
+        var windowLabel = window.__WINDOW_LABEL__ || 'main';
+
+        invoke("js_log", { message: "Setting up landing page drag-drop for window: " + windowLabel });
+
+        // Track drag state for visual feedback
+        var nativeDragActive = false;
+
+        // CRITICAL: Block ALL native drag events from reaching TiddlyWiki's dropzone
+        // This prevents the import mechanism from triggering
+        document.addEventListener("dragenter", function(event) {
+            event.preventDefault();
+            event.stopPropagation();
+        }, true);
+
+        document.addEventListener("dragover", function(event) {
+            event.preventDefault();
+            event.stopPropagation();
+        }, true);
+
+        document.addEventListener("dragleave", function(event) {
+            event.preventDefault();
+            event.stopPropagation();
+        }, true);
+
+        document.addEventListener("drop", function(event) {
+            invoke("js_log", { message: "Landing page: native drop blocked (preventing import)" });
+            event.preventDefault();
+            event.stopPropagation();
+        }, true);
+
+        // Handle drag motion - show visual feedback
+        listen("td-drag-motion", function(event) {
+            if (!nativeDragActive) {
+                nativeDragActive = true;
+                document.body.classList.add("td-drag-over");
+            }
+        });
+
+        // Handle drag leave - clear visual feedback
+        listen("td-drag-leave", function(event) {
+            nativeDragActive = false;
+            document.body.classList.remove("td-drag-over");
+        });
+
+        // Handle td-drag-content - IGNORE for landing page (no imports)
+        listen("td-drag-content", function(event) {
+            invoke("js_log", { message: "Landing page: ignoring td-drag-content (no import on landing page)" });
+            // Clear drag state
+            nativeDragActive = false;
+            document.body.classList.remove("td-drag-over");
+        });
+
+        // Handle file drops - open as wikis
+        listen("td-file-drop", function(event) {
+            invoke("js_log", { message: "Landing page: td-file-drop received, paths: " + JSON.stringify(event.payload && event.payload.paths) });
+
+            nativeDragActive = false;
+            document.body.classList.remove("td-drag-over");
+
+            if (!event.payload || !event.payload.paths || event.payload.paths.length === 0) {
+                return;
+            }
+
+            var paths = event.payload.paths;
+
+            // Open each dropped file/folder as a wiki
+            paths.forEach(function(filepath) {
+                if (!filepath || filepath.startsWith("data:")) {
+                    return;
+                }
+
+                // Determine if it's a folder or file
+                invoke("is_directory", { path: filepath }).then(function(isDir) {
+                    if (isDir) {
+                        invoke("js_log", { message: "Landing page: opening folder wiki: " + filepath });
+                        invoke("open_wiki_folder", { path: filepath }).catch(function(err) {
+                            invoke("js_log", { message: "Landing page: failed to open folder wiki: " + err });
+                        });
+                    } else {
+                        // Check if it's a valid wiki file extension
+                        var ext = filepath.split('.').pop().toLowerCase();
+                        if (ext === 'html' || ext === 'htm') {
+                            invoke("js_log", { message: "Landing page: opening HTML wiki: " + filepath });
+                            invoke("open_wiki_window", { path: filepath }).catch(function(err) {
+                                invoke("js_log", { message: "Landing page: failed to open wiki: " + err });
+                            });
+                        } else {
+                            invoke("js_log", { message: "Landing page: ignoring non-wiki file: " + filepath });
+                        }
+                    }
+                }).catch(function(err) {
+                    // If is_directory fails, try as HTML file
+                    var ext = filepath.split('.').pop().toLowerCase();
+                    if (ext === 'html' || ext === 'htm') {
+                        invoke("open_wiki_window", { path: filepath }).catch(function(err2) {
+                            invoke("js_log", { message: "Landing page: failed to open wiki: " + err2 });
+                        });
+                    }
+                });
+            });
+        });
+
+        // Handle tauri://drag-enter for visual feedback
+        listen("tauri://drag-enter", function(event) {
+            var paths = event.payload.paths || [];
+            // Only show feedback for file drags
+            if (paths.length > 0 && !paths.every(function(p) { return p.startsWith("data:"); })) {
+                document.body.classList.add("td-drag-over");
+            }
+        });
+
+        // Handle tauri://drag-leave for visual feedback
+        listen("tauri://drag-leave", function(event) {
+            document.body.classList.remove("td-drag-over");
+        });
+
+        invoke("js_log", { message: "Landing page drag-drop ready" });
+    }
+
+    // ========================================
     // Main Setup Function
     // ========================================
 
@@ -333,8 +464,7 @@
         }
 
         if (window.__IS_MAIN_WIKI__) {
-            window.__TD_EXTERNAL_ATTACHMENTS_READY__ = true;
-            window.__TAURI__.core.invoke("js_log", { message: "Main wiki - external attachments disabled" });
+            setupLandingPageDragDrop();
             return;
         }
 

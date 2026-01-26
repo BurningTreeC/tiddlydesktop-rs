@@ -178,6 +178,22 @@ impl IpcServer {
         Ok(())
     }
 
+    /// Send a focus window request to all clients for a specific wiki
+    pub fn send_focus_window(&self, wiki_path: &str) -> std::io::Result<()> {
+        let msg = IpcMessage::FocusWiki {
+            wiki_path: wiki_path.to_string(),
+        };
+        let json = serde_json::to_string(&msg)?;
+
+        let groups = self.wiki_groups.lock().unwrap();
+        if let Some(clients) = groups.get(wiki_path) {
+            for client in clients {
+                let mut s = &client.stream;
+                let _ = writeln!(s, "{}", json);
+            }
+        }
+        Ok(())
+    }
 }
 
 fn handle_client(

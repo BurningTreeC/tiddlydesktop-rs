@@ -43,6 +43,8 @@ pub struct OutgoingDragData {
     pub text_x_moz_url: Option<String>,
     /// Standard URL type: data:text/vnd.tiddler,<url-encoded-json>
     pub url: Option<String>,
+    /// True if this is a text-selection drag (not a draggable element)
+    pub is_text_selection_drag: bool,
 }
 
 /// Registry mapping GDK window raw pointers to window labels + dimensions
@@ -275,6 +277,8 @@ struct OutgoingDragState {
     source_window_label: String,
     /// Set to true when drag-data-get is called (data was actually transferred)
     data_was_requested: bool,
+    /// True if this is a text-selection drag (needs special handling)
+    is_text_selection_drag: bool,
 }
 
 /// Global storage for outgoing drag data (needed because GTK callbacks can't capture owned data easily)
@@ -607,121 +611,203 @@ fn setup_outgoing_drag_handlers(widget: &gtk::Widget, window: WebviewWindow) {
         });
     });
 
-    // Connect drag-data-get signal to provide data when requested by external apps
-    widget.connect_drag_data_get(move |_widget, _context, selection_data, info, _time| {
-        eprintln!(
-            "[TiddlyDesktop] Linux: drag-data-get called, info: {}",
-            info
-        );
+    // Handle drag-data-get: provide ALL stored data and block WebKit's internal format.
+    //
+    // JS calls prepare_native_drag during dragstart for ALL drags (including text selections).
+    // We provide the stored data for all requested formats, and block WebKit's internal
+    // binary format that causes "Chinese characters" in Firefox.
+    //
+    // We use raw signal connection to run BEFORE WebKit and stop emission when needed.
+    unsafe {
+        use glib::translate::ToGlibPtr;
+        use std::ffi::CStr;
 
-        // Mark that data was requested - this means an external app picked up the drag
-        mark_data_requested();
-
-        // Get the stored drag data (regardless of window - we're providing data for an active drag)
-        let drag_data = if let Ok(guard) = outgoing_drag_state().lock() {
-            guard.as_ref().map(|state| state.data.clone())
-        } else {
-            None
-        };
-
-        if let Some(data) = drag_data {
-            let target_name = selection_data.target().name();
-            eprintln!(
-                "[TiddlyDesktop] Linux: Providing data for target: {}",
-                target_name
-            );
-
-            // Provide data based on requested target
-            // MIME type encoding requirements:
-            // - text/x-moz-url: UTF-16LE (Mozilla specific)
-            // - text/vnd.tiddler: UTF-8 (custom TiddlyWiki type)
-            // - URL: UTF-8
-            // - text/html: UTF-8
-            // - text/uri-list: UTF-8 (ASCII subset per RFC 2483)
-            // - text/plain, UTF8_STRING: UTF-8
-            // - STRING: Latin-1, but GTK's set_text() handles conversion
-            // - TEXT: Compound text, GTK handles conversion
-            eprintln!(
-                "[TiddlyDesktop] Linux: Requested target '{}', available: vnd.tiddler={}, moz_url={}, url={}, plain={}",
-                target_name,
-                data.text_vnd_tiddler.is_some(),
-                data.text_x_moz_url.is_some(),
-                data.url.is_some(),
-                data.text_plain.is_some()
-            );
-
-            if target_name == "text/vnd.tiddler" {
-                // TiddlyWiki custom type - UTF-8 JSON
-                if let Some(tiddler) = data.text_vnd_tiddler.as_ref() {
-                    eprintln!("[TiddlyDesktop] Linux: Providing text/vnd.tiddler ({} bytes UTF-8)", tiddler.len());
-                    selection_data.set_text(tiddler);
+        extern "C" fn drag_data_get_handler(
+            widget: *mut gtk::ffi::GtkWidget,
+            _context: *mut gdk::ffi::GdkDragContext,
+            selection_data: *mut gtk::ffi::GtkSelectionData,
+            _info: u32,
+            _time: u32,
+            _user_data: glib::ffi::gpointer,
+        ) {
+            unsafe {
+                extern "C" {
+                    fn gtk_selection_data_get_target(data: *mut gtk::ffi::GtkSelectionData) -> gdk::ffi::GdkAtom;
+                    fn gdk_atom_name(atom: gdk::ffi::GdkAtom) -> *mut std::ffi::c_char;
+                    fn g_free(ptr: glib::ffi::gpointer);
+                    fn g_signal_stop_emission_by_name(instance: *mut glib::gobject_ffi::GObject, name: *const std::ffi::c_char);
+                    fn gtk_selection_data_set(
+                        data: *mut gtk::ffi::GtkSelectionData,
+                        type_: gdk::ffi::GdkAtom,
+                        format: i32,
+                        data_ptr: *const u8,
+                        length: i32,
+                    );
+                    fn gdk_atom_intern(name: *const std::ffi::c_char, only_if_exists: i32) -> gdk::ffi::GdkAtom;
                 }
-            } else if target_name == "text/x-moz-url" {
-                // Mozilla URL format: URL\nTitle (two lines) - MUST be UTF-16LE encoded!
-                if let Some(moz_url) = data.text_x_moz_url.as_ref() {
-                    let title = data.text_plain.as_deref().unwrap_or("");
-                    let full_moz_url = format!("{}\n{}", moz_url, title);
 
-                    // Convert to UTF-16LE bytes (Mozilla's required format)
-                    let utf16_bytes: Vec<u8> = full_moz_url
-                        .encode_utf16()
-                        .flat_map(|c| c.to_le_bytes())
-                        .collect();
+                let target_atom = gtk_selection_data_get_target(selection_data);
+                let target_name_ptr = gdk_atom_name(target_atom);
+                if target_name_ptr.is_null() {
+                    return;
+                }
+                let target_name = CStr::from_ptr(target_name_ptr).to_string_lossy().to_string();
+                g_free(target_name_ptr as glib::ffi::gpointer);
 
-                    eprintln!("[TiddlyDesktop] Linux: Providing text/x-moz-url ({} chars -> {} bytes UTF-16LE)",
-                        full_moz_url.len(), utf16_bytes.len());
+                // Get stored drag data, source window label, and text-selection flag
+                let (stored_data, source_window, is_text_selection) = outgoing_drag_state().lock().ok()
+                    .and_then(|guard| {
+                        guard.as_ref().map(|state| (
+                            Some(state.data.clone()),
+                            Some(state.source_window_label.clone()),
+                            state.is_text_selection_drag
+                        ))
+                    })
+                    .unwrap_or((None, None, false));
 
-                    let atom = gdk::Atom::intern("text/x-moz-url");
-                    selection_data.set(&atom, 8, &utf16_bytes);
+                // Check if this is a same-window drop
+                let current_target = current_drag_target().lock().ok().and_then(|g| g.clone());
+                let is_same_window = source_window.is_some() && source_window == current_target;
+
+                // For same-window TIDDLER drags, let WebKit handle everything natively.
+                // But for TEXT-SELECTION drags, we must provide data because WebKit's native
+                // handling is broken (DataTransfer doesn't preserve data across events).
+                // We only block the webkit internal format (which causes Chinese characters in Firefox).
+                if is_same_window && !is_text_selection {
+                    if target_name == "org.webkitgtk.WebKit.custom-pasteboard-data" {
+                        // Block the internal format
+                        let atom_name = b"org.webkitgtk.WebKit.custom-pasteboard-data\0".as_ptr() as *const std::ffi::c_char;
+                        let atom = gdk_atom_intern(atom_name, 0);
+                        gtk_selection_data_set(selection_data, atom, 8, std::ptr::null(), 0);
+                        let signal_name = b"drag-data-get\0".as_ptr() as *const std::ffi::c_char;
+                        g_signal_stop_emission_by_name(widget as *mut glib::gobject_ffi::GObject, signal_name);
+                    }
+                    // For all other formats, let WebKit handle natively
+                    return;
                 }
-            } else if target_name == "URL" {
-                // Standard URL type - UTF-8 data URI
-                if let Some(url) = data.url.as_ref() {
-                    eprintln!("[TiddlyDesktop] Linux: Providing URL ({} bytes UTF-8)", url.len());
-                    selection_data.set_text(url);
+
+                // If no stored data, let WebKit handle everything EXCEPT its internal format
+                let data = match stored_data {
+                    Some(d) => d,
+                    None => {
+                        // Still block the internal format even without data
+                        if target_name == "org.webkitgtk.WebKit.custom-pasteboard-data" {
+                            // Set empty data
+                            let atom_name = b"org.webkitgtk.WebKit.custom-pasteboard-data\0".as_ptr() as *const std::ffi::c_char;
+                            let atom = gdk_atom_intern(atom_name, 0);
+                            gtk_selection_data_set(selection_data, atom, 8, std::ptr::null(), 0);
+                            let signal_name = b"drag-data-get\0".as_ptr() as *const std::ffi::c_char;
+                            g_signal_stop_emission_by_name(widget as *mut glib::gobject_ffi::GObject, signal_name);
+                        }
+                        return;
+                    }
+                };
+
+                // Helper to set data (without stopping emission - let WebKit also provide data)
+                let set_data = |atom_name: &[u8], content: &str| {
+                    let atom = gdk_atom_intern(atom_name.as_ptr() as *const std::ffi::c_char, 0);
+                    let bytes = content.as_bytes();
+                    gtk_selection_data_set(selection_data, atom, 8, bytes.as_ptr(), bytes.len() as i32);
+                    mark_data_requested();
+                    // Don't stop emission - let WebKit's handler also run
+                };
+
+                match target_name.as_str() {
+                    // Block WebKit's internal format - set empty data and stop signal
+                    "org.webkitgtk.WebKit.custom-pasteboard-data" => {
+                        gtk_selection_data_set(selection_data, target_atom, 8, std::ptr::null(), 0);
+                        let signal_name = b"drag-data-get\0".as_ptr() as *const std::ffi::c_char;
+                        g_signal_stop_emission_by_name(widget as *mut glib::gobject_ffi::GObject, signal_name);
+                    }
+                    // Our custom TiddlyWiki type
+                    "text/vnd.tiddler" => {
+                        if let Some(ref tiddler) = data.text_vnd_tiddler {
+                            set_data(b"text/vnd.tiddler\0", tiddler);
+                        }
+                    }
+                    // Plain text (including charset variants)
+                    s if s == "text/plain" || s.starts_with("text/plain;") || s == "TEXT" => {
+                        if let Some(ref text) = data.text_plain {
+                            set_data(b"text/plain\0", text);
+                        }
+                    }
+                    "UTF8_STRING" => {
+                        if let Some(ref text) = data.text_plain {
+                            set_data(b"UTF8_STRING\0", text);
+                        }
+                    }
+                    "STRING" => {
+                        if let Some(ref text) = data.text_plain {
+                            set_data(b"STRING\0", text);
+                        }
+                    }
+                    // HTML - DON'T provide it to avoid Firefox/Chrome encoding incompatibility
+                    // Firefox expects UTF-16LE, Chrome expects UTF-8 - can't satisfy both
+                    // Apps will fall back to text/plain which works universally
+                    // Block the signal so WebKit doesn't provide its version either
+                    s if s == "text/html" || s.starts_with("text/html;") => {
+                        let signal_name = b"drag-data-get\0".as_ptr() as *const std::ffi::c_char;
+                        g_signal_stop_emission_by_name(widget as *mut glib::gobject_ffi::GObject, signal_name);
+                    }
+                    // URI list
+                    "text/uri-list" => {
+                        if let Some(ref uri) = data.url {
+                            set_data(b"text/uri-list\0", uri);
+                        } else if let Some(ref uris) = data.text_uri_list {
+                            set_data(b"text/uri-list\0", uris);
+                        }
+                    }
+                    // Mozilla URL format (needs UTF-16LE)
+                    "text/x-moz-url" => {
+                        if let Some(ref moz_url) = data.text_x_moz_url {
+                            let title = data.text_plain.as_deref().unwrap_or("");
+                            let full_moz_url = format!("{}\n{}", moz_url, title);
+                            let utf16_bytes: Vec<u8> = full_moz_url
+                                .encode_utf16()
+                                .flat_map(|c| c.to_le_bytes())
+                                .collect();
+                            let atom = gdk_atom_intern(b"text/x-moz-url\0".as_ptr() as *const std::ffi::c_char, 0);
+                            gtk_selection_data_set(selection_data, atom, 8, utf16_bytes.as_ptr(), utf16_bytes.len() as i32);
+                            mark_data_requested();
+                        }
+                    }
+                    // URL type
+                    "URL" => {
+                        if let Some(ref url) = data.url {
+                            set_data(b"URL\0", url);
+                        }
+                    }
+                    _ => {
+                        // Unknown type - don't provide data, let WebKit handle if it can
+                    }
                 }
-            } else if target_name == "text/html" {
-                // HTML content - UTF-8
-                if let Some(html) = data.text_html.as_ref() {
-                    eprintln!("[TiddlyDesktop] Linux: Providing text/html ({} bytes UTF-8)", html.len());
-                    selection_data.set_text(html);
-                }
-            } else if target_name == "text/uri-list" {
-                // URI list - UTF-8 (RFC 2483)
-                // Prefer data URI for tiddler data, fall back to regular uri-list
-                if let Some(data_uri) = data.url.as_ref() {
-                    eprintln!("[TiddlyDesktop] Linux: Providing text/uri-list with data URI ({} bytes UTF-8)", data_uri.len());
-                    selection_data.set_text(data_uri);
-                } else if let Some(uris) = data.text_uri_list.as_ref() {
-                    eprintln!("[TiddlyDesktop] Linux: Providing text/uri-list ({} bytes UTF-8)", uris.len());
-                    let uri_list: Vec<&str> = uris.lines().collect();
-                    let _ = selection_data.set_uris(&uri_list);
-                }
-            } else if target_name == "UTF8_STRING" || target_name == "text/plain" {
-                // UTF-8 text - provide tiddler title or fall back to tiddler JSON
-                if let Some(text) = data.text_plain.as_ref() {
-                    eprintln!("[TiddlyDesktop] Linux: Providing {} ({} bytes UTF-8)", target_name, text.len());
-                    selection_data.set_text(text);
-                } else if let Some(tiddler) = data.text_vnd_tiddler.as_ref() {
-                    eprintln!("[TiddlyDesktop] Linux: Providing {} (fallback tiddler: {} bytes UTF-8)", target_name, tiddler.len());
-                    selection_data.set_text(tiddler);
-                }
-            } else if target_name == "STRING" || target_name == "TEXT" || target_name == "COMPOUND_TEXT" {
-                // Legacy X11 text types - GTK's set_text() handles encoding conversion
-                if let Some(text) = data.text_plain.as_ref() {
-                    eprintln!("[TiddlyDesktop] Linux: Providing {} ({} bytes, GTK converts)", target_name, text.len());
-                    selection_data.set_text(text);
-                } else if let Some(tiddler) = data.text_vnd_tiddler.as_ref() {
-                    eprintln!("[TiddlyDesktop] Linux: Providing {} (fallback: {} bytes, GTK converts)", target_name, tiddler.len());
-                    selection_data.set_text(tiddler);
-                }
-            } else {
-                eprintln!("[TiddlyDesktop] Linux: Unknown target '{}' - no data provided", target_name);
             }
-        } else {
-            eprintln!("[TiddlyDesktop] Linux: No outgoing drag data available");
         }
-    });
+
+        // Connect with G_CONNECT_FIRST (value 0) - this doesn't exist in glib-rs,
+        // but we can use g_signal_connect_data directly with connect_flags = 0
+        extern "C" {
+            fn g_signal_connect_data(
+                instance: *mut glib::gobject_ffi::GObject,
+                detailed_signal: *const std::ffi::c_char,
+                c_handler: Option<extern "C" fn()>,
+                data: glib::ffi::gpointer,
+                destroy_data: Option<extern "C" fn(glib::ffi::gpointer, *mut glib::gobject_ffi::GClosure)>,
+                connect_flags: u32,
+            ) -> std::ffi::c_ulong;
+        }
+
+        let signal_name = b"drag-data-get\0".as_ptr() as *const std::ffi::c_char;
+        let widget_ptr: *mut gtk::ffi::GtkWidget = widget.to_glib_none().0;
+        g_signal_connect_data(
+            widget_ptr as *mut glib::gobject_ffi::GObject,
+            signal_name,
+            Some(std::mem::transmute(drag_data_get_handler as *const ())),
+            std::ptr::null_mut(),
+            None,
+            0, // G_CONNECT_DEFAULT - runs before handlers connected with connect()
+        );
+    }
 
     // Clone window for later handlers
     let window_for_failed = window.clone();
@@ -1672,6 +1758,7 @@ pub fn prepare_native_drag(window: &WebviewWindow, data: OutgoingDragData) -> Re
             data: data.clone(),
             source_window_label: label.clone(),
             data_was_requested: false, // Reset - will be set true when drag-data-get is called
+            is_text_selection_drag: data.is_text_selection_drag,
         });
     }
 
@@ -1891,6 +1978,7 @@ pub fn start_native_drag(window: &WebviewWindow, data: OutgoingDragData, x: i32,
             data: data.clone(),
             source_window_label: label.clone(),
             data_was_requested: false, // Reset - will be set true when drag-data-get is called
+            is_text_selection_drag: data.is_text_selection_drag,
         });
     }
 

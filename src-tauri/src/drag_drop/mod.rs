@@ -57,7 +57,7 @@ mod linux;
 mod input_inject;
 
 #[cfg(target_os = "linux")]
-mod native_dnd;
+pub(crate) mod native_dnd;
 
 
 #[cfg(target_os = "macos")]
@@ -89,6 +89,10 @@ pub struct NativeDragData {
     pub text_x_moz_url: Option<String>,
     /// Standard URL type: data:text/vnd.tiddler,<url-encoded-json>
     pub url: Option<String>,
+    /// True if this is a text-selection drag (not a draggable element)
+    /// Text-selection drags need special handling because WebKit's DataTransfer is broken
+    #[serde(default)]
+    pub is_text_selection_drag: bool,
 }
 
 /// Start a native drag operation (called from JavaScript when pointer leaves window during internal drag)
@@ -101,6 +105,7 @@ pub fn start_native_drag_impl(window: &WebviewWindow, data: NativeDragData, x: i
         text_uri_list: data.text_uri_list,
         text_x_moz_url: data.text_x_moz_url,
         url: data.url,
+        is_text_selection_drag: data.is_text_selection_drag,
     };
     linux::start_native_drag(window, outgoing_data, x, y, image_data, image_offset_x, image_offset_y)
 }
@@ -114,6 +119,7 @@ pub fn start_native_drag_impl(window: &WebviewWindow, data: NativeDragData, x: i
         text_uri_list: data.text_uri_list,
         text_x_moz_url: data.text_x_moz_url,
         url: data.url,
+        is_text_selection_drag: data.is_text_selection_drag,
     };
     windows::start_native_drag(window, outgoing_data, x, y, image_data, image_offset_x, image_offset_y)
 }
@@ -127,6 +133,7 @@ pub fn start_native_drag_impl(window: &WebviewWindow, data: NativeDragData, x: i
         text_uri_list: data.text_uri_list,
         text_x_moz_url: data.text_x_moz_url,
         url: data.url,
+        is_text_selection_drag: data.is_text_selection_drag,
     };
     macos::start_native_drag(window, outgoing_data, x, y, image_data, image_offset_x, image_offset_y)
 }
@@ -141,6 +148,7 @@ pub fn prepare_native_drag_impl(window: &WebviewWindow, data: NativeDragData) ->
         text_uri_list: data.text_uri_list,
         text_x_moz_url: data.text_x_moz_url,
         url: data.url,
+        is_text_selection_drag: data.is_text_selection_drag,
     };
     linux::prepare_native_drag(window, outgoing_data)
 }

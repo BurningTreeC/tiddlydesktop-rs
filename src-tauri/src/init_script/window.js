@@ -1,8 +1,46 @@
 // TiddlyDesktop Initialization Script - Window Module
-// Handles: window close with unsaved changes check
+// Handles: window close with unsaved changes check, window state persistence
 
 (function(TD) {
     'use strict';
+
+    // Save window state (size, position, monitor) for this wiki
+    function saveWindowState(callback) {
+        var invoke = window.__TAURI__.core.invoke;
+        var wikiPath = window.__WIKI_PATH__;
+
+        // Don't save state for tiddler windows
+        if (window.__SINGLE_TIDDLER_TITLE__) {
+            if (callback) callback();
+            return;
+        }
+
+        // Use special key for landing page, otherwise use wiki path
+        var stateKey = window.__IS_MAIN_WIKI__ ? '__LANDING_PAGE__' : wikiPath;
+        if (!stateKey) {
+            if (callback) callback();
+            return;
+        }
+
+        invoke('get_window_state_info').then(function(state) {
+            return invoke('save_window_state', {
+                path: stateKey,
+                width: state.width,
+                height: state.height,
+                x: state.x,
+                y: state.y,
+                monitorName: state.monitor_name,
+                monitorX: state.monitor_x,
+                monitorY: state.monitor_y,
+                maximized: state.maximized
+            });
+        }).then(function() {
+            if (callback) callback();
+        }).catch(function(err) {
+            console.error('[TiddlyDesktop] Failed to save window state:', err);
+            if (callback) callback();
+        });
+    }
 
     function setupCloseHandler() {
         if (typeof window.__TAURI__ === 'undefined' || !window.__TAURI__.event) {
@@ -41,14 +79,21 @@
                 }
             }
 
+            // Save window state before closing
+            var closeWindow = function() {
+                saveWindowState(function() {
+                    invoke('close_window');
+                });
+            };
+
             if (isDirty) {
                 TD.showConfirmModal('You have unsaved changes. Are you sure you want to close?', function(confirmed) {
                     if (confirmed) {
-                        invoke('close_window');
+                        closeWindow();
                     }
                 });
             } else {
-                invoke('close_window');
+                closeWindow();
             }
         });
     }

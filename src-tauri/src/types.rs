@@ -68,6 +68,41 @@ pub struct SessionAuthConfig {
     pub auth_urls: Vec<AuthUrlEntry>,
 }
 
+/// Window state (size, position, monitor) for a wiki
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct WindowState {
+    pub width: u32,
+    pub height: u32,
+    pub x: i32,
+    pub y: i32,
+    /// Monitor name (may not be unique if multiple identical monitors)
+    #[serde(default)]
+    pub monitor_name: Option<String>,
+    /// Monitor position for unique identification (top-left corner)
+    #[serde(default)]
+    pub monitor_x: i32,
+    #[serde(default)]
+    pub monitor_y: i32,
+    /// Whether the window was maximized
+    #[serde(default)]
+    pub maximized: bool,
+}
+
+impl Default for WindowState {
+    fn default() -> Self {
+        Self {
+            width: 1200,
+            height: 800,
+            x: 100,
+            y: 100,
+            monitor_name: None,
+            monitor_x: 0,
+            monitor_y: 0,
+            maximized: false,
+        }
+    }
+}
+
 /// All wiki configs stored in a single file, keyed by wiki path
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
 pub struct WikiConfigs {
@@ -75,6 +110,8 @@ pub struct WikiConfigs {
     pub external_attachments: HashMap<String, ExternalAttachmentsConfig>,
     #[serde(default)]
     pub session_auth: HashMap<String, SessionAuthConfig>,
+    #[serde(default)]
+    pub window_states: HashMap<String, WindowState>,
 }
 
 /// Information about a TiddlyWiki edition

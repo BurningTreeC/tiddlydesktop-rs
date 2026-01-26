@@ -231,18 +231,67 @@ The plugin provides the `<$action-run-command>` widget for executing shell comma
 
 ## Troubleshooting
 
-### Linux: Disabling GPU Acceleration
+### Linux: Performance Issues
 
-If you experience graphics issues on Linux (blank windows, rendering glitches, crashes), particularly with older Nvidia cards using the **nouveau driver**, you can disable hardware acceleration:
+If you experience slow performance, laggy scrolling, or high CPU usage on Linux, this is typically related to GPU acceleration and WebKitGTK rendering. This is more common on **KDE Plasma** and **Linux Mint**.
+
+#### Quick Fixes to Try
 
 ```bash
+# Try disabling DMA-buf renderer (often helps on KDE)
+WEBKIT_DISABLE_DMABUF_RENDERER=1 ./tiddlydesktop-rs
+
+# Try disabling compositing mode
+WEBKIT_DISABLE_COMPOSITING_MODE=1 ./tiddlydesktop-rs
+
+# Disable all GPU acceleration (slowest but most compatible)
 TIDDLYDESKTOP_DISABLE_GPU=1 ./tiddlydesktop-rs
 ```
 
-For a permanent fix, create a wrapper script or add to your `.bashrc`:
+#### KDE Plasma Specific
+
+KDE uses Qt, and GTK applications may have extra overhead:
 
 ```bash
+# Disable GTK portal integration (can reduce overhead)
+GTK_USE_PORTAL=0 ./tiddlydesktop-rs
+
+# Force X11 backend on KDE Wayland (sometimes faster)
+GDK_BACKEND=x11 ./tiddlydesktop-rs
+```
+
+Install GTK integration for KDE:
+- **Kubuntu/KDE Neon**: `sudo apt install kde-config-gtk-style`
+- **Fedora KDE**: `sudo dnf install kde-gtk-config`
+
+#### Linux Mint / Cinnamon
+
+Check your WebKitGTK version:
+```bash
+pkg-config --modversion webkit2gtk-4.1
+```
+Versions below 2.40 may have performance issues. Consider using the Flatpak version if available.
+
+#### Required Dependencies
+
+Missing system libraries can cause performance issues. See [dependencies.md](../dependencies.md) for a complete list of required packages for your distribution.
+
+#### Permanent Configuration
+
+Add to your `~/.bashrc` or create a wrapper script:
+
+```bash
+export WEBKIT_DISABLE_DMABUF_RENDERER=1
+# or for maximum compatibility:
 export TIDDLYDESKTOP_DISABLE_GPU=1
+```
+
+### Linux: Graphics Glitches
+
+If you experience blank windows, black artifacts, or rendering glitches (particularly with older Nvidia cards using the **nouveau driver**):
+
+```bash
+TIDDLYDESKTOP_DISABLE_GPU=1 ./tiddlydesktop-rs
 ```
 
 This forces software rendering by setting `WEBKIT_DISABLE_COMPOSITING_MODE=1`, `WEBKIT_DISABLE_DMABUF_RENDERER=1`, and `LIBGL_ALWAYS_SOFTWARE=1`.

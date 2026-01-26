@@ -37,6 +37,12 @@ pub fn load_wiki_configs(app: &tauri::AppHandle) -> Result<WikiConfigs, String> 
 /// Save all wiki configs to disk
 pub fn save_wiki_configs(app: &tauri::AppHandle, configs: &WikiConfigs) -> Result<(), String> {
     let path = get_wiki_configs_path(app)?;
+
+    // Ensure parent directory exists
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("Failed to create config directory: {}", e))?;
+    }
+
     let content = serde_json::to_string_pretty(configs)
         .map_err(|e| format!("Failed to serialize wiki configs: {}", e))?;
     std::fs::write(&path, content)
@@ -147,6 +153,53 @@ pub fn set_wiki_backup_dir(app: tauri::AppHandle, path: String, backup_dir: Opti
     }
 
     save_recent_files_to_disk(&app, &entries)
+}
+
+/// Get favicon for a wiki from storage
+pub fn get_wiki_favicon(app: &tauri::AppHandle, path: &str) -> Option<String> {
+    let entries = load_recent_files_from_disk(app);
+    for entry in entries {
+        if utils::paths_equal(&entry.path, path) {
+            return entry.favicon;
+        }
+    }
+    None
+}
+
+/// Get window state for a wiki
+pub fn get_window_state(app: &tauri::AppHandle, path: &str) -> Option<crate::types::WindowState> {
+    let configs = load_wiki_configs(app).ok()?;
+    configs.window_states.get(path).cloned()
+}
+
+/// Save window state for a wiki
+#[tauri::command]
+pub fn save_window_state(
+    app: tauri::AppHandle,
+    path: String,
+    width: u32,
+    height: u32,
+    x: i32,
+    y: i32,
+    monitor_name: Option<String>,
+    monitor_x: Option<i32>,
+    monitor_y: Option<i32>,
+    maximized: bool,
+) -> Result<(), String> {
+    eprintln!("[TiddlyDesktop] Saving window state for '{}': {}x{} at ({}, {}), monitor=({}, {}), maximized={}",
+        path, width, height, x, y, monitor_x.unwrap_or(0), monitor_y.unwrap_or(0), maximized);
+    let mut configs = load_wiki_configs(&app)?;
+    configs.window_states.insert(path, crate::types::WindowState {
+        width,
+        height,
+        x,
+        y,
+        monitor_name,
+        monitor_x: monitor_x.unwrap_or(0),
+        monitor_y: monitor_y.unwrap_or(0),
+        maximized,
+    });
+    save_wiki_configs(&app, &configs)
 }
 
 /// Update favicon for a wiki (used after decryption when favicon wasn't available initially)

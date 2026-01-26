@@ -1,11 +1,113 @@
 use std::{collections::HashMap, path::PathBuf, process::{Child, Command}, sync::{Arc, Mutex, OnceLock}};
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
-#[cfg(target_os = "linux")]
-use std::os::unix::process::CommandExt as UnixCommandExt;
 
 /// Global AppHandle for IPC callbacks that need Tauri access
 static GLOBAL_APP_HANDLE: OnceLock<tauri::AppHandle> = OnceLock::new();
+
+/// Global IPC server for sending messages to wiki processes
+static GLOBAL_IPC_SERVER: OnceLock<Arc<ipc::IpcServer>> = OnceLock::new();
+
+/// Linux: Activate a window - uses X11 _NET_ACTIVE_WINDOW on X11, urgency hint on Wayland
+#[cfg(target_os = "linux")]
+fn linux_activate_window(gtk_window: &gtk::ApplicationWindow) {
+    use gtk::prelude::{GtkWindowExt, WidgetExt};
+
+    // Get the GDK window
+    let gdk_window = match gtk_window.window() {
+        Some(w) => w,
+        None => {
+            eprintln!("[Linux] No GDK window available");
+            return;
+        }
+    };
+
+    // Check if we're on X11 or Wayland using the native_dnd module's detection
+    match drag_drop::native_dnd::get_display_server() {
+        drag_drop::native_dnd::DisplayServer::X11 => {
+            // X11: Use _NET_ACTIVE_WINDOW protocol
+            x11_activate_window_impl(gtk_window, &gdk_window);
+        }
+        _ => {
+            // Wayland: Best effort - urgency hint + present
+            // Wayland prevents focus stealing by design; user must click the flashing taskbar
+            eprintln!("[Wayland] Setting urgency hint (focus stealing not allowed on Wayland)");
+            gtk_window.set_urgency_hint(true);
+            gtk_window.present();
+            // Clear urgency after a moment
+            let win = gtk_window.clone();
+            gtk::glib::timeout_add_local_once(
+                std::time::Duration::from_millis(100),
+                move || { win.set_urgency_hint(false); }
+            );
+        }
+    }
+}
+
+/// X11-specific window activation using _NET_ACTIVE_WINDOW protocol
+#[cfg(target_os = "linux")]
+fn x11_activate_window_impl(gtk_window: &gtk::ApplicationWindow, gdk_window: &gtk::gdk::Window) {
+    use gtk::prelude::GtkWindowExt;
+    use gtk::glib::translate::ToGlibPtr;
+    use x11rb::connection::Connection;
+    use x11rb::protocol::xproto::{self, ConnectionExt};
+
+    // Get the X11 window ID
+    extern "C" {
+        fn gdk_x11_window_get_xid(window: *mut gtk::gdk::ffi::GdkWindow) -> u32;
+    }
+    let xid = unsafe { gdk_x11_window_get_xid(gdk_window.to_glib_none().0) };
+    if xid == 0 {
+        eprintln!("[X11] Could not get X11 window ID");
+        return;
+    }
+
+    eprintln!("[X11] Activating window with XID: {}", xid);
+
+    // Also call GTK present for good measure
+    gtk_window.present();
+
+    // Connect to X11 and send _NET_ACTIVE_WINDOW message
+    let result = (|| -> Result<(), Box<dyn std::error::Error>> {
+        let (conn, screen_num) = x11rb::connect(None)?;
+        let screen = &conn.setup().roots[screen_num];
+        let root = screen.root;
+
+        // Get the _NET_ACTIVE_WINDOW atom
+        let atom_cookie = conn.intern_atom(false, b"_NET_ACTIVE_WINDOW")?;
+        let atom = atom_cookie.reply()?.atom;
+
+        // Send client message to root window
+        let event = xproto::ClientMessageEvent {
+            response_type: xproto::CLIENT_MESSAGE_EVENT,
+            format: 32,
+            sequence: 0,
+            window: xid,
+            type_: atom,
+            data: xproto::ClientMessageData::from([
+                1u32,  // Source indication: 1 = application
+                0,     // Timestamp (0 = current)
+                0,     // Currently active window (0 = none)
+                0, 0,
+            ]),
+        };
+
+        conn.send_event(
+            false,
+            root,
+            xproto::EventMask::SUBSTRUCTURE_REDIRECT | xproto::EventMask::SUBSTRUCTURE_NOTIFY,
+            event,
+        )?;
+        conn.flush()?;
+
+        eprintln!("[X11] Sent _NET_ACTIVE_WINDOW message for XID {}", xid);
+        Ok(())
+    })();
+
+    if let Err(e) = result {
+        eprintln!("[X11] Failed to activate window: {}", e);
+    }
+}
 
 /// Linux: Set up a GtkHeaderBar on a window for reliable title display
 /// This works around WebKitGTK's broken title propagation
@@ -162,6 +264,98 @@ fn setup_header_bar(window: &tauri::WebviewWindow) {
     }
 }
 
+/// Linux: Check if GNOME's auto-maximize is enabled
+/// Returns true only if we're on GNOME and auto-maximize is set to true
+#[cfg(target_os = "linux")]
+fn linux_gnome_auto_maximize_enabled() -> bool {
+    use std::process::Command;
+
+    // Check if we're on GNOME
+    let desktop = std::env::var("XDG_CURRENT_DESKTOP").unwrap_or_default();
+    if !desktop.to_lowercase().contains("gnome") {
+        return false;
+    }
+
+    // Check the gsettings value
+    if let Ok(output) = Command::new("gsettings")
+        .args(["get", "org.gnome.mutter", "auto-maximize"])
+        .output()
+    {
+        let value = String::from_utf8_lossy(&output.stdout);
+        return value.trim() == "true";
+    }
+
+    false
+}
+
+/// Linux: Clamp window dimensions to avoid GNOME's auto-maximize
+/// GNOME auto-maximizes windows that are "almost fullscreen" (>~80% of monitor).
+/// This function clamps dimensions to 80% of primary monitor to prevent that.
+/// Only applies when GNOME's auto-maximize setting is enabled.
+#[cfg(target_os = "linux")]
+fn linux_clamp_window_size(width: f64, height: f64) -> (f64, f64) {
+    use gtk::prelude::MonitorExt;
+
+    // Only clamp if GNOME auto-maximize is enabled
+    if !linux_gnome_auto_maximize_enabled() {
+        return (width, height);
+    }
+
+    let display = gtk::gdk::Display::default().expect("No display");
+    let monitor = display.primary_monitor()
+        .or_else(|| display.monitor_at_point(0, 0));
+
+    if let Some(monitor) = monitor {
+        let geometry = monitor.geometry();
+        let max_width = (geometry.width() as f64 * 0.80).floor();
+        let max_height = (geometry.height() as f64 * 0.80).floor();
+
+        let clamped_width = width.min(max_width);
+        let clamped_height = height.min(max_height);
+
+        if clamped_width != width || clamped_height != height {
+            eprintln!("[Linux/GNOME] Clamped window size from {}x{} to {}x{} (80% of {}x{}) to prevent auto-maximize",
+                width, height, clamped_width, clamped_height, geometry.width(), geometry.height());
+        }
+
+        (clamped_width, clamped_height)
+    } else {
+        (width, height)
+    }
+}
+
+/// Linux: Finalize window state after creation
+/// - Centers window if no saved position exists
+/// - Handles maximize state
+#[cfg(target_os = "linux")]
+fn linux_finalize_window_state(window: &tauri::WebviewWindow, saved_state: &Option<crate::types::WindowState>) {
+    use gtk::prelude::{GtkWindowExt, MonitorExt, WidgetExt};
+
+    if let Ok(gtk_window) = window.gtk_window() {
+        // If no saved state at all, center the window on the primary monitor
+        if saved_state.is_none() {
+            let (win_width, win_height) = gtk_window.size();
+            let display = gtk_window.display();
+            let monitor = display.primary_monitor()
+                .or_else(|| display.monitor_at_point(0, 0));
+
+            if let Some(monitor) = monitor {
+                let geometry = monitor.geometry();
+                let center_x = geometry.x() + (geometry.width() - win_width).max(0) / 2;
+                let center_y = geometry.y() + (geometry.height() - win_height).max(0) / 2;
+                gtk_window.move_(center_x, center_y);
+                eprintln!("[Linux] Centered window at ({}, {}) on monitor {}x{}",
+                    center_x, center_y, geometry.width(), geometry.height());
+            }
+        }
+
+        // Handle maximize state
+        if saved_state.as_ref().map(|s| s.maximized).unwrap_or(false) {
+            gtk_window.maximize();
+        }
+    }
+}
+
 /// Windows flag to prevent console window from appearing
 #[cfg(target_os = "windows")]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
@@ -233,14 +427,6 @@ fn get_user_editions_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     Ok(data_dir.join("editions"))
 }
 
-/// A running wiki folder server
-#[allow(dead_code)] // Fields may be used for status display in future
-struct WikiFolderServer {
-    process: Child,
-    port: u16,
-    path: String,
-}
-
 /// A running wiki child process (separate process per wiki)
 /// Fields stored for potential future use (process management, cleanup)
 #[allow(dead_code)]
@@ -257,8 +443,6 @@ struct AppState {
     open_wikis: Mutex<HashMap<String, String>>,
     /// Running wiki child processes (keyed by wiki path for duplicate detection)
     wiki_processes: Mutex<HashMap<String, WikiProcess>>,
-    /// Running wiki folder servers (keyed by window label)
-    wiki_servers: Mutex<HashMap<String, WikiFolderServer>>,
     /// Next available port for wiki folder servers
     next_port: Mutex<u16>,
     /// Path to the main wiki file (tiddlydesktop.html)
@@ -693,6 +877,54 @@ fn close_window_by_label(app: tauri::AppHandle, label: String) -> Result<(), Str
     } else {
         Err(format!("Window '{}' not found", label))
     }
+}
+
+/// Check if a path is a directory
+#[tauri::command]
+fn is_directory(path: String) -> bool {
+    std::path::Path::new(&path).is_dir()
+}
+
+/// Get current window state (size, position, monitor) for saving
+#[tauri::command]
+fn get_window_state_info(window: tauri::WebviewWindow) -> Result<serde_json::Value, String> {
+    let size = window.inner_size().map_err(|e| e.to_string())?;
+    let position = window.outer_position().map_err(|e| e.to_string())?;
+    let is_maximized = window.is_maximized().unwrap_or(false);
+
+    // Get scale factor to convert physical pixels to logical pixels
+    // Tauri's inner_size() returns physical pixels, but we set size in logical pixels
+    let scale_factor = window.scale_factor().unwrap_or(1.0);
+    let logical_width = (size.width as f64 / scale_factor).round() as u32;
+    let logical_height = (size.height as f64 / scale_factor).round() as u32;
+
+    // Get the monitor this window is on, including its position for unique identification
+    // (monitor name alone isn't unique if you have multiple identical monitors)
+    let (monitor_name, monitor_x, monitor_y) = window.current_monitor()
+        .ok()
+        .flatten()
+        .map(|m| {
+            let pos = m.position();
+            (m.name().map(|n| n.to_string()), pos.x, pos.y)
+        })
+        .unwrap_or((None, 0, 0));
+
+    Ok(serde_json::json!({
+        "width": logical_width,
+        "height": logical_height,
+        "x": position.x,
+        "y": position.y,
+        "monitor_name": monitor_name,
+        "monitor_x": monitor_x,
+        "monitor_y": monitor_y,
+        "maximized": is_maximized
+    }))
+}
+
+/// Get saved window state for a wiki path
+#[tauri::command]
+fn get_saved_window_state(app: tauri::AppHandle, path: String) -> Option<types::WindowState> {
+    wiki_storage::get_window_state(&app, &path)
 }
 
 /// JavaScript for injecting a custom find bar UI
@@ -1311,6 +1543,37 @@ fn find_system_node() -> Option<PathBuf> {
     None
 }
 
+/// Find Node.js executable without needing an AppHandle (for use before Tauri setup)
+fn find_node_executable() -> Option<PathBuf> {
+    // First, try system Node.js
+    if let Some(system_node) = find_system_node() {
+        return Some(system_node);
+    }
+
+    // Fall back to bundled Node.js relative to exe
+    #[cfg(target_os = "windows")]
+    let node_name = "node.exe";
+    #[cfg(not(target_os = "windows"))]
+    let node_name = "node";
+
+    let exe_dir = std::env::current_exe().ok()?.parent()?.to_path_buf();
+
+    let possible_paths = [
+        exe_dir.join(node_name),
+        exe_dir.join("resources").join("binaries").join(node_name),
+        exe_dir.join("..").join("lib").join("tiddlydesktop-rs").join("resources").join("binaries").join(node_name),
+    ];
+
+    for path in &possible_paths {
+        if path.exists() {
+            eprintln!("[TiddlyDesktop] Using bundled Node.js at {:?}", path);
+            return Some(path.clone());
+        }
+    }
+
+    None
+}
+
 /// Get path to Node.js binary (prefer system, fall back to bundled)
 fn get_node_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     // First, try to use system Node.js if available and compatible
@@ -1466,7 +1729,7 @@ fn wait_for_server_ready(port: u16, process: &mut Child, timeout: std::time::Dur
     }
 }
 
-/// Open a wiki folder in a new window with its own server
+/// Open a wiki folder in a separate process with its own server
 /// Returns WikiEntry so frontend can update its wiki list
 #[tauri::command]
 async fn open_wiki_folder(app: tauri::AppHandle, path: String) -> Result<WikiEntry, String> {
@@ -1485,31 +1748,30 @@ async fn open_wiki_folder(app: tauri::AppHandle, path: String) -> Result<WikiEnt
         return Err("Not a valid wiki folder (missing tiddlywiki.info)".to_string());
     }
 
-    // Check if this wiki folder is already open
+    // Check if this wiki folder is already open (tracked as a wiki process)
     {
-        let open_wikis = state.open_wikis.lock().unwrap();
-        for (label, wiki_path) in open_wikis.iter() {
-            if wiki_path == &path {
-                // Focus existing window
-                if let Some(window) = app.get_webview_window(label) {
-                    let _ = window.set_focus();
-                    // Return entry even when focusing existing window
-                    return Ok(WikiEntry {
-                        path: path.clone(),
-                        filename: folder_name,
-                        favicon: None,
-                        is_folder: true,
-                        backups_enabled: false,
-                        backup_dir: None,
-                        group: None,
-                    });
+        let wiki_processes = state.wiki_processes.lock().unwrap();
+        if wiki_processes.contains_key(&path) {
+            // Wiki folder already open - send focus request via IPC
+            eprintln!("[TiddlyDesktop] Wiki folder already open in separate process: {}", path);
+            if let Some(server) = GLOBAL_IPC_SERVER.get() {
+                if let Err(e) = server.send_focus_window(&path) {
+                    eprintln!("[TiddlyDesktop] Failed to send focus request: {}", e);
                 }
             }
+            // Get existing favicon from storage
+            let existing_favicon = wiki_storage::get_wiki_favicon(&app, &path);
+            return Ok(WikiEntry {
+                path: path.clone(),
+                filename: folder_name,
+                favicon: existing_favicon,
+                is_folder: true,
+                backups_enabled: false,
+                backup_dir: None,
+                group: None,
+            });
         }
     }
-
-    // Ensure required plugins and autosave are enabled
-    ensure_wiki_folder_config(&path_buf);
 
     // Extract favicon from the wiki folder
     let favicon = tiddlywiki_html::extract_favicon_from_folder(&path_buf).await;
@@ -1517,131 +1779,47 @@ async fn open_wiki_folder(app: tauri::AppHandle, path: String) -> Result<WikiEnt
     // Allocate a port for this server
     let port = allocate_port(&state);
 
-    // Generate unique window label
-    let base_label = folder_name.replace(|c: char| !c.is_alphanumeric(), "-");
-    let label = {
-        let open_wikis = state.open_wikis.lock().unwrap();
-        let mut label = format!("folder-{}", base_label);
-        let mut counter = 1;
-        while open_wikis.contains_key(&label) {
-            label = format!("folder-{}-{}", base_label, counter);
-            counter += 1;
-        }
-        label
-    };
+    // Get the path to our own executable
+    let exe_path = std::env::current_exe()
+        .map_err(|e| format!("Failed to get executable path: {}", e))?;
 
-    // Track this wiki as open
-    state.open_wikis.lock().unwrap().insert(label.clone(), path.clone());
+    // Spawn the wiki folder process
+    eprintln!("[TiddlyDesktop] Spawning wiki folder process: {} --wiki-folder {} --port {}",
+        exe_path.display(), path, port);
 
-    // Start the Node.js + TiddlyWiki server
-    let node_path = get_node_path(&app)?;
-    let tw_path = get_tiddlywiki_path(&app)?;
+    let mut cmd = Command::new(&exe_path);
+    cmd.arg("--wiki-folder").arg(&path)
+       .arg("--port").arg(port.to_string());
 
-    println!("Starting wiki folder server:");
-    println!("  Node.js: {:?}", node_path);
-    println!("  TiddlyWiki: {:?}", tw_path);
-    println!("  Wiki folder: {:?}", path_buf);
-    println!("  Port: {}", port);
-
-    let mut cmd = Command::new(&node_path);
-    cmd.arg(&tw_path)
-        .arg(&path_buf)
-        .arg("--listen")
-        .arg(format!("port={}", port))
-        .arg("host=127.0.0.1");
     #[cfg(target_os = "windows")]
-    cmd.creation_flags(CREATE_NO_WINDOW);
-    // On Linux, set up child to die when parent dies
-    #[cfg(target_os = "linux")]
-    unsafe {
-        cmd.pre_exec(|| {
-            // PR_SET_PDEATHSIG = 1, SIGKILL = 9
-            libc::prctl(1, 9);
-            Ok(())
-        });
-    }
-    let mut child = cmd.spawn()
-        .map_err(|e| format!("Failed to start TiddlyWiki server: {}", e))?;
-    // On Windows, assign process to job object so it dies when parent dies
-    #[cfg(target_os = "windows")]
-    drag_drop::windows_job::assign_process_to_job(child.id());
-
-    // Wait for server to be ready (10s timeout)
-    if let Err(e) = wait_for_server_ready(port, &mut child, std::time::Duration::from_secs(10)) {
-        let _ = child.kill();
-        state.open_wikis.lock().unwrap().remove(&label);
-        return Err(format!("Failed to start wiki server: {}", e));
+    {
+        cmd.creation_flags(CREATE_NO_WINDOW);
     }
 
-    // Store the server info
-    state.wiki_servers.lock().unwrap().insert(label.clone(), WikiFolderServer {
-        process: child,
-        port,
+    // Wiki folder processes run independently - they survive when landing page closes
+
+    let child = cmd.spawn()
+        .map_err(|e| format!("Failed to spawn wiki folder process: {}", e))?;
+
+    let pid = child.id();
+    eprintln!("[TiddlyDesktop] Wiki folder process spawned with PID: {}", pid);
+
+    // Track the process (using wiki_processes like single-file wikis)
+    state.wiki_processes.lock().unwrap().insert(path.clone(), WikiProcess {
+        pid,
         path: path.clone(),
     });
 
-    let server_url = format!("http://127.0.0.1:{}", port);
-
-    let icon = Image::from_bytes(include_bytes!("../icons/icon.png"))
-        .map_err(|e| format!("Failed to load icon: {}", e))?;
-
-    // Get isolated session directory for this wiki folder
-    let session_dir = get_wiki_session_dir(&app, &path);
-
-    // Use full init script that sets __WIKI_PATH__, __WINDOW_LABEL__, __IS_MAIN_WIKI__ early
-    let mut builder = WebviewWindowBuilder::new(&app, &label, WebviewUrl::External(server_url.parse().unwrap()))
-        .title(&folder_name)
-        .inner_size(1200.0, 800.0)
-        .icon(icon)
-        .map_err(|e| format!("Failed to set icon: {}", e))?
-        .window_classname("tiddlydesktop-rs")
-        .initialization_script(&init_script::get_wiki_init_script(&path, &label, false))
-        .devtools(true); // TEMP: enabled for debugging
-
-    // Apply isolated session if available
-    if let Some(dir) = session_dir {
-        builder = builder.data_directory(dir);
-    }
-
-    // Tauri's drag/drop handler intercepts drops before WebKit/DOM gets them.
-    // On Windows/macOS, we disable it and use custom handlers.
-    // On Linux, we're testing if vanilla WebKitGTK handles drops like Epiphany.
-    #[cfg(not(target_os = "linux"))]
-    {
-        builder = builder.disable_drag_drop_handler();
-    }
-
-    let window = builder
-        .build()
-        .map_err(|e| format!("Failed to create window: {}", e))?;
-
-    // Set up platform-specific drag handlers for content drops from external apps
-    drag_drop::setup_drag_handlers(&window);
-
-    // Linux: Set up HeaderBar for reliable title display (works around WebKitGTK bug)
-    #[cfg(target_os = "linux")]
-    setup_header_bar(&window);
-
-    // Set window icon from favicon if available
-    if let Some(ref fav) = favicon {
-        if let Err(e) = set_window_icon_internal(&app, &label, Some(fav)) {
-            eprintln!("[TiddlyDesktop] Failed to set window icon: {}", e);
-        }
-    }
-
-    // Handle window close - JS onCloseRequested handles unsaved changes confirmation
+    // Spawn a thread to wait for the process to exit and clean up
     let app_handle = app.clone();
-    let label_clone = label.clone();
-    window.on_window_event(move |event| {
-        if let tauri::WindowEvent::Destroyed = event {
-            let state = app_handle.state::<AppState>();
-            // Stop the server
-            if let Some(mut server) = state.wiki_servers.lock().unwrap().remove(&label_clone) {
-                let _ = server.process.kill();
-            }
-            // Remove from open wikis
-            state.open_wikis.lock().unwrap().remove(&label_clone);
-        }
+    let path_clone = path.clone();
+    std::thread::spawn(move || {
+        let mut child = child;
+        let _ = child.wait();
+        eprintln!("[TiddlyDesktop] Wiki folder process {} exited", pid);
+        // Clean up tracking
+        let state = app_handle.state::<AppState>();
+        state.wiki_processes.lock().unwrap().remove(&path_clone);
     });
 
     // Create the wiki entry
@@ -2355,13 +2533,19 @@ async fn open_wiki_window(app: tauri::AppHandle, path: String) -> Result<WikiEnt
     {
         let wiki_processes = state.wiki_processes.lock().unwrap();
         if wiki_processes.contains_key(&path) {
-            // Wiki already open - we can't easily focus a window in another process
-            // Just return success so the UI knows it's open
+            // Wiki already open - send focus request via IPC
             eprintln!("[TiddlyDesktop] Wiki already open in separate process: {}", path);
+            if let Some(server) = GLOBAL_IPC_SERVER.get() {
+                if let Err(e) = server.send_focus_window(&path) {
+                    eprintln!("[TiddlyDesktop] Failed to send focus request: {}", e);
+                }
+            }
+            // Get existing favicon from storage instead of None
+            let existing_favicon = wiki_storage::get_wiki_favicon(&app, &path);
             return Ok(WikiEntry {
                 path: path.clone(),
                 filename,
-                favicon: None,
+                favicon: existing_favicon,
                 is_folder: false,
                 backups_enabled: true,
                 backup_dir: None,
@@ -2395,16 +2579,8 @@ async fn open_wiki_window(app: tauri::AppHandle, path: String) -> Result<WikiEnt
         cmd.creation_flags(CREATE_NO_WINDOW);
     }
 
-    #[cfg(target_os = "linux")]
-    {
-        // Set the child to die when parent dies
-        unsafe {
-            cmd.pre_exec(|| {
-                libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGTERM);
-                Ok(())
-            });
-        }
-    }
+    // Wiki processes run independently - they survive when landing page closes
+    // This prevents data loss from unsaved changes in open wikis
 
     let child = cmd.spawn()
         .map_err(|e| format!("Failed to spawn wiki process: {}", e))?;
@@ -2569,9 +2745,12 @@ async fn open_tiddler_window(
     // Set up platform-specific drag handlers for content drops from external apps
     drag_drop::setup_drag_handlers(&window);
 
-    // Linux: Set up HeaderBar for reliable title display (works around WebKitGTK bug)
+    // Linux: Set up HeaderBar and center window (tiddler windows don't save state)
     #[cfg(target_os = "linux")]
-    setup_header_bar(&window);
+    {
+        setup_header_bar(&window);
+        linux_finalize_window_state(&window, &None);
+    }
 
     // Handle window close
     let app_handle = app.clone();
@@ -2603,15 +2782,7 @@ fn spawn_wiki_process_sync(wiki_path: &str) -> Result<u32, String> {
         cmd.creation_flags(CREATE_NO_WINDOW);
     }
 
-    #[cfg(target_os = "linux")]
-    {
-        unsafe {
-            cmd.pre_exec(|| {
-                libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGTERM);
-                Ok(())
-            });
-        }
-    }
+    // Wiki processes run independently - they survive when landing page closes
 
     let child = cmd.spawn()
         .map_err(|e| format!("Failed to spawn wiki process: {}", e))?;
@@ -2651,16 +2822,8 @@ fn spawn_tiddler_process(wiki_path: &str, tiddler_title: &str, startup_tiddler: 
         cmd.creation_flags(CREATE_NO_WINDOW);
     }
 
-    #[cfg(target_os = "linux")]
-    {
-        // Set the child to die when parent dies
-        unsafe {
-            cmd.pre_exec(|| {
-                libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGTERM);
-                Ok(())
-            });
-        }
-    }
+    // Wiki processes run independently - they survive when landing page closes
+    // This prevents data loss from unsaved changes in open wikis
 
     let child = cmd.spawn()
         .map_err(|e| format!("Failed to spawn tiddler process: {}", e))?;
@@ -3575,6 +3738,24 @@ fn reveal_or_create_main_window(app_handle: &tauri::AppHandle) {
     let path_key = utils::base64_url_encode(&main_wiki_path.to_string_lossy());
     let wiki_url = format!("wikifile://localhost/{}", path_key);
 
+    // Load saved window state for landing page
+    let saved_state = wiki_storage::get_window_state(app_handle, "__LANDING_PAGE__");
+    let (win_width, win_height) = {
+        let (w, h) = saved_state.as_ref()
+            .map(|s| (s.width as f64, s.height as f64))
+            .unwrap_or((800.0, 600.0));
+
+        // On Linux, clamp size to prevent GNOME's auto-maximize (only if not maximized)
+        #[cfg(target_os = "linux")]
+        let (w, h) = if !saved_state.as_ref().map(|s| s.maximized).unwrap_or(false) {
+            linux_clamp_window_size(w, h)
+        } else {
+            (w, h)
+        };
+
+        (w, h)
+    };
+
     if let Ok(icon) = Image::from_bytes(include_bytes!("../icons/icon.png")) {
         // Use full init script with is_main_wiki=true
         #[allow(unused_mut)]  // mut needed for disable_drag_drop_handler()
@@ -3584,10 +3765,15 @@ fn reveal_or_create_main_window(app_handle: &tauri::AppHandle) {
             WebviewUrl::External(wiki_url.parse().unwrap())
         )
             .title("TiddlyDesktopRS")
-            .inner_size(800.0, 600.0)
+            .inner_size(win_width, win_height)
             .icon(icon)
             .expect("Failed to set icon")
             .initialization_script(&init_script::get_wiki_init_script(&main_wiki_path.to_string_lossy(), "main", true));
+
+        // Apply saved position if available
+        if let Some(ref state) = saved_state {
+            builder = builder.position(state.x as f64, state.y as f64);
+        }
 
         // Tauri's drag/drop handler intercepts drops before WebKit/DOM gets them.
         // On Windows/macOS, we disable it. On Linux, testing vanilla WebKitGTK.
@@ -3601,9 +3787,18 @@ fn reveal_or_create_main_window(app_handle: &tauri::AppHandle) {
             // Set up platform-specific drag handlers for content drops from external apps
             drag_drop::setup_drag_handlers(&main_window);
 
-            // Linux: Set up HeaderBar for reliable title display
+            // Linux: Set up HeaderBar and finalize window state (centering, unmaximize workaround)
             #[cfg(target_os = "linux")]
-            setup_header_bar(&main_window);
+            {
+                setup_header_bar(&main_window);
+                linux_finalize_window_state(&main_window, &saved_state);
+            }
+
+            // Restore maximized state (Windows/macOS only - Linux handled in linux_finalize_window_state)
+            #[cfg(not(target_os = "linux"))]
+            if saved_state.as_ref().map(|s| s.maximized).unwrap_or(false) {
+                let _ = main_window.maximize();
+            }
 
             let _ = main_window.set_focus();
         }
@@ -3646,29 +3841,43 @@ fn setup_system_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>>
     Ok(())
 }
 
-/// Command-line arguments for wiki mode
+/// Arguments for wiki file mode (single-file wiki in separate process)
 struct WikiModeArgs {
-    /// Path to the wiki file
     wiki_path: PathBuf,
-    /// If this is a tiddler window, the tiddler title
     tiddler_title: Option<String>,
-    /// Startup tiddler (for tm-open-window)
     startup_tiddler: Option<String>,
 }
 
-/// Parse command-line arguments and return wiki mode args if in wiki mode
-fn parse_wiki_mode_args() -> Option<WikiModeArgs> {
+/// Arguments for wiki folder mode (Node.js server in separate process)
+struct WikiFolderModeArgs {
+    folder_path: PathBuf,
+    port: u16,
+}
+
+/// Parse command-line arguments for special modes
+enum SpecialModeArgs {
+    WikiFile(WikiModeArgs),
+    WikiFolder(WikiFolderModeArgs),
+}
+
+fn parse_special_mode_args() -> Option<SpecialModeArgs> {
     let args: Vec<String> = std::env::args().collect();
 
     let mut wiki_path: Option<PathBuf> = None;
+    let mut wiki_folder_path: Option<PathBuf> = None;
     let mut tiddler_title: Option<String> = None;
     let mut startup_tiddler: Option<String> = None;
+    let mut port: Option<u16> = None;
 
     let mut i = 1;
     while i < args.len() {
         match args[i].as_str() {
             "--wiki" if i + 1 < args.len() => {
                 wiki_path = Some(PathBuf::from(&args[i + 1]));
+                i += 2;
+            }
+            "--wiki-folder" if i + 1 < args.len() => {
+                wiki_folder_path = Some(PathBuf::from(&args[i + 1]));
                 i += 2;
             }
             "--tiddler" if i + 1 < args.len() => {
@@ -3679,17 +3888,30 @@ fn parse_wiki_mode_args() -> Option<WikiModeArgs> {
                 startup_tiddler = Some(args[i + 1].clone());
                 i += 2;
             }
+            "--port" if i + 1 < args.len() => {
+                port = args[i + 1].parse().ok();
+                i += 2;
+            }
             _ => {
                 i += 1;
             }
         }
     }
 
-    wiki_path.map(|path| WikiModeArgs {
+    // Wiki folder mode takes precedence
+    if let Some(folder_path) = wiki_folder_path {
+        return Some(SpecialModeArgs::WikiFolder(WikiFolderModeArgs {
+            folder_path,
+            port: port.unwrap_or(8080),
+        }));
+    }
+
+    // Wiki file mode
+    wiki_path.map(|path| SpecialModeArgs::WikiFile(WikiModeArgs {
         wiki_path: path,
         tiddler_title,
         startup_tiddler,
-    })
+    }))
 }
 
 /// Simplified app state for wiki-only mode (single wiki process)
@@ -3806,7 +4028,6 @@ fn run_wiki_mode(args: WikiModeArgs) {
                     m
                 }),
                 wiki_processes: Mutex::new(HashMap::new()), // Not used in wiki mode
-                wiki_servers: Mutex::new(HashMap::new()),
                 next_port: Mutex::new(8080),
                 main_wiki_path: wiki_path_clone.clone(), // Use wiki path as "main" for this process
             });
@@ -3826,12 +4047,33 @@ fn run_wiki_mode(args: WikiModeArgs) {
 
             // Create the wiki window
             let icon = Image::from_bytes(include_bytes!("../icons/icon.png"))?;
+
+            // Load saved window state (main wiki only, not tiddler windows)
+            let saved_state = if !is_tiddler_window_for_state {
+                wiki_storage::get_window_state(&app.handle(), &wiki_path_clone.to_string_lossy())
+            } else {
+                None
+            };
+
             // Tiddler windows are smaller than main wiki windows
             let (win_width, win_height) = if is_tiddler_window_for_state {
                 (700.0, 600.0)
             } else {
-                (1200.0, 800.0)
+                let (w, h) = saved_state.as_ref()
+                    .map(|s| (s.width as f64, s.height as f64))
+                    .unwrap_or((1200.0, 800.0));
+
+                // On Linux, clamp size to prevent GNOME's auto-maximize (only if not maximized)
+                #[cfg(target_os = "linux")]
+                let (w, h) = if !saved_state.as_ref().map(|s| s.maximized).unwrap_or(false) {
+                    linux_clamp_window_size(w, h)
+                } else {
+                    (w, h)
+                };
+
+                (w, h)
             };
+
             #[allow(unused_mut)]
             let mut builder = WebviewWindowBuilder::new(app, &label, WebviewUrl::External(wiki_url.parse().unwrap()))
                 .title(&title)
@@ -3840,6 +4082,11 @@ fn run_wiki_mode(args: WikiModeArgs) {
                 .window_classname("tiddlydesktop-rs-wiki")
                 .initialization_script(&init_script::get_wiki_init_script(&wiki_path_clone.to_string_lossy(), &label, false))
                 .devtools(true);
+
+            // Apply saved position if available
+            if let Some(ref state) = saved_state {
+                builder = builder.position(state.x as f64, state.y as f64);
+            }
 
             // Tauri's drag/drop handler intercepts drops before WebKit/DOM gets them.
             // On Windows, we disable it. On Linux, testing vanilla WebKitGTK.
@@ -3853,9 +4100,18 @@ fn run_wiki_mode(args: WikiModeArgs) {
             // Set up drag handlers
             drag_drop::setup_drag_handlers(&window);
 
-            // Linux: Set up HeaderBar for reliable title display (works around WebKitGTK bug)
+            // Linux: Set up HeaderBar and finalize window state (centering, unmaximize workaround)
             #[cfg(target_os = "linux")]
-            setup_header_bar(&window);
+            {
+                setup_header_bar(&window);
+                linux_finalize_window_state(&window, &saved_state);
+            }
+
+            // Restore maximized state (Windows/macOS only - Linux handled in linux_finalize_window_state)
+            #[cfg(not(target_os = "linux"))]
+            if saved_state.as_ref().map(|s| s.maximized).unwrap_or(false) {
+                let _ = window.maximize();
+            }
 
             eprintln!("[TiddlyDesktop] Wiki window created: {}", label);
 
@@ -3902,6 +4158,32 @@ fn run_wiki_mode(args: WikiModeArgs) {
                                             eprintln!("[IPC Listener] Server error: {}", msg);
                                         }
                                     }
+                                }
+                                ipc::IpcMessage::FocusWiki { .. } => {
+                                    eprintln!("[IPC Listener] Focus window request received");
+                                    // Focus this window - must run on main thread for GTK
+                                    let handle = app_handle.clone();
+                                    let _ = app_handle.run_on_main_thread(move || {
+                                        // Get any window in this process (wiki processes have one window)
+                                        let windows = handle.webview_windows();
+                                        if let Some((label, window)) = windows.into_iter().next() {
+                                            eprintln!("[IPC Listener] Found window '{}', attempting to focus", label);
+                                            let _ = window.unminimize();
+                                            let _ = window.show();
+                                            #[cfg(target_os = "linux")]
+                                            {
+                                                if let Ok(gtk_window) = window.gtk_window() {
+                                                    linux_activate_window(&gtk_window);
+                                                }
+                                            }
+                                            #[cfg(not(target_os = "linux"))]
+                                            {
+                                                let _ = window.set_focus();
+                                            }
+                                        } else {
+                                            eprintln!("[IPC Listener] No windows found in process!");
+                                        }
+                                    });
                                 }
                                 _ => {}
                             }
@@ -3951,6 +4233,10 @@ fn run_wiki_mode(args: WikiModeArgs) {
             // Tiddler window commands (same process, shares $tw.wiki)
             open_tiddler_window,
             close_window_by_label,
+            is_directory,
+            get_window_state_info,
+            get_saved_window_state,
+            wiki_storage::save_window_state,
             // IPC commands for multi-process wiki sync (between different wiki files)
             ipc_notify_tiddler_changed,
             ipc_notify_tiddler_deleted,
@@ -3968,17 +4254,286 @@ fn run_wiki_mode(args: WikiModeArgs) {
         });
 }
 
-pub fn run() {
-    // Check if we're running in wiki-only mode (--wiki <path>)
-    if let Some(args) = parse_wiki_mode_args() {
-        run_wiki_mode(args);
+/// Run in wiki-folder mode - a Node.js TiddlyWiki server in its own process
+/// This is called when the app is started with --wiki-folder <path> --port <port>
+fn run_wiki_folder_mode(args: WikiFolderModeArgs) {
+    let folder_path = args.folder_path;
+    let port = args.port;
+
+    eprintln!("[TiddlyDesktop] Wiki folder mode: {:?}, port: {}", folder_path, port);
+
+    // Validate the folder exists and is a wiki folder
+    if !folder_path.exists() {
+        eprintln!("[TiddlyDesktop] Error: Wiki folder not found: {:?}", folder_path);
         return;
     }
 
-    // Main process: Start the IPC server for wiki process coordination
-    std::thread::spawn(|| {
-        let server = ipc::IpcServer::new();
+    if !utils::is_wiki_folder(&folder_path) {
+        eprintln!("[TiddlyDesktop] Error: Not a valid wiki folder (missing tiddlywiki.info): {:?}", folder_path);
+        return;
+    }
 
+    // Get folder name for window title
+    let folder_name = folder_path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("TiddlyWiki")
+        .to_string();
+
+    let folder_path_str = folder_path.to_string_lossy().to_string();
+
+    // We need to find Node.js and TiddlyWiki paths
+    // In folder mode, we'll use the same logic as the main process
+    let node_path_result = find_node_executable();
+    let node_path = match node_path_result {
+        Some(p) => p,
+        None => {
+            eprintln!("[TiddlyDesktop] Error: Node.js not found");
+            return;
+        }
+    };
+
+    // Find TiddlyWiki - it should be in the resources directory
+    let exe_dir = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|p| p.to_path_buf()));
+
+    let tw_path = exe_dir.as_ref().and_then(|dir| {
+        // Try various locations
+        let candidates = [
+            dir.join("resources").join("tiddlywiki").join("tiddlywiki.js"),
+            dir.join("..").join("lib").join("tiddlydesktop-rs").join("resources").join("tiddlywiki").join("tiddlywiki.js"),
+            dir.join("..").join("Resources").join("tiddlywiki").join("tiddlywiki.js"),
+        ];
+        candidates.into_iter().find(|p| p.exists())
+    });
+
+    let tw_path = match tw_path {
+        Some(p) => p,
+        None => {
+            eprintln!("[TiddlyDesktop] Error: TiddlyWiki not found in resources");
+            return;
+        }
+    };
+
+    eprintln!("[TiddlyDesktop] Starting wiki folder server:");
+    eprintln!("  Node.js: {:?}", node_path);
+    eprintln!("  TiddlyWiki: {:?}", tw_path);
+    eprintln!("  Wiki folder: {:?}", folder_path);
+    eprintln!("  Port: {}", port);
+
+    // Ensure required plugins and autosave are enabled
+    ensure_wiki_folder_config(&folder_path);
+
+    // Start the Node.js server
+    let mut cmd = Command::new(&node_path);
+    cmd.arg(&tw_path)
+        .arg(&folder_path)
+        .arg("--listen")
+        .arg(format!("port={}", port))
+        .arg("host=127.0.0.1");
+
+    #[cfg(target_os = "windows")]
+    cmd.creation_flags(CREATE_NO_WINDOW);
+
+    let mut server_process = match cmd.spawn() {
+        Ok(child) => child,
+        Err(e) => {
+            eprintln!("[TiddlyDesktop] Error: Failed to start TiddlyWiki server: {}", e);
+            return;
+        }
+    };
+
+    // Wait for server to be ready
+    if let Err(e) = wait_for_server_ready(port, &mut server_process, std::time::Duration::from_secs(15)) {
+        eprintln!("[TiddlyDesktop] Error: Server failed to start: {}", e);
+        let _ = server_process.kill();
+        return;
+    }
+
+    let server_url = format!("http://127.0.0.1:{}", port);
+    eprintln!("[TiddlyDesktop] Wiki folder server ready at {}", server_url);
+
+    // Store server process in a mutex for cleanup
+    let server_process = Arc::new(Mutex::new(Some(server_process)));
+    let server_process_for_exit = server_process.clone();
+
+    // Connect to IPC server in main process
+    let ipc_client: Arc<Mutex<Option<ipc::IpcClient>>> = Arc::new(Mutex::new(None));
+    let ipc_client_for_setup = ipc_client.clone();
+
+    // Try to connect to IPC (try_connect handles creation and registration)
+    if let Some(client) = ipc::try_connect(&folder_path_str, false, None) {
+        eprintln!("[TiddlyDesktop] Registered with IPC server");
+        *ipc_client_for_setup.lock().unwrap() = Some(client);
+    }
+
+    let folder_path_for_state = folder_path.clone();
+    let folder_name_for_state = folder_name.clone();
+    let ipc_client_for_state = ipc_client.clone();
+
+    // Build the Tauri app for this wiki folder
+    tauri::Builder::default()
+        .setup(move |app| {
+            let icon = Image::from_bytes(include_bytes!("../icons/icon.png"))?;
+
+            // Load saved window state
+            let saved_state = wiki_storage::get_window_state(&app.handle(), &folder_path_for_state.to_string_lossy());
+            let (win_width, win_height) = {
+                let (w, h) = saved_state.as_ref()
+                    .map(|s| (s.width as f64, s.height as f64))
+                    .unwrap_or((1200.0, 800.0));
+
+                // On Linux, clamp size to prevent GNOME's auto-maximize (only if not maximized)
+                #[cfg(target_os = "linux")]
+                let (w, h) = if !saved_state.as_ref().map(|s| s.maximized).unwrap_or(false) {
+                    linux_clamp_window_size(w, h)
+                } else {
+                    (w, h)
+                };
+
+                (w, h)
+            };
+
+            let mut builder = WebviewWindowBuilder::new(
+                app,
+                "main",
+                WebviewUrl::External(server_url.parse().unwrap())
+            )
+            .title(&folder_name_for_state)
+            .inner_size(win_width, win_height)
+            .icon(icon)?
+            .window_classname("tiddlydesktop-rs-wiki")
+            .initialization_script(&init_script::get_wiki_init_script(
+                &folder_path_for_state.to_string_lossy(),
+                "main",
+                false
+            ))
+            .devtools(true);
+
+            // Apply saved position
+            if let Some(ref state) = saved_state {
+                builder = builder.position(state.x as f64, state.y as f64);
+            }
+
+            let window = builder.build()?;
+
+            // Set up drag handlers
+            drag_drop::setup_drag_handlers(&window);
+
+            // Linux: Set up HeaderBar and finalize window state (centering, unmaximize workaround)
+            #[cfg(target_os = "linux")]
+            {
+                setup_header_bar(&window);
+                linux_finalize_window_state(&window, &saved_state);
+            }
+
+            // Restore maximized state (Windows/macOS only - Linux handled in linux_finalize_window_state)
+            #[cfg(not(target_os = "linux"))]
+            if saved_state.as_ref().map(|s| s.maximized).unwrap_or(false) {
+                let _ = window.maximize();
+            }
+
+            // Minimal app state for this process
+            app.manage(AppState {
+                wiki_paths: Mutex::new(HashMap::new()),
+                open_wikis: Mutex::new(HashMap::new()),
+                wiki_processes: Mutex::new(HashMap::new()),
+                next_port: Mutex::new(port + 1),
+                main_wiki_path: folder_path_for_state.clone(),
+            });
+
+            // Start IPC listener for focus requests
+            let client_guard = ipc_client_for_state.lock().unwrap();
+            if let Some(ref client) = *client_guard {
+                if let Some(listener_stream) = client.get_listener_stream() {
+                    let app_handle = app.handle().clone();
+                    std::thread::spawn(move || {
+                        ipc::run_listener(listener_stream, |msg| {
+                            if let ipc::IpcMessage::FocusWiki { .. } = msg {
+                                eprintln!("[IPC Listener] Focus window request received");
+                                // Focus this window - must run on main thread for GTK
+                                let handle = app_handle.clone();
+                                let _ = app_handle.run_on_main_thread(move || {
+                                    // Get any window in this process (wiki processes have one window)
+                                    let windows = handle.webview_windows();
+                                    if let Some((label, window)) = windows.into_iter().next() {
+                                        eprintln!("[IPC Listener] Found window '{}', attempting to focus", label);
+                                        let _ = window.unminimize();
+                                        let _ = window.show();
+                                        #[cfg(target_os = "linux")]
+                                        {
+                                            if let Ok(gtk_window) = window.gtk_window() {
+                                                linux_activate_window(&gtk_window);
+                                            }
+                                        }
+                                        #[cfg(not(target_os = "linux"))]
+                                        {
+                                            let _ = window.set_focus();
+                                        }
+                                    } else {
+                                        eprintln!("[IPC Listener] No windows found in process!");
+                                    }
+                                });
+                            }
+                        });
+                    });
+                }
+            }
+            drop(client_guard);
+
+            Ok(())
+        })
+        .on_window_event(move |_window, event| {
+            if let tauri::WindowEvent::Destroyed = event {
+                // Kill the Node.js server when window closes
+                if let Some(mut process) = server_process_for_exit.lock().unwrap().take() {
+                    eprintln!("[TiddlyDesktop] Killing wiki folder server");
+                    let _ = process.kill();
+                }
+            }
+        })
+        .invoke_handler(tauri::generate_handler![
+            load_wiki,
+            save_wiki,
+            set_window_title,
+            set_window_icon,
+            get_window_label,
+            show_alert,
+            show_confirm,
+            close_window,
+            is_directory,
+            get_window_state_info,
+            get_saved_window_state,
+            wiki_storage::save_window_state,
+            wiki_storage::js_log,
+            clipboard::get_clipboard_content,
+        ])
+        .build(tauri::generate_context!())
+        .expect("error while building wiki-folder-mode application")
+        .run(|_app, _event| {});
+}
+
+pub fn run() {
+    // Check if we're running in a special mode (wiki file or wiki folder)
+    if let Some(mode) = parse_special_mode_args() {
+        match mode {
+            SpecialModeArgs::WikiFile(args) => {
+                run_wiki_mode(args);
+                return;
+            }
+            SpecialModeArgs::WikiFolder(args) => {
+                run_wiki_folder_mode(args);
+                return;
+            }
+        }
+    }
+
+    // Main process: Start the IPC server for wiki process coordination
+    let server = Arc::new(ipc::IpcServer::new());
+    let _ = GLOBAL_IPC_SERVER.set(server.clone());
+
+    std::thread::spawn(move || {
         // Set up callback for opening wikis (from tiddler windows or other sources)
         server.on_open_wiki(|path| {
             eprintln!("[IPC] Open wiki request received: {}", path);
@@ -4073,7 +4628,6 @@ pub fn run() {
                 wiki_paths: Mutex::new(HashMap::new()),
                 open_wikis: Mutex::new(HashMap::new()),
                 wiki_processes: Mutex::new(HashMap::new()),
-                wiki_servers: Mutex::new(HashMap::new()),
                 next_port: Mutex::new(8080),
                 main_wiki_path: main_wiki_path.clone(),
             });
@@ -4092,17 +4646,42 @@ pub fn run() {
             // Use wikifile:// protocol to load main wiki
             let wiki_url = format!("wikifile://localhost/{}", path_key);
 
+            // Load saved window state for landing page
+            let saved_state = wiki_storage::get_window_state(&app.handle(), "__LANDING_PAGE__");
+            let (win_width, win_height) = {
+                let (w, h) = saved_state.as_ref()
+                    .map(|s| (s.width as f64, s.height as f64))
+                    .unwrap_or((800.0, 600.0));
+
+                // On Linux, clamp size to prevent GNOME's auto-maximize (only if not maximized)
+                #[cfg(target_os = "linux")]
+                let (w, h) = if !saved_state.as_ref().map(|s| s.maximized).unwrap_or(false) {
+                    linux_clamp_window_size(w, h)
+                } else {
+                    (w, h)
+                };
+
+                (w, h)
+            };
+            eprintln!("[TiddlyDesktop] Landing page saved state: {:?}", saved_state);
+            eprintln!("[TiddlyDesktop] Using size: {}x{}", win_width, win_height);
+
             // Create the main window programmatically with initialization script
             // Use full init script with is_main_wiki=true so setupExternalAttachments knows to skip
             let icon = Image::from_bytes(include_bytes!("../icons/icon.png"))?;
             #[allow(unused_mut)]
             let mut builder = WebviewWindowBuilder::new(app, "main", WebviewUrl::External(wiki_url.parse().unwrap()))
                 .title("TiddlyDesktopRS")
-                .inner_size(800.0, 600.0)
+                .inner_size(win_width, win_height)
                 .icon(icon)?
                 .window_classname("tiddlydesktop-rs")
                 .initialization_script(&init_script::get_wiki_init_script(&main_wiki_path.to_string_lossy(), "main", true))
                 .devtools(true); // TEMP: enabled for debugging
+
+            // Apply saved position if available
+            if let Some(ref state) = saved_state {
+                builder = builder.position(state.x as f64, state.y as f64);
+            }
 
             // Tauri's drag/drop handler intercepts drops before WebKit/DOM gets them.
             // On Windows, we disable it. On Linux, testing vanilla WebKitGTK.
@@ -4116,9 +4695,18 @@ pub fn run() {
             // Set up platform-specific drag handlers for content drops from external apps
             drag_drop::setup_drag_handlers(&main_window);
 
-            // Linux: Set up HeaderBar for reliable title display
+            // Linux: Set up HeaderBar and finalize window state (centering, unmaximize workaround)
             #[cfg(target_os = "linux")]
-            setup_header_bar(&main_window);
+            {
+                setup_header_bar(&main_window);
+                linux_finalize_window_state(&main_window, &saved_state);
+            }
+
+            // Restore maximized state (Windows/macOS only - Linux handled in linux_finalize_window_state)
+            #[cfg(not(target_os = "linux"))]
+            if saved_state.as_ref().map(|s| s.maximized).unwrap_or(false) {
+                let _ = main_window.maximize();
+            }
 
             setup_system_tray(app)?;
 
@@ -4173,6 +4761,10 @@ pub fn run() {
             show_confirm,
             close_window,
             close_window_by_label,
+            is_directory,
+            get_window_state_info,
+            get_saved_window_state,
+            wiki_storage::save_window_state,
             wiki_storage::get_recent_files,
             wiki_storage::remove_recent_file,
             wiki_storage::set_wiki_backups,

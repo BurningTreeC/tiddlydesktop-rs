@@ -1159,6 +1159,8 @@ pub struct OutgoingDragData {
     pub text_uri_list: Option<String>,
     pub text_x_moz_url: Option<String>,
     pub url: Option<String>,
+    /// True if this is a text-selection drag (not used on Windows currently)
+    pub is_text_selection_drag: bool,
 }
 
 /// Global state for outgoing drag operation

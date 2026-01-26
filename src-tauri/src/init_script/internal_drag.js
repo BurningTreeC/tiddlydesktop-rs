@@ -29,6 +29,7 @@
     // === State ===
     var internalDragActive = false;  // True when we started a drag (we are the source)
     var externalDragActive = false;  // True when receiving an external drag
+    var isTextSelectionDrag = false; // True when dragging text selection (not a draggable element)
     var dragData = null;             // Current drag data (for internal drags)
     var dragSource = null;           // Element that started the drag
     var lastTarget = null;           // Last element we dispatched dragover to
@@ -386,6 +387,7 @@
         log('Cleanup');
         internalDragActive = false;
         externalDragActive = false;
+        isTextSelectionDrag = false;
         dragData = null;
         dragSource = null;
         lastTarget = null;
@@ -415,8 +417,14 @@
 
         // This is an internal drag - we are the source
         internalDragActive = true;
-        dragSource = findDraggable(event.target) || event.target;
+
+        // Detect if this is a text-selection drag vs a draggable element drag
+        var draggableElement = findDraggable(event.target);
+        isTextSelectionDrag = !draggableElement;
+        dragSource = draggableElement || event.target;
         dragData = {};
+
+        log('isTextSelectionDrag=' + isTextSelectionDrag);
 
         // Read data from the real DataTransfer (TiddlyWiki has already populated it)
         var dt = event.dataTransfer;
@@ -435,6 +443,15 @@
             }
         }
 
+        // For text-selection drags, capture the selection if not in DataTransfer
+        if (isTextSelectionDrag && !dragData['text/plain']) {
+            var selection = window.getSelection();
+            if (selection && selection.toString()) {
+                dragData['text/plain'] = selection.toString();
+                log('Captured selection text: ' + dragData['text/plain'].substring(0, 50));
+            }
+        }
+
         // Send data to Rust for inter-wiki drops
         if (window.__TAURI__?.core?.invoke) {
             var tiddlerJson = dragData['text/vnd.tiddler'] || null;
@@ -446,7 +463,8 @@
                 text_vnd_tiddler: tiddlerJson,
                 text_uri_list: dragData['text/uri-list'] || null,
                 text_x_moz_url: dragData['text/x-moz-url'] || tiddlerUri,
-                url: dragData['URL'] || tiddlerUri
+                url: dragData['URL'] || tiddlerUri,
+                is_text_selection_drag: isTextSelectionDrag
             };
 
             window.__TAURI__.core.invoke('prepare_native_drag', { data: data })

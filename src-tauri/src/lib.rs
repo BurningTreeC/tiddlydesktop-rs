@@ -405,7 +405,7 @@ fn validate_window_position(
            saved_y >= mon_y && saved_y < mon_y + mon_height {
             eprintln!("[Window Position] Saved position ({}, {}) is on monitor '{}' at ({}, {})",
                 saved_x, saved_y,
-                monitor.name().as_deref().unwrap_or("unknown"),
+                monitor.name().map(String::as_str).unwrap_or("unknown"),
                 mon_x, mon_y);
             return (saved_x, saved_y);
         }
@@ -457,7 +457,7 @@ fn validate_window_position(
             let center_y = mon_y + (mon_height - win_height) / 2.0;
             eprintln!("[Window Position] Cursor at ({}, {}), centering on monitor '{}' at ({}, {})",
                 cursor_x, cursor_y,
-                monitor.name().as_deref().unwrap_or("unknown"),
+                monitor.name().map(String::as_str).unwrap_or("unknown"),
                 center_x, center_y);
             return (center_x, center_y);
         }

@@ -8,14 +8,21 @@ on:
       - '**.md'
       - '.gitignore'
   workflow_dispatch:
+    inputs:
+      use_current_version:
+        description: 'Use version from files (skip auto-increment). Set to true for major/minor releases like 0.2.0'
+        required: false
+        default: 'false'
+        type: boolean
 
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
   increment-version:
-    # Skip if this is a version bump commit from the bot
-    if: "!contains(github.event.head_commit.message, 'Bump version to')"
+    # Skip if this is a version bump commit from the bot, or a manual release commit
+    # Manual release commits should start with "Release v" (e.g., "Release v0.2.0")
+    if: "!contains(github.event.head_commit.message, 'Bump version to') && !startsWith(github.event.head_commit.message, 'Release v')"
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -36,12 +43,17 @@ jobs:
           CURRENT_VERSION=$(grep '^version = ' src-tauri/Cargo.toml | head -1 | sed 's/version = "\(.*\)"/\1/')
           echo "Current version: $CURRENT_VERSION"
 
-          # Parse version components
-          IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT_VERSION"
+          # Check if we should use current version (for manual major/minor releases)
+          if [ "${{ github.event.inputs.use_current_version }}" == "true" ]; then
+            echo "Using current version from files (no auto-increment)"
+            NEW_VERSION="$CURRENT_VERSION"
+          else
+            # Parse version components and increment patch
+            IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT_VERSION"
+            NEW_PATCH=$((PATCH + 1))
+            NEW_VERSION="${MAJOR}.${MINOR}.${NEW_PATCH}"
+          fi
 
-          # Increment patch version
-          NEW_PATCH=$((PATCH + 1))
-          NEW_VERSION="${MAJOR}.${MINOR}.${NEW_PATCH}"
           NEW_TAG="v${NEW_VERSION}"
 
           echo "New version: $NEW_VERSION"
@@ -57,6 +69,7 @@ jobs:
         run: cargo install cargo-about
 
       - name: Update version in all files
+        if: github.event.inputs.use_current_version != 'true'
         run: |
           NEW_VERSION="${{ steps.bump.outputs.new_version }}"
 
@@ -87,9 +100,22 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add src-tauri/Cargo.toml src-tauri/tauri.conf.json package.json THIRD_PARTY_LICENSES.txt
-          git commit -m "Bump version to ${{ steps.bump.outputs.new_version }}"
-          git push
+
+          # Add files that may have changed
+          git add THIRD_PARTY_LICENSES.txt
+
+          # Only add version files if we're auto-incrementing
+          if [ "${{ github.event.inputs.use_current_version }}" != "true" ]; then
+            git add src-tauri/Cargo.toml src-tauri/tauri.conf.json package.json
+          fi
+
+          # Check if there are changes to commit
+          if git diff --staged --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "Bump version to ${{ steps.bump.outputs.new_version }}"
+            git push
+          fi
 
       - name: Create and push tag
         run: |

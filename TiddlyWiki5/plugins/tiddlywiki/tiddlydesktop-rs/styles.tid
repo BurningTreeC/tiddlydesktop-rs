@@ -680,6 +680,25 @@ body {
 	border-color: #a0a0c0;
 }
 
+/* Update available button */
+.td-button-update {
+	background: #4a90d9;
+	border-color: #3a7fc8;
+	color: white;
+	text-decoration: none;
+	margin-right: 12px;
+}
+
+.td-button-update:hover {
+	background: #3a7fc8;
+	border-color: #2a6fb8;
+	color: white;
+}
+
+.td-button-update:visited {
+	color: white;
+}
+
 /* Group sections */
 .td-group-section {
 	margin-bottom: 16px;

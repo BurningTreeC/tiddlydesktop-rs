@@ -818,7 +818,75 @@ exports.startup = function(callback) {
 	// Initial load of wiki list from tiddler
 	refreshWikiList();
 
+	// Check for updates (only on main wiki / landing page)
+	if (isMainWiki) {
+		checkForUpdates();
+	}
+
 	callback();
 };
+
+// Check for updates by comparing current version with latest GitHub release
+function checkForUpdates() {
+	var GITHUB_RELEASES_URL = "https://api.github.com/repos/BurningTreeC/tiddlydesktop-rs/releases/latest";
+	var RELEASES_PAGE_URL = "https://github.com/BurningTreeC/tiddlydesktop-rs/releases";
+
+	// Get current app version from Tauri
+	if (!window.__TAURI__ || !window.__TAURI__.app) {
+		console.log("[Update Check] Tauri app API not available");
+		return;
+	}
+
+	window.__TAURI__.app.getVersion().then(function(currentVersion) {
+		console.log("[Update Check] Current version:", currentVersion);
+
+		// Fetch latest release from GitHub
+		fetch(GITHUB_RELEASES_URL)
+			.then(function(response) {
+				if (!response.ok) {
+					throw new Error("GitHub API request failed: " + response.status);
+				}
+				return response.json();
+			})
+			.then(function(release) {
+				var latestVersion = release.tag_name;
+				// Remove 'v' prefix if present
+				if (latestVersion.startsWith("v")) {
+					latestVersion = latestVersion.substring(1);
+				}
+				console.log("[Update Check] Latest version:", latestVersion);
+
+				// Compare versions
+				if (isNewerVersion(latestVersion, currentVersion)) {
+					console.log("[Update Check] Update available!");
+					$tw.wiki.setText("$:/temp/tiddlydesktop-rs/update-available", "text", null, "yes");
+					$tw.wiki.setText("$:/temp/tiddlydesktop-rs/latest-version", "text", null, latestVersion);
+					$tw.wiki.setText("$:/temp/tiddlydesktop-rs/releases-url", "text", null, RELEASES_PAGE_URL);
+				} else {
+					console.log("[Update Check] App is up to date");
+					$tw.wiki.setText("$:/temp/tiddlydesktop-rs/update-available", "text", null, "no");
+				}
+			})
+			.catch(function(err) {
+				console.log("[Update Check] Failed to check for updates:", err);
+			});
+	}).catch(function(err) {
+		console.log("[Update Check] Failed to get app version:", err);
+	});
+}
+
+// Compare two version strings (e.g., "0.2.1" > "0.2.0")
+function isNewerVersion(latest, current) {
+	var latestParts = latest.split(".").map(Number);
+	var currentParts = current.split(".").map(Number);
+
+	for (var i = 0; i < Math.max(latestParts.length, currentParts.length); i++) {
+		var latestPart = latestParts[i] || 0;
+		var currentPart = currentParts[i] || 0;
+		if (latestPart > currentPart) return true;
+		if (latestPart < currentPart) return false;
+	}
+	return false;
+}
 
 })();

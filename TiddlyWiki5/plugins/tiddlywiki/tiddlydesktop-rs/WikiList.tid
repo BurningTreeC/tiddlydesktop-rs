@@ -208,6 +208,11 @@ change
 </$button>
 </div>
 <div class="td-toolbar-item td-toolbar-right">
+<$reveal state="$:/temp/tiddlydesktop-rs/update-available" type="match" text="yes">
+<a href={{$:/temp/tiddlydesktop-rs/releases-url}} target="_blank" rel="noopener noreferrer" class="td-button td-button-update">
+{{$:/core/images/download-button}} Update available: v{{$:/temp/tiddlydesktop-rs/latest-version}}
+</a>
+</$reveal>
 <$button message="tm-tiddlydesktop-rs-manage-groups" class="td-button td-button-manage-groups" tooltip="Manage groups">
 {{$:/core/images/tag-button}} Groups
 </$button>

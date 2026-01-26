@@ -1951,6 +1951,14 @@ async fn open_wiki_folder(app: tauri::AppHandle, path: String) -> Result<WikiEnt
         // Clean up tracking
         let state = app_handle.state::<AppState>();
         state.wiki_processes.lock().unwrap().remove(&path_clone);
+
+        // Exit app if no more wikis and no windows
+        let wiki_count = state.wiki_processes.lock().unwrap().len();
+        let has_windows = app_handle.webview_windows().len() > 0;
+        if wiki_count == 0 && !has_windows {
+            eprintln!("[TiddlyDesktop] No more wikis or windows, exiting");
+            app_handle.exit(0);
+        }
     });
 
     // Create the wiki entry
@@ -2747,6 +2755,14 @@ async fn open_wiki_window(app: tauri::AppHandle, path: String) -> Result<WikiEnt
         let state = app_handle.state::<AppState>();
         state.wiki_processes.lock().unwrap().remove(&path_clone);
         eprintln!("[TiddlyDesktop] Removed wiki process from tracking: {}", path_clone);
+
+        // Exit app if no more wikis and no windows
+        let wiki_count = state.wiki_processes.lock().unwrap().len();
+        let has_windows = app_handle.webview_windows().len() > 0;
+        if wiki_count == 0 && !has_windows {
+            eprintln!("[TiddlyDesktop] No more wikis or windows, exiting");
+            app_handle.exit(0);
+        }
     });
 
     // Create the wiki entry
@@ -3953,11 +3969,11 @@ fn reveal_or_create_main_window(app_handle: &tauri::AppHandle) {
 }
 
 fn setup_system_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
-    let open_wiki = MenuItemBuilder::with_id("open_wiki", "Open Wiki...").build(app)?;
+    let show_window = MenuItemBuilder::with_id("show_window", "Show TiddlyDesktop").build(app)?;
     let quit = MenuItemBuilder::with_id("quit", "Quit").build(app)?;
 
     let menu = MenuBuilder::new(app)
-        .item(&open_wiki)
+        .item(&show_window)
         .separator()
         .item(&quit)
         .build()?;
@@ -3968,10 +3984,18 @@ fn setup_system_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>>
         .tooltip("TiddlyDesktop")
         .on_menu_event(|app, event| {
             match event.id().as_ref() {
-                "open_wiki" => {
+                "show_window" => {
                     reveal_or_create_main_window(app);
                 }
                 "quit" => {
+                    // Check if wikis are open before quitting
+                    let state = app.state::<AppState>();
+                    let wiki_count = state.wiki_processes.lock().unwrap().len();
+                    if wiki_count > 0 {
+                        eprintln!("[TiddlyDesktop] Quit requested with {} wiki(s) open - closing all", wiki_count);
+                        // Clear wiki processes so ExitRequested handler allows exit
+                        state.wiki_processes.lock().unwrap().clear();
+                    }
                     app.exit(0);
                 }
                 _ => {}
@@ -4396,7 +4420,8 @@ fn run_wiki_mode(args: WikiModeArgs) {
             ipc_get_tiddler_title,
             ipc_request_sync,
             ipc_send_sync_state,
-            ipc_update_favicon
+            ipc_update_favicon,
+            show_find_in_page
         ])
         .build(tauri::generate_context!())
         .expect("error while building wiki-mode application")
@@ -4667,6 +4692,7 @@ fn run_wiki_folder_mode(args: WikiFolderModeArgs) {
             wiki_storage::save_window_state,
             wiki_storage::js_log,
             clipboard::get_clipboard_content,
+            show_find_in_page,
         ])
         .build(tauri::generate_context!())
         .expect("error while building wiki-folder-mode application")
@@ -4961,30 +4987,38 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
         .run(|app, event| {
-            // Handle files opened via macOS file associations
-            #[cfg(target_os = "macos")]
-            if let tauri::RunEvent::Opened { urls } = event {
-                for url in urls {
-                    if let Ok(path) = url.to_file_path() {
-                        if let Some(ext) = path.extension() {
-                            let ext_lower = ext.to_string_lossy().to_lowercase();
-                            if ext_lower == "html" || ext_lower == "htm" {
-                                let app_handle = app.clone();
-                                let path_str = path.to_string_lossy().to_string();
-                                tauri::async_runtime::spawn(async move {
-                                    if let Ok(entry) = open_wiki_window(app_handle.clone(), path_str).await {
-                                        // Emit event to refresh wiki list in main window
-                                        let _ = app_handle.emit("wiki-list-changed", entry);
-                                    }
-                                });
+            match event {
+                // Prevent app exit if wiki windows are still open
+                tauri::RunEvent::ExitRequested { api, .. } => {
+                    let state = app.state::<AppState>();
+                    let wiki_count = state.wiki_processes.lock().unwrap().len();
+                    if wiki_count > 0 {
+                        eprintln!("[TiddlyDesktop] Preventing exit - {} wiki(s) still open", wiki_count);
+                        api.prevent_exit();
+                    }
+                }
+                // Handle files opened via macOS file associations
+                #[cfg(target_os = "macos")]
+                tauri::RunEvent::Opened { urls } => {
+                    for url in urls {
+                        if let Ok(path) = url.to_file_path() {
+                            if let Some(ext) = path.extension() {
+                                let ext_lower = ext.to_string_lossy().to_lowercase();
+                                if ext_lower == "html" || ext_lower == "htm" {
+                                    let app_handle = app.clone();
+                                    let path_str = path.to_string_lossy().to_string();
+                                    tauri::async_runtime::spawn(async move {
+                                        if let Ok(entry) = open_wiki_window(app_handle.clone(), path_str).await {
+                                            // Emit event to refresh wiki list in main window
+                                            let _ = app_handle.emit("wiki-list-changed", entry);
+                                        }
+                                    });
+                                }
                             }
                         }
                     }
                 }
+                _ => {}
             }
-
-            // Suppress unused variable warnings on non-macOS platforms
-            #[cfg(not(target_os = "macos"))]
-            let _ = (app, event);
         });
 }

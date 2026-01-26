@@ -7,23 +7,36 @@ A modern, cross-platform desktop application for [TiddlyWiki](https://tiddlywiki
 - **Single-file wikis**: Open and edit standalone TiddlyWiki HTML files with automatic saving and backups
 - **Wiki folders**: Full Node.js-powered wiki folder support with real-time syncing
 - **Create new wikis**: Initialize new single-file or folder wikis from any TiddlyWiki edition
+- **Drag and drop**: Drop wiki files onto the app or landing page to open them
 - **Cross-platform**: Windows, macOS, and Linux support
-- **Lightweight**: Small download size and low resource usage thanks to Tauri
+- **Lightweight**: Small download size (~15MB) and low resource usage thanks to Tauri
 - **Native experience**: System tray, native file dialogs, and platform-specific installers
+
+## Quick Start
+
+1. Download the installer for your platform from the [Releases page](../../releases)
+2. Install and launch TiddlyDesktopRS
+3. Click **"Open Wiki File"** to open an existing TiddlyWiki HTML file, or
+4. Click **"New Wiki File"** to create a new wiki
 
 ## Download
 
-Download the latest release for your platform from the [Releases page](../../releases).
+| Platform | Recommended | Alternative |
+|----------|-------------|-------------|
+| **Windows** | `.msi` installer | `.exe` (NSIS installer) |
+| **macOS** | `.dmg` disk image | `.app.zip` |
+| **Linux** | `.deb` / `.rpm` / `.pkg.tar.zst` | `.tar.gz` (portable) |
 
-| Platform | Download |
-|----------|----------|
-| Windows | `.msi` (installer) or `.exe` (NSIS installer) |
-| macOS | `.dmg` (disk image) or `.app.zip` |
-| Linux | `.deb` (Debian/Ubuntu), `.rpm` (Fedora/RHEL), `.pkg.tar.zst` (Arch), or `.tar.gz` (portable) |
+### Which Build Should I Choose?
 
-### Builds Without Bundled Node.js
+**Standard builds** (recommended): Include a bundled Node.js binary for wiki folder support. Everything works out of the box.
 
-Files prefixed with `PROVIDE_YOUR_OWN_NODEJS_` are smaller builds that don't include a bundled Node.js binary. These require Node.js to be installed on your system for wiki folder support. Single-file wikis work without Node.js.
+**`PROVIDE_YOUR_OWN_NODEJS_` builds**: Smaller downloads without bundled Node.js. Use these if:
+- You already have Node.js 18+ installed system-wide
+- You only use single-file wikis (Node.js not required)
+- You want smaller download size
+
+**Note**: Linux builds never bundle Node.js - install it via your package manager if you need wiki folder support.
 
 ## Installation
 
@@ -32,124 +45,92 @@ Files prefixed with `PROVIDE_YOUR_OWN_NODEJS_` are smaller builds that don't inc
 1. Download the `.msi` or `.exe` installer
 2. Run the installer
 3. **Security warning**: Windows SmartScreen may show "Windows protected your PC"
-   - Click **"More info"**
-   - Click **"Run anyway"**
+   - Click **"More info"** → **"Run anyway"**
 
 ### macOS
 
 1. Download the `.dmg` file
 2. Open the disk image and drag the app to Applications
-3. **Security warning**: macOS will show "app is damaged" or "unidentified developer"
+3. **Security warning**: macOS may show "app is damaged" or "unidentified developer"
    - **Option A**: Right-click the app → **Open** → **Open**
    - **Option B**: Run in Terminal: `xattr -cr /Applications/TiddlyDesktopRS.app`
 
 ### Linux
 
-**Requirements**:
-- **Node.js 18+**: Required for wiki folder support. Install via your package manager, [NodeSource](https://github.com/nodesource/distributions), or [nvm](https://github.com/nvm-sh/nvm). Single-file wikis work without Node.js.
-- **libayatana-appindicator**: Required for system tray support.
-  - Debian/Ubuntu: `sudo apt install libayatana-appindicator3-1`
-  - Fedora: `sudo dnf install libayatana-appindicator-gtk3`
+**Install required system libraries first:**
 
-**Debian/Ubuntu (.deb)**:
+| Distribution | Command |
+|--------------|---------|
+| Debian/Ubuntu | `sudo apt install libwebkit2gtk-4.1-0 libgtk-3-0 libayatana-appindicator3-1` |
+| Fedora | `sudo dnf install webkit2gtk4.1 gtk3 libayatana-appindicator-gtk3` |
+| Arch | `sudo pacman -S webkit2gtk-4.1 gtk3 libayatana-appindicator` |
+
+**For wiki folder support**, also install Node.js 18+ via your package manager, [NodeSource](https://github.com/nodesource/distributions), or [nvm](https://github.com/nvm-sh/nvm).
+
+**Then install the package:**
+
 ```bash
+# Debian/Ubuntu
 sudo dpkg -i tiddlydesktop-rs_*.deb
-```
 
-**Fedora/RHEL (.rpm)**:
-```bash
+# Fedora/RHEL
 sudo rpm -i tiddlydesktop-rs-*.rpm
-```
 
-**Arch Linux (.pkg.tar.zst)**:
-```bash
+# Arch Linux
 sudo pacman -U tiddlydesktop-rs-*.pkg.tar.zst
-```
 
-**Portable tarball (.tar.gz)**:
-```bash
+# Portable (any distro)
 tar -xzf tiddlydesktop-rs-*.tar.gz
-cd tiddlydesktop-rs
-./tiddlydesktop-rs
-```
-
-## Verifying Downloads
-
-Each release includes a `CHECKSUMS-SHA256.txt` file containing SHA256 checksums for all downloads.
-
-**Linux/macOS**:
-```bash
-# Download CHECKSUMS-SHA256.txt and the file you want to verify
-sha256sum -c CHECKSUMS-SHA256.txt --ignore-missing
-```
-
-**Windows (PowerShell)**:
-```powershell
-# Get the checksum of your downloaded file
-Get-FileHash .\TiddlyDesktopRS_x64-setup.exe -Algorithm SHA256
-
-# Compare with the value in CHECKSUMS-SHA256.txt
-```
-
-## Building from Source
-
-### Prerequisites
-
-- [Node.js](https://nodejs.org/) 20+
-- [Rust](https://rustup.rs/) (stable)
-- Platform-specific dependencies (see [Tauri prerequisites](https://tauri.app/start/prerequisites/))
-
-### Build Steps
-
-```bash
-# Clone the repository
-git clone https://github.com/BurningTreeC/tiddlydesktop-rs.git
-cd tiddlydesktop-rs
-
-# Clone TiddlyWiki5 (required for building)
-git clone https://github.com/TiddlyWiki/TiddlyWiki5.git ../TiddlyWiki5
-
-# Copy plugins and editions
-cp -r TiddlyWiki5/plugins/tiddlywiki/tiddlydesktop-rs ../TiddlyWiki5/plugins/tiddlywiki/
-cp -r TiddlyWiki5/plugins/tiddlywiki/tiddlydesktop-rs-commands ../TiddlyWiki5/plugins/tiddlywiki/
-cp -r TiddlyWiki5/editions/tiddlydesktop-rs ../TiddlyWiki5/editions/
-
-# Install dependencies
-npm install
-
-# Build TiddlyWiki
-cd ../TiddlyWiki5
-node tiddlywiki.js editions/tiddlydesktop-rs --output ../tiddlydesktop-rs/src --render '$:/core/save/all' 'index.html' 'text/plain'
-cd ../tiddlydesktop-rs
-
-# Bundle TiddlyWiki for the app
-mkdir -p src-tauri/resources
-cp -r ../TiddlyWiki5 src-tauri/resources/tiddlywiki
-
-# Download Node.js binary for wiki folder support (desktop only)
-# See .github/workflows/release.yml for platform-specific instructions
-
-# Build the application
-npm run tauri build
+./tiddlydesktop-rs/tiddlydesktop-rs
 ```
 
 ## Usage
 
 ### Opening Wikis
 
-- **Single-file wiki**: Click "Open Wiki File" or drag-and-drop an HTML file
-- **Wiki folder**: Click "Open Wiki Folder" and select a folder containing `tiddlywiki.info`
+- **Click** "Open Wiki File" or "Open Wiki Folder" from the landing page
+- **Drag and drop** a `.html` wiki file onto the app window
+- **Double-click** a `.html` file (if file associations are set up)
+
+### Saving Wikis
+
+| Wiki Type | How to Save |
+|-----------|-------------|
+| Single-file | Press **Ctrl+S** (or **Cmd+S** on macOS), or click the save button in TiddlyWiki |
+| Wiki folder | Saves automatically on every change |
+
+Single-file wikis create timestamped backups in the same directory when saved.
 
 ### Creating New Wikis
 
-1. Click "New Wiki File" or "New Wiki Folder"
+1. Click **"New Wiki File"** or **"New Wiki Folder"**
 2. Select an edition (e.g., "empty", "full")
 3. Optionally select additional plugins
 4. Choose the save location
 
+### Wiki Folders vs Single Files
+
+| Feature | Single File | Wiki Folder |
+|---------|-------------|-------------|
+| Format | Single `.html` file | Directory with multiple files |
+| Saving | Manual (Ctrl+S) with backups | Auto-save on every change |
+| Performance | Can slow down with large wikis | Better for large wikis |
+| Plugins | Embedded in file | External plugin folders |
+| Node.js required | No | Yes |
+| Portability | Easy to share/backup | Requires folder copy |
+
+### Keyboard Shortcuts
+
+| Shortcut | Action |
+|----------|--------|
+| Ctrl+S / Cmd+S | Save wiki (single-file wikis) |
+| Ctrl+F / Cmd+F | Find in page (wiki windows only, not landing page) |
+| F3 / Shift+F3 | Find next / previous |
+| Escape | Close find bar |
+
 ### Custom Editions
 
-You can add custom TiddlyWiki editions by placing them in the user editions directory:
+Add custom TiddlyWiki editions to the user editions directory:
 
 | Platform | Path |
 |----------|------|
@@ -157,31 +138,33 @@ You can add custom TiddlyWiki editions by placing them in the user editions dire
 | macOS | `~/Library/Application Support/tiddlydesktop-rs/editions/` |
 | Windows | `%APPDATA%\tiddlydesktop-rs\editions\` |
 
-Each edition must be a directory containing a valid `tiddlywiki.info` file. Custom editions will appear in the edition selector when creating new wikis.
+Each edition must be a directory containing a valid `tiddlywiki.info` file.
 
-### Wiki Folders vs Single Files
+### Data Storage Locations
 
-| Feature | Single File | Wiki Folder |
-|---------|-------------|-------------|
-| Portability | Single HTML file | Directory with multiple files |
-| Saving | Manual save (Ctrl+S) with backups | Auto-save on every change |
-| Performance | Can be slow with large wikis | Better for large wikis |
-| Plugins | Embedded in file | External plugin folders |
-| Node.js required | No | Yes |
+TiddlyDesktopRS stores settings and wiki metadata in:
 
-### Running Shell Commands
+| Platform | Path |
+|----------|------|
+| Linux | `~/.local/share/tiddlydesktop-rs/` |
+| macOS | `~/Library/Application Support/tiddlydesktop-rs/` |
+| Windows | `%APPDATA%\tiddlydesktop-rs\` |
 
-TiddlyDesktop-RS supports running shell commands from within your wikis via the **TiddlyDesktop-RS Commands** plugin.
+This includes:
+- `settings.json` - Application preferences
+- `wikis.json` - Recently opened wikis and window positions
+- `editions/` - Custom TiddlyWiki editions
 
-#### Installing the Plugin
+## Running Shell Commands
 
-1. Locate the plugin in `TiddlyWiki5/plugins/tiddlywiki/tiddlydesktop-rs-commands/`
-2. Drag and drop the plugin folder into your wiki, or install it via TiddlyWiki's plugin library
-3. Save and reload your wiki
+TiddlyDesktopRS supports running shell commands from within your wikis via the **TiddlyDesktop-RS Commands** plugin.
 
-The plugin provides the `<$action-run-command>` widget for executing shell commands.
+### Installing the Plugin
 
-#### Basic Usage
+1. Drag and drop the plugin folder from `TiddlyWiki5/plugins/tiddlywiki/tiddlydesktop-rs-commands/` into your wiki
+2. Save and reload your wiki
+
+### Basic Usage
 
 ```html
 <$button>
@@ -190,21 +173,21 @@ The plugin provides the `<$action-run-command>` widget for executing shell comma
 </$button>
 ```
 
-#### Widget Attributes
+### Widget Attributes
 
 | Attribute | Description | Default |
 |-----------|-------------|---------|
 | `$command` | Command or script path to run (required) | - |
 | `$args` | Arguments (space-separated, supports quotes) | - |
-| `$workingDir` | Working directory | - |
+| `$workingDir` | Working directory | Wiki directory |
 | `$wait` | Wait for completion (`yes`/`no`) | `no` |
 | `$confirm` | Show confirmation dialog (`yes`/`no`) | `yes` |
-| `$outputTiddler` | Tiddler to store output (needs `$wait="yes"`) | - |
+| `$outputTiddler` | Tiddler to store output (requires `$wait="yes"`) | - |
 | `$outputField` | Field for stdout | `text` |
 | `$exitCodeField` | Field for exit code | - |
 | `$stderrField` | Field for stderr | - |
 
-#### Capturing Output
+### Capturing Output
 
 ```html
 <$button>
@@ -222,111 +205,161 @@ The plugin provides the `<$action-run-command>` widget for executing shell comma
 </$list>
 ```
 
-#### Security
+### Security Notes
 
-- **Confirmation dialog**: By default, a native dialog asks the user to approve each command before execution
-- Use `$confirm="no"` only for trusted commands you control
+- By default, a confirmation dialog appears before each command runs
+- Use `$confirm="no"` only for trusted commands
 - Commands run with your user permissions
-- This widget only works when the plugin is installed and the wiki is opened in TiddlyDesktop-RS (has no effect in browsers)
+- This widget only works in TiddlyDesktopRS (no effect in browsers)
 
 ## Troubleshooting
 
 ### Linux: Performance Issues
 
-If you experience slow performance, laggy scrolling, or high CPU usage on Linux, this is typically related to GPU acceleration and WebKitGTK rendering. This is more common on **KDE Plasma** and **Linux Mint**.
-
-#### Quick Fixes to Try
+If you experience slow performance, laggy scrolling, or high CPU usage, try these environment variables:
 
 ```bash
-# Try disabling DMA-buf renderer (often helps on KDE)
+# Often fixes issues on KDE Plasma
 WEBKIT_DISABLE_DMABUF_RENDERER=1 ./tiddlydesktop-rs
 
-# Try disabling compositing mode
+# Alternative fix
 WEBKIT_DISABLE_COMPOSITING_MODE=1 ./tiddlydesktop-rs
 
-# Disable all GPU acceleration (slowest but most compatible)
+# Maximum compatibility (software rendering)
 TIDDLYDESKTOP_DISABLE_GPU=1 ./tiddlydesktop-rs
 ```
 
-#### KDE Plasma Specific
-
-KDE uses Qt, and GTK applications may have extra overhead:
-
+**KDE Plasma specific:**
 ```bash
-# Disable GTK portal integration (can reduce overhead)
 GTK_USE_PORTAL=0 ./tiddlydesktop-rs
-
-# Force X11 backend on KDE Wayland (sometimes faster)
+# Or on Wayland:
 GDK_BACKEND=x11 ./tiddlydesktop-rs
 ```
 
-Install GTK integration for KDE:
-- **Kubuntu/KDE Neon**: `sudo apt install kde-config-gtk-style`
-- **Fedora KDE**: `sudo dnf install kde-gtk-config`
-
-#### Linux Mint / Cinnamon
-
-Check your WebKitGTK version:
-```bash
-pkg-config --modversion webkit2gtk-4.1
-```
-Versions below 2.40 may have performance issues. Consider using the Flatpak version if available.
-
-#### Required Dependencies
-
-Missing system libraries can cause performance issues. See [dependencies.md](../dependencies.md) for a complete list of required packages for your distribution.
-
-#### Permanent Configuration
-
-Add to your `~/.bashrc` or create a wrapper script:
-
+**Make permanent** by adding to `~/.bashrc`:
 ```bash
 export WEBKIT_DISABLE_DMABUF_RENDERER=1
-# or for maximum compatibility:
-export TIDDLYDESKTOP_DISABLE_GPU=1
 ```
 
 ### Linux: Graphics Glitches
 
-If you experience blank windows, black artifacts, or rendering glitches (particularly with older Nvidia cards using the **nouveau driver**):
-
+Blank windows or rendering artifacts (common with nouveau driver):
 ```bash
 TIDDLYDESKTOP_DISABLE_GPU=1 ./tiddlydesktop-rs
 ```
 
-This forces software rendering by setting `WEBKIT_DISABLE_COMPOSITING_MODE=1`, `WEBKIT_DISABLE_DMABUF_RENDERER=1`, and `LIBGL_ALWAYS_SOFTWARE=1`.
+### Linux: Missing Libraries
+
+If the app fails to start, ensure all dependencies are installed:
+```bash
+# Debian/Ubuntu
+sudo apt install libwebkit2gtk-4.1-0 libgtk-3-0 libayatana-appindicator3-1
+
+# Fedora
+sudo dnf install webkit2gtk4.1 gtk3 libayatana-appindicator-gtk3
+
+# Arch
+sudo pacman -S webkit2gtk-4.1 gtk3 libayatana-appindicator
+```
 
 ## Known Limitations
 
-### Linux: Window Title Not Updated
+### Linux: Window Title
 
-On **Linux**, the window title does not automatically update to reflect the wiki name. This is due to a limitation in WebKitGTK (the web rendering engine used by Tauri on Linux) where dynamically setting the window title from JavaScript or the Tauri API doesn't work reliably.
-
-The window title works correctly on **Windows** and **macOS**.
+The window title doesn't update to reflect the wiki name on Linux due to a WebKitGTK limitation. Works correctly on Windows and macOS.
 
 ### macOS: Orphaned Node.js Processes
 
-When using wiki folders, TiddlyDesktop-RS spawns a Node.js server process. On **Linux** and **Windows**, if the app is forcefully terminated (e.g., via Task Manager or `kill -9`), these Node.js processes are automatically killed.
-
-On **macOS**, due to OS limitations, forcefully killing the app may leave orphaned Node.js processes running. To clean them up manually:
-
+If you force-kill the app (e.g., `kill -9`) while using wiki folders, Node.js processes may remain running. Clean up manually:
 ```bash
-# Find orphaned Node.js processes
 ps aux | grep "node.*tiddlywiki"
-
-# Kill them (replace PID with actual process ID)
-kill PID
+kill <PID>
 ```
 
-This only affects wiki folders, not single-file wikis. Normal app closure (quit via menu/tray) always cleans up properly on all platforms.
+Normal quit (menu/tray) always cleans up properly.
+
+## Verifying Downloads
+
+Each release includes `CHECKSUMS-SHA256.txt` with SHA256 checksums.
+
+**Linux/macOS:**
+```bash
+sha256sum -c CHECKSUMS-SHA256.txt --ignore-missing
+```
+
+**Windows (PowerShell):**
+```powershell
+Get-FileHash .\TiddlyDesktopRS_x64-setup.exe -Algorithm SHA256
+```
+
+## Building from Source
+
+### Prerequisites
+
+- [Node.js](https://nodejs.org/) 20+
+- [Rust](https://rustup.rs/) (stable)
+- Platform-specific dependencies (see below)
+
+### Build Dependencies
+
+**Linux (Debian/Ubuntu):**
+```bash
+sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev
+```
+
+**Linux (Fedora):**
+```bash
+sudo dnf install gtk3-devel webkit2gtk4.1-devel libayatana-appindicator-gtk3-devel librsvg2-devel
+```
+
+**Linux (Arch):**
+```bash
+sudo pacman -S gtk3 webkit2gtk-4.1 libayatana-appindicator librsvg
+```
+
+**Windows:**
+- Visual Studio Build Tools with C++ workload (comes with Rust)
+- [WiX Toolset](https://wixtoolset.org/) v3 for `.msi` builds: `choco install wixtoolset`
+
+**macOS:**
+- Xcode Command Line Tools: `xcode-select --install`
+
+### Build Steps
+
+```bash
+# Clone repositories
+git clone https://github.com/BurningTreeC/tiddlydesktop-rs.git
+git clone https://github.com/TiddlyWiki/TiddlyWiki5.git
+
+# Copy plugins and editions to TiddlyWiki5
+cp -r tiddlydesktop-rs/TiddlyWiki5/plugins/tiddlywiki/tiddlydesktop-rs TiddlyWiki5/plugins/tiddlywiki/
+cp -r tiddlydesktop-rs/TiddlyWiki5/plugins/tiddlywiki/tiddlydesktop-rs-commands TiddlyWiki5/plugins/tiddlywiki/
+cp -r tiddlydesktop-rs/TiddlyWiki5/editions/tiddlydesktop-rs TiddlyWiki5/editions/
+
+# Build TiddlyWiki landing page
+cd TiddlyWiki5
+node tiddlywiki.js editions/tiddlydesktop-rs --output ../tiddlydesktop-rs/src --render '$:/core/save/all' 'index.html' 'text/plain'
+
+# Bundle TiddlyWiki into the app
+cd ../tiddlydesktop-rs
+npm install
+mkdir -p src-tauri/resources
+cp -r ../TiddlyWiki5 src-tauri/resources/tiddlywiki
+cp src/index.html src-tauri/resources/index.html
+
+# Build the application
+npm run tauri build
+```
+
+Built artifacts will be in `src-tauri/target/release/bundle/`.
 
 ## Why the Security Warnings?
 
-The application is not code-signed, which means your operating system can't verify the publisher. Code signing certificates cost $100-400+ per year, which isn't feasible for this free, open-source project.
+The application is not code-signed because certificates cost $100-400+/year, which isn't feasible for this free, open-source project.
 
-**The app is safe to use** - you can:
-- Review the source code in this repository
-- Verify downloads using the SHA256 checksums
+**The app is safe** - you can:
+- Review the [source code](https://github.com/BurningTreeC/tiddlydesktop-rs)
+- Verify downloads using SHA256 checksums
 - Build from source yourself
 
 ## License
@@ -335,6 +368,6 @@ MIT License - see [LICENSE](LICENSE) for details.
 
 ## Acknowledgments
 
-- [TiddlyWiki](https://tiddlywiki.com/) - The amazing non-linear personal web notebook
-- [Tauri](https://tauri.app/) - Build smaller, faster, and more secure desktop applications
+- [TiddlyWiki](https://tiddlywiki.com/) - The non-linear personal web notebook
+- [Tauri](https://tauri.app/) - Framework for building desktop apps
 - [Original TiddlyDesktop](https://github.com/TiddlyWiki/TiddlyDesktop) - Inspiration for this project

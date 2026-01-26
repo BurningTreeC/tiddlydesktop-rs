@@ -34,47 +34,14 @@
     "linux": {
       "deb": {
         "depends": [
-          "libwebkit2gtk-4.1-0 (>= 2.40.0)",
-          "libgtk-3-0 (>= 3.24.0)",
-          "libglib2.0-0 (>= 2.66.0)",
-          "libcairo2 (>= 1.16.0)",
-          "libpango-1.0-0 (>= 1.48.0)",
-          "libgdk-pixbuf-2.0-0 (>= 2.40.0)",
-          "libayatana-appindicator3-1",
-          "gstreamer1.0-plugins-base",
-          "gstreamer1.0-plugins-good",
-          "libva2",
-          "libva-drm2",
-          "libva-x11-2",
-          "mesa-va-drivers",
-          "libegl1",
-          "libgl1"
-        ],
-        "recommends": [
-          "gstreamer1.0-plugins-bad",
-          "gstreamer1.0-plugins-ugly",
-          "gstreamer1.0-libav",
-          "mesa-utils"
+          "libayatana-appindicator3-1"
         ],
         "section": "utils",
         "priority": "optional"
       },
       "rpm": {
         "depends": [
-          "webkit2gtk4.1 >= 2.40.0",
-          "gtk3 >= 3.24.0",
-          "glib2 >= 2.66.0",
-          "cairo >= 1.16.0",
-          "pango >= 1.48.0",
-          "gdk-pixbuf2 >= 2.40.0",
-          "libayatana-appindicator-gtk3",
-          "gstreamer1-plugins-base",
-          "gstreamer1-plugins-good",
-          "mesa-dri-drivers",
-          "mesa-va-drivers",
-          "libva",
-          "mesa-libEGL",
-          "mesa-libGL"
+          "libayatana-appindicator-gtk3"
         ]
       }
     },

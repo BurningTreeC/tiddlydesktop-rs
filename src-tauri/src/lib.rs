@@ -1367,8 +1367,13 @@ async fn run_command(
         }))
     } else {
         // Fire and forget
-        cmd.spawn()
+        #[allow(unused_variables)]
+        let child = cmd.spawn()
             .map_err(|e| format!("Failed to spawn command: {}", e))?;
+
+        // Windows: Assign to job object so it gets killed when parent exits
+        #[cfg(target_os = "windows")]
+        drag_drop::windows_job::assign_process_to_job(child.id());
 
         Ok(None)
     }
@@ -1803,6 +1808,10 @@ async fn open_wiki_folder(app: tauri::AppHandle, path: String) -> Result<WikiEnt
 
     let pid = child.id();
     eprintln!("[TiddlyDesktop] Wiki folder process spawned with PID: {}", pid);
+
+    // Windows: Assign to job object so it gets killed when parent exits
+    #[cfg(target_os = "windows")]
+    drag_drop::windows_job::assign_process_to_job(pid);
 
     // Track the process (using wiki_processes like single-file wikis)
     state.wiki_processes.lock().unwrap().insert(path.clone(), WikiProcess {
@@ -2588,6 +2597,10 @@ async fn open_wiki_window(app: tauri::AppHandle, path: String) -> Result<WikiEnt
     let pid = child.id();
     eprintln!("[TiddlyDesktop] Wiki process spawned with PID: {}", pid);
 
+    // Windows: Assign to job object so it gets killed when parent exits
+    #[cfg(target_os = "windows")]
+    drag_drop::windows_job::assign_process_to_job(pid);
+
     // Track the process
     state.wiki_processes.lock().unwrap().insert(path.clone(), WikiProcess {
         pid,
@@ -2790,6 +2803,10 @@ fn spawn_wiki_process_sync(wiki_path: &str) -> Result<u32, String> {
     let pid = child.id();
     eprintln!("[TiddlyDesktop] Wiki process spawned with PID: {}", pid);
 
+    // Windows: Assign to job object so it gets killed when parent exits
+    #[cfg(target_os = "windows")]
+    drag_drop::windows_job::assign_process_to_job(pid);
+
     // Spawn a thread to wait for the process to exit (cleanup)
     std::thread::spawn(move || {
         let mut child = child;
@@ -2830,6 +2847,10 @@ fn spawn_tiddler_process(wiki_path: &str, tiddler_title: &str, startup_tiddler: 
 
     let pid = child.id();
     eprintln!("[TiddlyDesktop] Tiddler process spawned with PID: {}", pid);
+
+    // Windows: Assign to job object so it gets killed when parent exits
+    #[cfg(target_os = "windows")]
+    drag_drop::windows_job::assign_process_to_job(pid);
 
     // Spawn a thread to wait for the process to exit (cleanup)
     std::thread::spawn(move || {
@@ -4343,6 +4364,10 @@ fn run_wiki_folder_mode(args: WikiFolderModeArgs) {
             return;
         }
     };
+
+    // Windows: Assign to job object so it gets killed when parent exits
+    #[cfg(target_os = "windows")]
+    drag_drop::windows_job::assign_process_to_job(server_process.id());
 
     // Wait for server to be ready
     if let Err(e) = wait_for_server_ready(port, &mut server_process, std::time::Duration::from_secs(15)) {

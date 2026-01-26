@@ -22,7 +22,11 @@ jobs:
   increment-version:
     # Skip if this is a version bump commit from the bot, or a manual release commit
     # Manual release commits should start with "Release v" (e.g., "Release v0.2.0")
-    if: "!contains(github.event.head_commit.message, 'Bump version to') && !startsWith(github.event.head_commit.message, 'Release v')"
+    # Always run for workflow_dispatch (manual trigger)
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (!contains(github.event.head_commit.message, 'Bump version to') &&
+       !startsWith(github.event.head_commit.message, 'Release v'))
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -119,8 +123,13 @@ jobs:
 
       - name: Create and push tag
         run: |
-          git tag ${{ steps.bump.outputs.new_tag }}
-          git push origin ${{ steps.bump.outputs.new_tag }}
+          # Check if tag already exists
+          if git rev-parse "${{ steps.bump.outputs.new_tag }}" >/dev/null 2>&1; then
+            echo "Tag ${{ steps.bump.outputs.new_tag }} already exists, skipping creation"
+          else
+            git tag ${{ steps.bump.outputs.new_tag }}
+            git push origin ${{ steps.bump.outputs.new_tag }}
+          fi
 
   build-linux:
     needs: increment-version

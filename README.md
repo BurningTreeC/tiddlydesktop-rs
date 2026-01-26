@@ -264,10 +264,6 @@ sudo pacman -S webkit2gtk-4.1 gtk3 libayatana-appindicator
 
 ## Known Limitations
 
-### Linux: Window Title
-
-The window title doesn't update to reflect the wiki name on Linux due to a WebKitGTK limitation. Works correctly on Windows and macOS.
-
 ### macOS: Orphaned Node.js Processes
 
 If you force-kill the app (e.g., `kill -9`) while using wiki folders, Node.js processes may remain running. Clean up manually:

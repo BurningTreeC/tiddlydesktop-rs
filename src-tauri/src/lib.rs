@@ -361,15 +361,19 @@ fn linux_finalize_window_state(window: &tauri::WebviewWindow, saved_state: &Opti
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 
 /// Windows/macOS: Validate saved window position against current monitor configuration.
-/// Returns adjusted (x, y) position that's guaranteed to be on a visible monitor.
+/// Returns adjusted (x, y) position in logical pixels that's guaranteed to be on a visible monitor.
 ///
 /// If the saved position is on a currently visible monitor, returns it unchanged.
 /// Otherwise, falls back to the monitor containing the mouse cursor and centers the window there.
+///
+/// Note: Saved state is in logical pixels. Monitor APIs return physical pixels, so we convert
+/// using each monitor's scale factor for accurate comparison.
 fn validate_window_position(
     app: &tauri::AppHandle,
     saved_state: &crate::types::WindowState,
 ) -> (f64, f64) {
 
+    // Saved state is in logical pixels
     let saved_x = saved_state.x as f64;
     let saved_y = saved_state.y as f64;
     let win_width = saved_state.width as f64;
@@ -389,20 +393,22 @@ fn validate_window_position(
         return (saved_x, saved_y);
     }
 
-    // Check if saved position is within any monitor's bounds
+    // Check if saved position (logical) is within any monitor's bounds (converted to logical)
     // We check if the top-left corner of the window is on a monitor
     for monitor in &monitors {
+        let scale = monitor.scale_factor();
         let pos = monitor.position();
         let size = monitor.size();
-        let mon_x = pos.x as f64;
-        let mon_y = pos.y as f64;
-        let mon_width = size.width as f64;
-        let mon_height = size.height as f64;
+        // Convert physical to logical
+        let mon_x = pos.x as f64 / scale;
+        let mon_y = pos.y as f64 / scale;
+        let mon_width = size.width as f64 / scale;
+        let mon_height = size.height as f64 / scale;
 
         // Check if the saved position is within this monitor
         if saved_x >= mon_x && saved_x < mon_x + mon_width &&
            saved_y >= mon_y && saved_y < mon_y + mon_height {
-            eprintln!("[Window Position] Saved position ({}, {}) is on monitor '{}' at ({}, {})",
+            eprintln!("[Window Position] Saved position ({}, {}) is on monitor '{}' at logical ({}, {})",
                 saved_x, saved_y,
                 monitor.name().map(String::as_str).unwrap_or("unknown"),
                 mon_x, mon_y);
@@ -414,47 +420,65 @@ fn validate_window_position(
     eprintln!("[Window Position] Saved position ({}, {}) not on any visible monitor", saved_x, saved_y);
 
     // Get cursor position to find the "active" monitor
+    // cursor_position() returns physical pixels
     let cursor_pos = match app.cursor_position() {
         Ok(pos) => pos,
         Err(e) => {
             eprintln!("[Window Position] Failed to get cursor position: {}, using primary monitor", e);
             // Fall back to primary monitor
             if let Ok(Some(primary)) = app.primary_monitor() {
+                let scale = primary.scale_factor();
                 let pos = primary.position();
                 let size = primary.size();
-                let center_x = pos.x as f64 + (size.width as f64 - win_width) / 2.0;
-                let center_y = pos.y as f64 + (size.height as f64 - win_height) / 2.0;
-                eprintln!("[Window Position] Centering on primary monitor at ({}, {})", center_x, center_y);
+                // Convert to logical for centering calculation
+                let mon_x = pos.x as f64 / scale;
+                let mon_y = pos.y as f64 / scale;
+                let mon_width = size.width as f64 / scale;
+                let mon_height = size.height as f64 / scale;
+                let center_x = mon_x + (mon_width - win_width) / 2.0;
+                let center_y = mon_y + (mon_height - win_height) / 2.0;
+                eprintln!("[Window Position] Centering on primary monitor at logical ({}, {})", center_x, center_y);
                 return (center_x, center_y);
             }
             // Last resort: use first monitor
             let monitor = &monitors[0];
+            let scale = monitor.scale_factor();
             let pos = monitor.position();
             let size = monitor.size();
-            let center_x = pos.x as f64 + (size.width as f64 - win_width) / 2.0;
-            let center_y = pos.y as f64 + (size.height as f64 - win_height) / 2.0;
+            let mon_x = pos.x as f64 / scale;
+            let mon_y = pos.y as f64 / scale;
+            let mon_width = size.width as f64 / scale;
+            let mon_height = size.height as f64 / scale;
+            let center_x = mon_x + (mon_width - win_width) / 2.0;
+            let center_y = mon_y + (mon_height - win_height) / 2.0;
             return (center_x, center_y);
         }
     };
 
-    // Find the monitor containing the cursor
+    // Find the monitor containing the cursor (cursor is in physical pixels)
     let cursor_x = cursor_pos.x;
     let cursor_y = cursor_pos.y;
 
     for monitor in &monitors {
         let pos = monitor.position();
         let size = monitor.size();
-        let mon_x = pos.x as f64;
-        let mon_y = pos.y as f64;
-        let mon_width = size.width as f64;
-        let mon_height = size.height as f64;
+        // Compare cursor in physical pixel space
+        let mon_x_phys = pos.x as f64;
+        let mon_y_phys = pos.y as f64;
+        let mon_width_phys = size.width as f64;
+        let mon_height_phys = size.height as f64;
 
-        if cursor_x >= mon_x && cursor_x < mon_x + mon_width &&
-           cursor_y >= mon_y && cursor_y < mon_y + mon_height {
-            // Center window on this monitor
+        if cursor_x >= mon_x_phys && cursor_x < mon_x_phys + mon_width_phys &&
+           cursor_y >= mon_y_phys && cursor_y < mon_y_phys + mon_height_phys {
+            // Center window on this monitor, return logical coordinates
+            let scale = monitor.scale_factor();
+            let mon_x = mon_x_phys / scale;
+            let mon_y = mon_y_phys / scale;
+            let mon_width = mon_width_phys / scale;
+            let mon_height = mon_height_phys / scale;
             let center_x = mon_x + (mon_width - win_width) / 2.0;
             let center_y = mon_y + (mon_height - win_height) / 2.0;
-            eprintln!("[Window Position] Cursor at ({}, {}), centering on monitor '{}' at ({}, {})",
+            eprintln!("[Window Position] Cursor at ({}, {}), centering on monitor '{}' at logical ({}, {})",
                 cursor_x, cursor_y,
                 monitor.name().map(String::as_str).unwrap_or("unknown"),
                 center_x, center_y);
@@ -465,19 +489,29 @@ fn validate_window_position(
     // Cursor not on any monitor (shouldn't happen), use primary or first monitor
     eprintln!("[Window Position] Cursor position ({}, {}) not on any monitor, using primary", cursor_x, cursor_y);
     if let Ok(Some(primary)) = app.primary_monitor() {
+        let scale = primary.scale_factor();
         let pos = primary.position();
         let size = primary.size();
-        let center_x = pos.x as f64 + (size.width as f64 - win_width) / 2.0;
-        let center_y = pos.y as f64 + (size.height as f64 - win_height) / 2.0;
+        let mon_x = pos.x as f64 / scale;
+        let mon_y = pos.y as f64 / scale;
+        let mon_width = size.width as f64 / scale;
+        let mon_height = size.height as f64 / scale;
+        let center_x = mon_x + (mon_width - win_width) / 2.0;
+        let center_y = mon_y + (mon_height - win_height) / 2.0;
         return (center_x, center_y);
     }
 
     // Absolute fallback
     let monitor = &monitors[0];
+    let scale = monitor.scale_factor();
     let pos = monitor.position();
     let size = monitor.size();
-    let center_x = pos.x as f64 + (size.width as f64 - win_width) / 2.0;
-    let center_y = pos.y as f64 + (size.height as f64 - win_height) / 2.0;
+    let mon_x = pos.x as f64 / scale;
+    let mon_y = pos.y as f64 / scale;
+    let mon_width = size.width as f64 / scale;
+    let mon_height = size.height as f64 / scale;
+    let center_x = mon_x + (mon_width - win_width) / 2.0;
+    let center_y = mon_y + (mon_height - win_height) / 2.0;
     (center_x, center_y)
 }
 
@@ -1014,27 +1048,33 @@ fn get_window_state_info(window: tauri::WebviewWindow) -> Result<serde_json::Val
     let is_maximized = window.is_maximized().unwrap_or(false);
 
     // Get scale factor to convert physical pixels to logical pixels
-    // Tauri's inner_size() returns physical pixels, but we set size in logical pixels
+    // Tauri's inner_size() and outer_position() return physical pixels,
+    // but WindowBuilder::position() and inner_size() expect logical pixels
     let scale_factor = window.scale_factor().unwrap_or(1.0);
     let logical_width = (size.width as f64 / scale_factor).round() as u32;
     let logical_height = (size.height as f64 / scale_factor).round() as u32;
+    let logical_x = (position.x as f64 / scale_factor).round() as i32;
+    let logical_y = (position.y as f64 / scale_factor).round() as i32;
 
     // Get the monitor this window is on, including its position for unique identification
     // (monitor name alone isn't unique if you have multiple identical monitors)
+    // Monitor position is also in physical pixels, convert to logical
     let (monitor_name, monitor_x, monitor_y) = window.current_monitor()
         .ok()
         .flatten()
         .map(|m| {
             let pos = m.position();
-            (m.name().map(|n| n.to_string()), pos.x, pos.y)
+            let logical_mon_x = (pos.x as f64 / scale_factor).round() as i32;
+            let logical_mon_y = (pos.y as f64 / scale_factor).round() as i32;
+            (m.name().map(|n| n.to_string()), logical_mon_x, logical_mon_y)
         })
         .unwrap_or((None, 0, 0));
 
     Ok(serde_json::json!({
         "width": logical_width,
         "height": logical_height,
-        "x": position.x,
-        "y": position.y,
+        "x": logical_x,
+        "y": logical_y,
         "monitor_name": monitor_name,
         "monitor_x": monitor_x,
         "monitor_y": monitor_y,

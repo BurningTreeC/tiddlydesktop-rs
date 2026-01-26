@@ -41,8 +41,12 @@
     // === Find the actual draggable element ===
     function findDraggable(element) {
         var el = element;
+        // Handle text nodes (nodeType 3) - browsers can fire drag events on them
+        if (el && el.nodeType === 3) {
+            el = el.parentElement;
+        }
         while (el && el !== document.body) {
-            if (el.draggable || el.getAttribute('draggable') === 'true') {
+            if (el.draggable || (el.getAttribute && el.getAttribute('draggable') === 'true')) {
                 return el;
             }
             el = el.parentElement;

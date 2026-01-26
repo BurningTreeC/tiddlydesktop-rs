@@ -366,8 +366,8 @@ const CREATE_NO_WINDOW: u32 = 0x08000000;
 /// If the saved position is on a currently visible monitor, returns it unchanged.
 /// Otherwise, falls back to the monitor containing the mouse cursor and centers the window there.
 #[cfg(not(target_os = "linux"))]
-fn validate_window_position<M: tauri::Manager<tauri::Wry>>(
-    app: &M,
+fn validate_window_position(
+    app: &tauri::AppHandle,
     saved_state: &crate::types::WindowState,
 ) -> (f64, f64) {
 
@@ -4233,7 +4233,7 @@ fn run_wiki_mode(args: WikiModeArgs) {
             // Apply saved position if available, with monitor validation on Windows/macOS
             if let Some(ref state) = saved_state {
                 #[cfg(not(target_os = "linux"))]
-                let (x, y) = validate_window_position(app, state);
+                let (x, y) = validate_window_position(app.handle(), state);
                 #[cfg(target_os = "linux")]
                 let (x, y) = (state.x as f64, state.y as f64);
                 builder = builder.position(x, y);
@@ -4569,7 +4569,7 @@ fn run_wiki_folder_mode(args: WikiFolderModeArgs) {
             // Apply saved position, with monitor validation on Windows/macOS
             if let Some(ref state) = saved_state {
                 #[cfg(not(target_os = "linux"))]
-                let (x, y) = validate_window_position(app, state);
+                let (x, y) = validate_window_position(app.handle(), state);
                 #[cfg(target_os = "linux")]
                 let (x, y) = (state.x as f64, state.y as f64);
                 builder = builder.position(x, y);
@@ -4840,7 +4840,7 @@ pub fn run() {
             // Apply saved position if available, with monitor validation on Windows/macOS
             if let Some(ref state) = saved_state {
                 #[cfg(not(target_os = "linux"))]
-                let (x, y) = validate_window_position(app, state);
+                let (x, y) = validate_window_position(app.handle(), state);
                 #[cfg(target_os = "linux")]
                 let (x, y) = (state.x as f64, state.y as f64);
                 builder = builder.position(x, y);

@@ -154,13 +154,31 @@ pub fn prepare_native_drag_impl(window: &WebviewWindow, data: NativeDragData) ->
 }
 
 #[cfg(target_os = "windows")]
-pub fn prepare_native_drag_impl(_window: &WebviewWindow, _data: NativeDragData) -> Result<(), String> {
-    Ok(()) // No-op for Windows currently
+pub fn prepare_native_drag_impl(window: &WebviewWindow, data: NativeDragData) -> Result<(), String> {
+    let outgoing_data = windows::OutgoingDragData {
+        text_plain: data.text_plain,
+        text_html: data.text_html,
+        text_vnd_tiddler: data.text_vnd_tiddler,
+        text_uri_list: data.text_uri_list,
+        text_x_moz_url: data.text_x_moz_url,
+        url: data.url,
+        is_text_selection_drag: data.is_text_selection_drag,
+    };
+    windows::prepare_native_drag(window, outgoing_data)
 }
 
 #[cfg(target_os = "macos")]
-pub fn prepare_native_drag_impl(_window: &WebviewWindow, _data: NativeDragData) -> Result<(), String> {
-    Ok(()) // No-op for macOS currently
+pub fn prepare_native_drag_impl(window: &WebviewWindow, data: NativeDragData) -> Result<(), String> {
+    let outgoing_data = macos::OutgoingDragData {
+        text_plain: data.text_plain,
+        text_html: data.text_html,
+        text_vnd_tiddler: data.text_vnd_tiddler,
+        text_uri_list: data.text_uri_list,
+        text_x_moz_url: data.text_x_moz_url,
+        url: data.url,
+        is_text_selection_drag: data.is_text_selection_drag,
+    };
+    macos::prepare_native_drag(window, outgoing_data)
 }
 
 /// Clean up native drag preparation (called when internal drag ends normally)
@@ -171,12 +189,12 @@ pub fn cleanup_native_drag_impl() -> Result<(), String> {
 
 #[cfg(target_os = "windows")]
 pub fn cleanup_native_drag_impl() -> Result<(), String> {
-    Ok(()) // No-op for Windows currently
+    windows::cleanup_native_drag()
 }
 
 #[cfg(target_os = "macos")]
 pub fn cleanup_native_drag_impl() -> Result<(), String> {
-    Ok(()) // No-op for macOS currently
+    macos::cleanup_native_drag()
 }
 
 /// Update the drag icon during an active drag operation

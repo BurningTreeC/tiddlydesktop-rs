@@ -1119,6 +1119,38 @@ unsafe fn apply_opacity_to_nsimage(image: *mut AnyObject, size: NSSize, opacity:
     new_image
 }
 
+/// Prepare for a potential native drag (called when internal drag starts)
+/// This sets the outgoing drag state so that performDragOperation can detect same-window drags
+/// and avoid emitting td-drag-content events that would trigger imports.
+pub fn prepare_native_drag(window: &WebviewWindow, data: OutgoingDragData) -> Result<(), String> {
+    let label = window.label().to_string();
+    eprintln!(
+        "[TiddlyDesktop] macOS: prepare_native_drag called for window '{}'",
+        label
+    );
+
+    // Store drag state so performDragOperation can detect same-window drags
+    let mut guard = outgoing_drag_state().lock().map_err(|e| e.to_string())?;
+    *guard = Some(OutgoingDragState {
+        data,
+        source_window_label: label,
+        data_was_requested: false,
+    });
+
+    Ok(())
+}
+
+/// Clean up native drag preparation (called when internal drag ends normally)
+pub fn cleanup_native_drag() -> Result<(), String> {
+    eprintln!("[TiddlyDesktop] macOS: cleanup_native_drag called");
+
+    if let Ok(mut guard) = outgoing_drag_state().lock() {
+        *guard = None;
+    }
+
+    Ok(())
+}
+
 /// Start a native drag operation
 pub fn start_native_drag(
     window: &WebviewWindow,

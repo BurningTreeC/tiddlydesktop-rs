@@ -1960,6 +1960,38 @@ fn setup_drag_image(
     }
 }
 
+/// Prepare for a potential native drag (called when internal drag starts)
+/// This sets the outgoing drag state so that IDropTarget can detect same-window drags
+/// and avoid emitting td-drag-content events that would trigger imports.
+pub fn prepare_native_drag(window: &WebviewWindow, data: OutgoingDragData) -> Result<(), String> {
+    let label = window.label().to_string();
+    eprintln!(
+        "[TiddlyDesktop] Windows: prepare_native_drag called for window '{}'",
+        label
+    );
+
+    // Store drag state so IDropTarget can detect same-window drags
+    let mut guard = OUTGOING_DRAG_STATE.lock().map_err(|e| e.to_string())?;
+    *guard = Some(OutgoingDragState {
+        data,
+        source_window_label: label,
+        data_was_requested: false,
+    });
+
+    Ok(())
+}
+
+/// Clean up native drag preparation (called when internal drag ends normally)
+pub fn cleanup_native_drag() -> Result<(), String> {
+    eprintln!("[TiddlyDesktop] Windows: cleanup_native_drag called");
+
+    if let Ok(mut guard) = OUTGOING_DRAG_STATE.lock() {
+        *guard = None;
+    }
+
+    Ok(())
+}
+
 /// Start a native drag operation (called from JavaScript when pointer leaves window during internal drag)
 pub fn start_native_drag(window: &WebviewWindow, data: OutgoingDragData, _x: i32, _y: i32, image_data: Option<Vec<u8>>, image_offset_x: Option<i32>, image_offset_y: Option<i32>) -> Result<(), String> {
     use windows::Win32::System::Ole::DoDragDrop;

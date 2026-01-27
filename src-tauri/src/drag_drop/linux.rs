@@ -936,14 +936,14 @@ fn setup_widget_drag_handlers(_widget: &gtk::Widget, _state: Rc<RefCell<DragStat
 
 /// Set up drag handlers on WebKit widget
 fn setup_webkit_drag_handlers(_widget: &gtk::Widget, _state: Rc<RefCell<DragState>>) {
-    // EXPERIMENT: Don't connect any handlers, let vanilla WebKitGTK handle everything
-    // like Epiphany does. Testing if this allows external drops to work natively.
-    eprintln!("[TiddlyDesktop] Linux: setup_webkit_drag_handlers - NO-OP (testing vanilla WebKitGTK)");
+    // Let vanilla WebKitGTK handle drops natively.
+    // File URL filtering happens in JavaScript (internal_drag.js getData patch)
+    eprintln!("[TiddlyDesktop] Linux: setup_webkit_drag_handlers - NO-OP (native WebKit handling)");
 }
 
 #[allow(dead_code)]
-/// Set up drag handlers on WebKit widget (DISABLED for vanilla WebKitGTK test)
-fn setup_webkit_drag_handlers_disabled(widget: &gtk::Widget, state: Rc<RefCell<DragState>>) {
+/// Set up drag handlers on WebKit widget (disabled - using native WebKit handling)
+fn setup_webkit_drag_handlers_full(widget: &gtk::Widget, state: Rc<RefCell<DragState>>) {
     // NOTE: We do NOT call drag_dest_set() on the WebView!
     // WebKitWebView is already a fully configured drag destination.
     // Calling drag_dest_set() would:

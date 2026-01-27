@@ -1002,12 +1002,45 @@
             });
         }
 
+        // Helper to check if an element or its ancestors are editable
+        function isEditableElement(el) {
+            while (el && el !== document.body) {
+                var tagName = el.tagName;
+                if (tagName === 'INPUT') {
+                    var type = (el.type || 'text').toLowerCase();
+                    if (['text', 'search', 'url', 'tel', 'email', 'password'].indexOf(type) !== -1) {
+                        return true;
+                    }
+                }
+                if (tagName === 'TEXTAREA') return true;
+                if (el.isContentEditable) return true;
+                if (tagName === 'IFRAME') {
+                    try {
+                        var iframeDoc = el.contentDocument || el.contentWindow.document;
+                        if (iframeDoc && (iframeDoc.designMode === 'on' ||
+                            (iframeDoc.body && iframeDoc.body.isContentEditable))) {
+                            return true;
+                        }
+                    } catch (e) {}
+                }
+                el = el.parentElement;
+            }
+            return false;
+        }
+
         function processContentDrop() {
             if (!pendingContentDropData) return;
 
             var capturedData = pendingContentDropData;
             var pos = pendingContentDropPos;
             var dropTarget = getTargetElement(pos);
+
+            // Skip synthetic drops for editable elements - let native handling work
+            if (isEditableElement(dropTarget)) {
+                pendingContentDropData = null;
+                pendingContentDropPos = null;
+                return;
+            }
 
             // Merge in any captured internal drag data (from TiddlyWiki's dataTransfer.setData)
             if (window.__tiddlyDesktopDragData) {
@@ -1151,6 +1184,10 @@
             if (!dt || !dt.types || dt.types.length === 0) return;
             if (typeof $tw !== "undefined" && $tw.dragInProgress) return;
 
+            // Skip for editable elements - let native handling work
+            var target = document.elementFromPoint(event.clientX, event.clientY);
+            if (target && isEditableElement(target)) return;
+
             var hasFiles = false;
             var hasContent = false;
             var types = [];
@@ -1194,6 +1231,10 @@
             if (!contentDragActive || nativeDragActive || isDragging) return;
             if (typeof $tw !== "undefined" && $tw.dragInProgress) return;
 
+            // Skip for editable elements - let native handling work
+            var target = document.elementFromPoint(event.clientX, event.clientY);
+            if (target && isEditableElement(target)) return;
+
             event.preventDefault();
 
             var target = document.elementFromPoint(event.clientX, event.clientY) || document.body;
@@ -1219,6 +1260,11 @@
 
         document.addEventListener("dragleave", function(event) {
             if (!contentDragActive || event.__tiddlyDesktopSynthetic || isDragging) return;
+
+            // Skip for editable elements - let native handling work
+            var target = document.elementFromPoint(event.clientX, event.clientY);
+            if (target && isEditableElement(target)) return;
+
             contentDragEnterCount--;
             if (contentDragEnterCount <= 0) {
                 contentDragEnterCount = 0;
@@ -1230,6 +1276,10 @@
             if (window.__tiddlyDesktopDragData || (typeof $tw !== "undefined" && $tw.dragInProgress)) return;
             if (event.__tiddlyDesktopSynthetic) return;
             if (isDragging) return;
+
+            // Skip for editable elements - let native handling work
+            var target = document.elementFromPoint(event.clientX, event.clientY);
+            if (target && isEditableElement(target)) return;
 
             if (nativeDragActive) {
                 event.preventDefault();

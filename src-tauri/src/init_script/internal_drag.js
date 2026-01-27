@@ -52,6 +52,10 @@
         var pendingDragData = {};
         var capturingSetData = false;
 
+        // Capture original types getter early (needed by getData filter)
+        var typesDescriptor = Object.getOwnPropertyDescriptor(DataTransfer.prototype, 'types');
+        var originalTypesGetter = typesDescriptor && typesDescriptor.get ? typesDescriptor.get : null;
+
         // Patch setData to capture data as it's being set
         var originalSetData = DataTransfer.prototype.setData;
         DataTransfer.prototype.setData = function(type, data) {
@@ -63,25 +67,71 @@
         // Patch getData to return captured data during internal drags
         var originalGetData = DataTransfer.prototype.getData;
         DataTransfer.prototype.getData = function(type) {
-            // If internal drag is active and we have captured data, use it
-            if (internalDragActive && dragData && type in dragData) {
-                return dragData[type];
+            // If internal drag is active, check our captured data
+            if (internalDragActive) {
+                // Check dragData first (data we've already processed)
+                if (dragData && type in dragData) {
+                    return dragData[type];
+                }
+                // Fall back to pendingDragData - this contains setData() calls that happened
+                // AFTER our dragstart handler ran (since we use capture phase, TiddlyWiki's
+                // handler runs after ours and its setData calls go here)
+                if (type in pendingDragData) {
+                    return pendingDragData[type];
+                }
             }
-            return originalGetData.call(this, type);
+
+            var result = originalGetData.call(this, type);
+
+            // For external drops, filter out text/html to avoid styled HTML from browsers
+            // TiddlyWiki will fall back to text/plain which is cleaner
+            if (!internalDragActive && type === 'text/html') {
+                return '';
+            }
+
+            // Filter out file URLs when files are present (prevents double import on Linux)
+            // This happens during native drops where WebKitGTK provides both the file AND its URL
+            if (!internalDragActive && (type === 'text/plain' || type === 'text/uri-list' || type === 'text/x-moz-url')) {
+                // Check if result looks like a file URL or absolute path
+                if (result) {
+                    var trimmed = result.trim();
+                    var isFileUrl = trimmed.indexOf('file://') === 0;
+                    var isAbsPath = trimmed.indexOf('/') === 0 && trimmed.indexOf('\n') === -1;
+                    if (isFileUrl || isAbsPath) {
+                        // Check if this DataTransfer has files using types array (more reliable than files property)
+                        try {
+                            var types = originalTypesGetter ? originalTypesGetter.call(this) : this.types;
+                            var typesArr = types ? Array.from(types) : [];
+                            var hasFiles = typesArr.indexOf('Files') !== -1;
+                            if (hasFiles) {
+                                // Files present - filter out the URL to prevent double import
+                                return '';
+                            }
+                        } catch (e) {}
+                    }
+                }
+            }
+
+            return result;
         };
 
         // Also patch types getter so iteration includes our captured types
-        var typesDescriptor = Object.getOwnPropertyDescriptor(DataTransfer.prototype, 'types');
-        if (typesDescriptor && typesDescriptor.get) {
-            var originalTypesGetter = typesDescriptor.get;
+        if (originalTypesGetter) {
             Object.defineProperty(DataTransfer.prototype, 'types', {
                 get: function() {
                     var originalTypes = originalTypesGetter.call(this);
-                    if (internalDragActive && dragData) {
-                        var capturedTypes = Object.keys(dragData);
+                    if (internalDragActive) {
+                        // Merge types from dragData, pendingDragData, and original
+                        var capturedTypes = dragData ? Object.keys(dragData) : [];
+                        var pendingTypes = Object.keys(pendingDragData);
                         var original = Array.from(originalTypes || []);
-                        // Merge captured types with original, captured first for priority
+                        // Merge: dragData first, then pendingDragData, then original
                         var merged = capturedTypes.slice();
+                        for (var i = 0; i < pendingTypes.length; i++) {
+                            if (merged.indexOf(pendingTypes[i]) === -1) {
+                                merged.push(pendingTypes[i]);
+                            }
+                        }
                         for (var i = 0; i < original.length; i++) {
                             if (merged.indexOf(original[i]) === -1) {
                                 merged.push(original[i]);
@@ -108,6 +158,77 @@
         };
 
         log('DataTransfer.prototype patched (setData + getData) for same-window drag support');
+
+        // Helper to check if an element or its ancestors are editable
+        function isEditableElement(el) {
+            while (el && el !== document.body) {
+                var tagName = el.tagName;
+                if (tagName === 'INPUT') {
+                    var type = (el.type || 'text').toLowerCase();
+                    if (['text', 'search', 'url', 'tel', 'email', 'password'].indexOf(type) !== -1) {
+                        return true;
+                    }
+                }
+                if (tagName === 'TEXTAREA') return true;
+                if (el.isContentEditable) return true;
+                // Check if it's an iframe with editable content
+                if (tagName === 'IFRAME') {
+                    try {
+                        var iframeDoc = el.contentDocument || el.contentWindow.document;
+                        if (iframeDoc && (iframeDoc.designMode === 'on' ||
+                            (iframeDoc.body && iframeDoc.body.isContentEditable))) {
+                            return true;
+                        }
+                    } catch (e) {}
+                }
+                el = el.parentElement;
+            }
+            return false;
+        }
+
+        // Intercept drop events to filter out file URL items that would cause double imports
+        // This runs in capture phase BEFORE TiddlyWiki's handlers
+        document.addEventListener('drop', function(event) {
+            // Skip synthetic events we created
+            if (event.__tdFiltered) return;
+
+            var dt = event.dataTransfer;
+            if (!dt || !dt.items) return;
+
+            // If dropping into an editable element, let native handling work
+            // Stop immediate propagation to prevent ANY other handlers (including TiddlyWiki's dropzone)
+            // from calling preventDefault() which would block native input handling
+            if (isEditableElement(event.target)) {
+                event.stopImmediatePropagation();
+                return;
+            }
+
+            // If no files but has file:// URLs, this is likely an external file drop
+            // where WebKitGTK provides the file URL but not the actual file data.
+            // The actual file will come via tauri://drag-drop, so block this event entirely.
+            // But allow http://, https://, and other URLs to pass through for link drops.
+            if (dt.files.length === 0) {
+                var hasFileUrl = false;
+                try {
+                    var uriList = dt.getData('text/uri-list') || '';
+                    var plainText = dt.getData('text/plain') || '';
+                    // Check if any URL is a file:// URL or absolute path
+                    var urls = (uriList + '\n' + plainText).split('\n');
+                    for (var i = 0; i < urls.length; i++) {
+                        var url = urls[i].trim();
+                        if (url && (url.indexOf('file://') === 0 || (url.indexOf('/') === 0 && url.indexOf('//') !== 0))) {
+                            hasFileUrl = true;
+                            break;
+                        }
+                    }
+                } catch (e) {}
+                if (hasFileUrl) {
+                    event.preventDefault();
+                    event.stopImmediatePropagation();
+                    return;
+                }
+            }
+        }, true); // capture phase - runs before TiddlyWiki
     })();
 
     // === Find the actual draggable element ===
@@ -812,37 +933,30 @@
             var target = editable || getElementAt(pos.x, pos.y);
 
             // Create DataTransfer with drop data
+            // When we have text/vnd.tiddler, use the tiddler title for text/plain (not the URL)
+            // to avoid TiddlyWiki importing both the tiddler AND the plain text URL
             var dataTransfer = new DataTransfer();
 
             if (tiddler) {
                 try { dataTransfer.setData('text/vnd.tiddler', tiddler); } catch (e) {}
-            }
-            if (text) {
-                try { dataTransfer.setData('text/plain', text); } catch (e) {}
-            }
-            if (html) {
-                try { dataTransfer.setData('text/html', html); } catch (e) {}
-            }
-
-            // For INPUT/TEXTAREA, manually insert text
-            if (editable && (editable.tagName === 'INPUT' || editable.tagName === 'TEXTAREA')) {
-                var textToInsert = text || '';
-                if (textToInsert) {
-                    editable.focus();
-                    var start = editable.selectionStart || 0;
-                    var end = editable.selectionEnd || 0;
-                    var value = editable.value || '';
-                    editable.value = value.substring(0, start) + textToInsert + value.substring(end);
-                    var newPos = start + textToInsert.length;
-                    editable.setSelectionRange(newPos, newPos);
-                    log('Inserted text into ' + editable.tagName);
-                    editable.dispatchEvent(new Event('input', { bubbles: true }));
-                    cleanup();
-                    return;
+                // Extract title from tiddler JSON for text/plain (useful for input drops)
+                try {
+                    var parsed = JSON.parse(tiddler);
+                    var title = parsed.title || '';
+                    if (title) {
+                        dataTransfer.setData('text/plain', title);
+                    }
+                } catch (e) {}
+            } else {
+                if (text) {
+                    try { dataTransfer.setData('text/plain', text); } catch (e) {}
+                }
+                if (html) {
+                    try { dataTransfer.setData('text/html', html); } catch (e) {}
                 }
             }
 
-            // Dispatch drop event for other elements
+            // Dispatch drop event
             var dropEvent = createDragEvent("drop", pos.x, pos.y, dataTransfer, null);
             target.dispatchEvent(dropEvent);
             log('Dispatched drop to ' + target.tagName);

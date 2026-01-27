@@ -30,13 +30,13 @@
 +          return false;
          }
        }
-
+ 
 --- a/src/wkwebview/drag_drop.rs
 +++ b/src/wkwebview/drag_drop.rs
-@@ -86,15 +86,62 @@
+@@ -86,13 +86,54 @@
    let frame: NSRect = this.frame();
    let position = (dl.x as i32, (frame.size.height - dl.y) as i32);
-
+ 
 +  // PATCH: Emit the event so JS knows about the drop
    let listener = &this.ivars().drag_drop_handler;
 -  if !listener(DragDropEvent::Drop { paths, position }) {
@@ -86,23 +86,19 @@
 +      }
 +    }
    }
--}
 +
 +  // PATCH: Always invoke native WKWebView handling
 +  // This allows text/file paths to be inserted into inputs natively
 +  unsafe { objc2::msg_send![super(this), performDragOperation: drag_info] }
-+}
-+
+ }
+ 
  pub(crate) fn dragging_exited(this: &WryWebView, drag_info: &ProtocolObject<dyn NSDraggingInfo>) {
-   let listener = &this.ivars().drag_drop_handler;
-   if !listener(DragDropEvent::Leave) {
-
 --- a/src/webview2/mod.rs
 +++ b/src/webview2/mod.rs
-@@ -146,15 +146,12 @@
+@@ -146,15 +146,11 @@
        is_child,
      )?;
-
+ 
 -    let drag_drop_controller = drop_handler.map(|handler| {
 -      // Disable file drops, so our handler can capture it
 -      unsafe {
@@ -117,6 +113,6 @@
 +    // TiddlyDesktop patches DataTransfer.setData/getData in JavaScript to ensure
 +    // correct data is available during internal drags.
 +    let drag_drop_controller: Option<DragDropController> = None;
-
+ 
      let w = Self {
        id,

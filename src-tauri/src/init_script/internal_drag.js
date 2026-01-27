@@ -40,9 +40,27 @@
 
     // === Patch DataTransfer.prototype for Windows/macOS ===
     // On these platforms, the webview strips custom MIME types like text/vnd.tiddler
-    // during same-window drags. We patch getData and types to return our captured data.
-    // This allows native drops to happen while ensuring correct data is available.
+    // during same-window drags. We patch setData, getData, and types to capture and
+    // return our data. This allows native drops to happen while ensuring correct data.
+    //
+    // IMPORTANT: On Chromium (WebView2), getData() returns empty during dragstart
+    // due to security restrictions - data is only readable during drop. So we MUST
+    // patch setData() to capture data as TiddlyWiki sets it.
     (function() {
+        // Temporary storage for setData calls during dragstart
+        // This captures data BEFORE our dragstart handler runs
+        var pendingDragData = {};
+        var capturingSetData = false;
+
+        // Patch setData to capture data as it's being set
+        var originalSetData = DataTransfer.prototype.setData;
+        DataTransfer.prototype.setData = function(type, data) {
+            // Always capture setData calls - we'll use them if this becomes an internal drag
+            pendingDragData[type] = data;
+            return originalSetData.call(this, type, data);
+        };
+
+        // Patch getData to return captured data during internal drags
         var originalGetData = DataTransfer.prototype.getData;
         DataTransfer.prototype.getData = function(type) {
             // If internal drag is active and we have captured data, use it
@@ -78,7 +96,18 @@
             });
         }
 
-        log('DataTransfer.prototype patched for same-window drag support');
+        // Export functions to access pending data from dragstart handler
+        TD._getPendingDragData = function() {
+            var data = pendingDragData;
+            pendingDragData = {};  // Clear for next drag
+            return data;
+        };
+
+        TD._clearPendingDragData = function() {
+            pendingDragData = {};
+        };
+
+        log('DataTransfer.prototype patched (setData + getData) for same-window drag support');
     })();
 
     // === Find the actual draggable element ===
@@ -492,6 +521,11 @@
         pendingDragElement = null;
         enableIframePointerEvents();
 
+        // Clear any pending setData captures
+        if (TD._clearPendingDragData) {
+            TD._clearPendingDragData();
+        }
+
         if (typeof $tw !== 'undefined') {
             $tw.dragInProgress = null;
         }
@@ -519,26 +553,36 @@
         var draggableElement = findDraggable(event.target);
         isTextSelectionDrag = !draggableElement;
         dragSource = draggableElement || event.target;
-        dragData = {};
+
+        // Get data captured from setData() calls (works on all platforms)
+        // This is more reliable than getData() which returns empty on Chromium during dragstart
+        dragData = TD._getPendingDragData ? TD._getPendingDragData() : {};
 
         log('isTextSelectionDrag=' + isTextSelectionDrag);
 
-        // Read data from the real DataTransfer (TiddlyWiki has already populated it)
+        // Also try to read from DataTransfer as fallback (works on WebKitGTK/Linux)
         var dt = event.dataTransfer;
         if (dt) {
             try {
                 var types = dt.types || [];
                 for (var i = 0; i < types.length; i++) {
                     var type = types[i];
-                    try {
-                        dragData[type] = dt.getData(type);
-                    } catch (e) {}
+                    // Only read if we don't already have this type from setData capture
+                    if (!(type in dragData)) {
+                        try {
+                            var value = dt.getData(type);
+                            if (value) {
+                                dragData[type] = value;
+                            }
+                        } catch (e) {}
+                    }
                 }
-                log('Captured drag data types: ' + Object.keys(dragData).join(', '));
             } catch (e) {
                 log('Failed to read dataTransfer: ' + e);
             }
         }
+
+        log('Captured drag data types: ' + Object.keys(dragData).join(', '));
 
         // For text-selection drags, capture the selection if not in DataTransfer
         if (isTextSelectionDrag && !dragData['text/plain']) {

@@ -34,10 +34,10 @@
 
 --- a/src/wkwebview/drag_drop.rs
 +++ b/src/wkwebview/drag_drop.rs
-@@ -86,15 +86,14 @@
+@@ -86,15 +86,62 @@
    let frame: NSRect = this.frame();
    let position = (dl.x as i32, (frame.size.height - dl.y) as i32);
- 
+
 +  // PATCH: Emit the event so JS knows about the drop
    let listener = &this.ivars().drag_drop_handler;
 -  if !listener(DragDropEvent::Drop { paths, position }) {
@@ -45,10 +45,50 @@
 -    unsafe { objc2::msg_send![super(this), performDragOperation: drag_info] }
 -  } else {
 -    Bool::YES
--  }
--}
 +  listener(DragDropEvent::Drop { paths, position });
- 
++
++  // PATCH: For internal drags, fix the pasteboard data before native handling.
++  // This ensures:
++  // 1. Inputs receive the correct text (tiddler title) instead of the resolved URL
++  // 2. TiddlyWiki dropzones receive the full tiddler JSON (text/vnd.tiddler)
++  unsafe {
++    // FFI functions provided by TiddlyDesktop
++    extern "C" {
++      fn tiddlydesktop_has_internal_drag() -> i32;
++      fn tiddlydesktop_get_internal_drag_text_plain() -> *const std::ffi::c_char;
++      fn tiddlydesktop_get_internal_drag_tiddler_json() -> *const std::ffi::c_char;
++    }
++
++    if tiddlydesktop_has_internal_drag() != 0 {
++      // Get the pasteboard
++      let pasteboard: *mut objc2::runtime::AnyObject = objc2::msg_send![drag_info, draggingPasteboard];
++      if !pasteboard.is_null() {
++        // Fix text/plain (for native input insertion)
++        let text_ptr = tiddlydesktop_get_internal_drag_text_plain();
++        if !text_ptr.is_null() {
++          let text_cstr = std::ffi::CStr::from_ptr(text_ptr);
++          if let Ok(text_str) = text_cstr.to_str() {
++            let ns_string = objc2_foundation::NSString::from_str(text_str);
++            let type_string = objc2_foundation::NSString::from_str("public.utf8-plain-text");
++            let _: () = objc2::msg_send![pasteboard, setString: &*ns_string, forType: &*type_string];
++          }
++        }
++
++        // Fix text/vnd.tiddler (for TiddlyWiki dropzone handlers)
++        let tiddler_ptr = tiddlydesktop_get_internal_drag_tiddler_json();
++        if !tiddler_ptr.is_null() {
++          let tiddler_cstr = std::ffi::CStr::from_ptr(tiddler_ptr);
++          if let Ok(tiddler_str) = tiddler_cstr.to_str() {
++            let ns_string = objc2_foundation::NSString::from_str(tiddler_str);
++            let type_string = objc2_foundation::NSString::from_str("text/vnd.tiddler");
++            let _: () = objc2::msg_send![pasteboard, setString: &*ns_string, forType: &*type_string];
++          }
++        }
++      }
++    }
+   }
+-}
++
 +  // PATCH: Always invoke native WKWebView handling
 +  // This allows text/file paths to be inserted into inputs natively
 +  unsafe { objc2::msg_send![super(this), performDragOperation: drag_info] }
@@ -62,7 +102,7 @@
 @@ -146,15 +146,12 @@
        is_child,
      )?;
- 
+
 -    let drag_drop_controller = drop_handler.map(|handler| {
 -      // Disable file drops, so our handler can capture it
 -      unsafe {
@@ -72,12 +112,11 @@
 -      }
 -      DragDropController::new(hwnd, handler)
 -    });
-+    // PATCH: Don't install custom drag-drop handler on Windows
-+    // This preserves WebView2's native drop handling, which allows:
-+    // - Text drops into inputs/textareas/contenteditables
-+    // - File path insertion into inputs
-+    // The Tauri drag-drop events won't fire, but JS drop events still work.
++    // PATCH: Don't install WRY's DragDropController on Windows.
++    // Keep SetAllowExternalDrop at default (true) so native drop events fire.
++    // TiddlyDesktop patches DataTransfer.setData/getData in JavaScript to ensure
++    // correct data is available during internal drags.
 +    let drag_drop_controller: Option<DragDropController> = None;
- 
+
      let w = Self {
        id,

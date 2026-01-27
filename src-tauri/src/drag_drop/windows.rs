@@ -2189,3 +2189,85 @@ pub fn setup_drag_handlers(window: &WebviewWindow) {
         }
     });
 }
+
+// ============================================================================
+// FFI functions for potential WRY patch integration (matching macOS API)
+// ============================================================================
+
+/// FFI function to get stored text/plain data for internal drags.
+/// Returns a pointer to a null-terminated C string, or null if no data is available.
+/// The caller must NOT free this memory - it's managed by Rust.
+#[no_mangle]
+pub extern "C" fn tiddlydesktop_get_internal_drag_text_plain() -> *const std::ffi::c_char {
+    // Use a thread-local to store the CString so it outlives the function call
+    thread_local! {
+        static CACHED_STRING: std::cell::RefCell<Option<std::ffi::CString>> = const { std::cell::RefCell::new(None) };
+    }
+
+    let text = OUTGOING_DRAG_STATE
+        .lock()
+        .ok()
+        .and_then(|guard| {
+            guard.as_ref().and_then(|state| state.data.text_plain.clone())
+        });
+
+    match text {
+        Some(s) => {
+            CACHED_STRING.with(|cached| {
+                if let Ok(cstring) = std::ffi::CString::new(s) {
+                    let ptr = cstring.as_ptr();
+                    *cached.borrow_mut() = Some(cstring);
+                    ptr
+                } else {
+                    std::ptr::null()
+                }
+            })
+        }
+        None => std::ptr::null(),
+    }
+}
+
+/// FFI function to get stored text/vnd.tiddler data for internal drags.
+/// Returns a pointer to a null-terminated C string containing the tiddler JSON,
+/// or null if no data is available.
+/// The caller must NOT free this memory - it's managed by Rust.
+#[no_mangle]
+pub extern "C" fn tiddlydesktop_get_internal_drag_tiddler_json() -> *const std::ffi::c_char {
+    // Use a thread-local to store the CString so it outlives the function call
+    thread_local! {
+        static CACHED_STRING: std::cell::RefCell<Option<std::ffi::CString>> = const { std::cell::RefCell::new(None) };
+    }
+
+    let tiddler = OUTGOING_DRAG_STATE
+        .lock()
+        .ok()
+        .and_then(|guard| {
+            guard.as_ref().and_then(|state| state.data.text_vnd_tiddler.clone())
+        });
+
+    match tiddler {
+        Some(s) => {
+            CACHED_STRING.with(|cached| {
+                if let Ok(cstring) = std::ffi::CString::new(s) {
+                    let ptr = cstring.as_ptr();
+                    *cached.borrow_mut() = Some(cstring);
+                    ptr
+                } else {
+                    std::ptr::null()
+                }
+            })
+        }
+        None => std::ptr::null(),
+    }
+}
+
+/// FFI function to check if there's an active internal drag from our app.
+/// Returns 1 if there's an active internal drag, 0 otherwise.
+#[no_mangle]
+pub extern "C" fn tiddlydesktop_has_internal_drag() -> i32 {
+    OUTGOING_DRAG_STATE
+        .lock()
+        .ok()
+        .map(|guard| if guard.is_some() { 1 } else { 0 })
+        .unwrap_or(0)
+}

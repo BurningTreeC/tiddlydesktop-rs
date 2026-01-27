@@ -30,7 +30,6 @@
 +          return false;
          }
        }
- 
 
 --- a/src/wkwebview/drag_drop.rs
 +++ b/src/wkwebview/drag_drop.rs
@@ -93,10 +92,10 @@
 +  // This allows text/file paths to be inserted into inputs natively
 +  unsafe { objc2::msg_send![super(this), performDragOperation: drag_info] }
 +}
++
  pub(crate) fn dragging_exited(this: &WryWebView, drag_info: &ProtocolObject<dyn NSDraggingInfo>) {
    let listener = &this.ivars().drag_drop_handler;
    if !listener(DragDropEvent::Leave) {
-
 --- a/src/webview2/mod.rs
 +++ b/src/webview2/mod.rs
 @@ -146,15 +146,12 @@

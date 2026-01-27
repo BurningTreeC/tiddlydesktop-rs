@@ -416,10 +416,11 @@ extern "C" fn swizzled_perform_drag_operation(this: *mut AnyObject, _sel: Sel, d
                 is_our_drag, source_window_label, is_same_window
             );
 
-            // If this is a same-window drag (not cross-wiki), let JS handle it
-            // Cross-wiki drops (different source window) are handled below
+            // For same-window drags, we need to provide the data to JS because
+            // our drag handler intercepts the drop before WebKit can handle it natively.
+            // This is similar to Windows where IDropTarget intercepts all drops.
             if is_same_window {
-                eprintln!("[TiddlyDesktop] macOS: performDragOperation - same-window drag, letting JS handle it");
+                eprintln!("[TiddlyDesktop] macOS: performDragOperation - same-window drag, providing data to JS");
                 if let Some(state) = DRAG_STATES.lock().unwrap().get(&label) {
                     let state = state.lock().unwrap();
                     let _ = state.window.emit(
@@ -434,6 +435,40 @@ extern "C" fn swizzled_perform_drag_operation(this: *mut AnyObject, _sel: Sel, d
                             "windowLabel": label
                         }),
                     );
+
+                    // Get the stored drag data and emit td-drag-content so JS can process the drop
+                    if let Ok(guard) = outgoing_drag_state().lock() {
+                        if let Some(outgoing) = guard.as_ref() {
+                            let mut types = Vec::new();
+                            let mut data = std::collections::HashMap::new();
+
+                            if let Some(ref text) = outgoing.data.text_plain {
+                                types.push("text/plain".to_string());
+                                data.insert("text/plain".to_string(), text.clone());
+                            }
+                            if let Some(ref html) = outgoing.data.text_html {
+                                types.push("text/html".to_string());
+                                data.insert("text/html".to_string(), html.clone());
+                            }
+                            if let Some(ref tiddler) = outgoing.data.text_vnd_tiddler {
+                                types.push("text/vnd.tiddler".to_string());
+                                data.insert("text/vnd.tiddler".to_string(), tiddler.clone());
+                            }
+                            if let Some(ref uri_list) = outgoing.data.text_uri_list {
+                                types.push("text/uri-list".to_string());
+                                data.insert("text/uri-list".to_string(), uri_list.clone());
+                            }
+
+                            if !types.is_empty() {
+                                eprintln!(
+                                    "[TiddlyDesktop] macOS: performDragOperation - emitting td-drag-content for same-window drag, types: {:?}",
+                                    types
+                                );
+                                let content_data = DragContentData { types, data };
+                                let _ = state.window.emit("td-drag-content", &content_data);
+                            }
+                        }
+                    }
                 }
                 handled = true;
             } else if let Some(pasteboard) = get_dragging_pasteboard(dragging_info) {

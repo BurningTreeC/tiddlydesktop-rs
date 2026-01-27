@@ -56,7 +56,18 @@
 
     // === Recursively inline all computed styles on an element and its children ===
     function inlineAllStyles(source, target) {
-        var computed = window.getComputedStyle(source);
+        // Safeguard: ensure source is a valid element
+        if (!source || !source.nodeType || source.nodeType !== 1) return;
+        if (!target || !target.style) return;
+
+        var computed;
+        try {
+            computed = window.getComputedStyle(source);
+        } catch (e) {
+            return;
+        }
+        if (!computed) return;
+
         var cssText = '';
         for (var i = 0; i < computed.length; i++) {
             var prop = computed[i];
@@ -76,7 +87,20 @@
     function generateDragImagePng(element, callback) {
         if (!element) return callback(null);
 
-        var rect = element.getBoundingClientRect();
+        // Safeguard: ensure element has getBoundingClientRect method
+        if (typeof element.getBoundingClientRect !== 'function') {
+            log('Cannot generate drag image: element has no getBoundingClientRect');
+            return callback(null);
+        }
+
+        var rect;
+        try {
+            rect = element.getBoundingClientRect();
+        } catch (e) {
+            log('Cannot generate drag image: getBoundingClientRect failed');
+            return callback(null);
+        }
+
         var width = Math.ceil(rect.width);
         var height = Math.ceil(rect.height);
 
@@ -164,10 +188,28 @@
 
     // === Fallback: simple canvas-based drag image ===
     function generateSimpleDragImage(element, callback) {
-        var rect = element.getBoundingClientRect();
+        // Safeguard: ensure element has getBoundingClientRect method
+        if (!element || typeof element.getBoundingClientRect !== 'function') {
+            return callback(null);
+        }
+
+        var rect;
+        try {
+            rect = element.getBoundingClientRect();
+        } catch (e) {
+            return callback(null);
+        }
+
         var width = Math.ceil(rect.width);
         var height = Math.ceil(rect.height);
-        var computed = window.getComputedStyle(element);
+
+        // Safeguard: ensure we can get computed style
+        var computed;
+        try {
+            computed = window.getComputedStyle(element);
+        } catch (e) {
+            computed = {};
+        }
 
         var bgColor = computed.backgroundColor;
         if (bgColor === 'rgba(0, 0, 0, 0)' || bgColor === 'transparent') {
@@ -342,7 +384,15 @@
         var iframes = document.querySelectorAll('iframe');
         for (var i = 0; i < iframes.length; i++) {
             var iframe = iframes[i];
-            var rect = iframe.getBoundingClientRect();
+            // Safeguard: ensure iframe has getBoundingClientRect method
+            if (!iframe || typeof iframe.getBoundingClientRect !== 'function') continue;
+
+            var rect;
+            try {
+                rect = iframe.getBoundingClientRect();
+            } catch (e) {
+                continue;
+            }
             if (x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom) {
                 try {
                     var iframeDoc = iframe.contentDocument || iframe.contentWindow.document;
@@ -641,6 +691,15 @@
 
             var x = p.x || 0;
             var y = p.y || 0;
+
+            // Handle coordinate scaling based on format
+            if (p.physicalPixels) {
+                // Windows sends physical pixels that need DPR scaling
+                var dpr = window.devicePixelRatio || 1;
+                x = x / dpr;
+                y = y / dpr;
+            }
+
             log('td-drag-drop-position at (' + x + ', ' + y + ')');
             window.__pendingDropPosition = { x: x, y: y };
         });

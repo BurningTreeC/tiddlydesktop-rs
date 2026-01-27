@@ -158,7 +158,9 @@
 
     // Check if element is a text input or textarea
     function isTextInput(el) {
-        if (!el || !el.tagName) return false;
+        // Safeguard: ensure el is a valid element with tagName
+        if (!el || typeof el !== 'object') return false;
+        if (!el.tagName || typeof el.tagName !== 'string') return false;
         var tag = el.tagName.toLowerCase();
         if (tag === 'textarea') return true;
         if (tag === 'input') {
@@ -170,11 +172,16 @@
 
     // Check if element is contenteditable
     function isContentEditable(el) {
-        if (!el) return false;
+        // Safeguard: ensure el is a valid element
+        if (!el || typeof el !== 'object') return false;
         // Check if the element itself is contenteditable
-        if (el.isContentEditable) return true;
-        // Check for contenteditable attribute
-        if (el.getAttribute && el.getAttribute('contenteditable') === 'true') return true;
+        try {
+            if (el.isContentEditable) return true;
+            // Check for contenteditable attribute
+            if (el.getAttribute && el.getAttribute('contenteditable') === 'true') return true;
+        } catch (e) {
+            return false;
+        }
         return false;
     }
 
@@ -186,6 +193,10 @@
         // Check if it's an iframe
         if (el.tagName && el.tagName.toLowerCase() === 'iframe') {
             try {
+                // Safeguard: ensure element has getBoundingClientRect method
+                if (typeof el.getBoundingClientRect !== 'function') {
+                    return { element: el, adjustedX: x, adjustedY: y };
+                }
                 var rect = el.getBoundingClientRect();
                 var iframeX = x - rect.left;
                 var iframeY = y - rect.top;
@@ -195,7 +206,7 @@
                     return { element: iframeEl, adjustedX: iframeX, adjustedY: iframeY, iframe: el };
                 }
             } catch (e) {
-                // Cross-origin iframe, can't access
+                // Cross-origin iframe or other error, can't access
             }
         }
         return { element: el, adjustedX: x, adjustedY: y };
@@ -204,6 +215,9 @@
     // Set caret position in input/textarea from coordinates
     function setInputCaretFromPoint(el, clientX, clientY) {
         if (!el || !isTextInput(el)) return;
+
+        // Safeguard: ensure element has getBoundingClientRect method
+        if (typeof el.getBoundingClientRect !== 'function') return;
 
         // Ensure the browser window is focused before focusing the element
         // This is needed during native drags when the OS drag system had focus
@@ -219,7 +233,14 @@
         }
 
         // Create a temporary span to measure text
-        var style = window.getComputedStyle(el);
+        var style;
+        try {
+            style = window.getComputedStyle(el);
+        } catch (e) {
+            return;
+        }
+        if (!style) return;
+
         var span = document.createElement('span');
         span.style.font = style.font;
         span.style.fontSize = style.fontSize;
@@ -231,7 +252,13 @@
         span.style.visibility = 'hidden';
         document.body.appendChild(span);
 
-        var rect = el.getBoundingClientRect();
+        var rect;
+        try {
+            rect = el.getBoundingClientRect();
+        } catch (e) {
+            document.body.removeChild(span);
+            return;
+        }
         var paddingLeft = parseFloat(style.paddingLeft) || 0;
         var relativeX = clientX - rect.left - paddingLeft + el.scrollLeft;
 
@@ -261,11 +288,18 @@
 
     // Set caret position in contenteditable from coordinates
     function setContentEditableCaretFromPoint(el, clientX, clientY) {
-        if (!el) return;
+        // Safeguard: ensure el is a valid element
+        if (!el || typeof el !== 'object') return;
 
         // Use the document that owns the element (important for iframes)
-        var doc = el.ownerDocument || document;
-        var win = doc.defaultView || window;
+        var doc;
+        var win;
+        try {
+            doc = el.ownerDocument || document;
+            win = doc.defaultView || window;
+        } catch (e) {
+            return;
+        }
 
         // Ensure the browser window is focused before focusing the element
         // This is needed during native drags when the OS drag system had focus
@@ -300,12 +334,17 @@
     function updateCaretForDrag(x, y) {
         var info = getElementAtPointForCaret(x, y);
         var el = info.element;
-        if (!el) return;
+        // Safeguard: ensure el is a valid element
+        if (!el || typeof el !== 'object') return;
 
-        if (isTextInput(el)) {
-            setInputCaretFromPoint(el, info.adjustedX, info.adjustedY);
-        } else if (isContentEditable(el)) {
-            setContentEditableCaretFromPoint(el, info.adjustedX, info.adjustedY);
+        try {
+            if (isTextInput(el)) {
+                setInputCaretFromPoint(el, info.adjustedX, info.adjustedY);
+            } else if (isContentEditable(el)) {
+                setContentEditableCaretFromPoint(el, info.adjustedX, info.adjustedY);
+            }
+        } catch (e) {
+            // Silently ignore errors from invalid elements
         }
     }
 

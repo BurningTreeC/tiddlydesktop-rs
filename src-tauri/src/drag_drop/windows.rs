@@ -443,10 +443,11 @@ impl DropTargetImpl {
             client_x, client_y, is_our_drag, source_window_label, is_same_window
         );
 
-        // If this is a same-window drag (not cross-wiki), let JS handle it
-        // Cross-wiki drops (different source window) are handled below
+        // For same-window drags, we need to provide the data to JS because
+        // IDropTarget intercepts the drop before WebView2 can handle it natively.
+        // This is different from Linux where WebKit can still handle same-window drops.
         if is_same_window {
-            eprintln!("[TiddlyDesktop] Windows IDropTarget::Drop - same-window drag, letting JS handle it");
+            eprintln!("[TiddlyDesktop] Windows IDropTarget::Drop - same-window drag, providing data to JS");
             let _ = obj.window.emit(
                 "td-drag-drop-position",
                 serde_json::json!({
@@ -460,6 +461,41 @@ impl DropTargetImpl {
                     "windowLabel": obj.window.label()
                 }),
             );
+
+            // Get the stored drag data and emit td-drag-content so JS can process the drop
+            if let Ok(guard) = OUTGOING_DRAG_STATE.lock() {
+                if let Some(state) = guard.as_ref() {
+                    let mut types = Vec::new();
+                    let mut data = HashMap::new();
+
+                    if let Some(ref text) = state.data.text_plain {
+                        types.push("text/plain".to_string());
+                        data.insert("text/plain".to_string(), text.clone());
+                    }
+                    if let Some(ref html) = state.data.text_html {
+                        types.push("text/html".to_string());
+                        data.insert("text/html".to_string(), html.clone());
+                    }
+                    if let Some(ref tiddler) = state.data.text_vnd_tiddler {
+                        types.push("text/vnd.tiddler".to_string());
+                        data.insert("text/vnd.tiddler".to_string(), tiddler.clone());
+                    }
+                    if let Some(ref uri_list) = state.data.text_uri_list {
+                        types.push("text/uri-list".to_string());
+                        data.insert("text/uri-list".to_string(), uri_list.clone());
+                    }
+
+                    if !types.is_empty() {
+                        eprintln!(
+                            "[TiddlyDesktop] Windows IDropTarget::Drop - emitting td-drag-content for same-window drag, types: {:?}",
+                            types
+                        );
+                        let content_data = DragContentData { types, data };
+                        let _ = obj.window.emit("td-drag-content", &content_data);
+                    }
+                }
+            }
+
             if !pdw_effect.is_null() {
                 *pdw_effect = DROPEFFECT_COPY.0 as u32;
             }

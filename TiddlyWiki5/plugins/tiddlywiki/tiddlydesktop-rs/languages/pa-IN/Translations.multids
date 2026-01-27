@@ -1,0 +1,60 @@
+title: $:/plugins/tiddlywiki/tiddlydesktop-rs/languages/pa-IN/
+
+Buttons/Open: ਖੋਲ੍ਹੋ
+Buttons/Reveal: ਦਿਖਾਓ
+Buttons/Remove: ਹਟਾਓ
+Buttons/Add: ਸ਼ਾਮਲ ਕਰੋ
+Buttons/Change: ਬਦਲੋ
+Buttons/Reset: ਰੀਸੈੱਟ ਕਰੋ
+Buttons/Close: ਬੰਦ ਕਰੋ
+Buttons/Cancel: ਰੱਦ ਕਰੋ
+Buttons/Backup: ਬੈਕਅੱਪ
+Buttons/Group: ਗਰੁੱਪ
+Buttons/Groups: ਗਰੁੱਪ
+Buttons/OpenWikiFile: ਵਿਕੀ ਫ਼ਾਈਲ ਖੋਲ੍ਹੋ
+Buttons/OpenWikiFolder: ਵਿਕੀ ਫੋਲਡਰ ਖੋਲ੍ਹੋ
+Buttons/CreateWikiFile: ਵਿਕੀ ਫ਼ਾਈਲ ਬਣਾਓ
+Buttons/CreateWikiFolder: ਵਿਕੀ ਫੋਲਡਰ ਬਣਾਓ
+Buttons/ToFile: ਫਾਈਲ ਵਿੱਚ
+Buttons/ToFolder: ਫੋਲਡਰ ਵਿੱਚ
+
+Tooltips/BackupsEnabled: ਬੈਕਅੱਪ ਚਾਲੂ - ਬੰਦ ਕਰਨ ਲਈ ਕਲਿੱਕ ਕਰੋ
+Tooltips/ConvertWiki: ਵਿਕੀ ਫਾਰਮੈਟ ਬਦਲੋ
+Tooltips/BackupsDisabled: ਬੈਕਅੱਪ ਬੰਦ - ਚਾਲੂ ਕਰਨ ਲਈ ਕਲਿੱਕ ਕਰੋ
+Tooltips/AssignToGroup: ਗਰੁੱਪ ਵਿੱਚ ਸ਼ਾਮਲ ਕਰੋ
+Tooltips/ManageGroups: ਗਰੁੱਪ ਪ੍ਰਬੰਧਿਤ ਕਰੋ
+Tooltips/ChangeBackupDir: ਬੈਕਅੱਪ ਫੋਲਡਰ ਬਦਲੋ
+Tooltips/ResetBackupDir: ਡਿਫ਼ਾਲਟ ਬੈਕਅੱਪ ਫੋਲਡਰ ਤੇ ਰੀਸੈੱਟ ਕਰੋ
+Tooltips/SetBackupDir: ਕਸਟਮ ਬੈਕਅੱਪ ਫੋਲਡਰ ਸੈੱਟ ਕਰੋ
+Tooltips/RenameGroup: ਗਰੁੱਪ ਦਾ ਨਾਮ ਬਦਲੋ
+Tooltips/DeleteGroup: ਗਰੁੱਪ ਹਟਾਓ (ਵਿਕੀ ਬਿਨਾਂ ਗਰੁੱਪ ਵਿੱਚ ਜਾਣਗੇ)
+
+Labels/BackupFolder: ਬੈਕਅੱਪ ਫੋਲਡਰ:
+Labels/Default: (ਡਿਫ਼ਾਲਟ)
+Labels/Local: (ਸਥਾਨਕ)
+Labels/Ungrouped: ਬਿਨਾਂ ਗਰੁੱਪ
+Labels/Wikis: ਵਿਕੀ
+Labels/UpdateAvailable: ਅੱਪਡੇਟ ਉਪਲਬਧ:
+Labels/SaveTo: ਇੱਥੇ ਸੇਵ ਕਰੋ:
+Labels/InFolder: ਫੋਲਡਰ ਵਿੱਚ:
+Labels/Language: ਭਾਸ਼ਾ:
+Labels/AutoDetect: ਆਪਣੇ ਆਪ ਪਤਾ ਲਗਾਓ
+
+Placeholders/NewGroupName: ਨਵਾਂ ਗਰੁੱਪ ਨਾਮ...
+
+DropZone/Active: ਵਿਕੀ ਫ਼ਾਈਲ ਜਾਂ ਫੋਲਡਰ ਇੱਥੇ ਛੱਡੋ
+DropZone/Hint: TiddlyWiki ਫ਼ਾਈਲਾਂ ਜਾਂ ਫੋਲਡਰ ਇੱਥੇ ਛੱਡੋ
+
+EmptyMessage/Title: ਅਜੇ ਕੋਈ ਵਿਕੀ ਨਹੀਂ।
+EmptyMessage/Hint: ਸ਼ੁਰੂ ਕਰਨ ਲਈ "ਵਿਕੀ ਫ਼ਾਈਲ ਖੋਲ੍ਹੋ" ਤੇ ਕਲਿੱਕ ਕਰੋ ਜਾਂ TiddlyWiki ਫ਼ਾਈਲ ਛੱਡੋ।
+
+GroupManager/Title: ਗਰੁੱਪ ਪ੍ਰਬੰਧਿਤ ਕਰੋ
+GroupManager/NoGroups: ਅਜੇ ਕੋਈ ਗਰੁੱਪ ਨਹੀਂ ਬਣਾਇਆ। ਬਣਾਉਣ ਲਈ ਵਿਕੀ ਨੂੰ ਗਰੁੱਪ ਵਿੱਚ ਸ਼ਾਮਲ ਕਰੋ।
+
+EditionSelector/CreateFile: ਨਵੀਂ ਵਿਕੀ ਫ਼ਾਈਲ ਬਣਾਓ
+EditionSelector/CreateFolder: ਨਵਾਂ ਵਿਕੀ ਫੋਲਡਰ ਬਣਾਓ
+EditionSelector/SelectEdition: ਐਡੀਸ਼ਨ ਚੁਣੋ
+EditionSelector/AdditionalPlugins: ਹੋਰ ਪਲੱਗਇਨ
+EditionSelector/Optional: (ਵਿਕਲਪਿਕ)
+EditionSelector/CreatingFile: ਵਿਕੀ ਫ਼ਾਈਲ ਬਣਾ ਰਿਹਾ ਹੈ...
+EditionSelector/InitializingFolder: ਵਿਕੀ ਫੋਲਡਰ ਸ਼ੁਰੂ ਕਰ ਰਿਹਾ ਹੈ...

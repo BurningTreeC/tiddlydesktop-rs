@@ -1,0 +1,60 @@
+title: $:/plugins/tiddlywiki/tiddlydesktop-rs/languages/ia-IA/
+
+Buttons/Open: aperir
+Buttons/Reveal: revelar
+Buttons/Remove: remover
+Buttons/Add: adder
+Buttons/Change: cambiar
+Buttons/Reset: reinitialisar
+Buttons/Close: Clauder
+Buttons/Cancel: Cancellar
+Buttons/Backup: copia de securitate
+Buttons/Group: gruppo
+Buttons/Groups: Gruppos
+Buttons/OpenWikiFile: Aperir file wiki
+Buttons/OpenWikiFolder: Aperir dossier wiki
+Buttons/CreateWikiFile: Crear file wiki
+Buttons/CreateWikiFolder: Crear dossier wiki
+Buttons/ToFile: a file
+Buttons/ToFolder: a dossier
+
+Tooltips/BackupsEnabled: Copias de securitate activate - clicca pro disactivar
+Tooltips/ConvertWiki: Converter formato de wiki
+Tooltips/BackupsDisabled: Copias de securitate disactivate - clicca pro activar
+Tooltips/AssignToGroup: Assignar a gruppo
+Tooltips/ManageGroups: Gerer gruppos
+Tooltips/ChangeBackupDir: Cambiar directorio de copias de securitate
+Tooltips/ResetBackupDir: Reinitialisar directorio de copias de securitate predefinite
+Tooltips/SetBackupDir: Definir directorio de copias de securitate personalisate
+Tooltips/RenameGroup: Renominar gruppo
+Tooltips/DeleteGroup: Deler gruppo (wikis se movera a Sin gruppo)
+
+Labels/BackupFolder: Dossier de copias de securitate:
+Labels/Default: (predefinite)
+Labels/Local: (local)
+Labels/Ungrouped: Sin gruppo
+Labels/Wikis: wikis
+Labels/UpdateAvailable: Actualisation disponibile:
+Labels/SaveTo: salvar in:
+Labels/InFolder: in dossier:
+Labels/Language: Lingua:
+Labels/AutoDetect: Detection automatic
+
+Placeholders/NewGroupName: Nomine de nove gruppo...
+
+DropZone/Active: Depone file o dossier wiki hic
+DropZone/Hint: Depone files o dossieres TiddlyWiki hic
+
+EmptyMessage/Title: Nulle wikis ancora.
+EmptyMessage/Hint: Clicca "Aperir file wiki" o depone un file TiddlyWiki pro initiar.
+
+GroupManager/Title: Gerer gruppos
+GroupManager/NoGroups: Nulle gruppos create ancora. Assigna un wiki a un gruppo pro crear uno.
+
+EditionSelector/CreateFile: Crear nove file wiki
+EditionSelector/CreateFolder: Crear nove dossier wiki
+EditionSelector/SelectEdition: Seliger edition
+EditionSelector/AdditionalPlugins: Plugins additional
+EditionSelector/Optional: (optional)
+EditionSelector/CreatingFile: Creante file wiki...
+EditionSelector/InitializingFolder: Initialisante dossier wiki...

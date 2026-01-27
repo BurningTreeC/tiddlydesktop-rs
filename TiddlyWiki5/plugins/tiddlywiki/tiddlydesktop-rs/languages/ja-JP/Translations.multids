@@ -1,0 +1,60 @@
+title: $:/plugins/tiddlywiki/tiddlydesktop-rs/languages/ja-JP/
+
+Buttons/Open: 開く
+Buttons/Reveal: 表示
+Buttons/Remove: 削除
+Buttons/Add: 追加
+Buttons/Change: 変更
+Buttons/Reset: リセット
+Buttons/Close: 閉じる
+Buttons/Cancel: キャンセル
+Buttons/Backup: バックアップ
+Buttons/Group: グループ
+Buttons/Groups: グループ
+Buttons/OpenWikiFile: Wikiファイルを開く
+Buttons/OpenWikiFolder: Wikiフォルダを開く
+Buttons/CreateWikiFile: Wikiファイルを作成
+Buttons/CreateWikiFolder: Wikiフォルダを作成
+Buttons/ToFile: ファイルへ
+Buttons/ToFolder: フォルダへ
+
+Tooltips/BackupsEnabled: バックアップ有効 - クリックで無効化
+Tooltips/ConvertWiki: Wiki形式を変換
+Tooltips/BackupsDisabled: バックアップ無効 - クリックで有効化
+Tooltips/AssignToGroup: グループに割り当て
+Tooltips/ManageGroups: グループを管理
+Tooltips/ChangeBackupDir: バックアップディレクトリを変更
+Tooltips/ResetBackupDir: デフォルトのバックアップディレクトリにリセット
+Tooltips/SetBackupDir: カスタムバックアップディレクトリを設定
+Tooltips/RenameGroup: グループ名を変更
+Tooltips/DeleteGroup: グループを削除（Wikiは未分類に移動）
+
+Labels/BackupFolder: バックアップフォルダ:
+Labels/Default: (デフォルト)
+Labels/Local: (ローカル)
+Labels/Ungrouped: 未分類
+Labels/Wikis: Wiki
+Labels/UpdateAvailable: アップデートあり:
+Labels/SaveTo: 保存先:
+Labels/InFolder: フォルダ内:
+Labels/Language: 言語:
+Labels/AutoDetect: 自動検出
+
+Placeholders/NewGroupName: 新しいグループ名...
+
+DropZone/Active: Wikiファイルまたはフォルダをここにドロップ
+DropZone/Hint: TiddlyWikiファイルまたはフォルダをここにドロップ
+
+EmptyMessage/Title: Wikiがまだありません。
+EmptyMessage/Hint: 「Wikiファイルを開く」をクリックするか、TiddlyWikiファイルをドロップして開始してください。
+
+GroupManager/Title: グループを管理
+GroupManager/NoGroups: グループがまだ作成されていません。Wikiをグループに割り当てて作成してください。
+
+EditionSelector/CreateFile: 新しいWikiファイルを作成
+EditionSelector/CreateFolder: 新しいWikiフォルダを作成
+EditionSelector/SelectEdition: エディションを選択
+EditionSelector/AdditionalPlugins: 追加プラグイン
+EditionSelector/Optional: (オプション)
+EditionSelector/CreatingFile: Wikiファイルを作成中...
+EditionSelector/InitializingFolder: Wikiフォルダを初期化中...

@@ -1,0 +1,60 @@
+title: $:/plugins/tiddlywiki/tiddlydesktop-rs/languages/fa-IR/
+
+Buttons/Open: باز کردن
+Buttons/Reveal: نمایش
+Buttons/Remove: حذف
+Buttons/Add: افزودن
+Buttons/Change: تغییر
+Buttons/Reset: بازنشانی
+Buttons/Close: بستن
+Buttons/Cancel: لغو
+Buttons/Backup: پشتیبان
+Buttons/Group: گروه
+Buttons/Groups: گروه‌ها
+Buttons/OpenWikiFile: باز کردن فایل ویکی
+Buttons/OpenWikiFolder: باز کردن پوشه ویکی
+Buttons/CreateWikiFile: ایجاد فایل ویکی
+Buttons/CreateWikiFolder: ایجاد پوشه ویکی
+Buttons/ToFile: به فایل
+Buttons/ToFolder: به پوشه
+
+Tooltips/BackupsEnabled: پشتیبان‌گیری فعال است - برای غیرفعال کردن کلیک کنید
+Tooltips/ConvertWiki: تبدیل فرمت ویکی
+Tooltips/BackupsDisabled: پشتیبان‌گیری غیرفعال است - برای فعال کردن کلیک کنید
+Tooltips/AssignToGroup: اختصاص به گروه
+Tooltips/ManageGroups: مدیریت گروه‌ها
+Tooltips/ChangeBackupDir: تغییر پوشه پشتیبان
+Tooltips/ResetBackupDir: بازنشانی به پوشه پشتیبان پیش‌فرض
+Tooltips/SetBackupDir: تنظیم پوشه پشتیبان سفارشی
+Tooltips/RenameGroup: تغییر نام گروه
+Tooltips/DeleteGroup: حذف گروه (ویکی‌ها به بدون گروه منتقل می‌شوند)
+
+Labels/BackupFolder: پوشه پشتیبان:
+Labels/Default: (پیش‌فرض)
+Labels/Local: (محلی)
+Labels/Ungrouped: بدون گروه
+Labels/Wikis: ویکی
+Labels/UpdateAvailable: به‌روزرسانی موجود:
+Labels/SaveTo: ذخیره در:
+Labels/InFolder: در پوشه:
+Labels/Language: زبان:
+Labels/AutoDetect: تشخیص خودکار
+
+Placeholders/NewGroupName: نام گروه جدید...
+
+DropZone/Active: فایل یا پوشه ویکی را اینجا رها کنید
+DropZone/Hint: فایل‌ها یا پوشه‌های TiddlyWiki را اینجا رها کنید
+
+EmptyMessage/Title: هنوز ویکی‌ای وجود ندارد.
+EmptyMessage/Hint: روی "باز کردن فایل ویکی" کلیک کنید یا یک فایل TiddlyWiki را رها کنید تا شروع کنید.
+
+GroupManager/Title: مدیریت گروه‌ها
+GroupManager/NoGroups: هنوز گروهی ایجاد نشده است. یک ویکی را به گروهی اختصاص دهید تا ایجاد شود.
+
+EditionSelector/CreateFile: ایجاد فایل ویکی جدید
+EditionSelector/CreateFolder: ایجاد پوشه ویکی جدید
+EditionSelector/SelectEdition: انتخاب نسخه
+EditionSelector/AdditionalPlugins: افزونه‌های اضافی
+EditionSelector/Optional: (اختیاری)
+EditionSelector/CreatingFile: در حال ایجاد فایل ویکی...
+EditionSelector/InitializingFolder: در حال آماده‌سازی پوشه ویکی...

@@ -1,0 +1,60 @@
+title: $:/plugins/tiddlywiki/tiddlydesktop-rs/languages/sl-SI/
+
+Buttons/Open: odpri
+Buttons/Reveal: prikaži
+Buttons/Remove: odstrani
+Buttons/Add: dodaj
+Buttons/Change: spremeni
+Buttons/Reset: ponastavi
+Buttons/Close: Zapri
+Buttons/Cancel: Prekliči
+Buttons/Backup: varnostna kopija
+Buttons/Group: skupina
+Buttons/Groups: Skupine
+Buttons/OpenWikiFile: Odpri wiki datoteko
+Buttons/OpenWikiFolder: Odpri wiki mapo
+Buttons/CreateWikiFile: Ustvari wiki datoteko
+Buttons/CreateWikiFolder: Ustvari wiki mapo
+Buttons/ToFile: v datoteko
+Buttons/ToFolder: v mapo
+
+Tooltips/BackupsEnabled: Varnostne kopije omogočene - kliknite za onemogočenje
+Tooltips/ConvertWiki: Pretvori format wikija
+Tooltips/BackupsDisabled: Varnostne kopije onemogočene - kliknite za omogočenje
+Tooltips/AssignToGroup: Dodeli v skupino
+Tooltips/ManageGroups: Upravljaj skupine
+Tooltips/ChangeBackupDir: Spremeni mapo varnostnih kopij
+Tooltips/ResetBackupDir: Ponastavi privzeto mapo varnostnih kopij
+Tooltips/SetBackupDir: Nastavi prilagojeno mapo varnostnih kopij
+Tooltips/RenameGroup: Preimenuj skupino
+Tooltips/DeleteGroup: Izbriši skupino (wikiji bodo premaknjeni v Brez skupine)
+
+Labels/BackupFolder: Mapa varnostnih kopij:
+Labels/Default: (privzeto)
+Labels/Local: (lokalno)
+Labels/Ungrouped: Brez skupine
+Labels/Wikis: wikijev
+Labels/UpdateAvailable: Na voljo je posodobitev:
+Labels/SaveTo: shrani v:
+Labels/InFolder: v mapi:
+Labels/Language: Jezik:
+Labels/AutoDetect: Samodejna zaznava
+
+Placeholders/NewGroupName: Ime nove skupine...
+
+DropZone/Active: Spustite wiki datoteko ali mapo sem
+DropZone/Hint: Spustite TiddlyWiki datoteke ali mape sem
+
+EmptyMessage/Title: Še ni wikijev.
+EmptyMessage/Hint: Kliknite "Odpri wiki datoteko" ali spustite TiddlyWiki datoteko za začetek.
+
+GroupManager/Title: Upravljaj skupine
+GroupManager/NoGroups: Še ni ustvarjenih skupin. Dodelite wiki v skupino za ustvarjanje.
+
+EditionSelector/CreateFile: Ustvari novo wiki datoteko
+EditionSelector/CreateFolder: Ustvari novo wiki mapo
+EditionSelector/SelectEdition: Izberi izdajo
+EditionSelector/AdditionalPlugins: Dodatni vtičniki
+EditionSelector/Optional: (neobvezno)
+EditionSelector/CreatingFile: Ustvarjanje wiki datoteke...
+EditionSelector/InitializingFolder: Inicializacija wiki mape...

@@ -1,0 +1,60 @@
+title: $:/plugins/tiddlywiki/tiddlydesktop-rs/languages/ar-PS/
+
+Buttons/Open: فتح
+Buttons/Reveal: إظهار
+Buttons/Remove: إزالة
+Buttons/Add: إضافة
+Buttons/Change: تغيير
+Buttons/Reset: إعادة تعيين
+Buttons/Close: إغلاق
+Buttons/Cancel: إلغاء
+Buttons/Backup: نسخ احتياطي
+Buttons/Group: مجموعة
+Buttons/Groups: المجموعات
+Buttons/OpenWikiFile: فتح ملف ويكي
+Buttons/OpenWikiFolder: فتح مجلد ويكي
+Buttons/CreateWikiFile: إنشاء ملف ويكي
+Buttons/CreateWikiFolder: إنشاء مجلد ويكي
+Buttons/ToFile: إلى ملف
+Buttons/ToFolder: إلى مجلد
+
+Tooltips/BackupsEnabled: النسخ الاحتياطي مفعل - انقر للتعطيل
+Tooltips/ConvertWiki: تحويل تنسيق الويكي
+Tooltips/BackupsDisabled: النسخ الاحتياطي معطل - انقر للتفعيل
+Tooltips/AssignToGroup: تعيين إلى مجموعة
+Tooltips/ManageGroups: إدارة المجموعات
+Tooltips/ChangeBackupDir: تغيير دليل النسخ الاحتياطي
+Tooltips/ResetBackupDir: إعادة تعيين دليل النسخ الاحتياطي الافتراضي
+Tooltips/SetBackupDir: تعيين دليل نسخ احتياطي مخصص
+Tooltips/RenameGroup: إعادة تسمية المجموعة
+Tooltips/DeleteGroup: حذف المجموعة (سيتم نقل الويكي إلى غير مصنف)
+
+Labels/BackupFolder: مجلد النسخ الاحتياطي:
+Labels/Default: (افتراضي)
+Labels/Local: (محلي)
+Labels/Ungrouped: غير مصنف
+Labels/Wikis: ويكي
+Labels/UpdateAvailable: تحديث متاح:
+Labels/SaveTo: حفظ في:
+Labels/InFolder: في المجلد:
+Labels/Language: اللغة:
+Labels/AutoDetect: كشف تلقائي
+
+Placeholders/NewGroupName: اسم المجموعة الجديدة...
+
+DropZone/Active: أفلت ملف أو مجلد ويكي هنا
+DropZone/Hint: أفلت ملفات أو مجلدات TiddlyWiki هنا
+
+EmptyMessage/Title: لا يوجد ويكي حتى الآن.
+EmptyMessage/Hint: انقر على "فتح ملف ويكي" أو أفلت ملف TiddlyWiki للبدء.
+
+GroupManager/Title: إدارة المجموعات
+GroupManager/NoGroups: لم يتم إنشاء مجموعات بعد. عين ويكي إلى مجموعة لإنشاء واحدة.
+
+EditionSelector/CreateFile: إنشاء ملف ويكي جديد
+EditionSelector/CreateFolder: إنشاء مجلد ويكي جديد
+EditionSelector/SelectEdition: اختر الإصدار
+EditionSelector/AdditionalPlugins: إضافات إضافية
+EditionSelector/Optional: (اختياري)
+EditionSelector/CreatingFile: جاري إنشاء ملف ويكي...
+EditionSelector/InitializingFolder: جاري تهيئة مجلد ويكي...

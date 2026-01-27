@@ -1,0 +1,60 @@
+title: $:/plugins/tiddlywiki/tiddlydesktop-rs/languages/pl-PL/
+
+Buttons/Open: otwórz
+Buttons/Reveal: pokaż
+Buttons/Remove: usuń
+Buttons/Add: dodaj
+Buttons/Change: zmień
+Buttons/Reset: resetuj
+Buttons/Close: Zamknij
+Buttons/Cancel: Anuluj
+Buttons/Backup: kopia zapasowa
+Buttons/Group: grupa
+Buttons/Groups: Grupy
+Buttons/OpenWikiFile: Otwórz plik wiki
+Buttons/OpenWikiFolder: Otwórz folder wiki
+Buttons/CreateWikiFile: Utwórz plik wiki
+Buttons/CreateWikiFolder: Utwórz folder wiki
+Buttons/ToFile: do pliku
+Buttons/ToFolder: do folderu
+
+Tooltips/BackupsEnabled: Kopie zapasowe włączone - kliknij aby wyłączyć
+Tooltips/ConvertWiki: Konwertuj format wiki
+Tooltips/BackupsDisabled: Kopie zapasowe wyłączone - kliknij aby włączyć
+Tooltips/AssignToGroup: Przypisz do grupy
+Tooltips/ManageGroups: Zarządzaj grupami
+Tooltips/ChangeBackupDir: Zmień katalog kopii zapasowych
+Tooltips/ResetBackupDir: Przywróć domyślny katalog kopii zapasowych
+Tooltips/SetBackupDir: Ustaw własny katalog kopii zapasowych
+Tooltips/RenameGroup: Zmień nazwę grupy
+Tooltips/DeleteGroup: Usuń grupę (wiki zostaną przeniesione do Bez grupy)
+
+Labels/BackupFolder: Folder kopii zapasowych:
+Labels/Default: (domyślny)
+Labels/Local: (lokalny)
+Labels/Ungrouped: Bez grupy
+Labels/Wikis: wiki
+Labels/UpdateAvailable: Dostępna aktualizacja:
+Labels/SaveTo: zapisz do:
+Labels/InFolder: w folderze:
+Labels/Language: Język:
+Labels/AutoDetect: Automatyczne wykrywanie
+
+Placeholders/NewGroupName: Nazwa nowej grupy...
+
+DropZone/Active: Upuść plik lub folder wiki tutaj
+DropZone/Hint: Upuść pliki lub foldery TiddlyWiki tutaj
+
+EmptyMessage/Title: Brak wiki.
+EmptyMessage/Hint: Kliknij "Otwórz plik wiki" lub upuść plik TiddlyWiki aby rozpocząć.
+
+GroupManager/Title: Zarządzaj grupami
+GroupManager/NoGroups: Nie utworzono jeszcze grup. Przypisz wiki do grupy aby ją utworzyć.
+
+EditionSelector/CreateFile: Utwórz nowy plik wiki
+EditionSelector/CreateFolder: Utwórz nowy folder wiki
+EditionSelector/SelectEdition: Wybierz edycję
+EditionSelector/AdditionalPlugins: Dodatkowe wtyczki
+EditionSelector/Optional: (opcjonalne)
+EditionSelector/CreatingFile: Tworzenie pliku wiki...
+EditionSelector/InitializingFolder: Inicjalizacja folderu wiki...

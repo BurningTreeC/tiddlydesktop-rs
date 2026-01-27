@@ -42,15 +42,26 @@ const COMBINED_INIT_SCRIPT: &str = concat!(
 /// This ensures __WIKI_PATH__, __WINDOW_LABEL__, and __IS_MAIN_WIKI__ are available before
 /// setupExternalAttachments runs, avoiding race conditions with protocol handler injection.
 pub fn get_wiki_init_script(wiki_path: &str, window_label: &str, is_main_wiki: bool) -> String {
+    get_wiki_init_script_with_language(wiki_path, window_label, is_main_wiki, None)
+}
+
+/// Full JavaScript initialization script with optional language override
+pub fn get_wiki_init_script_with_language(wiki_path: &str, window_label: &str, is_main_wiki: bool, language: Option<&str>) -> String {
+    let lang_line = match language {
+        Some(lang) => format!(r#"window.__TIDDLYDESKTOP_LANGUAGE__ = "{}";"#, lang.replace('"', "\\\"")),
+        None => String::new(),
+    };
     format!(
         r#"
     window.__WIKI_PATH__ = "{}";
     window.__WINDOW_LABEL__ = "{}";
     window.__IS_MAIN_WIKI__ = {};
+    {}
     "#,
         wiki_path.replace('\\', "\\\\").replace('"', "\\\""),
         window_label.replace('\\', "\\\\").replace('"', "\\\""),
-        is_main_wiki
+        is_main_wiki,
+        lang_line
     ) + get_dialog_init_script()
 }
 

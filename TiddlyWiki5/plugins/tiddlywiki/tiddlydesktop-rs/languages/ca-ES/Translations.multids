@@ -1,0 +1,60 @@
+title: $:/plugins/tiddlywiki/tiddlydesktop-rs/languages/ca-ES/
+
+Buttons/Open: obrir
+Buttons/Reveal: mostrar
+Buttons/Remove: eliminar
+Buttons/Add: afegir
+Buttons/Change: canviar
+Buttons/Reset: restablir
+Buttons/Close: Tancar
+Buttons/Cancel: Cancel·lar
+Buttons/Backup: còpia de seguretat
+Buttons/Group: grup
+Buttons/Groups: Grups
+Buttons/OpenWikiFile: Obrir fitxer wiki
+Buttons/OpenWikiFolder: Obrir carpeta wiki
+Buttons/CreateWikiFile: Crear fitxer wiki
+Buttons/CreateWikiFolder: Crear carpeta wiki
+Buttons/ToFile: a fitxer
+Buttons/ToFolder: a carpeta
+
+Tooltips/BackupsEnabled: Còpies de seguretat activades - feu clic per desactivar
+Tooltips/ConvertWiki: Convertir format de wiki
+Tooltips/BackupsDisabled: Còpies de seguretat desactivades - feu clic per activar
+Tooltips/AssignToGroup: Assignar a grup
+Tooltips/ManageGroups: Gestionar grups
+Tooltips/ChangeBackupDir: Canviar directori de còpies de seguretat
+Tooltips/ResetBackupDir: Restablir directori de còpies de seguretat per defecte
+Tooltips/SetBackupDir: Establir directori de còpies de seguretat personalitzat
+Tooltips/RenameGroup: Reanomenar grup
+Tooltips/DeleteGroup: Eliminar grup (els wikis es mouran a Sense grup)
+
+Labels/BackupFolder: Carpeta de còpies de seguretat:
+Labels/Default: (per defecte)
+Labels/Local: (local)
+Labels/Ungrouped: Sense grup
+Labels/Wikis: wikis
+Labels/UpdateAvailable: Actualització disponible:
+Labels/SaveTo: desar a:
+Labels/InFolder: a la carpeta:
+Labels/Language: Idioma:
+Labels/AutoDetect: Detecció automàtica
+
+Placeholders/NewGroupName: Nom del nou grup...
+
+DropZone/Active: Deixeu anar el fitxer o carpeta wiki aquí
+DropZone/Hint: Deixeu anar fitxers o carpetes TiddlyWiki aquí
+
+EmptyMessage/Title: Encara no hi ha wikis.
+EmptyMessage/Hint: Feu clic a "Obrir fitxer wiki" o deixeu anar un fitxer TiddlyWiki per començar.
+
+GroupManager/Title: Gestionar grups
+GroupManager/NoGroups: Encara no s'han creat grups. Assigneu un wiki a un grup per crear-ne un.
+
+EditionSelector/CreateFile: Crear nou fitxer wiki
+EditionSelector/CreateFolder: Crear nova carpeta wiki
+EditionSelector/SelectEdition: Seleccionar edició
+EditionSelector/AdditionalPlugins: Connectors addicionals
+EditionSelector/Optional: (opcional)
+EditionSelector/CreatingFile: Creant fitxer wiki...
+EditionSelector/InitializingFolder: Inicialitzant carpeta wiki...

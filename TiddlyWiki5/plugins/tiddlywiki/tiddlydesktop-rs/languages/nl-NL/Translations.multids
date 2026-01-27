@@ -1,0 +1,60 @@
+title: $:/plugins/tiddlywiki/tiddlydesktop-rs/languages/nl-NL/
+
+Buttons/Open: openen
+Buttons/Reveal: tonen
+Buttons/Remove: verwijderen
+Buttons/Add: toevoegen
+Buttons/Change: wijzigen
+Buttons/Reset: herstellen
+Buttons/Close: Sluiten
+Buttons/Cancel: Annuleren
+Buttons/Backup: backup
+Buttons/Group: groep
+Buttons/Groups: Groepen
+Buttons/OpenWikiFile: Wiki-bestand openen
+Buttons/OpenWikiFolder: Wiki-map openen
+Buttons/CreateWikiFile: Wiki-bestand maken
+Buttons/CreateWikiFolder: Wiki-map maken
+Buttons/ToFile: naar bestand
+Buttons/ToFolder: naar map
+
+Tooltips/BackupsEnabled: Back-ups ingeschakeld - klik om uit te schakelen
+Tooltips/ConvertWiki: Wiki-formaat converteren
+Tooltips/BackupsDisabled: Back-ups uitgeschakeld - klik om in te schakelen
+Tooltips/AssignToGroup: Toewijzen aan groep
+Tooltips/ManageGroups: Groepen beheren
+Tooltips/ChangeBackupDir: Back-upmap wijzigen
+Tooltips/ResetBackupDir: Standaard back-upmap herstellen
+Tooltips/SetBackupDir: Aangepaste back-upmap instellen
+Tooltips/RenameGroup: Groep hernoemen
+Tooltips/DeleteGroup: Groep verwijderen (wiki's worden verplaatst naar Niet-gegroepeerd)
+
+Labels/BackupFolder: Back-upmap:
+Labels/Default: (standaard)
+Labels/Local: (lokaal)
+Labels/Ungrouped: Niet-gegroepeerd
+Labels/Wikis: wiki's
+Labels/UpdateAvailable: Update beschikbaar:
+Labels/SaveTo: opslaan in:
+Labels/InFolder: in map:
+Labels/Language: Taal:
+Labels/AutoDetect: Automatisch detecteren
+
+Placeholders/NewGroupName: Nieuwe groepsnaam...
+
+DropZone/Active: Sleep wiki-bestand of -map hierheen
+DropZone/Hint: Sleep TiddlyWiki-bestanden of -mappen hierheen
+
+EmptyMessage/Title: Nog geen wiki's.
+EmptyMessage/Hint: Klik op "Wiki-bestand openen" of sleep een TiddlyWiki-bestand om te beginnen.
+
+GroupManager/Title: Groepen beheren
+GroupManager/NoGroups: Nog geen groepen aangemaakt. Wijs een wiki toe aan een groep om er een te maken.
+
+EditionSelector/CreateFile: Nieuw wiki-bestand maken
+EditionSelector/CreateFolder: Nieuwe wiki-map maken
+EditionSelector/SelectEdition: Selecteer editie
+EditionSelector/AdditionalPlugins: Extra plugins
+EditionSelector/Optional: (optioneel)
+EditionSelector/CreatingFile: Wiki-bestand wordt gemaakt...
+EditionSelector/InitializingFolder: Wiki-map wordt geïnitialiseerd...

@@ -1,0 +1,60 @@
+title: $:/plugins/tiddlywiki/tiddlydesktop-rs/languages/he-IL/
+
+Buttons/Open: פתח
+Buttons/Reveal: הצג
+Buttons/Remove: הסר
+Buttons/Add: הוסף
+Buttons/Change: שנה
+Buttons/Reset: אפס
+Buttons/Close: סגור
+Buttons/Cancel: ביטול
+Buttons/Backup: גיבוי
+Buttons/Group: קבוצה
+Buttons/Groups: קבוצות
+Buttons/OpenWikiFile: פתח קובץ ויקי
+Buttons/OpenWikiFolder: פתח תיקיית ויקי
+Buttons/CreateWikiFile: צור קובץ ויקי
+Buttons/CreateWikiFolder: צור תיקיית ויקי
+Buttons/ToFile: לקובץ
+Buttons/ToFolder: לתיקייה
+
+Tooltips/BackupsEnabled: גיבויים מופעלים - לחץ להשבתה
+Tooltips/ConvertWiki: המר תבנית ויקי
+Tooltips/BackupsDisabled: גיבויים מושבתים - לחץ להפעלה
+Tooltips/AssignToGroup: הקצה לקבוצה
+Tooltips/ManageGroups: נהל קבוצות
+Tooltips/ChangeBackupDir: שנה תיקיית גיבוי
+Tooltips/ResetBackupDir: אפס לתיקיית גיבוי ברירת מחדל
+Tooltips/SetBackupDir: הגדר תיקיית גיבוי מותאמת אישית
+Tooltips/RenameGroup: שנה שם קבוצה
+Tooltips/DeleteGroup: מחק קבוצה (הויקי יועברו ללא קבוצה)
+
+Labels/BackupFolder: תיקיית גיבוי:
+Labels/Default: (ברירת מחדל)
+Labels/Local: (מקומי)
+Labels/Ungrouped: ללא קבוצה
+Labels/Wikis: ויקי
+Labels/UpdateAvailable: עדכון זמין:
+Labels/SaveTo: שמור ב:
+Labels/InFolder: בתיקייה:
+Labels/Language: שפה:
+Labels/AutoDetect: זיהוי אוטומטי
+
+Placeholders/NewGroupName: שם קבוצה חדשה...
+
+DropZone/Active: שחרר קובץ או תיקיית ויקי כאן
+DropZone/Hint: שחרר קבצי או תיקיות TiddlyWiki כאן
+
+EmptyMessage/Title: אין ויקי עדיין.
+EmptyMessage/Hint: לחץ על "פתח קובץ ויקי" או שחרר קובץ TiddlyWiki כדי להתחיל.
+
+GroupManager/Title: נהל קבוצות
+GroupManager/NoGroups: עדיין לא נוצרו קבוצות. הקצה ויקי לקבוצה כדי ליצור אחת.
+
+EditionSelector/CreateFile: צור קובץ ויקי חדש
+EditionSelector/CreateFolder: צור תיקיית ויקי חדשה
+EditionSelector/SelectEdition: בחר מהדורה
+EditionSelector/AdditionalPlugins: תוספים נוספים
+EditionSelector/Optional: (אופציונלי)
+EditionSelector/CreatingFile: יוצר קובץ ויקי...
+EditionSelector/InitializingFolder: מאתחל תיקיית ויקי...

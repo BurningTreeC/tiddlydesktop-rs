@@ -114,6 +114,14 @@ pub struct WikiConfigs {
     pub window_states: HashMap<String, WindowState>,
 }
 
+/// Application-wide settings (language, etc.)
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+pub struct AppSettings {
+    /// UI language code (e.g., "en-GB", "de-DE"). None = auto-detect from OS
+    #[serde(default)]
+    pub language: Option<String>,
+}
+
 /// Information about a TiddlyWiki edition
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct EditionInfo {

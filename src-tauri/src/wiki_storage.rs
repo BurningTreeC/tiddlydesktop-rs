@@ -6,7 +6,7 @@
 
 use std::path::PathBuf;
 use tauri::Manager;
-use crate::types::{WikiEntry, WikiConfigs, ExternalAttachmentsConfig, SessionAuthConfig};
+use crate::types::{WikiEntry, WikiConfigs, ExternalAttachmentsConfig, SessionAuthConfig, AppSettings};
 use crate::utils;
 
 /// Get the path to the recent files JSON
@@ -19,6 +19,61 @@ pub fn get_recent_files_path(app: &tauri::AppHandle) -> Result<PathBuf, String> 
 pub fn get_wiki_configs_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     let data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
     Ok(data_dir.join("wiki_configs.json"))
+}
+
+/// Get the path to the app settings JSON
+pub fn get_app_settings_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    let data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    Ok(data_dir.join("app_settings.json"))
+}
+
+/// Load app settings from disk
+pub fn load_app_settings(app: &tauri::AppHandle) -> Result<AppSettings, String> {
+    let path = get_app_settings_path(app)?;
+    if path.exists() {
+        let content = std::fs::read_to_string(&path)
+            .map_err(|e| format!("Failed to read app settings: {}", e))?;
+        serde_json::from_str(&content)
+            .map_err(|e| format!("Failed to parse app settings: {}", e))
+    } else {
+        Ok(AppSettings::default())
+    }
+}
+
+/// Save app settings to disk
+pub fn save_app_settings(app: &tauri::AppHandle, settings: &AppSettings) -> Result<(), String> {
+    let path = get_app_settings_path(app)?;
+
+    // Ensure parent directory exists
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("Failed to create config directory: {}", e))?;
+    }
+
+    let content = serde_json::to_string_pretty(settings)
+        .map_err(|e| format!("Failed to serialize app settings: {}", e))?;
+    std::fs::write(&path, content)
+        .map_err(|e| format!("Failed to write app settings: {}", e))
+}
+
+/// Detect system locale and return a language code
+pub fn detect_system_language() -> String {
+    use sys_locale::get_locale;
+
+    // Get system locale (e.g., "en-US", "de-DE", "fr-FR")
+    let locale = get_locale().unwrap_or_else(|| "en-GB".to_string());
+
+    // sys-locale returns formats like "en-US" or "en_US" - normalize to TiddlyWiki format
+    locale.replace('_', "-")
+}
+
+/// Get the effective language (user preference or system-detected)
+pub fn get_effective_language(app: &tauri::AppHandle) -> String {
+    let settings = load_app_settings(app).unwrap_or_default();
+    let system_lang = detect_system_language();
+    let effective = settings.language.clone().unwrap_or_else(|| system_lang.clone());
+    eprintln!("[TiddlyDesktop] get_effective_language: saved={:?}, system={}, effective={}",
+        settings.language, system_lang, effective);
+    effective
 }
 
 /// Load all wiki configs from disk
@@ -325,4 +380,35 @@ pub fn set_session_auth_config(app: tauri::AppHandle, wiki_path: String, config:
     let mut configs = load_wiki_configs(&app)?;
     configs.session_auth.insert(wiki_path, config);
     save_wiki_configs(&app, &configs)
+}
+
+/// Get current UI language (user preference or auto-detected)
+#[tauri::command]
+pub fn get_language(app: tauri::AppHandle) -> String {
+    get_effective_language(&app)
+}
+
+/// Set UI language preference (empty string = auto-detect from OS)
+#[tauri::command]
+pub fn set_language(app: tauri::AppHandle, language: String) -> Result<(), String> {
+    eprintln!("[TiddlyDesktop] set_language called with: '{}'", language);
+    let mut settings = load_app_settings(&app)?;
+    settings.language = if language.is_empty() { None } else { Some(language.clone()) };
+    save_app_settings(&app, &settings)?;
+    eprintln!("[TiddlyDesktop] Language saved: {:?}", settings.language);
+    Ok(())
+}
+
+/// Check if user has a custom language set (vs auto-detect)
+#[tauri::command]
+pub fn has_custom_language(app: tauri::AppHandle) -> bool {
+    load_app_settings(&app)
+        .map(|s| s.language.is_some())
+        .unwrap_or(false)
+}
+
+/// Get system-detected language (ignoring user preference)
+#[tauri::command]
+pub fn get_system_language() -> String {
+    detect_system_language()
 }

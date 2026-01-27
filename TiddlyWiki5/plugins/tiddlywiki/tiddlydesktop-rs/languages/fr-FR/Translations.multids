@@ -1,0 +1,60 @@
+title: $:/plugins/tiddlywiki/tiddlydesktop-rs/languages/fr-FR/
+
+Buttons/Open: ouvrir
+Buttons/Reveal: révéler
+Buttons/Remove: supprimer
+Buttons/Add: ajouter
+Buttons/Change: modifier
+Buttons/Reset: réinitialiser
+Buttons/Close: Fermer
+Buttons/Cancel: Annuler
+Buttons/Backup: sauvegarde
+Buttons/Group: groupe
+Buttons/Groups: Groupes
+Buttons/OpenWikiFile: Ouvrir un fichier wiki
+Buttons/OpenWikiFolder: Ouvrir un dossier wiki
+Buttons/CreateWikiFile: Créer un fichier wiki
+Buttons/CreateWikiFolder: Créer un dossier wiki
+Buttons/ToFile: en fichier
+Buttons/ToFolder: en dossier
+
+Tooltips/BackupsEnabled: Sauvegardes activées - cliquer pour désactiver
+Tooltips/ConvertWiki: Convertir le format du wiki
+Tooltips/BackupsDisabled: Sauvegardes désactivées - cliquer pour activer
+Tooltips/AssignToGroup: Assigner à un groupe
+Tooltips/ManageGroups: Gérer les groupes
+Tooltips/ChangeBackupDir: Changer le répertoire de sauvegarde
+Tooltips/ResetBackupDir: Réinitialiser le répertoire de sauvegarde par défaut
+Tooltips/SetBackupDir: Définir un répertoire de sauvegarde personnalisé
+Tooltips/RenameGroup: Renommer le groupe
+Tooltips/DeleteGroup: Supprimer le groupe (les wikis seront déplacés vers Non groupés)
+
+Labels/BackupFolder: Dossier de sauvegarde:
+Labels/Default: (par défaut)
+Labels/Local: (local)
+Labels/Ungrouped: Non groupés
+Labels/Wikis: wikis
+Labels/UpdateAvailable: Mise à jour disponible:
+Labels/SaveTo: enregistrer dans:
+Labels/InFolder: dans le dossier:
+Labels/Language: Langue:
+Labels/AutoDetect: Détection automatique
+
+Placeholders/NewGroupName: Nouveau nom de groupe...
+
+DropZone/Active: Déposez un fichier ou dossier wiki ici
+DropZone/Hint: Déposez des fichiers ou dossiers TiddlyWiki ici
+
+EmptyMessage/Title: Aucun wiki pour l'instant.
+EmptyMessage/Hint: Cliquez sur "Ouvrir un fichier wiki" ou déposez un fichier TiddlyWiki pour commencer.
+
+GroupManager/Title: Gérer les groupes
+GroupManager/NoGroups: Aucun groupe créé. Assignez un wiki à un groupe pour en créer un.
+
+EditionSelector/CreateFile: Créer un nouveau fichier wiki
+EditionSelector/CreateFolder: Créer un nouveau dossier wiki
+EditionSelector/SelectEdition: Sélectionner l'édition
+EditionSelector/AdditionalPlugins: Plugins supplémentaires
+EditionSelector/Optional: (optionnel)
+EditionSelector/CreatingFile: Création du fichier wiki...
+EditionSelector/InitializingFolder: Initialisation du dossier wiki...

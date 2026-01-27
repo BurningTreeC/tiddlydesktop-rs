@@ -1,0 +1,60 @@
+title: $:/plugins/tiddlywiki/tiddlydesktop-rs/languages/hi-IN/
+
+Buttons/Open: खोलें
+Buttons/Reveal: दिखाएं
+Buttons/Remove: हटाएं
+Buttons/Add: जोड़ें
+Buttons/Change: बदलें
+Buttons/Reset: रीसेट करें
+Buttons/Close: बंद करें
+Buttons/Cancel: रद्द करें
+Buttons/Backup: बैकअप
+Buttons/Group: समूह
+Buttons/Groups: समूह
+Buttons/OpenWikiFile: विकी फ़ाइल खोलें
+Buttons/OpenWikiFolder: विकी फ़ोल्डर खोलें
+Buttons/CreateWikiFile: विकी फ़ाइल बनाएं
+Buttons/CreateWikiFolder: विकी फ़ोल्डर बनाएं
+Buttons/ToFile: फ़ाइल में
+Buttons/ToFolder: फ़ोल्डर में
+
+Tooltips/BackupsEnabled: बैकअप सक्षम - अक्षम करने के लिए क्लिक करें
+Tooltips/ConvertWiki: विकी प्रारूप बदलें
+Tooltips/BackupsDisabled: बैकअप अक्षम - सक्षम करने के लिए क्लिक करें
+Tooltips/AssignToGroup: समूह में जोड़ें
+Tooltips/ManageGroups: समूह प्रबंधित करें
+Tooltips/ChangeBackupDir: बैकअप फ़ोल्डर बदलें
+Tooltips/ResetBackupDir: डिफ़ॉल्ट बैकअप फ़ोल्डर पर रीसेट करें
+Tooltips/SetBackupDir: कस्टम बैकअप फ़ोल्डर सेट करें
+Tooltips/RenameGroup: समूह का नाम बदलें
+Tooltips/DeleteGroup: समूह हटाएं (विकी असमूहित में जाएंगे)
+
+Labels/BackupFolder: बैकअप फ़ोल्डर:
+Labels/Default: (डिफ़ॉल्ट)
+Labels/Local: (स्थानीय)
+Labels/Ungrouped: असमूहित
+Labels/Wikis: विकी
+Labels/UpdateAvailable: अपडेट उपलब्ध:
+Labels/SaveTo: यहां सहेजें:
+Labels/InFolder: फ़ोल्डर में:
+Labels/Language: भाषा:
+Labels/AutoDetect: स्वतः पता लगाएं
+
+Placeholders/NewGroupName: नया समूह नाम...
+
+DropZone/Active: विकी फ़ाइल या फ़ोल्डर यहां छोड़ें
+DropZone/Hint: TiddlyWiki फ़ाइलें या फ़ोल्डर यहां छोड़ें
+
+EmptyMessage/Title: अभी तक कोई विकी नहीं।
+EmptyMessage/Hint: शुरू करने के लिए "विकी फ़ाइल खोलें" पर क्लिक करें या TiddlyWiki फ़ाइल छोड़ें।
+
+GroupManager/Title: समूह प्रबंधित करें
+GroupManager/NoGroups: अभी तक कोई समूह नहीं बनाया गया। एक बनाने के लिए विकी को समूह में जोड़ें।
+
+EditionSelector/CreateFile: नई विकी फ़ाइल बनाएं
+EditionSelector/CreateFolder: नया विकी फ़ोल्डर बनाएं
+EditionSelector/SelectEdition: संस्करण चुनें
+EditionSelector/AdditionalPlugins: अतिरिक्त प्लगइन
+EditionSelector/Optional: (वैकल्पिक)
+EditionSelector/CreatingFile: विकी फ़ाइल बना रहे हैं...
+EditionSelector/InitializingFolder: विकी फ़ोल्डर प्रारंभ कर रहे हैं...

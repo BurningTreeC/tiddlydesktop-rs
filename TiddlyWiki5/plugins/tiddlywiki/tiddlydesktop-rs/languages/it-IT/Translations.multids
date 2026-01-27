@@ -1,0 +1,60 @@
+title: $:/plugins/tiddlywiki/tiddlydesktop-rs/languages/it-IT/
+
+Buttons/Open: apri
+Buttons/Reveal: mostra
+Buttons/Remove: rimuovi
+Buttons/Add: aggiungi
+Buttons/Change: cambia
+Buttons/Reset: ripristina
+Buttons/Close: Chiudi
+Buttons/Cancel: Annulla
+Buttons/Backup: backup
+Buttons/Group: gruppo
+Buttons/Groups: Gruppi
+Buttons/OpenWikiFile: Apri file wiki
+Buttons/OpenWikiFolder: Apri cartella wiki
+Buttons/CreateWikiFile: Crea file wiki
+Buttons/CreateWikiFolder: Crea cartella wiki
+Buttons/ToFile: a file
+Buttons/ToFolder: a cartella
+
+Tooltips/BackupsEnabled: Backup attivati - clicca per disattivare
+Tooltips/ConvertWiki: Converti formato wiki
+Tooltips/BackupsDisabled: Backup disattivati - clicca per attivare
+Tooltips/AssignToGroup: Assegna a gruppo
+Tooltips/ManageGroups: Gestisci gruppi
+Tooltips/ChangeBackupDir: Cambia directory di backup
+Tooltips/ResetBackupDir: Ripristina directory di backup predefinita
+Tooltips/SetBackupDir: Imposta directory di backup personalizzata
+Tooltips/RenameGroup: Rinomina gruppo
+Tooltips/DeleteGroup: Elimina gruppo (i wiki verranno spostati in Non raggruppati)
+
+Labels/BackupFolder: Cartella di backup:
+Labels/Default: (predefinito)
+Labels/Local: (locale)
+Labels/Ungrouped: Non raggruppati
+Labels/Wikis: wiki
+Labels/UpdateAvailable: Aggiornamento disponibile:
+Labels/SaveTo: salva in:
+Labels/InFolder: nella cartella:
+Labels/Language: Lingua:
+Labels/AutoDetect: Rilevamento automatico
+
+Placeholders/NewGroupName: Nome nuovo gruppo...
+
+DropZone/Active: Rilascia file o cartella wiki qui
+DropZone/Hint: Rilascia file o cartelle TiddlyWiki qui
+
+EmptyMessage/Title: Nessun wiki ancora.
+EmptyMessage/Hint: Clicca su "Apri file wiki" o rilascia un file TiddlyWiki per iniziare.
+
+GroupManager/Title: Gestisci gruppi
+GroupManager/NoGroups: Nessun gruppo creato. Assegna un wiki a un gruppo per crearne uno.
+
+EditionSelector/CreateFile: Crea nuovo file wiki
+EditionSelector/CreateFolder: Crea nuova cartella wiki
+EditionSelector/SelectEdition: Seleziona edizione
+EditionSelector/AdditionalPlugins: Plugin aggiuntivi
+EditionSelector/Optional: (opzionale)
+EditionSelector/CreatingFile: Creazione file wiki...
+EditionSelector/InitializingFolder: Inizializzazione cartella wiki...

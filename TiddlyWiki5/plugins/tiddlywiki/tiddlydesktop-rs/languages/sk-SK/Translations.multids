@@ -1,0 +1,60 @@
+title: $:/plugins/tiddlywiki/tiddlydesktop-rs/languages/sk-SK/
+
+Buttons/Open: otvoriť
+Buttons/Reveal: zobraziť
+Buttons/Remove: odstrániť
+Buttons/Add: pridať
+Buttons/Change: zmeniť
+Buttons/Reset: obnoviť
+Buttons/Close: Zavrieť
+Buttons/Cancel: Zrušiť
+Buttons/Backup: záloha
+Buttons/Group: skupina
+Buttons/Groups: Skupiny
+Buttons/OpenWikiFile: Otvoriť wiki súbor
+Buttons/OpenWikiFolder: Otvoriť wiki priečinok
+Buttons/CreateWikiFile: Vytvoriť wiki súbor
+Buttons/CreateWikiFolder: Vytvoriť wiki priečinok
+Buttons/ToFile: do súboru
+Buttons/ToFolder: do priečinka
+
+Tooltips/BackupsEnabled: Zálohy povolené - kliknite pre zakázanie
+Tooltips/ConvertWiki: Previesť formát wiki
+Tooltips/BackupsDisabled: Zálohy zakázané - kliknite pre povolenie
+Tooltips/AssignToGroup: Priradiť k skupine
+Tooltips/ManageGroups: Spravovať skupiny
+Tooltips/ChangeBackupDir: Zmeniť adresár záloh
+Tooltips/ResetBackupDir: Obnoviť predvolený adresár záloh
+Tooltips/SetBackupDir: Nastaviť vlastný adresár záloh
+Tooltips/RenameGroup: Premenovať skupinu
+Tooltips/DeleteGroup: Odstrániť skupinu (wiki budú presunuté do Bez skupiny)
+
+Labels/BackupFolder: Priečinok záloh:
+Labels/Default: (predvolený)
+Labels/Local: (miestny)
+Labels/Ungrouped: Bez skupiny
+Labels/Wikis: wiki
+Labels/UpdateAvailable: Dostupná aktualizácia:
+Labels/SaveTo: uložiť do:
+Labels/InFolder: v priečinku:
+Labels/Language: Jazyk:
+Labels/AutoDetect: Automatická detekcia
+
+Placeholders/NewGroupName: Názov novej skupiny...
+
+DropZone/Active: Pretiahnite wiki súbor alebo priečinok sem
+DropZone/Hint: Pretiahnite TiddlyWiki súbory alebo priečinky sem
+
+EmptyMessage/Title: Zatiaľ žiadne wiki.
+EmptyMessage/Hint: Kliknite na "Otvoriť wiki súbor" alebo pretiahnite TiddlyWiki súbor pre začatie.
+
+GroupManager/Title: Spravovať skupiny
+GroupManager/NoGroups: Zatiaľ neboli vytvorené žiadne skupiny. Priraďte wiki k skupine pre jej vytvorenie.
+
+EditionSelector/CreateFile: Vytvoriť nový wiki súbor
+EditionSelector/CreateFolder: Vytvoriť nový wiki priečinok
+EditionSelector/SelectEdition: Vybrať edíciu
+EditionSelector/AdditionalPlugins: Ďalšie pluginy
+EditionSelector/Optional: (voliteľné)
+EditionSelector/CreatingFile: Vytváranie wiki súboru...
+EditionSelector/InitializingFolder: Inicializácia wiki priečinka...

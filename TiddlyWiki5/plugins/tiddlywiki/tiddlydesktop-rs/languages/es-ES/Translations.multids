@@ -1,0 +1,60 @@
+title: $:/plugins/tiddlywiki/tiddlydesktop-rs/languages/es-ES/
+
+Buttons/Open: abrir
+Buttons/Reveal: revelar
+Buttons/Remove: eliminar
+Buttons/Add: añadir
+Buttons/Change: cambiar
+Buttons/Reset: restablecer
+Buttons/Close: Cerrar
+Buttons/Cancel: Cancelar
+Buttons/Backup: copia de seguridad
+Buttons/Group: grupo
+Buttons/Groups: Grupos
+Buttons/OpenWikiFile: Abrir archivo wiki
+Buttons/OpenWikiFolder: Abrir carpeta wiki
+Buttons/CreateWikiFile: Crear archivo wiki
+Buttons/CreateWikiFolder: Crear carpeta wiki
+Buttons/ToFile: a archivo
+Buttons/ToFolder: a carpeta
+
+Tooltips/BackupsEnabled: Copias de seguridad activadas - clic para desactivar
+Tooltips/ConvertWiki: Convertir formato de wiki
+Tooltips/BackupsDisabled: Copias de seguridad desactivadas - clic para activar
+Tooltips/AssignToGroup: Asignar a grupo
+Tooltips/ManageGroups: Gestionar grupos
+Tooltips/ChangeBackupDir: Cambiar directorio de copias de seguridad
+Tooltips/ResetBackupDir: Restablecer directorio de copias de seguridad predeterminado
+Tooltips/SetBackupDir: Establecer directorio de copias de seguridad personalizado
+Tooltips/RenameGroup: Renombrar grupo
+Tooltips/DeleteGroup: Eliminar grupo (los wikis se moverán a Sin grupo)
+
+Labels/BackupFolder: Carpeta de copias de seguridad:
+Labels/Default: (predeterminado)
+Labels/Local: (local)
+Labels/Ungrouped: Sin grupo
+Labels/Wikis: wikis
+Labels/UpdateAvailable: Actualización disponible:
+Labels/SaveTo: guardar en:
+Labels/InFolder: en carpeta:
+Labels/Language: Idioma:
+Labels/AutoDetect: Detección automática
+
+Placeholders/NewGroupName: Nuevo nombre de grupo...
+
+DropZone/Active: Suelte el archivo o carpeta wiki aquí
+DropZone/Hint: Suelte archivos o carpetas TiddlyWiki aquí
+
+EmptyMessage/Title: Aún no hay wikis.
+EmptyMessage/Hint: Haga clic en "Abrir archivo wiki" o suelte un archivo TiddlyWiki para comenzar.
+
+GroupManager/Title: Gestionar grupos
+GroupManager/NoGroups: Aún no hay grupos. Asigne un wiki a un grupo para crear uno.
+
+EditionSelector/CreateFile: Crear nuevo archivo wiki
+EditionSelector/CreateFolder: Crear nueva carpeta wiki
+EditionSelector/SelectEdition: Seleccionar edición
+EditionSelector/AdditionalPlugins: Plugins adicionales
+EditionSelector/Optional: (opcional)
+EditionSelector/CreatingFile: Creando archivo wiki...
+EditionSelector/InitializingFolder: Inicializando carpeta wiki...

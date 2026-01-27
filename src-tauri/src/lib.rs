@@ -2483,6 +2483,122 @@ async fn create_wiki_file(app: tauri::AppHandle, path: String, edition: String, 
     Ok(())
 }
 
+/// Convert a wiki between single-file and folder formats
+#[tauri::command]
+async fn convert_wiki(app: tauri::AppHandle, source_path: String, dest_path: String, to_folder: bool) -> Result<(), String> {
+    let source = PathBuf::from(&source_path);
+    let dest = PathBuf::from(&dest_path);
+
+    if !source.exists() {
+        return Err("Source wiki does not exist".to_string());
+    }
+
+    let node_path = get_node_path(&app)?;
+    let tw_path = get_tiddlywiki_path(&app)?;
+
+    if to_folder {
+        // Convert single-file to folder: tiddlywiki --load <file> --savewikifolder <folder>
+        println!("Converting single-file wiki to folder:");
+        println!("  Source: {:?}", source);
+        println!("  Destination: {:?}", dest);
+
+        // Create destination folder
+        std::fs::create_dir_all(&dest)
+            .map_err(|e| format!("Failed to create destination folder: {}", e))?;
+
+        let mut cmd = Command::new(&node_path);
+        cmd.arg(&tw_path)
+            .arg("--load")
+            .arg(&source)
+            .arg("--savewikifolder")
+            .arg(&dest);
+        #[cfg(target_os = "windows")]
+        cmd.creation_flags(CREATE_NO_WINDOW);
+
+        let output = cmd.output()
+            .map_err(|e| format!("Failed to run conversion: {}", e))?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            return Err(format!("Conversion failed:\n{}\n{}", stdout, stderr));
+        }
+
+        // Verify tiddlywiki.info was created
+        if !dest.join("tiddlywiki.info").exists() {
+            return Err("Conversion failed - tiddlywiki.info not created".to_string());
+        }
+
+        println!("Successfully converted to folder wiki: {:?}", dest);
+    } else {
+        // Convert folder to single-file: tiddlywiki <folder> --render '$:/core/save/all' 'output.html' 'text/plain'
+        println!("Converting folder wiki to single-file:");
+        println!("  Source: {:?}", source);
+        println!("  Destination: {:?}", dest);
+
+        // Ensure destination has .html extension
+        let dest = if dest.extension().map(|e| e == "html" || e == "htm").unwrap_or(false) {
+            dest
+        } else {
+            dest.with_extension("html")
+        };
+
+        let output_filename = dest.file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("wiki.html");
+
+        // Create a temp output directory
+        let temp_output = std::env::temp_dir().join(format!("tiddlydesktop-convert-{}", std::process::id()));
+        std::fs::create_dir_all(&temp_output)
+            .map_err(|e| format!("Failed to create temp directory: {}", e))?;
+
+        let mut cmd = Command::new(&node_path);
+        cmd.arg(&tw_path)
+            .arg(&source)
+            .arg("--output")
+            .arg(&temp_output)
+            .arg("--render")
+            .arg("$:/core/save/all")
+            .arg(output_filename)
+            .arg("text/plain");
+        #[cfg(target_os = "windows")]
+        cmd.creation_flags(CREATE_NO_WINDOW);
+
+        let output = cmd.output()
+            .map_err(|e| format!("Failed to run conversion: {}", e))?;
+
+        if !output.status.success() {
+            let _ = std::fs::remove_dir_all(&temp_output);
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            return Err(format!("Conversion failed:\n{}\n{}", stdout, stderr));
+        }
+
+        // Move the output file to the destination
+        let built_file = temp_output.join(output_filename);
+        if !built_file.exists() {
+            let _ = std::fs::remove_dir_all(&temp_output);
+            return Err("Conversion succeeded but output file not found".to_string());
+        }
+
+        // Ensure parent directory exists
+        if let Some(parent) = dest.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| format!("Failed to create output directory: {}", e))?;
+        }
+
+        std::fs::copy(&built_file, &dest)
+            .map_err(|e| format!("Failed to copy wiki to destination: {}", e))?;
+
+        // Clean up
+        let _ = std::fs::remove_dir_all(&temp_output);
+
+        println!("Successfully converted to single-file wiki: {:?}", dest);
+    }
+
+    Ok(())
+}
+
 #[tauri::command]
 fn check_folder_status(path: String) -> Result<FolderStatus, String> {
     let path_buf = PathBuf::from(&path);
@@ -3954,6 +4070,9 @@ fn reveal_or_create_main_window(app_handle: &tauri::AppHandle) {
         (w, h)
     };
 
+    // Get effective language (user preference or system-detected)
+    let language = wiki_storage::get_effective_language(app_handle);
+
     if let Ok(icon) = Image::from_bytes(include_bytes!("../icons/icon.png")) {
         // Use full init script with is_main_wiki=true
         #[allow(unused_mut)]  // mut needed for disable_drag_drop_handler()
@@ -3966,7 +4085,7 @@ fn reveal_or_create_main_window(app_handle: &tauri::AppHandle) {
             .inner_size(win_width, win_height)
             .icon(icon)
             .expect("Failed to set icon")
-            .initialization_script(&init_script::get_wiki_init_script(&main_wiki_path.to_string_lossy(), "main", true));
+            .initialization_script(&init_script::get_wiki_init_script_with_language(&main_wiki_path.to_string_lossy(), "main", true, Some(&language)));
 
         // Apply saved position if available, with monitor validation
         if let Some(ref state) = saved_state {
@@ -4881,6 +5000,10 @@ pub fn run() {
             eprintln!("[TiddlyDesktop] Landing page saved state: {:?}", saved_state);
             eprintln!("[TiddlyDesktop] Using size: {}x{}", win_width, win_height);
 
+            // Get effective language (user preference or system-detected)
+            let language = wiki_storage::get_effective_language(&app.handle());
+            eprintln!("[TiddlyDesktop] UI language: {}", language);
+
             // Create the main window programmatically with initialization script
             // Use full init script with is_main_wiki=true so setupExternalAttachments knows to skip
             let icon = Image::from_bytes(include_bytes!("../icons/icon.png"))?;
@@ -4890,7 +5013,7 @@ pub fn run() {
                 .inner_size(win_width, win_height)
                 .icon(icon)?
                 .window_classname("tiddlydesktop-rs")
-                .initialization_script(&init_script::get_wiki_init_script(&main_wiki_path.to_string_lossy(), "main", true))
+                .initialization_script(&init_script::get_wiki_init_script_with_language(&main_wiki_path.to_string_lossy(), "main", true, Some(&language)))
                 .devtools(true); // TEMP: enabled for debugging
 
             // Apply saved position if available, with monitor validation on Windows/macOS
@@ -4968,6 +5091,7 @@ pub fn run() {
             get_available_plugins,
             init_wiki_folder,
             create_wiki_file,
+            convert_wiki,
             set_window_title,
             set_window_icon,
             get_window_label,
@@ -4998,6 +5122,10 @@ pub fn run() {
             wiki_storage::set_external_attachments_config,
             wiki_storage::get_session_auth_config,
             wiki_storage::set_session_auth_config,
+            wiki_storage::get_language,
+            wiki_storage::set_language,
+            wiki_storage::has_custom_language,
+            wiki_storage::get_system_language,
             open_auth_window,
             run_command,
             show_find_in_page,

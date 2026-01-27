@@ -1,0 +1,60 @@
+title: $:/plugins/tiddlywiki/tiddlydesktop-rs/languages/en-US/
+
+Buttons/Open: open
+Buttons/Reveal: reveal
+Buttons/Remove: remove
+Buttons/Add: add
+Buttons/Change: change
+Buttons/Reset: reset
+Buttons/Close: Close
+Buttons/Cancel: Cancel
+Buttons/Backup: backup
+Buttons/Group: group
+Buttons/Groups: Groups
+Buttons/OpenWikiFile: Open wiki file
+Buttons/OpenWikiFolder: Open wiki folder
+Buttons/CreateWikiFile: Create wiki file
+Buttons/CreateWikiFolder: Create Wiki Folder
+Buttons/ToFile: to file
+Buttons/ToFolder: to folder
+
+Tooltips/BackupsEnabled: Backups enabled - click to disable
+Tooltips/ConvertWiki: Convert wiki format
+Tooltips/BackupsDisabled: Backups disabled - click to enable
+Tooltips/AssignToGroup: Assign to group
+Tooltips/ManageGroups: Manage groups
+Tooltips/ChangeBackupDir: Change backup directory
+Tooltips/ResetBackupDir: Reset to default backup directory
+Tooltips/SetBackupDir: Set custom backup directory
+Tooltips/RenameGroup: Rename group
+Tooltips/DeleteGroup: Delete group (wikis move to Ungrouped)
+
+Labels/BackupFolder: Backup folder:
+Labels/Default: (default)
+Labels/Local: (local)
+Labels/Ungrouped: Ungrouped
+Labels/Wikis: wikis
+Labels/UpdateAvailable: Update available:
+Labels/SaveTo: save to:
+Labels/InFolder: in folder:
+Labels/Language: Language:
+Labels/AutoDetect: Auto-detect
+
+Placeholders/NewGroupName: New group name...
+
+DropZone/Active: Drop wiki file or folder here
+DropZone/Hint: Drop TiddlyWiki files or folders here
+
+EmptyMessage/Title: No wikis yet.
+EmptyMessage/Hint: Click "Open wiki file" or drop a TiddlyWiki file to get started.
+
+GroupManager/Title: Manage Groups
+GroupManager/NoGroups: No groups created yet. Assign a wiki to a group to create one.
+
+EditionSelector/CreateFile: Create New Wiki File
+EditionSelector/CreateFolder: Create New Wiki Folder
+EditionSelector/SelectEdition: Select Edition
+EditionSelector/AdditionalPlugins: Additional Plugins
+EditionSelector/Optional: (optional)
+EditionSelector/CreatingFile: Creating wiki file...
+EditionSelector/InitializingFolder: Initializing wiki folder...

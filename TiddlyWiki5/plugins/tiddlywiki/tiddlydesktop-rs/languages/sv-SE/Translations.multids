@@ -1,0 +1,60 @@
+title: $:/plugins/tiddlywiki/tiddlydesktop-rs/languages/sv-SE/
+
+Buttons/Open: öppna
+Buttons/Reveal: visa
+Buttons/Remove: ta bort
+Buttons/Add: lägg till
+Buttons/Change: ändra
+Buttons/Reset: återställ
+Buttons/Close: Stäng
+Buttons/Cancel: Avbryt
+Buttons/Backup: säkerhetskopia
+Buttons/Group: grupp
+Buttons/Groups: Grupper
+Buttons/OpenWikiFile: Öppna wiki-fil
+Buttons/OpenWikiFolder: Öppna wiki-mapp
+Buttons/CreateWikiFile: Skapa wiki-fil
+Buttons/CreateWikiFolder: Skapa wiki-mapp
+Buttons/ToFile: till fil
+Buttons/ToFolder: till mapp
+
+Tooltips/BackupsEnabled: Säkerhetskopior aktiverade - klicka för att inaktivera
+Tooltips/ConvertWiki: Konvertera wiki-format
+Tooltips/BackupsDisabled: Säkerhetskopior inaktiverade - klicka för att aktivera
+Tooltips/AssignToGroup: Tilldela till grupp
+Tooltips/ManageGroups: Hantera grupper
+Tooltips/ChangeBackupDir: Ändra säkerhetskopieringsmapp
+Tooltips/ResetBackupDir: Återställ standardmapp för säkerhetskopior
+Tooltips/SetBackupDir: Ange anpassad säkerhetskopieringsmapp
+Tooltips/RenameGroup: Byt namn på grupp
+Tooltips/DeleteGroup: Ta bort grupp (wikis flyttas till Ogrupperade)
+
+Labels/BackupFolder: Säkerhetskopieringsmapp:
+Labels/Default: (standard)
+Labels/Local: (lokal)
+Labels/Ungrouped: Ogrupperade
+Labels/Wikis: wikis
+Labels/UpdateAvailable: Uppdatering tillgänglig:
+Labels/SaveTo: spara till:
+Labels/InFolder: i mapp:
+Labels/Language: Språk:
+Labels/AutoDetect: Automatisk identifiering
+
+Placeholders/NewGroupName: Nytt gruppnamn...
+
+DropZone/Active: Släpp wiki-fil eller -mapp här
+DropZone/Hint: Släpp TiddlyWiki-filer eller -mappar här
+
+EmptyMessage/Title: Inga wikis ännu.
+EmptyMessage/Hint: Klicka på "Öppna wiki-fil" eller släpp en TiddlyWiki-fil för att komma igång.
+
+GroupManager/Title: Hantera grupper
+GroupManager/NoGroups: Inga grupper skapade ännu. Tilldela en wiki till en grupp för att skapa en.
+
+EditionSelector/CreateFile: Skapa ny wiki-fil
+EditionSelector/CreateFolder: Skapa ny wiki-mapp
+EditionSelector/SelectEdition: Välj utgåva
+EditionSelector/AdditionalPlugins: Ytterligare plugins
+EditionSelector/Optional: (valfritt)
+EditionSelector/CreatingFile: Skapar wiki-fil...
+EditionSelector/InitializingFolder: Initierar wiki-mapp...

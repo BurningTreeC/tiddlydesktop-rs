@@ -1,0 +1,60 @@
+title: $:/plugins/tiddlywiki/tiddlydesktop-rs/languages/el-GR/
+
+Buttons/Open: άνοιγμα
+Buttons/Reveal: εμφάνιση
+Buttons/Remove: αφαίρεση
+Buttons/Add: προσθήκη
+Buttons/Change: αλλαγή
+Buttons/Reset: επαναφορά
+Buttons/Close: Κλείσιμο
+Buttons/Cancel: Ακύρωση
+Buttons/Backup: αντίγραφο ασφαλείας
+Buttons/Group: ομάδα
+Buttons/Groups: Ομάδες
+Buttons/OpenWikiFile: Άνοιγμα αρχείου wiki
+Buttons/OpenWikiFolder: Άνοιγμα φακέλου wiki
+Buttons/CreateWikiFile: Δημιουργία αρχείου wiki
+Buttons/CreateWikiFolder: Δημιουργία φακέλου wiki
+Buttons/ToFile: σε αρχείο
+Buttons/ToFolder: σε φάκελο
+
+Tooltips/BackupsEnabled: Αντίγραφα ασφαλείας ενεργά - κλικ για απενεργοποίηση
+Tooltips/ConvertWiki: Μετατροπή μορφής wiki
+Tooltips/BackupsDisabled: Αντίγραφα ασφαλείας ανενεργά - κλικ για ενεργοποίηση
+Tooltips/AssignToGroup: Αντιστοίχιση σε ομάδα
+Tooltips/ManageGroups: Διαχείριση ομάδων
+Tooltips/ChangeBackupDir: Αλλαγή καταλόγου αντιγράφων ασφαλείας
+Tooltips/ResetBackupDir: Επαναφορά προεπιλεγμένου καταλόγου αντιγράφων ασφαλείας
+Tooltips/SetBackupDir: Ορισμός προσαρμοσμένου καταλόγου αντιγράφων ασφαλείας
+Tooltips/RenameGroup: Μετονομασία ομάδας
+Tooltips/DeleteGroup: Διαγραφή ομάδας (τα wiki θα μεταφερθούν στα Μη ομαδοποιημένα)
+
+Labels/BackupFolder: Φάκελος αντιγράφων ασφαλείας:
+Labels/Default: (προεπιλογή)
+Labels/Local: (τοπικό)
+Labels/Ungrouped: Μη ομαδοποιημένα
+Labels/Wikis: wiki
+Labels/UpdateAvailable: Διαθέσιμη ενημέρωση:
+Labels/SaveTo: αποθήκευση σε:
+Labels/InFolder: στον φάκελο:
+Labels/Language: Γλώσσα:
+Labels/AutoDetect: Αυτόματη ανίχνευση
+
+Placeholders/NewGroupName: Νέο όνομα ομάδας...
+
+DropZone/Active: Αποθέστε αρχείο ή φάκελο wiki εδώ
+DropZone/Hint: Αποθέστε αρχεία ή φακέλους TiddlyWiki εδώ
+
+EmptyMessage/Title: Δεν υπάρχουν wiki ακόμα.
+EmptyMessage/Hint: Κάντε κλικ στο "Άνοιγμα αρχείου wiki" ή αποθέστε ένα αρχείο TiddlyWiki για να ξεκινήσετε.
+
+GroupManager/Title: Διαχείριση ομάδων
+GroupManager/NoGroups: Δεν έχουν δημιουργηθεί ομάδες ακόμα. Αντιστοιχίστε ένα wiki σε ομάδα για να δημιουργήσετε μία.
+
+EditionSelector/CreateFile: Δημιουργία νέου αρχείου wiki
+EditionSelector/CreateFolder: Δημιουργία νέου φακέλου wiki
+EditionSelector/SelectEdition: Επιλογή έκδοσης
+EditionSelector/AdditionalPlugins: Πρόσθετα plugins
+EditionSelector/Optional: (προαιρετικό)
+EditionSelector/CreatingFile: Δημιουργία αρχείου wiki...
+EditionSelector/InitializingFolder: Αρχικοποίηση φακέλου wiki...

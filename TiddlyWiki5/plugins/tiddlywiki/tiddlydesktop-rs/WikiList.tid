@@ -38,39 +38,44 @@ title: $:/plugins/tiddlywiki/tiddlydesktop-rs/WikiList
 <div class="td-wiki-toolbar">
 <$button class="tc-btn-invisible td-button td-button-open">
 <$action-sendmessage $message="tm-tiddlydesktop-rs-open-path" path=<<path>> isFolder=<<isFolder>>/>
-open
+<<td-lingo Buttons/Open>>
 </$button>
 <$list filter="[{$:/temp/tiddlydesktop-rs/is-mobile}!match[yes]]" variable="ignore">
-<$button message="tm-tiddlydesktop-rs-reveal" param=<<path>> class="tc-btn-invisible td-button td-button-reveal">reveal</$button>
+<$button message="tm-tiddlydesktop-rs-reveal" param=<<path>> class="tc-btn-invisible td-button td-button-reveal"><<td-lingo Buttons/Reveal>></$button>
 </$list>
-<$button message="tm-tiddlydesktop-rs-remove" param=<<path>> class="tc-btn-invisible td-button td-button-remove">remove</$button>
+<$button message="tm-tiddlydesktop-rs-remove" param=<<path>> class="tc-btn-invisible td-button td-button-remove"><<td-lingo Buttons/Remove>></$button>
+<$button class="tc-btn-invisible td-button td-button-convert" tooltip=<<td-lingo Tooltips/ConvertWiki>>>
+<$action-sendmessage $message="tm-tiddlydesktop-rs-convert-wiki" path=<<path>> isFolder=<<isFolder>>/>
+<$list filter="[<isFolder>match[true]]" variable="ignore">{{$:/core/images/file}} <<td-lingo Buttons/ToFile>></$list>
+<$list filter="[<isFolder>!match[true]]" variable="ignore">{{$:/core/images/folder}} <<td-lingo Buttons/ToFolder>></$list>
+</$button>
 <$list filter="[<isFolder>!match[true]]" variable="ignore">
 <$let hasFolderAccess={{!!has_folder_access}} isMobile={{$:/temp/tiddlydesktop-rs/is-mobile}}>
 <$list filter="[<backupsEnabled>match[true]]" variable="ignore">
-<$button class="tc-btn-invisible td-button td-button-backup td-backup-on" tooltip="Backups enabled - click to disable">
+<$button class="tc-btn-invisible td-button td-button-backup td-backup-on" tooltip=<<td-lingo Tooltips/BackupsEnabled>>>
 <$action-sendmessage $message="tm-tiddlydesktop-rs-set-backups" path=<<path>> enabled="false"/>
-{{$:/core/images/done-button}} backup<$list filter="[<isMobile>match[yes]]" variable="ignore"><$list filter="[<hasFolderAccess>!match[true]]" variable="ignore"> (local)</$list></$list>
+{{$:/core/images/done-button}} <<td-lingo Buttons/Backup>><$list filter="[<isMobile>match[yes]]" variable="ignore"><$list filter="[<hasFolderAccess>!match[true]]" variable="ignore"> <<td-lingo Labels/Local>></$list></$list>
 </$button>
 </$list>
 <$list filter="[<backupsEnabled>!match[true]]" variable="ignore">
-<$button class="tc-btn-invisible td-button td-button-backup td-backup-off" tooltip="Backups disabled - click to enable">
+<$button class="tc-btn-invisible td-button td-button-backup td-backup-off" tooltip=<<td-lingo Tooltips/BackupsDisabled>>>
 <$action-sendmessage $message="tm-tiddlydesktop-rs-set-backups" path=<<path>> enabled="true"/>
-{{$:/core/images/close-button}} backup
+{{$:/core/images/close-button}} <<td-lingo Buttons/Backup>>
 </$button>
 </$list>
 </$let>
 </$list>
 <!-- Group selector dropdown -->
 <$let newGroupTiddler=<<qualify "$:/temp/new-group-name">> groupPopupState=<<qualify "$:/state/group-popup">>>
-<$button popup=<<groupPopupState>> class="tc-btn-invisible td-button td-button-group" tooltip="Assign to group">
-{{$:/core/images/tag-button}} <$list filter="[<wikiGroup>!is[blank]]" variable="ignore"><$text text=<<wikiGroup>>/></$list><$list filter="[<wikiGroup>is[blank]]" variable="ignore">group</$list>
+<$button popup=<<groupPopupState>> class="tc-btn-invisible td-button td-button-group" tooltip=<<td-lingo Tooltips/AssignToGroup>>>
+{{$:/core/images/tag-button}} <$list filter="[<wikiGroup>!is[blank]]" variable="ignore"><$text text=<<wikiGroup>>/></$list><$list filter="[<wikiGroup>is[blank]]" variable="ignore"><<td-lingo Buttons/Group>></$list>
 </$button>
 <$reveal state=<<groupPopupState>> type="popup" position="below" animate="yes" class="tc-drop-down td-group-dropdown tc-popup-keep">
 <div class="td-group-dropdown-content">
 <$button class="tc-btn-invisible td-group-option">
 <$action-sendmessage $message="tm-tiddlydesktop-rs-set-group" path=<<path>> group=""/>
 <$action-deletetiddler $tiddler=<<groupPopupState>>/>
-<em>Ungrouped</em>
+<em><<td-lingo Labels/Ungrouped>></em>
 </$button>
 <$list filter="[{$:/temp/tiddlydesktop-rs/groups}splitregexp[\n]!is[blank]]" variable="groupOption">
 <$button class="tc-btn-invisible td-group-option">
@@ -82,13 +87,13 @@ open
 <hr/>
 <div class="td-group-new">
 <$keyboard key="enter" actions="""<$action-sendmessage $message="tm-tiddlydesktop-rs-set-group" path=<<path>> group={{{ [<newGroupTiddler>get[text]] }}}/><$action-deletetiddler $tiddler=<<newGroupTiddler>>/><$action-deletetiddler $tiddler=<<groupPopupState>>/>""">
-<$edit-text tiddler=<<newGroupTiddler>> tag="input" placeholder="New group name..." class="td-group-input"/>
+<$edit-text tiddler=<<newGroupTiddler>> tag="input" placeholder=<<td-lingo Placeholders/NewGroupName>> class="td-group-input"/>
 </$keyboard>
 <$button class="tc-btn-invisible td-button">
 <$action-sendmessage $message="tm-tiddlydesktop-rs-set-group" path=<<path>> group={{{ [<newGroupTiddler>get[text]] }}}/>
 <$action-deletetiddler $tiddler=<<newGroupTiddler>>/>
 <$action-deletetiddler $tiddler=<<groupPopupState>>/>
-add
+<<td-lingo Buttons/Add>>
 </$button>
 </div>
 </div>
@@ -97,23 +102,23 @@ add
 </div>
 <$list filter="[<isFolder>!match[true]]" variable="ignore">
 <div class="td-wiki-backup-dir">
-<span class="td-backup-dir-label">Backup folder:</span>
+<span class="td-backup-dir-label"><<td-lingo Labels/BackupFolder>></span>
 <$list filter="[<backupDir>!is[blank]]" variable="ignore">
 <span class="td-backup-dir-path" title=<<backupDir>>><$text text=<<backupDir>>/></span>
-<$button class="tc-btn-invisible td-button td-button-backup-dir" tooltip="Change backup directory">
+<$button class="tc-btn-invisible td-button td-button-backup-dir" tooltip=<<td-lingo Tooltips/ChangeBackupDir>>>
 <$action-sendmessage $message="tm-tiddlydesktop-rs-set-backup-dir" path=<<path>>/>
-change
+<<td-lingo Buttons/Change>>
 </$button>
-<$button class="tc-btn-invisible td-button td-button-backup-dir-clear" tooltip="Reset to default backup directory">
+<$button class="tc-btn-invisible td-button td-button-backup-dir-clear" tooltip=<<td-lingo Tooltips/ResetBackupDir>>>
 <$action-sendmessage $message="tm-tiddlydesktop-rs-clear-backup-dir" path=<<path>>/>
-reset
+<<td-lingo Buttons/Reset>>
 </$button>
 </$list>
 <$list filter="[<backupDir>is[blank]]" variable="ignore">
-<span class="td-backup-dir-path td-backup-dir-default">(default)</span>
-<$button class="tc-btn-invisible td-button td-button-backup-dir" tooltip="Set custom backup directory">
+<span class="td-backup-dir-path td-backup-dir-default"><<td-lingo Labels/Default>></span>
+<$button class="tc-btn-invisible td-button td-button-backup-dir" tooltip=<<td-lingo Tooltips/SetBackupDir>>>
 <$action-sendmessage $message="tm-tiddlydesktop-rs-set-backup-dir" path=<<path>>/>
-change
+<<td-lingo Buttons/Change>>
 </$button>
 </$list>
 </div>
@@ -194,27 +199,72 @@ change
 </div>
 <div class="td-toolbar-item">
 <$button message="tm-tiddlydesktop-rs-open-wiki" class="td-button">
-{{$:/core/images/file}} Open wiki file
+{{$:/core/images/file}} <<td-lingo Buttons/OpenWikiFile>>
 </$button>
 </div>
 <div class="td-toolbar-item">
 <$button message="tm-tiddlydesktop-rs-open-folder" class="td-button">
-{{$:/core/images/folder}} Open wiki folder
+{{$:/core/images/folder}} <<td-lingo Buttons/OpenWikiFolder>>
 </$button>
 </div>
 <div class="td-toolbar-item">
 <$button message="tm-tiddlydesktop-rs-create-wiki" class="td-button td-button-create-new">
-{{$:/core/images/new-button}} Create wiki file
+{{$:/core/images/new-button}} <<td-lingo Buttons/CreateWikiFile>>
 </$button>
 </div>
 <div class="td-toolbar-item td-toolbar-right">
 <$reveal state="$:/temp/tiddlydesktop-rs/update-available" type="match" text="yes">
 <a href={{$:/temp/tiddlydesktop-rs/releases-url}} target="_blank" rel="noopener noreferrer" class="td-button td-button-update">
-{{$:/core/images/download-button}} Update available: v{{$:/temp/tiddlydesktop-rs/latest-version}}
+{{$:/core/images/download-button}} <<td-lingo Labels/UpdateAvailable>> v{{$:/temp/tiddlydesktop-rs/latest-version}}
 </a>
 </$reveal>
-<$button message="tm-tiddlydesktop-rs-manage-groups" class="td-button td-button-manage-groups" tooltip="Manage groups">
-{{$:/core/images/tag-button}} Groups
+<!-- Language selector dropdown -->
+<$let langPopupState=<<qualify "$:/state/language-popup">> currentLang={{$:/temp/tiddlydesktop-rs/language}}>
+<$button popup=<<langPopupState>> class="tc-btn-invisible td-button td-button-language" tooltip=<<td-lingo Labels/Language>>>
+{{$:/core/images/globe}} <$text text=<<currentLang>>/>
+</$button>
+<$reveal state=<<langPopupState>> type="popup" position="below" animate="yes" class="tc-drop-down td-language-dropdown tc-popup-keep">
+<div class="td-language-dropdown-content td-language-scrollable">
+<$button class="tc-btn-invisible td-language-option"><$action-sendmessage $message="tm-tiddlydesktop-rs-set-language" language=""/><$action-deletetiddler $tiddler=<<langPopupState>>/><em><<td-lingo Labels/AutoDetect>></em></$button>
+<hr/>
+<$button class={{{ [<currentLang>match[ar-PS]then[tc-btn-invisible td-language-option td-language-selected]else[tc-btn-invisible td-language-option]] }}}><$action-sendmessage $message="tm-tiddlydesktop-rs-set-language" language="ar-PS"/><$action-deletetiddler $tiddler=<<langPopupState>>/>العربية (ar-PS)</$button>
+<$button class={{{ [<currentLang>match[ca-ES]then[tc-btn-invisible td-language-option td-language-selected]else[tc-btn-invisible td-language-option]] }}}><$action-sendmessage $message="tm-tiddlydesktop-rs-set-language" language="ca-ES"/><$action-deletetiddler $tiddler=<<langPopupState>>/>Català (ca-ES)</$button>
+<$button class={{{ [<currentLang>match[cs-CZ]then[tc-btn-invisible td-language-option td-language-selected]else[tc-btn-invisible td-language-option]] }}}><$action-sendmessage $message="tm-tiddlydesktop-rs-set-language" language="cs-CZ"/><$action-deletetiddler $tiddler=<<langPopupState>>/>Čeština (cs-CZ)</$button>
+<$button class={{{ [<currentLang>match[da-DK]then[tc-btn-invisible td-language-option td-language-selected]else[tc-btn-invisible td-language-option]] }}}><$action-sendmessage $message="tm-tiddlydesktop-rs-set-language" language="da-DK"/><$action-deletetiddler $tiddler=<<langPopupState>>/>Dansk (da-DK)</$button>
+<$button class={{{ [<currentLang>match[de-DE]then[tc-btn-invisible td-language-option td-language-selected]else[tc-btn-invisible td-language-option]] }}}><$action-sendmessage $message="tm-tiddlydesktop-rs-set-language" language="de-DE"/><$action-deletetiddler $tiddler=<<langPopupState>>/>Deutsch (de-DE)</$button>
+<$button class={{{ [<currentLang>match[de-AT]then[tc-btn-invisible td-language-option td-language-selected]else[tc-btn-invisible td-language-option]] }}}><$action-sendmessage $message="tm-tiddlydesktop-rs-set-language" language="de-AT"/><$action-deletetiddler $tiddler=<<langPopupState>>/>Deutsch - Österreich (de-AT)</$button>
+<$button class={{{ [<currentLang>match[de-CH]then[tc-btn-invisible td-language-option td-language-selected]else[tc-btn-invisible td-language-option]] }}}><$action-sendmessage $message="tm-tiddlydesktop-rs-set-language" language="de-CH"/><$action-deletetiddler $tiddler=<<langPopupState>>/>Deutsch - Schweiz (de-CH)</$button>
+<$button class={{{ [<currentLang>match[el-GR]then[tc-btn-invisible td-language-option td-language-selected]else[tc-btn-invisible td-language-option]] }}}><$action-sendmessage $message="tm-tiddlydesktop-rs-set-language" language="el-GR"/><$action-deletetiddler $tiddler=<<langPopupState>>/>Ελληνικά (el-GR)</$button>
+<$button class={{{ [<currentLang>match[en-GB]then[tc-btn-invisible td-language-option td-language-selected]else[tc-btn-invisible td-language-option]] }}}><$action-sendmessage $message="tm-tiddlydesktop-rs-set-language" language="en-GB"/><$action-deletetiddler $tiddler=<<langPopupState>>/>English - UK (en-GB)</$button>
+<$button class={{{ [<currentLang>match[en-US]then[tc-btn-invisible td-language-option td-language-selected]else[tc-btn-invisible td-language-option]] }}}><$action-sendmessage $message="tm-tiddlydesktop-rs-set-language" language="en-US"/><$action-deletetiddler $tiddler=<<langPopupState>>/>English - US (en-US)</$button>
+<$button class={{{ [<currentLang>match[en-PH]then[tc-btn-invisible td-language-option td-language-selected]else[tc-btn-invisible td-language-option]] }}}><$action-sendmessage $message="tm-tiddlydesktop-rs-set-language" language="en-PH"/><$action-deletetiddler $tiddler=<<langPopupState>>/>English - Philippines (en-PH)</$button>
+<$button class={{{ [<currentLang>match[es-ES]then[tc-btn-invisible td-language-option td-language-selected]else[tc-btn-invisible td-language-option]] }}}><$action-sendmessage $message="tm-tiddlydesktop-rs-set-language" language="es-ES"/><$action-deletetiddler $tiddler=<<langPopupState>>/>Español (es-ES)</$button>
+<$button class={{{ [<currentLang>match[fa-IR]then[tc-btn-invisible td-language-option td-language-selected]else[tc-btn-invisible td-language-option]] }}}><$action-sendmessage $message="tm-tiddlydesktop-rs-set-language" language="fa-IR"/><$action-deletetiddler $tiddler=<<langPopupState>>/>فارسی (fa-IR)</$button>
+<$button class={{{ [<currentLang>match[fr-FR]then[tc-btn-invisible td-language-option td-language-selected]else[tc-btn-invisible td-language-option]] }}}><$action-sendmessage $message="tm-tiddlydesktop-rs-set-language" language="fr-FR"/><$action-deletetiddler $tiddler=<<langPopupState>>/>Français (fr-FR)</$button>
+<$button class={{{ [<currentLang>match[he-IL]then[tc-btn-invisible td-language-option td-language-selected]else[tc-btn-invisible td-language-option]] }}}><$action-sendmessage $message="tm-tiddlydesktop-rs-set-language" language="he-IL"/><$action-deletetiddler $tiddler=<<langPopupState>>/>עברית (he-IL)</$button>
+<$button class={{{ [<currentLang>match[hi-IN]then[tc-btn-invisible td-language-option td-language-selected]else[tc-btn-invisible td-language-option]] }}}><$action-sendmessage $message="tm-tiddlydesktop-rs-set-language" language="hi-IN"/><$action-deletetiddler $tiddler=<<langPopupState>>/>हिन्दी (hi-IN)</$button>
+<$button class={{{ [<currentLang>match[ia-IA]then[tc-btn-invisible td-language-option td-language-selected]else[tc-btn-invisible td-language-option]] }}}><$action-sendmessage $message="tm-tiddlydesktop-rs-set-language" language="ia-IA"/><$action-deletetiddler $tiddler=<<langPopupState>>/>Interlingua (ia-IA)</$button>
+<$button class={{{ [<currentLang>match[it-IT]then[tc-btn-invisible td-language-option td-language-selected]else[tc-btn-invisible td-language-option]] }}}><$action-sendmessage $message="tm-tiddlydesktop-rs-set-language" language="it-IT"/><$action-deletetiddler $tiddler=<<langPopupState>>/>Italiano (it-IT)</$button>
+<$button class={{{ [<currentLang>match[ja-JP]then[tc-btn-invisible td-language-option td-language-selected]else[tc-btn-invisible td-language-option]] }}}><$action-sendmessage $message="tm-tiddlydesktop-rs-set-language" language="ja-JP"/><$action-deletetiddler $tiddler=<<langPopupState>>/>日本語 (ja-JP)</$button>
+<$button class={{{ [<currentLang>match[ko-KR]then[tc-btn-invisible td-language-option td-language-selected]else[tc-btn-invisible td-language-option]] }}}><$action-sendmessage $message="tm-tiddlydesktop-rs-set-language" language="ko-KR"/><$action-deletetiddler $tiddler=<<langPopupState>>/>한국어 (ko-KR)</$button>
+<$button class={{{ [<currentLang>match[mk-MK]then[tc-btn-invisible td-language-option td-language-selected]else[tc-btn-invisible td-language-option]] }}}><$action-sendmessage $message="tm-tiddlydesktop-rs-set-language" language="mk-MK"/><$action-deletetiddler $tiddler=<<langPopupState>>/>Македонски (mk-MK)</$button>
+<$button class={{{ [<currentLang>match[nl-NL]then[tc-btn-invisible td-language-option td-language-selected]else[tc-btn-invisible td-language-option]] }}}><$action-sendmessage $message="tm-tiddlydesktop-rs-set-language" language="nl-NL"/><$action-deletetiddler $tiddler=<<langPopupState>>/>Nederlands (nl-NL)</$button>
+<$button class={{{ [<currentLang>match[pa-IN]then[tc-btn-invisible td-language-option td-language-selected]else[tc-btn-invisible td-language-option]] }}}><$action-sendmessage $message="tm-tiddlydesktop-rs-set-language" language="pa-IN"/><$action-deletetiddler $tiddler=<<langPopupState>>/>ਪੰਜਾਬੀ (pa-IN)</$button>
+<$button class={{{ [<currentLang>match[pl-PL]then[tc-btn-invisible td-language-option td-language-selected]else[tc-btn-invisible td-language-option]] }}}><$action-sendmessage $message="tm-tiddlydesktop-rs-set-language" language="pl-PL"/><$action-deletetiddler $tiddler=<<langPopupState>>/>Polski (pl-PL)</$button>
+<$button class={{{ [<currentLang>match[pt-BR]then[tc-btn-invisible td-language-option td-language-selected]else[tc-btn-invisible td-language-option]] }}}><$action-sendmessage $message="tm-tiddlydesktop-rs-set-language" language="pt-BR"/><$action-deletetiddler $tiddler=<<langPopupState>>/>Português - Brasil (pt-BR)</$button>
+<$button class={{{ [<currentLang>match[pt-PT]then[tc-btn-invisible td-language-option td-language-selected]else[tc-btn-invisible td-language-option]] }}}><$action-sendmessage $message="tm-tiddlydesktop-rs-set-language" language="pt-PT"/><$action-deletetiddler $tiddler=<<langPopupState>>/>Português - Portugal (pt-PT)</$button>
+<$button class={{{ [<currentLang>match[ru-RU]then[tc-btn-invisible td-language-option td-language-selected]else[tc-btn-invisible td-language-option]] }}}><$action-sendmessage $message="tm-tiddlydesktop-rs-set-language" language="ru-RU"/><$action-deletetiddler $tiddler=<<langPopupState>>/>Русский (ru-RU)</$button>
+<$button class={{{ [<currentLang>match[sk-SK]then[tc-btn-invisible td-language-option td-language-selected]else[tc-btn-invisible td-language-option]] }}}><$action-sendmessage $message="tm-tiddlydesktop-rs-set-language" language="sk-SK"/><$action-deletetiddler $tiddler=<<langPopupState>>/>Slovenčina (sk-SK)</$button>
+<$button class={{{ [<currentLang>match[sl-SI]then[tc-btn-invisible td-language-option td-language-selected]else[tc-btn-invisible td-language-option]] }}}><$action-sendmessage $message="tm-tiddlydesktop-rs-set-language" language="sl-SI"/><$action-deletetiddler $tiddler=<<langPopupState>>/>Slovenščina (sl-SI)</$button>
+<$button class={{{ [<currentLang>match[sv-SE]then[tc-btn-invisible td-language-option td-language-selected]else[tc-btn-invisible td-language-option]] }}}><$action-sendmessage $message="tm-tiddlydesktop-rs-set-language" language="sv-SE"/><$action-deletetiddler $tiddler=<<langPopupState>>/>Svenska (sv-SE)</$button>
+<$button class={{{ [<currentLang>match[zh-CN]then[tc-btn-invisible td-language-option td-language-selected]else[tc-btn-invisible td-language-option]] }}}><$action-sendmessage $message="tm-tiddlydesktop-rs-set-language" language="zh-CN"/><$action-deletetiddler $tiddler=<<langPopupState>>/>中文 - 简体 (zh-CN)</$button>
+<$button class={{{ [<currentLang>match[zh-TW]then[tc-btn-invisible td-language-option td-language-selected]else[tc-btn-invisible td-language-option]] }}}><$action-sendmessage $message="tm-tiddlydesktop-rs-set-language" language="zh-TW"/><$action-deletetiddler $tiddler=<<langPopupState>>/>中文 - 繁體 (zh-TW)</$button>
+<$button class={{{ [<currentLang>match[zh-HK]then[tc-btn-invisible td-language-option td-language-selected]else[tc-btn-invisible td-language-option]] }}}><$action-sendmessage $message="tm-tiddlydesktop-rs-set-language" language="zh-HK"/><$action-deletetiddler $tiddler=<<langPopupState>>/>中文 - 香港 (zh-HK)</$button>
+</div>
+</$reveal>
+</$let>
+<$button message="tm-tiddlydesktop-rs-manage-groups" class="td-button td-button-manage-groups" tooltip=<<td-lingo Tooltips/ManageGroups>>>
+{{$:/core/images/tag-button}} <<td-lingo Buttons/Groups>>
 </$button>
 </div>
 </div>
@@ -223,12 +273,12 @@ change
 <div class="td-drop-zone">
 <$reveal state="$:/temp/tiddlydesktop-rs/drag-over" type="match" text="yes">
 <div class="td-drop-active">
-Drop wiki file or folder here
+<<td-lingo DropZone/Active>>
 </div>
 </$reveal>
 <$reveal state="$:/temp/tiddlydesktop-rs/drag-over" type="nomatch" text="yes">
 <div class="td-drop-hint">
-{{$:/core/images/file}} Drop TiddlyWiki files or folders here
+{{$:/core/images/file}} <<td-lingo DropZone/Hint>>
 </div>
 </$reveal>
 </div>
@@ -250,21 +300,21 @@ Drop wiki file or folder here
 <div class="td-modal-overlay">
 <div class="td-modal td-group-manager-modal">
 <div class="td-modal-header">
-<h2>Manage Groups</h2>
+<h2><<td-lingo GroupManager/Title>></h2>
 <$button class="tc-btn-invisible td-modal-close" message="tm-tiddlydesktop-rs-close-group-manager">{{$:/core/images/close-button}}</$button>
 </div>
 <div class="td-modal-content">
-<$list filter="[{$:/temp/tiddlydesktop-rs/groups}splitregexp[\n]!is[blank]sort[]]" emptyMessage="<p class='td-no-groups'>No groups created yet. Assign a wiki to a group to create one.</p>" variable="groupToManage">
+<$list filter="[{$:/temp/tiddlydesktop-rs/groups}splitregexp[\n]!is[blank]sort[]]" emptyMessage="<p class='td-no-groups'><<td-lingo GroupManager/NoGroups>></p>" variable="groupToManage">
 <div class="td-group-manager-item">
 <$reveal state=<<qualify "$:/state/editing-group">> type="nomatch" text=<<groupToManage>> tag="span">
 <span class="td-group-manager-name"><$text text=<<groupToManage>>/></span>
-<span class="td-group-manager-count">(<$count filter="[prefix[$:/temp/tiddlydesktop-rs/wikis/]group<groupToManage>]"/> wikis)</span>
-<$button class="tc-btn-invisible td-button" tooltip="Rename group">
+<span class="td-group-manager-count">(<$count filter="[prefix[$:/temp/tiddlydesktop-rs/wikis/]group<groupToManage>]"/> <<td-lingo Labels/Wikis>>)</span>
+<$button class="tc-btn-invisible td-button" tooltip=<<td-lingo Tooltips/RenameGroup>>>
 <$action-setfield $tiddler=<<qualify "$:/state/editing-group">> text=<<groupToManage>>/>
 <$action-setfield $tiddler=<<qualify "$:/temp/rename-group-value">> text=<<groupToManage>>/>
 {{$:/core/images/edit-button}}
 </$button>
-<$button class="tc-btn-invisible td-button td-button-remove" tooltip="Delete group (wikis move to Ungrouped)">
+<$button class="tc-btn-invisible td-button td-button-remove" tooltip=<<td-lingo Tooltips/DeleteGroup>>>
 <$action-sendmessage $message="tm-tiddlydesktop-rs-delete-group" group=<<groupToManage>>/>
 {{$:/core/images/delete-button}}
 </$button>
@@ -289,7 +339,7 @@ Drop wiki file or folder here
 </$list>
 </div>
 <div class="td-modal-footer">
-<$button message="tm-tiddlydesktop-rs-close-group-manager" class="td-button">Close</$button>
+<$button message="tm-tiddlydesktop-rs-close-group-manager" class="td-button"><<td-lingo Buttons/Close>></$button>
 </div>
 </div>
 </div>

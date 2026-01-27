@@ -1,6 +1,6 @@
 title: $:/plugins/tiddlywiki/tiddlydesktop-rs/EmptyMessage
 
 <div class="td-empty-message">
-<p>No wikis yet.</p>
-<p>Click "Add wiki file" or drop a TiddlyWiki file to get started.</p>
+<p><<td-lingo EmptyMessage/Title>></p>
+<p><<td-lingo EmptyMessage/Hint>></p>
 </div>

@@ -1,0 +1,60 @@
+title: $:/plugins/tiddlywiki/tiddlydesktop-rs/languages/zh-CN/
+
+Buttons/Open: 打开
+Buttons/Reveal: 显示
+Buttons/Remove: 移除
+Buttons/Add: 添加
+Buttons/Change: 更改
+Buttons/Reset: 重置
+Buttons/Close: 关闭
+Buttons/Cancel: 取消
+Buttons/Backup: 备份
+Buttons/Group: 分组
+Buttons/Groups: 分组
+Buttons/OpenWikiFile: 打开维基文件
+Buttons/OpenWikiFolder: 打开维基文件夹
+Buttons/CreateWikiFile: 创建维基文件
+Buttons/CreateWikiFolder: 创建维基文件夹
+Buttons/ToFile: 转为文件
+Buttons/ToFolder: 转为文件夹
+
+Tooltips/BackupsEnabled: 备份已启用 - 点击禁用
+Tooltips/ConvertWiki: 转换维基格式
+Tooltips/BackupsDisabled: 备份已禁用 - 点击启用
+Tooltips/AssignToGroup: 分配到分组
+Tooltips/ManageGroups: 管理分组
+Tooltips/ChangeBackupDir: 更改备份目录
+Tooltips/ResetBackupDir: 重置为默认备份目录
+Tooltips/SetBackupDir: 设置自定义备份目录
+Tooltips/RenameGroup: 重命名分组
+Tooltips/DeleteGroup: 删除分组（维基将移至未分组）
+
+Labels/BackupFolder: 备份文件夹：
+Labels/Default: （默认）
+Labels/Local: （本地）
+Labels/Ungrouped: 未分组
+Labels/Wikis: 个维基
+Labels/UpdateAvailable: 有更新可用：
+Labels/SaveTo: 保存到：
+Labels/InFolder: 在文件夹：
+Labels/Language: 语言：
+Labels/AutoDetect: 自动检测
+
+Placeholders/NewGroupName: 新分组名称...
+
+DropZone/Active: 将维基文件或文件夹拖放到此处
+DropZone/Hint: 将 TiddlyWiki 文件或文件夹拖放到此处
+
+EmptyMessage/Title: 还没有维基。
+EmptyMessage/Hint: 点击"打开维基文件"或拖放 TiddlyWiki 文件以开始。
+
+GroupManager/Title: 管理分组
+GroupManager/NoGroups: 还没有创建分组。将维基分配到分组以创建一个。
+
+EditionSelector/CreateFile: 创建新维基文件
+EditionSelector/CreateFolder: 创建新维基文件夹
+EditionSelector/SelectEdition: 选择版本
+EditionSelector/AdditionalPlugins: 附加插件
+EditionSelector/Optional: （可选）
+EditionSelector/CreatingFile: 正在创建维基文件...
+EditionSelector/InitializingFolder: 正在初始化维基文件夹...

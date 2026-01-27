@@ -1,0 +1,60 @@
+title: $:/plugins/tiddlywiki/tiddlydesktop-rs/languages/da-DK/
+
+Buttons/Open: åbn
+Buttons/Reveal: vis
+Buttons/Remove: fjern
+Buttons/Add: tilføj
+Buttons/Change: skift
+Buttons/Reset: nulstil
+Buttons/Close: Luk
+Buttons/Cancel: Annuller
+Buttons/Backup: backup
+Buttons/Group: gruppe
+Buttons/Groups: Grupper
+Buttons/OpenWikiFile: Åbn wiki-fil
+Buttons/OpenWikiFolder: Åbn wiki-mappe
+Buttons/CreateWikiFile: Opret wiki-fil
+Buttons/CreateWikiFolder: Opret wiki-mappe
+Buttons/ToFile: til fil
+Buttons/ToFolder: til mappe
+
+Tooltips/BackupsEnabled: Backups aktiveret - klik for at deaktivere
+Tooltips/ConvertWiki: Konverter wiki-format
+Tooltips/BackupsDisabled: Backups deaktiveret - klik for at aktivere
+Tooltips/AssignToGroup: Tildel til gruppe
+Tooltips/ManageGroups: Administrer grupper
+Tooltips/ChangeBackupDir: Skift backup-mappe
+Tooltips/ResetBackupDir: Nulstil til standard backup-mappe
+Tooltips/SetBackupDir: Indstil brugerdefineret backup-mappe
+Tooltips/RenameGroup: Omdøb gruppe
+Tooltips/DeleteGroup: Slet gruppe (wikis flyttes til Ikke-grupperet)
+
+Labels/BackupFolder: Backup-mappe:
+Labels/Default: (standard)
+Labels/Local: (lokal)
+Labels/Ungrouped: Ikke-grupperet
+Labels/Wikis: wikis
+Labels/UpdateAvailable: Opdatering tilgængelig:
+Labels/SaveTo: gem til:
+Labels/InFolder: i mappe:
+Labels/Language: Sprog:
+Labels/AutoDetect: Automatisk registrering
+
+Placeholders/NewGroupName: Nyt gruppenavn...
+
+DropZone/Active: Slip wiki-fil eller -mappe her
+DropZone/Hint: Slip TiddlyWiki-filer eller -mapper her
+
+EmptyMessage/Title: Ingen wikis endnu.
+EmptyMessage/Hint: Klik på "Åbn wiki-fil" eller slip en TiddlyWiki-fil for at komme i gang.
+
+GroupManager/Title: Administrer grupper
+GroupManager/NoGroups: Ingen grupper oprettet endnu. Tildel en wiki til en gruppe for at oprette en.
+
+EditionSelector/CreateFile: Opret ny wiki-fil
+EditionSelector/CreateFolder: Opret ny wiki-mappe
+EditionSelector/SelectEdition: Vælg udgave
+EditionSelector/AdditionalPlugins: Yderligere plugins
+EditionSelector/Optional: (valgfrit)
+EditionSelector/CreatingFile: Opretter wiki-fil...
+EditionSelector/InitializingFolder: Initialiserer wiki-mappe...

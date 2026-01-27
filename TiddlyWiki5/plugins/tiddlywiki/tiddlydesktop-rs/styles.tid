@@ -773,6 +773,46 @@ body {
 	padding: 4px 0;
 }
 
+/* Language dropdown */
+.td-language-dropdown {
+	min-width: 200px;
+}
+
+.td-language-dropdown-content {
+	padding: 4px 0;
+}
+
+.td-language-scrollable {
+	max-height: 400px;
+	overflow-y: auto;
+}
+
+.td-language-option {
+	display: block;
+	width: 100%;
+	padding: 8px 12px;
+	text-align: left;
+	background: none;
+	border: none;
+	cursor: pointer;
+	font-size: 13px;
+	color: #333;
+	transition: background 0.1s;
+}
+
+.td-language-option:hover {
+	background: #f0f0f0;
+}
+
+.td-language-selected {
+	background: #e8f4fc;
+	font-weight: 500;
+}
+
+.td-button-language {
+	gap: 4px;
+}
+
 .td-group-option {
 	display: block;
 	width: 100%;

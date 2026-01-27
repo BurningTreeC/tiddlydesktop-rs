@@ -1,0 +1,60 @@
+title: $:/plugins/tiddlywiki/tiddlydesktop-rs/languages/ko-KR/
+
+Buttons/Open: 열기
+Buttons/Reveal: 표시
+Buttons/Remove: 제거
+Buttons/Add: 추가
+Buttons/Change: 변경
+Buttons/Reset: 재설정
+Buttons/Close: 닫기
+Buttons/Cancel: 취소
+Buttons/Backup: 백업
+Buttons/Group: 그룹
+Buttons/Groups: 그룹
+Buttons/OpenWikiFile: 위키 파일 열기
+Buttons/OpenWikiFolder: 위키 폴더 열기
+Buttons/CreateWikiFile: 위키 파일 만들기
+Buttons/CreateWikiFolder: 위키 폴더 만들기
+Buttons/ToFile: 파일로
+Buttons/ToFolder: 폴더로
+
+Tooltips/BackupsEnabled: 백업 활성화됨 - 클릭하여 비활성화
+Tooltips/ConvertWiki: 위키 형식 변환
+Tooltips/BackupsDisabled: 백업 비활성화됨 - 클릭하여 활성화
+Tooltips/AssignToGroup: 그룹에 할당
+Tooltips/ManageGroups: 그룹 관리
+Tooltips/ChangeBackupDir: 백업 디렉터리 변경
+Tooltips/ResetBackupDir: 기본 백업 디렉터리로 재설정
+Tooltips/SetBackupDir: 사용자 지정 백업 디렉터리 설정
+Tooltips/RenameGroup: 그룹 이름 변경
+Tooltips/DeleteGroup: 그룹 삭제 (위키가 미분류로 이동됨)
+
+Labels/BackupFolder: 백업 폴더:
+Labels/Default: (기본값)
+Labels/Local: (로컬)
+Labels/Ungrouped: 미분류
+Labels/Wikis: 위키
+Labels/UpdateAvailable: 업데이트 가능:
+Labels/SaveTo: 저장 위치:
+Labels/InFolder: 폴더:
+Labels/Language: 언어:
+Labels/AutoDetect: 자동 감지
+
+Placeholders/NewGroupName: 새 그룹 이름...
+
+DropZone/Active: 위키 파일 또는 폴더를 여기에 놓으세요
+DropZone/Hint: TiddlyWiki 파일 또는 폴더를 여기에 놓으세요
+
+EmptyMessage/Title: 아직 위키가 없습니다.
+EmptyMessage/Hint: "위키 파일 열기"를 클릭하거나 TiddlyWiki 파일을 놓아 시작하세요.
+
+GroupManager/Title: 그룹 관리
+GroupManager/NoGroups: 아직 그룹이 없습니다. 위키를 그룹에 할당하여 만드세요.
+
+EditionSelector/CreateFile: 새 위키 파일 만들기
+EditionSelector/CreateFolder: 새 위키 폴더 만들기
+EditionSelector/SelectEdition: 에디션 선택
+EditionSelector/AdditionalPlugins: 추가 플러그인
+EditionSelector/Optional: (선택 사항)
+EditionSelector/CreatingFile: 위키 파일 생성 중...
+EditionSelector/InitializingFolder: 위키 폴더 초기화 중...

@@ -1,0 +1,60 @@
+title: $:/plugins/tiddlywiki/tiddlydesktop-rs/languages/ru-RU/
+
+Buttons/Open: открыть
+Buttons/Reveal: показать
+Buttons/Remove: удалить
+Buttons/Add: добавить
+Buttons/Change: изменить
+Buttons/Reset: сбросить
+Buttons/Close: Закрыть
+Buttons/Cancel: Отмена
+Buttons/Backup: резервная копия
+Buttons/Group: группа
+Buttons/Groups: Группы
+Buttons/OpenWikiFile: Открыть файл вики
+Buttons/OpenWikiFolder: Открыть папку вики
+Buttons/CreateWikiFile: Создать файл вики
+Buttons/CreateWikiFolder: Создать папку вики
+Buttons/ToFile: в файл
+Buttons/ToFolder: в папку
+
+Tooltips/BackupsEnabled: Резервные копии включены - нажмите для отключения
+Tooltips/ConvertWiki: Конвертировать формат вики
+Tooltips/BackupsDisabled: Резервные копии отключены - нажмите для включения
+Tooltips/AssignToGroup: Назначить группу
+Tooltips/ManageGroups: Управление группами
+Tooltips/ChangeBackupDir: Изменить папку резервных копий
+Tooltips/ResetBackupDir: Сбросить папку резервных копий по умолчанию
+Tooltips/SetBackupDir: Установить пользовательскую папку резервных копий
+Tooltips/RenameGroup: Переименовать группу
+Tooltips/DeleteGroup: Удалить группу (вики будут перемещены в Без группы)
+
+Labels/BackupFolder: Папка резервных копий:
+Labels/Default: (по умолчанию)
+Labels/Local: (локально)
+Labels/Ungrouped: Без группы
+Labels/Wikis: вики
+Labels/UpdateAvailable: Доступно обновление:
+Labels/SaveTo: сохранить в:
+Labels/InFolder: в папке:
+Labels/Language: Язык:
+Labels/AutoDetect: Автоопределение
+
+Placeholders/NewGroupName: Имя новой группы...
+
+DropZone/Active: Перетащите файл или папку вики сюда
+DropZone/Hint: Перетащите файлы или папки TiddlyWiki сюда
+
+EmptyMessage/Title: Пока нет вики.
+EmptyMessage/Hint: Нажмите "Открыть файл вики" или перетащите файл TiddlyWiki, чтобы начать.
+
+GroupManager/Title: Управление группами
+GroupManager/NoGroups: Группы ещё не созданы. Назначьте вики группу, чтобы создать её.
+
+EditionSelector/CreateFile: Создать новый файл вики
+EditionSelector/CreateFolder: Создать новую папку вики
+EditionSelector/SelectEdition: Выбрать редакцию
+EditionSelector/AdditionalPlugins: Дополнительные плагины
+EditionSelector/Optional: (необязательно)
+EditionSelector/CreatingFile: Создание файла вики...
+EditionSelector/InitializingFolder: Инициализация папки вики...

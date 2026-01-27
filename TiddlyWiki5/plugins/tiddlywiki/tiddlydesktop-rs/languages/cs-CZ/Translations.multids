@@ -1,0 +1,60 @@
+title: $:/plugins/tiddlywiki/tiddlydesktop-rs/languages/cs-CZ/
+
+Buttons/Open: otevřít
+Buttons/Reveal: zobrazit
+Buttons/Remove: odstranit
+Buttons/Add: přidat
+Buttons/Change: změnit
+Buttons/Reset: obnovit
+Buttons/Close: Zavřít
+Buttons/Cancel: Zrušit
+Buttons/Backup: záloha
+Buttons/Group: skupina
+Buttons/Groups: Skupiny
+Buttons/OpenWikiFile: Otevřít wiki soubor
+Buttons/OpenWikiFolder: Otevřít wiki složku
+Buttons/CreateWikiFile: Vytvořit wiki soubor
+Buttons/CreateWikiFolder: Vytvořit wiki složku
+Buttons/ToFile: do souboru
+Buttons/ToFolder: do složky
+
+Tooltips/BackupsEnabled: Zálohy povoleny - klikněte pro zakázání
+Tooltips/ConvertWiki: Převést formát wiki
+Tooltips/BackupsDisabled: Zálohy zakázány - klikněte pro povolení
+Tooltips/AssignToGroup: Přiřadit ke skupině
+Tooltips/ManageGroups: Spravovat skupiny
+Tooltips/ChangeBackupDir: Změnit adresář záloh
+Tooltips/ResetBackupDir: Obnovit výchozí adresář záloh
+Tooltips/SetBackupDir: Nastavit vlastní adresář záloh
+Tooltips/RenameGroup: Přejmenovat skupinu
+Tooltips/DeleteGroup: Smazat skupinu (wiki budou přesunuty do Bez skupiny)
+
+Labels/BackupFolder: Složka záloh:
+Labels/Default: (výchozí)
+Labels/Local: (místní)
+Labels/Ungrouped: Bez skupiny
+Labels/Wikis: wiki
+Labels/UpdateAvailable: Dostupná aktualizace:
+Labels/SaveTo: uložit do:
+Labels/InFolder: ve složce:
+Labels/Language: Jazyk:
+Labels/AutoDetect: Automatická detekce
+
+Placeholders/NewGroupName: Název nové skupiny...
+
+DropZone/Active: Přetáhněte wiki soubor nebo složku sem
+DropZone/Hint: Přetáhněte TiddlyWiki soubory nebo složky sem
+
+EmptyMessage/Title: Zatím žádné wiki.
+EmptyMessage/Hint: Klikněte na "Otevřít wiki soubor" nebo přetáhněte TiddlyWiki soubor pro začátek.
+
+GroupManager/Title: Spravovat skupiny
+GroupManager/NoGroups: Zatím nebyly vytvořeny žádné skupiny. Přiřaďte wiki ke skupině pro její vytvoření.
+
+EditionSelector/CreateFile: Vytvořit nový wiki soubor
+EditionSelector/CreateFolder: Vytvořit novou wiki složku
+EditionSelector/SelectEdition: Vybrat edici
+EditionSelector/AdditionalPlugins: Další pluginy
+EditionSelector/Optional: (volitelné)
+EditionSelector/CreatingFile: Vytváření wiki souboru...
+EditionSelector/InitializingFolder: Inicializace wiki složky...

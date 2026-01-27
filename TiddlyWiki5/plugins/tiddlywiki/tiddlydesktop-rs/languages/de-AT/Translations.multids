@@ -1,0 +1,60 @@
+title: $:/plugins/tiddlywiki/tiddlydesktop-rs/languages/de-AT/
+
+Buttons/Open: öffnen
+Buttons/Reveal: anzeigen
+Buttons/Remove: entfernen
+Buttons/Add: hinzufügen
+Buttons/Change: ändern
+Buttons/Reset: zurücksetzen
+Buttons/Close: Schließen
+Buttons/Cancel: Abbrechen
+Buttons/Backup: Backup
+Buttons/Group: Gruppe
+Buttons/Groups: Gruppen
+Buttons/OpenWikiFile: Wiki-Datei öffnen
+Buttons/OpenWikiFolder: Wiki-Ordner öffnen
+Buttons/CreateWikiFile: Wiki-Datei erstellen
+Buttons/CreateWikiFolder: Wiki-Ordner erstellen
+Buttons/ToFile: zu Datei
+Buttons/ToFolder: zu Ordner
+
+Tooltips/BackupsEnabled: Backups aktiviert - klicken zum Deaktivieren
+Tooltips/ConvertWiki: Wiki-Format konvertieren
+Tooltips/BackupsDisabled: Backups deaktiviert - klicken zum Aktivieren
+Tooltips/AssignToGroup: Gruppe zuweisen
+Tooltips/ManageGroups: Gruppen verwalten
+Tooltips/ChangeBackupDir: Backup-Verzeichnis ändern
+Tooltips/ResetBackupDir: Standard-Backup-Verzeichnis wiederherstellen
+Tooltips/SetBackupDir: Eigenes Backup-Verzeichnis festlegen
+Tooltips/RenameGroup: Gruppe umbenennen
+Tooltips/DeleteGroup: Gruppe löschen (Wikis werden zu Ungruppiert verschoben)
+
+Labels/BackupFolder: Backup-Ordner:
+Labels/Default: (Standard)
+Labels/Local: (lokal)
+Labels/Ungrouped: Ungruppiert
+Labels/Wikis: Wikis
+Labels/UpdateAvailable: Update verfügbar:
+Labels/SaveTo: speichern unter:
+Labels/InFolder: im Ordner:
+Labels/Language: Sprache:
+Labels/AutoDetect: Automatisch erkennen
+
+Placeholders/NewGroupName: Neuer Gruppenname...
+
+DropZone/Active: Wiki-Datei oder -Ordner hier ablegen
+DropZone/Hint: TiddlyWiki-Dateien oder -Ordner hier ablegen
+
+EmptyMessage/Title: Noch keine Wikis.
+EmptyMessage/Hint: Klicken Sie auf "Wiki-Datei öffnen" oder legen Sie eine TiddlyWiki-Datei ab.
+
+GroupManager/Title: Gruppen verwalten
+GroupManager/NoGroups: Noch keine Gruppen erstellt. Weisen Sie einem Wiki eine Gruppe zu, um eine zu erstellen.
+
+EditionSelector/CreateFile: Neue Wiki-Datei erstellen
+EditionSelector/CreateFolder: Neuen Wiki-Ordner erstellen
+EditionSelector/SelectEdition: Edition auswählen
+EditionSelector/AdditionalPlugins: Zusätzliche Plugins
+EditionSelector/Optional: (optional)
+EditionSelector/CreatingFile: Wiki-Datei wird erstellt...
+EditionSelector/InitializingFolder: Wiki-Ordner wird initialisiert...

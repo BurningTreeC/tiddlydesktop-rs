@@ -1,0 +1,60 @@
+title: $:/plugins/tiddlywiki/tiddlydesktop-rs/languages/mk-MK/
+
+Buttons/Open: отвори
+Buttons/Reveal: прикажи
+Buttons/Remove: отстрани
+Buttons/Add: додај
+Buttons/Change: промени
+Buttons/Reset: ресетирај
+Buttons/Close: Затвори
+Buttons/Cancel: Откажи
+Buttons/Backup: резервна копија
+Buttons/Group: група
+Buttons/Groups: Групи
+Buttons/OpenWikiFile: Отвори вики датотека
+Buttons/OpenWikiFolder: Отвори вики папка
+Buttons/CreateWikiFile: Создај вики датотека
+Buttons/CreateWikiFolder: Создај вики папка
+Buttons/ToFile: во датотека
+Buttons/ToFolder: во папка
+
+Tooltips/BackupsEnabled: Резервни копии вклучени - кликни за исклучување
+Tooltips/ConvertWiki: Конвертирај формат на вики
+Tooltips/BackupsDisabled: Резервни копии исклучени - кликни за вклучување
+Tooltips/AssignToGroup: Додели во група
+Tooltips/ManageGroups: Управувај со групи
+Tooltips/ChangeBackupDir: Промени папка за резервни копии
+Tooltips/ResetBackupDir: Ресетирај на стандардна папка за резервни копии
+Tooltips/SetBackupDir: Постави приспособена папка за резервни копии
+Tooltips/RenameGroup: Преименувај група
+Tooltips/DeleteGroup: Избриши група (викијата ќе се преместат во Без група)
+
+Labels/BackupFolder: Папка за резервни копии:
+Labels/Default: (стандардно)
+Labels/Local: (локално)
+Labels/Ungrouped: Без група
+Labels/Wikis: викија
+Labels/UpdateAvailable: Достапно ажурирање:
+Labels/SaveTo: зачувај во:
+Labels/InFolder: во папка:
+Labels/Language: Јазик:
+Labels/AutoDetect: Автоматско откривање
+
+Placeholders/NewGroupName: Име на нова група...
+
+DropZone/Active: Пуштете вики датотека или папка тука
+DropZone/Hint: Пуштете TiddlyWiki датотеки или папки тука
+
+EmptyMessage/Title: Сè уште нема викија.
+EmptyMessage/Hint: Кликнете на "Отвори вики датотека" или пуштете TiddlyWiki датотека за да започнете.
+
+GroupManager/Title: Управувај со групи
+GroupManager/NoGroups: Сè уште нема создадени групи. Доделете вики во група за да создадете една.
+
+EditionSelector/CreateFile: Создај нова вики датотека
+EditionSelector/CreateFolder: Создај нова вики папка
+EditionSelector/SelectEdition: Избери издание
+EditionSelector/AdditionalPlugins: Дополнителни приклучоци
+EditionSelector/Optional: (опционално)
+EditionSelector/CreatingFile: Се создава вики датотека...
+EditionSelector/InitializingFolder: Се иницијализира вики папка...

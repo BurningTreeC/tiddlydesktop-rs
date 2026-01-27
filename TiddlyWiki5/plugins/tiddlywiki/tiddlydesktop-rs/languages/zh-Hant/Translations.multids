@@ -1,0 +1,60 @@
+title: $:/plugins/tiddlywiki/tiddlydesktop-rs/languages/zh-Hant/
+
+Buttons/Open: 開啟
+Buttons/Reveal: 顯示
+Buttons/Remove: 移除
+Buttons/Add: 新增
+Buttons/Change: 變更
+Buttons/Reset: 重設
+Buttons/Close: 關閉
+Buttons/Cancel: 取消
+Buttons/Backup: 備份
+Buttons/Group: 群組
+Buttons/Groups: 群組
+Buttons/OpenWikiFile: 開啟維基檔案
+Buttons/OpenWikiFolder: 開啟維基資料夾
+Buttons/CreateWikiFile: 建立維基檔案
+Buttons/CreateWikiFolder: 建立維基資料夾
+Buttons/ToFile: 轉為檔案
+Buttons/ToFolder: 轉為資料夾
+
+Tooltips/BackupsEnabled: 備份已啟用 - 點擊停用
+Tooltips/ConvertWiki: 轉換維基格式
+Tooltips/BackupsDisabled: 備份已停用 - 點擊啟用
+Tooltips/AssignToGroup: 指派到群組
+Tooltips/ManageGroups: 管理群組
+Tooltips/ChangeBackupDir: 變更備份目錄
+Tooltips/ResetBackupDir: 重設為預設備份目錄
+Tooltips/SetBackupDir: 設定自訂備份目錄
+Tooltips/RenameGroup: 重新命名群組
+Tooltips/DeleteGroup: 刪除群組（維基將移至未分組）
+
+Labels/BackupFolder: 備份資料夾：
+Labels/Default: （預設）
+Labels/Local: （本機）
+Labels/Ungrouped: 未分組
+Labels/Wikis: 個維基
+Labels/UpdateAvailable: 有更新可用：
+Labels/SaveTo: 儲存至：
+Labels/InFolder: 在資料夾：
+Labels/Language: 語言：
+Labels/AutoDetect: 自動偵測
+
+Placeholders/NewGroupName: 新群組名稱...
+
+DropZone/Active: 將維基檔案或資料夾拖放到此處
+DropZone/Hint: 將 TiddlyWiki 檔案或資料夾拖放到此處
+
+EmptyMessage/Title: 尚無維基。
+EmptyMessage/Hint: 點擊「開啟維基檔案」或拖放 TiddlyWiki 檔案以開始。
+
+GroupManager/Title: 管理群組
+GroupManager/NoGroups: 尚未建立群組。將維基指派到群組以建立一個。
+
+EditionSelector/CreateFile: 建立新維基檔案
+EditionSelector/CreateFolder: 建立新維基資料夾
+EditionSelector/SelectEdition: 選擇版本
+EditionSelector/AdditionalPlugins: 額外外掛
+EditionSelector/Optional: （選用）
+EditionSelector/CreatingFile: 正在建立維基檔案...
+EditionSelector/InitializingFolder: 正在初始化維基資料夾...

@@ -1,0 +1,60 @@
+title: $:/plugins/tiddlywiki/tiddlydesktop-rs/languages/pt-PT/
+
+Buttons/Open: abrir
+Buttons/Reveal: revelar
+Buttons/Remove: remover
+Buttons/Add: adicionar
+Buttons/Change: alterar
+Buttons/Reset: repor
+Buttons/Close: Fechar
+Buttons/Cancel: Cancelar
+Buttons/Backup: cópia de segurança
+Buttons/Group: grupo
+Buttons/Groups: Grupos
+Buttons/OpenWikiFile: Abrir ficheiro wiki
+Buttons/OpenWikiFolder: Abrir pasta wiki
+Buttons/CreateWikiFile: Criar ficheiro wiki
+Buttons/CreateWikiFolder: Criar pasta wiki
+Buttons/ToFile: para ficheiro
+Buttons/ToFolder: para pasta
+
+Tooltips/BackupsEnabled: Cópias de segurança ativadas - clique para desativar
+Tooltips/ConvertWiki: Converter formato do wiki
+Tooltips/BackupsDisabled: Cópias de segurança desativadas - clique para ativar
+Tooltips/AssignToGroup: Atribuir a grupo
+Tooltips/ManageGroups: Gerir grupos
+Tooltips/ChangeBackupDir: Alterar diretório de cópias de segurança
+Tooltips/ResetBackupDir: Repor diretório de cópias de segurança predefinido
+Tooltips/SetBackupDir: Definir diretório de cópias de segurança personalizado
+Tooltips/RenameGroup: Renomear grupo
+Tooltips/DeleteGroup: Eliminar grupo (wikis serão movidos para Sem grupo)
+
+Labels/BackupFolder: Pasta de cópias de segurança:
+Labels/Default: (predefinido)
+Labels/Local: (local)
+Labels/Ungrouped: Sem grupo
+Labels/Wikis: wikis
+Labels/UpdateAvailable: Atualização disponível:
+Labels/SaveTo: guardar em:
+Labels/InFolder: na pasta:
+Labels/Language: Idioma:
+Labels/AutoDetect: Detetar automaticamente
+
+Placeholders/NewGroupName: Nome do novo grupo...
+
+DropZone/Active: Largue o ficheiro ou pasta wiki aqui
+DropZone/Hint: Largue ficheiros ou pastas TiddlyWiki aqui
+
+EmptyMessage/Title: Ainda não há wikis.
+EmptyMessage/Hint: Clique em "Abrir ficheiro wiki" ou largue um ficheiro TiddlyWiki para começar.
+
+GroupManager/Title: Gerir grupos
+GroupManager/NoGroups: Ainda não há grupos criados. Atribua um wiki a um grupo para criar um.
+
+EditionSelector/CreateFile: Criar novo ficheiro wiki
+EditionSelector/CreateFolder: Criar nova pasta wiki
+EditionSelector/SelectEdition: Selecionar edição
+EditionSelector/AdditionalPlugins: Plugins adicionais
+EditionSelector/Optional: (opcional)
+EditionSelector/CreatingFile: A criar ficheiro wiki...
+EditionSelector/InitializingFolder: A inicializar pasta wiki...

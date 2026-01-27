@@ -25,22 +25,22 @@ tags: $:/tags/PageTemplate
 <div class="td-modal">
 <div class="td-modal-header">
 <$reveal state="$:/temp/tiddlydesktop-rs/create-mode" type="match" text="file">
-<h2>Create New Wiki File</h2>
+<h2><<td-lingo EditionSelector/CreateFile>></h2>
 <div class="td-modal-subtitle">
-save to: <strong>{{$:/temp/tiddlydesktop-rs/init-file-path}}</strong>
+<<td-lingo Labels/SaveTo>> <strong>{{$:/temp/tiddlydesktop-rs/init-file-path}}</strong>
 </div>
 </$reveal>
 <$reveal state="$:/temp/tiddlydesktop-rs/create-mode" type="nomatch" text="file">
-<h2>Create New Wiki Folder</h2>
+<h2><<td-lingo EditionSelector/CreateFolder>></h2>
 <div class="td-modal-subtitle">
-in folder: <strong>{{$:/temp/tiddlydesktop-rs/init-folder-name}}</strong>
+<<td-lingo Labels/InFolder>> <strong>{{$:/temp/tiddlydesktop-rs/init-folder-name}}</strong>
 </div>
 </$reveal>
 </div>
 
 <div class="td-modal-body">
 <div class="td-section">
-<h3>Select Edition</h3>
+<h3><<td-lingo EditionSelector/SelectEdition>></h3>
 <div class="td-edition-grid">
 <$list filter="[prefix[$:/temp/tiddlydesktop-rs/editions/]]">
 <$button class={{{ [[$:/temp/tiddlydesktop-rs/selected-edition]get[text]match{!!id}then[td-edition-btn td-edition-selected]else[td-edition-btn]] }}}>
@@ -53,7 +53,7 @@ in folder: <strong>{{$:/temp/tiddlydesktop-rs/init-folder-name}}</strong>
 </div>
 
 <div class="td-section">
-<h3>Additional Plugins <span class="td-optional">(optional)</span></h3>
+<h3><<td-lingo EditionSelector/AdditionalPlugins>> <span class="td-optional"><<td-lingo EditionSelector/Optional>></span></h3>
 <div class="td-plugin-categories">
 <div class="td-plugin-list">
 <$list filter="[prefix[$:/temp/tiddlydesktop-rs/plugins/]sort[name]]" variable="pluginTitle">
@@ -74,15 +74,15 @@ in folder: <strong>{{$:/temp/tiddlydesktop-rs/init-folder-name}}</strong>
 </div>
 
 <div class="td-modal-footer">
-<$button message="tm-tiddlydesktop-rs-cancel-init" class="td-button td-button-cancel">Cancel</$button>
+<$button message="tm-tiddlydesktop-rs-cancel-init" class="td-button td-button-cancel"><<td-lingo Buttons/Cancel>></$button>
 <$reveal state="$:/temp/tiddlydesktop-rs/create-mode" type="match" text="file">
 <$button message="tm-tiddlydesktop-rs-create-file" class="td-button td-button-create">
-Create Wiki File
+<<td-lingo Buttons/CreateWikiFile>>
 </$button>
 </$reveal>
 <$reveal state="$:/temp/tiddlydesktop-rs/create-mode" type="nomatch" text="file">
 <$button message="tm-tiddlydesktop-rs-init-folder" class="td-button td-button-create">
-Create Wiki Folder
+<<td-lingo Buttons/CreateWikiFolder>>
 </$button>
 </$reveal>
 </div>
@@ -95,10 +95,10 @@ Create Wiki Folder
 <div class="td-modal td-modal-loading">
 <div class="td-loading-spinner"></div>
 <$reveal state="$:/temp/tiddlydesktop-rs/create-mode" type="match" text="file">
-<div class="td-loading-text">Creating wiki file...</div>
+<div class="td-loading-text"><<td-lingo EditionSelector/CreatingFile>></div>
 </$reveal>
 <$reveal state="$:/temp/tiddlydesktop-rs/create-mode" type="nomatch" text="file">
-<div class="td-loading-text">Initializing wiki folder...</div>
+<div class="td-loading-text"><<td-lingo EditionSelector/InitializingFolder>></div>
 </$reveal>
 </div>
 </div>

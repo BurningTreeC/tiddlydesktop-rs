@@ -38,6 +38,49 @@
     var pendingDragElement = null;   // Element that might be dragged (set on pointerdown)
     var lastPointerType = 'mouse';   // Pointer type from last pointerdown (for synthetic pointerup)
 
+    // === Patch DataTransfer.prototype for Windows/macOS ===
+    // On these platforms, the webview strips custom MIME types like text/vnd.tiddler
+    // during same-window drags. We patch getData and types to return our captured data.
+    // This allows native drops to happen while ensuring correct data is available.
+    (function() {
+        var originalGetData = DataTransfer.prototype.getData;
+        DataTransfer.prototype.getData = function(type) {
+            // If internal drag is active and we have captured data, use it
+            if (internalDragActive && dragData && type in dragData) {
+                return dragData[type];
+            }
+            return originalGetData.call(this, type);
+        };
+
+        // Also patch types getter so iteration includes our captured types
+        var typesDescriptor = Object.getOwnPropertyDescriptor(DataTransfer.prototype, 'types');
+        if (typesDescriptor && typesDescriptor.get) {
+            var originalTypesGetter = typesDescriptor.get;
+            Object.defineProperty(DataTransfer.prototype, 'types', {
+                get: function() {
+                    var originalTypes = originalTypesGetter.call(this);
+                    if (internalDragActive && dragData) {
+                        var capturedTypes = Object.keys(dragData);
+                        var original = Array.from(originalTypes || []);
+                        // Merge captured types with original, captured first for priority
+                        var merged = capturedTypes.slice();
+                        for (var i = 0; i < original.length; i++) {
+                            if (merged.indexOf(original[i]) === -1) {
+                                merged.push(original[i]);
+                            }
+                        }
+                        return merged;
+                    }
+                    return originalTypes;
+                },
+                configurable: true,
+                enumerable: true
+            });
+        }
+
+        log('DataTransfer.prototype patched for same-window drag support');
+    })();
+
     // === Find the actual draggable element ===
     function findDraggable(element) {
         var el = element;

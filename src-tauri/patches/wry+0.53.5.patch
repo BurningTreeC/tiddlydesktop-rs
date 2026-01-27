@@ -96,6 +96,7 @@
  pub(crate) fn dragging_exited(this: &WryWebView, drag_info: &ProtocolObject<dyn NSDraggingInfo>) {
    let listener = &this.ivars().drag_drop_handler;
    if !listener(DragDropEvent::Leave) {
+
 --- a/src/webview2/mod.rs
 +++ b/src/webview2/mod.rs
 @@ -146,15 +146,12 @@

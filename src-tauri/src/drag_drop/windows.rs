@@ -462,27 +462,25 @@ impl DropTargetImpl {
                 }),
             );
 
-            // Get the stored drag data and emit td-drag-content so JS can process the drop
+            // Get the stored drag data and emit td-drag-content so JS can process the drop.
+            // For same-window drags, only emit text/plain and text/vnd.tiddler.
+            // We explicitly EXCLUDE text/html and text/uri-list because:
+            // - TiddlyWiki's $droppable prefers text/html over text/plain, causing HTML markup to be inserted
+            // - Inputs may use text/uri-list (wikifile://...) instead of text/plain
+            // This matches Linux behavior where the DataTransfer.getData patch ensures
+            // TiddlyWiki handlers see the correct data types.
             if let Ok(guard) = OUTGOING_DRAG_STATE.lock() {
                 if let Some(state) = guard.as_ref() {
                     let mut types = Vec::new();
                     let mut data = HashMap::new();
 
-                    if let Some(ref text) = state.data.text_plain {
-                        types.push("text/plain".to_string());
-                        data.insert("text/plain".to_string(), text.clone());
-                    }
-                    if let Some(ref html) = state.data.text_html {
-                        types.push("text/html".to_string());
-                        data.insert("text/html".to_string(), html.clone());
-                    }
                     if let Some(ref tiddler) = state.data.text_vnd_tiddler {
                         types.push("text/vnd.tiddler".to_string());
                         data.insert("text/vnd.tiddler".to_string(), tiddler.clone());
                     }
-                    if let Some(ref uri_list) = state.data.text_uri_list {
-                        types.push("text/uri-list".to_string());
-                        data.insert("text/uri-list".to_string(), uri_list.clone());
+                    if let Some(ref text) = state.data.text_plain {
+                        types.push("text/plain".to_string());
+                        data.insert("text/plain".to_string(), text.clone());
                     }
 
                     if !types.is_empty() {

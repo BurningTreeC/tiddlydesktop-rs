@@ -330,8 +330,11 @@ impl DropTargetImpl {
 
         // Log available formats for debugging
         if !p_data_obj.is_null() {
-            let data_object: &IDataObject = std::mem::transmute(&p_data_obj);
-            obj.log_available_formats(data_object);
+            // Borrow the IDataObject without taking ownership (ManuallyDrop prevents Release)
+            let data_object: std::mem::ManuallyDrop<IDataObject> = std::mem::ManuallyDrop::new(
+                std::mem::transmute(p_data_obj)
+            );
+            obj.log_available_formats(&data_object);
         }
 
         // Emit td-drag-motion with full context for cross-wiki support
@@ -493,9 +496,12 @@ impl DropTargetImpl {
             // Call the original IDropTarget if we have one
             let browser_handled = if let Some(ref original) = obj.original_drop_target {
                 eprintln!("[TiddlyDesktop] Windows IDropTarget::Drop - calling original IDropTarget");
-                let data_obj_ref: &IDataObject = std::mem::transmute(&p_data_obj);
+                // Borrow the IDataObject without taking ownership (ManuallyDrop prevents Release)
+                let data_obj_borrowed: std::mem::ManuallyDrop<IDataObject> = std::mem::ManuallyDrop::new(
+                    std::mem::transmute(p_data_obj)
+                );
                 let result = original.Drop(
-                    data_obj_ref,
+                    &data_obj_borrowed,
                     MODIFIERKEYS_FLAGS(_grf_key_state),
                     pt,
                     pdw_effect as *mut DROPEFFECT
@@ -567,8 +573,11 @@ impl DropTargetImpl {
         }
 
         if !p_data_obj.is_null() {
-            let data_object: &IDataObject = std::mem::transmute(&p_data_obj);
-            obj.log_available_formats(data_object);
+            // Borrow the IDataObject without taking ownership (ManuallyDrop prevents Release)
+            let data_object: std::mem::ManuallyDrop<IDataObject> = std::mem::ManuallyDrop::new(
+                std::mem::transmute(p_data_obj)
+            );
+            obj.log_available_formats(&data_object);
 
             // Emit drop-start
             let _ = obj.window.emit(
@@ -582,7 +591,7 @@ impl DropTargetImpl {
             );
 
             // Check for file paths first
-            let file_paths = obj.get_file_paths(data_object);
+            let file_paths = obj.get_file_paths(&data_object);
             // Security: Sanitize file paths to prevent path traversal
             let file_paths = sanitize_file_paths(file_paths);
             if !file_paths.is_empty() {
@@ -612,7 +621,7 @@ impl DropTargetImpl {
             }
 
             // Content drop - extract text/html/urls
-            if let Some(mut content_data) = obj.extract_data(data_object) {
+            if let Some(mut content_data) = obj.extract_data(&data_object) {
                 // For cross-wiki drags from our app, propagate the is_text_selection_drag flag
                 // This allows JS to filter text/html for text-selection drags (Issue 3)
                 if is_our_drag {
@@ -2261,14 +2270,20 @@ pub fn setup_drag_handlers(window: &WebviewWindow) {
                 // Try to get the original IDropTarget before revoking
                 // This is stored by OLE as a window property "OleDropTargetInterface"
                 let original_drop_target: Option<IDropTarget> = {
+                    use std::mem::ManuallyDrop;
                     use windows::core::w;
                     let prop = GetPropW(target_hwnd, w!("OleDropTargetInterface"));
                     if !prop.0.is_null() {
-                        // The property value is a pointer to IUnknown, we need to QueryInterface for IDropTarget
-                        let unknown_ptr = prop.0 as *mut std::ffi::c_void;
-                        // Cast to IUnknown and QueryInterface
-                        let unknown: &windows::core::IUnknown = std::mem::transmute(&unknown_ptr);
-                        match unknown.cast::<IDropTarget>() {
+                        // The property value is a raw COM pointer owned by OLE
+                        // Use ManuallyDrop to borrow it without affecting reference count
+                        // (we don't want to Release OLE's reference when this goes out of scope)
+                        let raw_ptr = prop.0 as *mut std::ffi::c_void;
+                        let borrowed: ManuallyDrop<windows::core::IUnknown> = ManuallyDrop::new(
+                            std::mem::transmute(raw_ptr)
+                        );
+                        // cast() calls QueryInterface which AddRefs the result,
+                        // giving us our own properly reference-counted IDropTarget
+                        match (*borrowed).cast::<IDropTarget>() {
                             Ok(dt) => {
                                 eprintln!("[TiddlyDesktop] Windows: Got original IDropTarget from OleDropTargetInterface property");
                                 Some(dt)

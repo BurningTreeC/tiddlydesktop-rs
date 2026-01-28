@@ -3123,7 +3123,7 @@ async fn open_tiddler_window(
         .map_err(|e| format!("Failed to set icon: {}", e))?
         .window_classname("tiddlydesktop-rs")
         .initialization_script(&init_script::get_wiki_init_script(&wiki_path, &label, false))
-        .devtools(true); // TEMP: enabled for debugging
+        .devtools(cfg!(debug_assertions)); // Only enable in debug builds
 
     // Apply isolated session if available (shares with parent wiki)
     if let Some(dir) = session_dir {
@@ -3552,8 +3552,49 @@ fn wiki_protocol_handler(app: &tauri::AppHandle, request: Request<Vec<u8>>) -> R
                 let filename = wiki_path.file_stem().and_then(|s| s.to_str()).unwrap_or("wiki");
 
                 // Get custom backup directory if set, otherwise use default
+                // Security: Validate custom backup directory is user-accessible
                 let backup_dir = match get_wiki_backup_dir(app, wiki_path_str.as_ref()) {
-                    Some(custom_dir) => PathBuf::from(custom_dir),
+                    Some(custom_dir) => {
+                        // Validate the custom directory path
+                        match drag_drop::sanitize::validate_file_path(&custom_dir) {
+                            Some(_) => {
+                                let dir_path = PathBuf::from(&custom_dir);
+                                // If directory exists, verify it's user-accessible
+                                if dir_path.exists() {
+                                    if let Ok(canonical) = dunce::canonicalize(&dir_path) {
+                                        if drag_drop::sanitize::is_user_accessible_path(&canonical) {
+                                            canonical
+                                        } else {
+                                            eprintln!("[TiddlyDesktop] Security: Custom backup dir not user-accessible, using default");
+                                            parent.join(format!("{}.backups", filename))
+                                        }
+                                    } else {
+                                        parent.join(format!("{}.backups", filename))
+                                    }
+                                } else {
+                                    // Directory doesn't exist yet, check parent is user-accessible
+                                    if let Some(dir_parent) = dir_path.parent() {
+                                        if let Ok(canonical_parent) = dunce::canonicalize(dir_parent) {
+                                            if drag_drop::sanitize::is_user_accessible_path(&canonical_parent) {
+                                                dir_path
+                                            } else {
+                                                eprintln!("[TiddlyDesktop] Security: Custom backup dir parent not user-accessible, using default");
+                                                parent.join(format!("{}.backups", filename))
+                                            }
+                                        } else {
+                                            parent.join(format!("{}.backups", filename))
+                                        }
+                                    } else {
+                                        parent.join(format!("{}.backups", filename))
+                                    }
+                                }
+                            }
+                            None => {
+                                eprintln!("[TiddlyDesktop] Security: Invalid custom backup dir path, using default");
+                                parent.join(format!("{}.backups", filename))
+                            }
+                        }
+                    }
                     None => parent.join(format!("{}.backups", filename)),
                 };
                 let _ = std::fs::create_dir_all(&backup_dir);
@@ -4586,7 +4627,7 @@ fn run_wiki_mode(args: WikiModeArgs) {
                 .icon(icon)?
                 .window_classname("tiddlydesktop-rs-wiki")
                 .initialization_script(&init_script::get_wiki_init_script(&wiki_path_clone.to_string_lossy(), &label, false))
-                .devtools(true);
+                .devtools(cfg!(debug_assertions)); // Only enable in debug builds
 
             // Apply saved position if available, with monitor validation on Windows/macOS
             if let Some(ref state) = saved_state {
@@ -4930,7 +4971,7 @@ fn run_wiki_folder_mode(args: WikiFolderModeArgs) {
                 &label_for_state,
                 false
             ))
-            .devtools(true);
+            .devtools(cfg!(debug_assertions)); // Only enable in debug builds
 
             // Apply saved position, with monitor validation on Windows/macOS
             if let Some(ref state) = saved_state {
@@ -5203,7 +5244,7 @@ pub fn run() {
                 .icon(icon)?
                 .window_classname("tiddlydesktop-rs")
                 .initialization_script(&init_script::get_wiki_init_script_with_language(&main_wiki_path.to_string_lossy(), "main", true, Some(&language)))
-                .devtools(true); // TEMP: enabled for debugging
+                .devtools(cfg!(debug_assertions)); // Only enable in debug builds
 
             // Apply saved position if available, with monitor validation on Windows/macOS
             if let Some(ref state) = saved_state {

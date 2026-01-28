@@ -113,10 +113,27 @@ pub fn validate_file_path(path: &str) -> Option<String> {
         return None;
     }
 
-    // Check for percent-encoded traversal
-    let decoded = urlencoding::decode(path).unwrap_or_else(|_| path.into());
+    // Check for percent-encoded traversal (including double/triple encoding)
+    // Recursively decode until no more changes to catch %252e%252e -> %2e%2e -> ..
+    let mut decoded = path.to_string();
+    for _ in 0..5 {  // Max 5 levels of encoding (more than enough)
+        match urlencoding::decode(&decoded) {
+            Ok(new_decoded) => {
+                if new_decoded == decoded {
+                    break; // No more decoding possible
+                }
+                decoded = new_decoded.into_owned();
+            }
+            Err(_) => break,
+        }
+    }
     if decoded.contains("..") {
         eprintln!("[TiddlyDesktop] Security: Rejected path with encoded traversal sequence");
+        return None;
+    }
+    // Also check the decoded path for tilde
+    if decoded.starts_with('~') {
+        eprintln!("[TiddlyDesktop] Security: Rejected path with encoded tilde expansion");
         return None;
     }
 
@@ -519,9 +536,19 @@ mod tests {
         assert!(validate_file_path("~/Documents/file.txt").is_none());
         assert!(validate_file_path("~user/file.txt").is_none());
 
-        // Percent-encoded traversal
+        // Percent-encoded traversal (single encoding)
         assert!(validate_file_path("/home/user/%2e%2e/etc/passwd").is_none());
         assert!(validate_file_path("/path/%2E%2E/secret").is_none());
+
+        // Double-encoded traversal (%25 = %, so %252e%252e -> %2e%2e -> ..)
+        assert!(validate_file_path("/home/user/%252e%252e/etc/passwd").is_none());
+
+        // Triple-encoded traversal
+        assert!(validate_file_path("/path/%25252e%25252e/secret").is_none());
+
+        // Encoded tilde
+        assert!(validate_file_path("%7e/Documents/file.txt").is_none());
+        assert!(validate_file_path("%257e/Documents/file.txt").is_none());
     }
 
     #[test]

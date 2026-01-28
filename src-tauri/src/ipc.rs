@@ -24,6 +24,15 @@ pub const IPC_PORT: u16 = 45678;
 /// Length of the authentication token in bytes
 const AUTH_TOKEN_LENGTH: usize = 32;
 
+/// Read timeout for IPC connections (30 seconds - allows large transfers)
+const IPC_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// Maximum concurrent IPC connections (one per wiki window, plus some headroom)
+const MAX_IPC_CONNECTIONS: usize = 100;
+
+/// Global connection counter for limiting concurrent connections
+static ACTIVE_CONNECTIONS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
 /// Global authentication token (generated once at startup)
 static AUTH_TOKEN: OnceLock<String> = OnceLock::new();
 
@@ -199,6 +208,22 @@ impl IpcServer {
         for stream in listener.incoming() {
             match stream {
                 Ok(stream) => {
+                    // Security: Check connection limit before accepting
+                    let current = ACTIVE_CONNECTIONS.load(std::sync::atomic::Ordering::SeqCst);
+                    if current >= MAX_IPC_CONNECTIONS {
+                        eprintln!("[IPC] Security: Connection limit reached ({}), rejecting new connection", current);
+                        drop(stream); // Close the connection
+                        continue;
+                    }
+
+                    // Security: Set read timeout to prevent slow-loris attacks
+                    if let Err(e) = stream.set_read_timeout(Some(IPC_READ_TIMEOUT)) {
+                        eprintln!("[IPC] Warning: Failed to set read timeout: {}", e);
+                    }
+
+                    // Increment connection counter
+                    ACTIVE_CONNECTIONS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+
                     let wiki_groups = self.wiki_groups.clone();
                     let clients_by_pid = self.clients_by_pid.clone();
                     let open_wiki_cb = self.open_wiki_callback.clone();
@@ -207,7 +232,7 @@ impl IpcServer {
                     let auth_token = self.auth_token.clone();
 
                     thread::spawn(move || {
-                        if let Err(e) = handle_client(
+                        let result = handle_client(
                             stream,
                             wiki_groups,
                             clients_by_pid,
@@ -215,7 +240,10 @@ impl IpcServer {
                             open_tiddler_cb,
                             update_favicon_cb,
                             auth_token,
-                        ) {
+                        );
+                        // Always decrement connection counter when done
+                        ACTIVE_CONNECTIONS.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+                        if let Err(e) = result {
                             eprintln!("[IPC] Client handler error: {}", e);
                         }
                     });

@@ -29,7 +29,7 @@ use windows::Win32::Foundation::{HWND, LPARAM, POINT, POINTL, E_NOINTERFACE, E_P
 use windows::Win32::Graphics::Gdi::ScreenToClient;
 use windows::Win32::Globalization::{MultiByteToWideChar, CP_ACP, MULTI_BYTE_TO_WIDE_CHAR_FLAGS};
 use windows::Win32::System::Com::{DVASPECT_CONTENT, FORMATETC, IDataObject, TYMED_HGLOBAL};
-use windows::Win32::System::Memory::{GlobalLock, GlobalSize, GlobalUnlock, VirtualQuery, MEMORY_BASIC_INFORMATION, MEM_COMMIT};
+use windows::Win32::System::Memory::{GlobalLock, GlobalSize, GlobalUnlock};
 use windows::Win32::System::Ole::{
     IDropTarget, OleInitialize, RegisterDragDrop, RevokeDragDrop, DROPEFFECT, DROPEFFECT_COPY,
     DROPEFFECT_LINK, DROPEFFECT_MOVE, DROPEFFECT_NONE,
@@ -57,26 +57,6 @@ const CF_HDROP: u16 = 15;
 /// IDropTarget interface GUID
 const IID_IDROPTARGET: GUID = GUID::from_u128(0x00000122_0000_0000_c000_000000000046);
 const IID_IUNKNOWN: GUID = GUID::from_u128(0x00000000_0000_0000_c000_000000000046);
-
-/// Validate that a pointer points to accessible memory (best-effort check for COM pointer safety)
-/// This helps prevent crashes when WebView2's IDropTarget is in an inconsistent state.
-fn is_valid_com_pointer(ptr: *const std::ffi::c_void) -> bool {
-    if ptr.is_null() {
-        return false;
-    }
-
-    let mut mbi: MEMORY_BASIC_INFORMATION = unsafe { std::mem::zeroed() };
-    let size = unsafe {
-        VirtualQuery(Some(ptr), &mut mbi, std::mem::size_of::<MEMORY_BASIC_INFORMATION>())
-    };
-
-    if size == 0 {
-        return false;
-    }
-
-    // Memory must be committed and have some access permission
-    mbi.State == MEM_COMMIT && mbi.Protect.0 != 0
-}
 
 /// Custom clipboard format for HTML
 fn get_cf_html() -> u16 {
@@ -2287,9 +2267,9 @@ pub fn setup_drag_handlers(window: &WebviewWindow) {
                     target_hwnd.0 as isize
                 );
 
-                // Try to get the original IDropTarget before revoking.
+                // Get the original IDropTarget before we revoke it.
                 // WebView2 registers its IDropTarget asynchronously, so we retry with delays.
-                // The property "OleDropTargetInterface" is set by OLE when RegisterDragDrop is called.
+                // The property "OleDropTargetInterface" is set by OLE's RegisterDragDrop().
                 let original_drop_target: Option<IDropTarget> = {
                     use windows::core::w;
 
@@ -2309,38 +2289,20 @@ pub fn setup_drag_handlers(window: &WebviewWindow) {
                             break;
                         }
 
-                        // Got a non-null property - validate memory before touching it
+                        // OLE stores the raw IDropTarget* directly in this property.
+                        // GetPropW returns it without AddRef, so we wrap in ManuallyDrop
+                        // and clone to get our own properly ref-counted reference.
                         let raw_ptr = prop.0 as *mut std::ffi::c_void;
+                        eprintln!(
+                            "[TiddlyDesktop] Windows: Found OleDropTargetInterface property: {:p}",
+                            raw_ptr
+                        );
 
-                        // Validate COM object memory is accessible
-                        if !is_valid_com_pointer(raw_ptr) {
-                            eprintln!("[TiddlyDesktop] Windows: Invalid COM pointer memory on attempt {}", attempt + 1);
-                            if attempt < 19 {
-                                std::thread::sleep(std::time::Duration::from_millis(50));
-                                continue;
-                            }
-                            break;
-                        }
-
-                        // Also validate vtable pointer (first 8 bytes of COM object point to vtable)
-                        let vtable_ptr = *(raw_ptr as *const *const std::ffi::c_void);
-                        if !is_valid_com_pointer(vtable_ptr) {
-                            eprintln!("[TiddlyDesktop] Windows: Invalid vtable memory on attempt {}", attempt + 1);
-                            if attempt < 19 {
-                                std::thread::sleep(std::time::Duration::from_millis(50));
-                                continue;
-                            }
-                            break;
-                        }
-
-                        // GetPropW returns raw IDropTarget* that OLE stored via SetPropW.
-                        // No need for QueryInterface - it's already an IDropTarget!
-                        // Use ManuallyDrop since GetPropW doesn't AddRef for us.
                         let temp = std::mem::ManuallyDrop::new(
                             IDropTarget::from_raw(raw_ptr)
                         );
 
-                        // Clone calls AddRef through proper COM mechanism, giving us our own reference
+                        // Clone calls AddRef, giving us our own reference
                         result = Some((*temp).clone());
                         eprintln!(
                             "[TiddlyDesktop] Windows: Got original IDropTarget on attempt {}",

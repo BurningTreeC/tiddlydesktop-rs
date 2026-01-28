@@ -493,8 +493,9 @@ impl DropTargetImpl {
             // Call the original IDropTarget if we have one
             let browser_handled = if let Some(ref original) = obj.original_drop_target {
                 eprintln!("[TiddlyDesktop] Windows IDropTarget::Drop - calling original IDropTarget");
+                let data_obj_ref: &IDataObject = std::mem::transmute(&p_data_obj);
                 let result = original.Drop(
-                    std::mem::transmute(p_data_obj),
+                    data_obj_ref,
                     MODIFIERKEYS_FLAGS(_grf_key_state),
                     pt,
                     pdw_effect as *mut DROPEFFECT

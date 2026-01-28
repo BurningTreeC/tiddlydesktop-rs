@@ -501,7 +501,7 @@ impl DropTargetImpl {
                     std::mem::transmute(p_data_obj)
                 );
                 let result = original.Drop(
-                    &data_obj_borrowed,
+                    &*data_obj_borrowed,
                     MODIFIERKEYS_FLAGS(_grf_key_state),
                     pt,
                     pdw_effect as *mut DROPEFFECT

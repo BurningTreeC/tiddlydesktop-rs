@@ -15,6 +15,10 @@
 !define INSTALLERICON "{{installer_icon}}"
 !define SIDEBARIMAGE "{{sidebar_image}}"
 !define HEADERIMAGE "{{header_image}}"
+
+; Set the installer and uninstaller icons
+!define MUI_ICON "${INSTALLERICON}"
+!define MUI_UNICON "${INSTALLERICON}"
 !define MAINBINARYNAME "{{main_binary_name}}"
 !define MAINBINARYSRCPATH "{{main_binary_path}}"
 !define BUNDLEID "{{bundle_id}}"

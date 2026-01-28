@@ -48,7 +48,9 @@
     "windows": {
       "nsis": {
         "template": "nsis/installer.nsi",
-        "installerIcon": "icons/icon.ico"
+        "installerIcon": "icons/icon.ico",
+        "headerImage": "icons/nsis-header.bmp",
+        "sidebarImage": "icons/nsis-sidebar.bmp"
       }
     },
     "macOS": {

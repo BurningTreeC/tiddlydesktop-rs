@@ -1,7 +1,7 @@
-//! Clipboard content retrieval for paste handling
+//! Clipboard content handling for paste and copy operations
 //!
-//! This module provides platform-specific clipboard access, returning content
-//! in the same format as drag-drop for consistent processing in TiddlyWiki.
+//! This module provides platform-specific clipboard access for both reading
+//! (paste) and writing (copy) operations.
 
 use std::collections::HashMap;
 
@@ -329,4 +329,124 @@ fn get_clipboard_content_macos() -> Result<ClipboardContentData, String> {
         types.len()
     );
     Ok(ClipboardContentData { types, data })
+}
+
+/// Set clipboard content (copy to clipboard)
+/// This is used to override TiddlyWiki's tm-copy-to-clipboard which uses
+/// document.execCommand("copy") that doesn't work reliably in webviews.
+#[tauri::command]
+pub fn set_clipboard_content(text: String) -> Result<bool, String> {
+    #[cfg(target_os = "linux")]
+    {
+        set_clipboard_content_linux(&text)
+    }
+    #[cfg(target_os = "windows")]
+    {
+        set_clipboard_content_windows(&text)
+    }
+    #[cfg(target_os = "macos")]
+    {
+        set_clipboard_content_macos(&text)
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn set_clipboard_content_linux(text: &str) -> Result<bool, String> {
+    let display = gdk::Display::default().ok_or("No display")?;
+    let clipboard = gtk::Clipboard::default(&display).ok_or("No clipboard")?;
+
+    clipboard.set_text(text);
+
+    // Store the clipboard content so it persists after the app loses focus
+    clipboard.store();
+
+    eprintln!(
+        "[TiddlyDesktop] Clipboard: Set text ({} chars)",
+        text.len()
+    );
+    Ok(true)
+}
+
+#[cfg(target_os = "windows")]
+fn set_clipboard_content_windows(text: &str) -> Result<bool, String> {
+    use std::ffi::OsStr;
+    use std::os::windows::ffi::OsStrExt;
+    use windows::Win32::Foundation::HANDLE;
+    use windows::Win32::System::DataExchange::{
+        CloseClipboard, EmptyClipboard, OpenClipboard, SetClipboardData,
+    };
+    use windows::Win32::System::Memory::{
+        GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE,
+    };
+    use windows::Win32::System::Ole::CF_UNICODETEXT;
+
+    unsafe {
+        if OpenClipboard(None).is_err() {
+            return Err("Failed to open clipboard".to_string());
+        }
+
+        if EmptyClipboard().is_err() {
+            let _ = CloseClipboard();
+            return Err("Failed to empty clipboard".to_string());
+        }
+
+        // Convert to UTF-16 with null terminator
+        let wide: Vec<u16> = OsStr::new(text)
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect();
+
+        let size = wide.len() * std::mem::size_of::<u16>();
+
+        let h_mem = GlobalAlloc(GMEM_MOVEABLE, size).map_err(|e| format!("GlobalAlloc failed: {}", e))?;
+
+        let ptr = GlobalLock(h_mem) as *mut u16;
+        if ptr.is_null() {
+            let _ = CloseClipboard();
+            return Err("GlobalLock failed".to_string());
+        }
+
+        std::ptr::copy_nonoverlapping(wide.as_ptr(), ptr, wide.len());
+        let _ = GlobalUnlock(h_mem);
+
+        let result = SetClipboardData(CF_UNICODETEXT.0 as u32, HANDLE(h_mem.0));
+        let _ = CloseClipboard();
+
+        if result.is_err() {
+            return Err("SetClipboardData failed".to_string());
+        }
+
+        eprintln!(
+            "[TiddlyDesktop] Clipboard: Set text ({} chars)",
+            text.len()
+        );
+        Ok(true)
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn set_clipboard_content_macos(text: &str) -> Result<bool, String> {
+    use objc2_app_kit::NSPasteboard;
+    use objc2_foundation::NSString;
+
+    let pasteboard = NSPasteboard::generalPasteboard();
+
+    // Clear the pasteboard
+    pasteboard.clearContents();
+
+    // Set the string
+    let ns_string = NSString::from_str(text);
+    let success = pasteboard.setString_forType(&ns_string, unsafe {
+        &*objc2_app_kit::NSPasteboardTypeString
+    });
+
+    if success {
+        eprintln!(
+            "[TiddlyDesktop] Clipboard: Set text ({} chars)",
+            text.len()
+        );
+        Ok(true)
+    } else {
+        Err("Failed to set clipboard content".to_string())
+    }
 }

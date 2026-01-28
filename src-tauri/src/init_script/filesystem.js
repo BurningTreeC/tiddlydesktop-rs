@@ -1,5 +1,5 @@
 // TiddlyDesktop Initialization Script - Filesystem Module
-// Handles: httpRequest override for filesystem paths, media interceptor
+// Handles: httpRequest override for filesystem paths, copyToClipboard override, media interceptor
 
 (function(TD) {
     'use strict';
@@ -131,6 +131,29 @@
                 return originalHttpRequest.call($tw.utils, options);
             };
             console.log('[TiddlyDesktop] httpRequest override installed');
+
+            // Override copyToClipboard to use native clipboard API
+            // TiddlyWiki's document.execCommand("copy") doesn't work reliably in webviews
+            $tw.utils.copyToClipboard = function(text, options) {
+                options = options || {};
+                invoke('set_clipboard_content', { text: text || '' })
+                    .then(function(success) {
+                        if (!options.doNotNotify) {
+                            var notification = success
+                                ? (options.successNotification || '$:/language/Notifications/CopiedToClipboard/Succeeded')
+                                : (options.failureNotification || '$:/language/Notifications/CopiedToClipboard/Failed');
+                            $tw.notifier.display(notification);
+                        }
+                    })
+                    .catch(function(err) {
+                        console.error('[TiddlyDesktop] Clipboard write failed:', err);
+                        if (!options.doNotNotify) {
+                            var notification = options.failureNotification || '$:/language/Notifications/CopiedToClipboard/Failed';
+                            $tw.notifier.display(notification);
+                        }
+                    });
+            };
+            console.log('[TiddlyDesktop] copyToClipboard override installed');
 
             // Media interceptor for filesystem paths
             function setupMediaInterceptor() {

@@ -4768,6 +4768,7 @@ fn run_wiki_mode(args: WikiModeArgs) {
             wiki_storage::set_external_attachments_config,
             wiki_storage::js_log,
             clipboard::get_clipboard_content,
+            clipboard::set_clipboard_content,
             run_command,
             // Drag-drop commands
             start_native_drag,
@@ -5071,6 +5072,7 @@ fn run_wiki_folder_mode(args: WikiFolderModeArgs) {
             wiki_storage::save_window_state,
             wiki_storage::js_log,
             clipboard::get_clipboard_content,
+            clipboard::set_clipboard_content,
             show_find_in_page,
         ])
         .build(tauri::generate_context!())
@@ -5363,6 +5365,7 @@ pub fn run() {
             show_find_in_page,
             wiki_storage::js_log,
             clipboard::get_clipboard_content,
+            clipboard::set_clipboard_content,
             start_native_drag,
             prepare_native_drag,
             cleanup_native_drag,

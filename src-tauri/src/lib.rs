@@ -1533,7 +1533,10 @@ async fn run_command(
     }
 
     if let Some(dir) = working_dir {
-        cmd.current_dir(dir);
+        // Security: Validate the working directory is user-accessible
+        let validated_dir = drag_drop::sanitize::validate_user_directory_path(&dir)
+            .map_err(|e| format!("Invalid working directory: {}", e))?;
+        cmd.current_dir(validated_dir);
     }
 
     // On Windows, hide the console window
@@ -1928,7 +1931,8 @@ fn wait_for_server_ready(port: u16, process: &mut Child, timeout: std::time::Dur
 /// Returns WikiEntry so frontend can update its wiki list
 #[tauri::command]
 async fn open_wiki_folder(app: tauri::AppHandle, path: String) -> Result<WikiEntry, String> {
-    let path_buf = PathBuf::from(&path);
+    // Security: Validate path is a user-accessible directory
+    let path_buf = drag_drop::sanitize::validate_user_directory_path(&path)?;
     let state = app.state::<AppState>();
 
     // Get folder name
@@ -2049,9 +2053,10 @@ async fn open_wiki_folder(app: tauri::AppHandle, path: String) -> Result<WikiEnt
 
 /// Check if a path is a wiki folder
 #[tauri::command]
-fn check_is_wiki_folder(_app: tauri::AppHandle, path: String) -> bool {
-    let path_buf = PathBuf::from(&path);
-    utils::is_wiki_folder(&path_buf)
+fn check_is_wiki_folder(_app: tauri::AppHandle, path: String) -> Result<bool, String> {
+    // Security: Validate path is a user-accessible directory
+    let path_buf = drag_drop::sanitize::validate_user_directory_path(&path)?;
+    Ok(utils::is_wiki_folder(&path_buf))
 }
 
 /// Get list of available TiddlyWiki editions
@@ -2263,7 +2268,21 @@ async fn get_available_plugins(app: tauri::AppHandle) -> Result<Vec<PluginInfo>,
 /// Initialize a new wiki folder with the specified edition and plugins
 #[tauri::command]
 async fn init_wiki_folder(app: tauri::AppHandle, path: String, edition: String, plugins: Vec<String>) -> Result<(), String> {
+    // Security: Validate path is safe and within user directories
+    if drag_drop::sanitize::validate_file_path(&path).is_none() {
+        return Err("Invalid path".to_string());
+    }
+
     let path_buf = PathBuf::from(&path);
+
+    if !path_buf.is_absolute() {
+        return Err("Path must be absolute".to_string());
+    }
+
+    // Security: Check path is in user-accessible location
+    if !drag_drop::sanitize::is_user_accessible_path(&path_buf) {
+        return Err("Access to system directories is not allowed".to_string());
+    }
 
     // Verify the folder exists
     if !path_buf.exists() {
@@ -2382,7 +2401,8 @@ async fn init_wiki_folder(app: tauri::AppHandle, path: String, edition: String, 
 /// Create a single-file wiki with the specified edition and plugins
 #[tauri::command]
 async fn create_wiki_file(app: tauri::AppHandle, path: String, edition: String, plugins: Vec<String>) -> Result<(), String> {
-    let output_path = PathBuf::from(&path);
+    // Security: Validate path for writing a wiki file
+    let output_path = drag_drop::sanitize::validate_wiki_path_for_write(&path)?;
 
     // Ensure it has .html extension
     let output_path = if output_path.extension().map(|e| e == "html" || e == "htm").unwrap_or(false) {
@@ -2390,6 +2410,11 @@ async fn create_wiki_file(app: tauri::AppHandle, path: String, edition: String, 
     } else {
         output_path.with_extension("html")
     };
+
+    // Security: Check path is in user-accessible location
+    if !drag_drop::sanitize::is_user_accessible_path(&output_path) {
+        return Err("Access to system directories is not allowed".to_string());
+    }
 
     println!("Creating single-file wiki:");
     println!("  Output: {:?}", output_path);
@@ -2515,8 +2540,29 @@ async fn create_wiki_file(app: tauri::AppHandle, path: String, edition: String, 
 /// Convert a wiki between single-file and folder formats
 #[tauri::command]
 async fn convert_wiki(app: tauri::AppHandle, source_path: String, dest_path: String, to_folder: bool) -> Result<(), String> {
+    // Security: Validate source path
+    if drag_drop::sanitize::validate_file_path(&source_path).is_none() {
+        return Err("Invalid source path".to_string());
+    }
     let source = PathBuf::from(&source_path);
+    if !source.is_absolute() {
+        return Err("Source path must be absolute".to_string());
+    }
+    if !drag_drop::sanitize::is_user_accessible_path(&source) {
+        return Err("Access to system directories is not allowed".to_string());
+    }
+
+    // Security: Validate destination path
+    if drag_drop::sanitize::validate_file_path(&dest_path).is_none() {
+        return Err("Invalid destination path".to_string());
+    }
     let dest = PathBuf::from(&dest_path);
+    if !dest.is_absolute() {
+        return Err("Destination path must be absolute".to_string());
+    }
+    if !drag_drop::sanitize::is_user_accessible_path(&dest) {
+        return Err("Access to system directories is not allowed".to_string());
+    }
 
     if !source.exists() {
         return Err("Source wiki does not exist".to_string());
@@ -2861,7 +2907,8 @@ async fn open_auth_window(app: tauri::AppHandle, wiki_path: String, url: String,
 /// Returns WikiEntry so frontend can update its wiki list
 #[tauri::command]
 async fn open_wiki_window(app: tauri::AppHandle, path: String) -> Result<WikiEntry, String> {
-    let path_buf = PathBuf::from(&path);
+    // Security: Validate path is a user-accessible wiki file
+    let path_buf = drag_drop::sanitize::validate_user_file_path(&path)?;
 
     // Validate that this is a TiddlyWiki file before opening
     validate_tiddlywiki_file_async(&path_buf).await?;
@@ -3460,7 +3507,30 @@ fn wiki_protocol_handler(app: &tauri::AppHandle, request: Request<Vec<u8>>) -> R
     if path.starts_with("save/") {
         let path_key = path.strip_prefix("save/").unwrap();
         let wiki_path = match utils::base64_url_decode(path_key) {
-            Some(decoded) => PathBuf::from(decoded),
+            Some(decoded) => {
+                // Security: Validate the wiki path before saving
+                match drag_drop::sanitize::validate_wiki_path_for_write(&decoded) {
+                    Ok(validated_path) => {
+                        // Also check user-accessible
+                        if !drag_drop::sanitize::is_user_accessible_path(&validated_path) {
+                            return Response::builder()
+                                .status(403)
+                                .header("Access-Control-Allow-Origin", "*")
+                                .body("Access denied: path is outside user-accessible directories".as_bytes().to_vec())
+                                .unwrap();
+                        }
+                        validated_path
+                    }
+                    Err(e) => {
+                        eprintln!("[TiddlyDesktop] Security: Invalid save path: {}", e);
+                        return Response::builder()
+                            .status(400)
+                            .header("Access-Control-Allow-Origin", "*")
+                            .body(format!("Invalid path: {}", e).as_bytes().to_vec())
+                            .unwrap();
+                    }
+                }
+            }
             None => {
                 return Response::builder()
                     .status(400)
@@ -3574,13 +3644,55 @@ fn wiki_protocol_handler(app: &tauri::AppHandle, request: Request<Vec<u8>>) -> R
                         None
                     };
 
+                    // Security: Check for path traversal in the raw path
+                    if drag_drop::sanitize::validate_file_path(path).is_none() {
+                        eprintln!("[TiddlyDesktop] Security: Blocked path traversal in wikifile protocol: {}", path);
+                        return Response::builder()
+                            .status(403)
+                            .header("Access-Control-Allow-Origin", "*")
+                            .body("Access denied: path contains invalid sequences".as_bytes().to_vec())
+                            .unwrap();
+                    }
+
                     // Resolve the file path
                     let resolved_path = if utils::is_absolute_filesystem_path(path) {
-                        // Absolute path - use directly
-                        PathBuf::from(path)
-                    } else if let Some(wiki_dir) = wiki_dir {
+                        // Absolute path - validate it's user-accessible
+                        let path_buf = PathBuf::from(path);
+                        match dunce::canonicalize(&path_buf) {
+                            Ok(canonical) => {
+                                if !drag_drop::sanitize::is_user_accessible_path(&canonical) {
+                                    eprintln!("[TiddlyDesktop] Security: Blocked access to system path via wikifile: {}", canonical.display());
+                                    return Response::builder()
+                                        .status(403)
+                                        .header("Access-Control-Allow-Origin", "*")
+                                        .body("Access denied: path is outside user-accessible directories".as_bytes().to_vec())
+                                        .unwrap();
+                                }
+                                canonical
+                            }
+                            Err(_) => path_buf, // File might not exist yet; let read() handle error
+                        }
+                    } else if let Some(ref wiki_dir) = wiki_dir {
                         // Relative path - resolve relative to wiki directory
-                        wiki_dir.join(path)
+                        let joined = wiki_dir.join(path);
+                        // Canonicalize and verify it's still within wiki_dir (prevent ../ escapes)
+                        match dunce::canonicalize(&joined) {
+                            Ok(canonical) => {
+                                // Canonicalize wiki_dir too for proper comparison
+                                let canonical_wiki_dir = dunce::canonicalize(wiki_dir)
+                                    .unwrap_or_else(|_| wiki_dir.clone());
+                                if !canonical.starts_with(&canonical_wiki_dir) {
+                                    eprintln!("[TiddlyDesktop] Security: Blocked path escape from wiki dir: {} -> {}", path, canonical.display());
+                                    return Response::builder()
+                                        .status(403)
+                                        .header("Access-Control-Allow-Origin", "*")
+                                        .body("Access denied: path escapes wiki directory".as_bytes().to_vec())
+                                        .unwrap();
+                                }
+                                canonical
+                            }
+                            Err(_) => joined, // File might not exist; let read() handle error
+                        }
                     } else {
                         // No wiki context and not absolute - can't resolve
                         return Response::builder()
@@ -3631,7 +3743,16 @@ fn wiki_protocol_handler(app: &tauri::AppHandle, request: Request<Vec<u8>>) -> R
         .map(|p| format!(r#"window.__PARENT_WINDOW__ = "{}";"#, p.replace('\\', "\\\\").replace('"', "\\\"")))
         .unwrap_or_default();
     let single_variables_js = single_variables.as_ref()
-        .map(|v| format!(r#"window.__SINGLE_VARIABLES__ = {};"#, v)) // Already JSON
+        .map(|v| {
+            // Security: Validate that the variables parameter is valid JSON before injection
+            match serde_json::from_str::<serde_json::Value>(v) {
+                Ok(_) => format!(r#"window.__SINGLE_VARIABLES__ = {};"#, v),
+                Err(e) => {
+                    eprintln!("[TiddlyDesktop] Security: Invalid JSON in variables parameter: {}", e);
+                    "window.__SINGLE_VARIABLES__ = {};".to_string()
+                }
+            }
+        })
         .unwrap_or_default();
 
     // Validate that this is a TiddlyWiki file before loading

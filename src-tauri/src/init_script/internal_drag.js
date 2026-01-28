@@ -853,32 +853,30 @@
         }
     }, false);
 
-    // Safety net: Prevent browser navigation on file drops
-    // If a file is dropped and nothing handles it, the browser would navigate to the file URL
+    // Safety net: Prevent browser navigation on external drops
+    // If something is dropped and nothing handles it, the browser might navigate away
     // This handler runs in bubble phase (after TiddlyWiki dropzone) and prevents that
     document.addEventListener("drop", function(event) {
-        // Only intervene for file drops that weren't handled
-        if (event.dataTransfer && event.dataTransfer.files && event.dataTransfer.files.length > 0) {
-            if (!event.defaultPrevented) {
-                log('Safety net: preventing browser navigation on unhandled file drop');
+        // Prevent default for any unhandled drop with content
+        if (event.dataTransfer && !event.defaultPrevented) {
+            var hasContent = (event.dataTransfer.files && event.dataTransfer.files.length > 0) ||
+                             (event.dataTransfer.types && event.dataTransfer.types.length > 0);
+            if (hasContent) {
+                log('Safety net: preventing browser navigation on unhandled drop');
                 event.preventDefault();
             }
         }
     }, false);
 
     // Also prevent dragover default to allow drops (required for drop events to fire)
+    // This handles both file drops and text selection drags from external apps
     document.addEventListener("dragover", function(event) {
-        if (event.dataTransfer && event.dataTransfer.types) {
-            // Check if this contains files
-            var hasFiles = false;
-            for (var i = 0; i < event.dataTransfer.types.length; i++) {
-                if (event.dataTransfer.types[i] === 'Files') {
-                    hasFiles = true;
-                    break;
-                }
-            }
-            if (hasFiles && !event.defaultPrevented) {
+        if (event.dataTransfer && event.dataTransfer.types && event.dataTransfer.types.length > 0) {
+            // For any external drag with content, prevent default to enable dropping
+            if (!event.defaultPrevented) {
                 event.preventDefault();
+                // Set dropEffect to copy for visual feedback
+                event.dataTransfer.dropEffect = 'copy';
             }
         }
     }, false);

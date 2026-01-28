@@ -749,9 +749,8 @@ fn extract_pasteboard_content(pasteboard: &NSPasteboard) -> Option<DragContentDa
             if !tiddler_str.is_empty() {
                 eprintln!("[TiddlyDesktop] macOS: Got tiddler data!");
                 types.push("text/vnd.tiddler".to_string());
-                data.insert("text/vnd.tiddler".to_string(), tiddler_str.clone());
-                types.push("text/plain".to_string());
-                data.insert("text/plain".to_string(), tiddler_str);
+                data.insert("text/vnd.tiddler".to_string(), tiddler_str);
+                // Don't also add as text/plain - that would cause duplicate imports
             }
         }
     }
@@ -780,19 +779,20 @@ fn extract_pasteboard_content(pasteboard: &NSPasteboard) -> Option<DragContentDa
                 eprintln!("[TiddlyDesktop] macOS: Detected tiddler JSON in plain text!");
                 types.push("text/vnd.tiddler".to_string());
                 data.insert("text/vnd.tiddler".to_string(), text_str.clone());
-            }
+                // Don't also add as text/plain - that would cause duplicate imports
+            } else {
+                types.push("text/plain".to_string());
+                data.insert("text/plain".to_string(), text_str.clone());
 
-            types.push("text/plain".to_string());
-            data.insert("text/plain".to_string(), text_str.clone());
-
-            // Check if it's a URL
-            if text_str.starts_with("http://") || text_str.starts_with("https://") {
-                // Security: Block dangerous URL schemes
-                if !is_dangerous_url(&text_str) {
-                    types.push("text/uri-list".to_string());
-                    data.insert("text/uri-list".to_string(), text_str.clone());
-                    types.push("URL".to_string());
-                    data.insert("URL".to_string(), text_str);
+                // Check if it's a URL
+                if text_str.starts_with("http://") || text_str.starts_with("https://") {
+                    // Security: Block dangerous URL schemes
+                    if !is_dangerous_url(&text_str) {
+                        types.push("text/uri-list".to_string());
+                        data.insert("text/uri-list".to_string(), text_str.clone());
+                        types.push("URL".to_string());
+                        data.insert("URL".to_string(), text_str);
+                    }
                 }
             }
         }

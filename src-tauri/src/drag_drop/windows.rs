@@ -748,11 +748,12 @@ impl DropTargetImpl {
             if looks_like_tiddler_json && !data.contains_key("text/vnd.tiddler") {
                 eprintln!("[TiddlyDesktop] Windows: Detected tiddler JSON in plain text!");
                 types.push("text/vnd.tiddler".to_string());
-                data.insert("text/vnd.tiddler".to_string(), text.clone());
+                data.insert("text/vnd.tiddler".to_string(), text);
+                // Don't also add as text/plain - that would cause duplicate imports
+            } else {
+                types.push("text/plain".to_string());
+                data.insert("text/plain".to_string(), text);
             }
-
-            types.push("text/plain".to_string());
-            data.insert("text/plain".to_string(), text);
         }
 
         // 6. Text (CF_TEXT fallback)
@@ -765,11 +766,12 @@ impl DropTargetImpl {
             if looks_like_tiddler_json && !data.contains_key("text/vnd.tiddler") {
                 eprintln!("[TiddlyDesktop] Windows: Detected tiddler JSON in ANSI text!");
                 types.push("text/vnd.tiddler".to_string());
-                data.insert("text/vnd.tiddler".to_string(), text.clone());
+                data.insert("text/vnd.tiddler".to_string(), text);
+                // Don't also add as Text - that would cause duplicate imports
+            } else {
+                types.push("Text".to_string());
+                data.insert("Text".to_string(), text);
             }
-
-            types.push("Text".to_string());
-            data.insert("Text".to_string(), text);
         }
 
         // 7. text/uri-list

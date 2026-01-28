@@ -34,6 +34,7 @@ use windows::Win32::System::Ole::{
     IDropTarget, OleInitialize, RegisterDragDrop, RevokeDragDrop, DROPEFFECT, DROPEFFECT_COPY,
     DROPEFFECT_LINK, DROPEFFECT_MOVE, DROPEFFECT_NONE,
 };
+use windows::Win32::System::SystemServices::MODIFIERKEYS_FLAGS;
 use windows::Win32::UI::Shell::{DragQueryFileW, HDROP};
 use windows::Win32::UI::WindowsAndMessaging::{EnumChildWindows, GetClassNameW, GetPropW};
 
@@ -494,9 +495,9 @@ impl DropTargetImpl {
                 eprintln!("[TiddlyDesktop] Windows IDropTarget::Drop - calling original IDropTarget");
                 let result = original.Drop(
                     std::mem::transmute(p_data_obj),
-                    _grf_key_state,
+                    MODIFIERKEYS_FLAGS(_grf_key_state),
                     pt,
-                    pdw_effect
+                    pdw_effect as *mut DROPEFFECT
                 );
                 result.is_ok()
             } else {
@@ -2265,7 +2266,7 @@ pub fn setup_drag_handlers(window: &WebviewWindow) {
                         // The property value is a pointer to IUnknown, we need to QueryInterface for IDropTarget
                         let unknown_ptr = prop.0 as *mut std::ffi::c_void;
                         // Cast to IUnknown and QueryInterface
-                        let unknown: &windows::Win32::System::Com::IUnknown = std::mem::transmute(&unknown_ptr);
+                        let unknown: &windows::core::IUnknown = std::mem::transmute(&unknown_ptr);
                         match unknown.cast::<IDropTarget>() {
                             Ok(dt) => {
                                 eprintln!("[TiddlyDesktop] Windows: Got original IDropTarget from OleDropTargetInterface property");

@@ -10,7 +10,7 @@
     "withGlobalTauri": true,
     "windows": [],
     "security": {
-      "csp": "default-src 'self' wikifile: http://127.0.0.1:*; script-src 'self' 'unsafe-inline' 'unsafe-eval' wikifile: http://127.0.0.1:*; style-src 'self' 'unsafe-inline' wikifile: http://127.0.0.1:*; img-src 'self' data: blob: wikifile: http://127.0.0.1:* https:; connect-src 'self' wikifile: http://127.0.0.1:* https:; font-src 'self' data: wikifile:; media-src 'self' data: blob: wikifile:; frame-src 'none'; object-src 'none'; base-uri 'self'",
+      "csp": "default-src 'self' wikifile: http://127.0.0.1:*; script-src 'self' 'unsafe-inline' 'unsafe-eval' wikifile: http://127.0.0.1:*; style-src 'self' 'unsafe-inline' wikifile: http://127.0.0.1:*; img-src 'self' data: blob: wikifile: http://127.0.0.1:* https:; connect-src 'self' wikifile: http://127.0.0.1:* https:; font-src 'self' data: wikifile:; media-src 'self' data: blob: wikifile: https:; frame-src 'self' wikifile: https:; object-src 'self' wikifile:; base-uri 'self'",
       "assetProtocol": {
         "enable": true,
         "scope": ["**/*"]

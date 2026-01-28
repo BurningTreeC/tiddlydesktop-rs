@@ -1561,8 +1561,22 @@ fn handle_drag_data_received(
                             s.detected_cross_wiki_drag = true;
 
                             // Extract and decode the tiddler JSON from the data: URI
-                            let encoded = &first_line["data:text/vnd.tiddler,".len()..];
-                            if let Ok(tiddler_json) = urlencoding::decode(encoded) {
+                            let raw_data = &first_line["data:text/vnd.tiddler,".len()..];
+                            // Try URL-decoding first, fall back to raw data if it looks like JSON
+                            let tiddler_json = urlencoding::decode(raw_data)
+                                .map(|s| s.into_owned())
+                                .unwrap_or_else(|_| {
+                                    // If decode fails, check if it's already raw JSON (e.g., from Firefox)
+                                    let trimmed = raw_data.trim();
+                                    if trimmed.starts_with('[') || trimmed.starts_with('{') {
+                                        eprintln!("[TiddlyDesktop] Linux: Using raw tiddler data (not URL-encoded)");
+                                        raw_data.to_string()
+                                    } else {
+                                        String::new()
+                                    }
+                                });
+
+                            if !tiddler_json.is_empty() {
                                 eprintln!("[TiddlyDesktop] Linux: Extracted tiddler JSON for native drop: {} chars", tiddler_json.len());
 
                                 // Emit the tiddler data to JavaScript BEFORE the drop occurs
@@ -1864,9 +1878,23 @@ fn handle_drag_data_received(
             eprintln!("[TiddlyDesktop] Linux: Detected cross-wiki tiddler drop via data: URI!");
 
             // Extract the tiddler JSON from the data URI
-            if let Some(encoded) = first_line.strip_prefix("data:text/vnd.tiddler,") {
-                if let Ok(decoded) = urlencoding::decode(encoded) {
-                    tiddler_json = Some(decoded.into_owned());
+            if let Some(raw_data) = first_line.strip_prefix("data:text/vnd.tiddler,") {
+                // Try URL-decoding first, fall back to raw data if it looks like JSON
+                let decoded = urlencoding::decode(raw_data)
+                    .map(|s| s.into_owned())
+                    .unwrap_or_else(|_| {
+                        // If decode fails, check if it's already raw JSON (e.g., from Firefox)
+                        let trimmed = raw_data.trim();
+                        if trimmed.starts_with('[') || trimmed.starts_with('{') {
+                            eprintln!("[TiddlyDesktop] Linux: Using raw tiddler data (not URL-encoded)");
+                            raw_data.to_string()
+                        } else {
+                            String::new()
+                        }
+                    });
+
+                if !decoded.is_empty() {
+                    tiddler_json = Some(decoded);
                     eprintln!("[TiddlyDesktop] Linux: Extracted tiddler JSON from data: URI");
                 }
             }

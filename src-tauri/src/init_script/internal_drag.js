@@ -1324,11 +1324,20 @@
             for (var i = 0; i < paths.length; i++) {
                 var path = paths[i];
                 if (path.startsWith('data:text/vnd.tiddler,')) {
+                    var rawData = path.substring('data:text/vnd.tiddler,'.length);
                     try {
-                        tiddlerData = decodeURIComponent(path.substring('data:text/vnd.tiddler,'.length));
-                        log('Extracted tiddler data from tauri://drag-drop');
+                        // First try to decode as URL-encoded data
+                        tiddlerData = decodeURIComponent(rawData);
+                        log('Extracted tiddler data from tauri://drag-drop (decoded)');
                     } catch (e) {
-                        log('Failed to decode tiddler data: ' + e);
+                        // If decoding fails, the data might already be raw JSON (e.g., from Firefox)
+                        // Try to use it directly if it looks like valid JSON
+                        if (rawData.trim().startsWith('[') || rawData.trim().startsWith('{')) {
+                            tiddlerData = rawData;
+                            log('Using raw tiddler data from tauri://drag-drop (not URL-encoded)');
+                        } else {
+                            log('Failed to decode tiddler data: ' + e);
+                        }
                     }
                 } else if (!path.startsWith('data:') && !path.startsWith('/')) {
                     // Plain text

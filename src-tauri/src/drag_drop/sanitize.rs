@@ -5,6 +5,8 @@
 //! must be sanitized before being passed to JavaScript/TiddlyWiki.
 
 use regex::Regex;
+#[cfg(target_os = "windows")]
+use std::path::Path;
 use std::path::PathBuf;
 use std::sync::LazyLock;
 
@@ -284,6 +286,175 @@ pub fn sanitize_file_paths(paths: Vec<String>) -> Vec<String> {
         .collect()
 }
 
+/// Check if a path is within the current user's accessible directories
+/// This is more restrictive than just blocking system directories - it only allows:
+/// 1. The current user's home directory
+/// 2. Shared temporary directories (/tmp)
+/// 3. Mounted volumes (for external drives)
+pub fn is_user_accessible_path(path: &std::path::Path) -> bool {
+    // Get the current user's home directory
+    let home_dir = match dirs::home_dir() {
+        Some(dir) => dir,
+        None => {
+            eprintln!("[TiddlyDesktop] Security: Could not determine home directory");
+            return false;
+        }
+    };
+
+    let path_str = path.to_string_lossy();
+
+    #[cfg(target_os = "windows")]
+    {
+        let path_lower = path_str.to_lowercase();
+        let home_lower = home_dir.to_string_lossy().to_lowercase();
+
+        // Allow: current user's home directory
+        if path_lower.starts_with(&home_lower) {
+            return true;
+        }
+
+        // Allow: other drives (D:\, E:\, etc.) for external storage
+        // But not C:\Windows, C:\Program Files, etc.
+        if path_lower.len() >= 3 {
+            let drive_letter = &path_lower[0..1];
+            if drive_letter != "c" && path_lower.chars().nth(1) == Some(':') {
+                return true;
+            }
+        }
+
+        // Allow: user's temp directory
+        if let Some(temp_dir) = dirs::cache_dir() {
+            if path_lower.starts_with(&temp_dir.to_string_lossy().to_lowercase()) {
+                return true;
+            }
+        }
+
+        false
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        // Allow: current user's home directory
+        if path.starts_with(&home_dir) {
+            return true;
+        }
+
+        // Allow: /tmp and /private/tmp for temporary files
+        if path_str.starts_with("/tmp") || path_str.starts_with("/private/tmp") {
+            return true;
+        }
+
+        // Allow: /Volumes for external drives and mounted volumes
+        if path_str.starts_with("/Volumes") {
+            return true;
+        }
+
+        // Allow: /Applications for app resources (read-only typically)
+        if path_str.starts_with("/Applications") {
+            return true;
+        }
+
+        false
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        // Allow: current user's home directory
+        if path.starts_with(&home_dir) {
+            return true;
+        }
+
+        // Allow: /tmp for temporary files
+        if path_str.starts_with("/tmp") {
+            return true;
+        }
+
+        // Allow: /media and /mnt for mounted drives
+        if path_str.starts_with("/media") || path_str.starts_with("/mnt") {
+            return true;
+        }
+
+        // Allow: /run/media for user-mounted drives (common on modern distros)
+        if path_str.starts_with("/run/media") {
+            return true;
+        }
+
+        false
+    }
+
+    #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
+    {
+        // For unknown platforms, only allow home directory
+        path.starts_with(&home_dir)
+    }
+}
+
+/// Validate a file path for reading user files
+/// Ensures path is safe and within user-accessible directories
+pub fn validate_user_file_path(path: &str) -> Result<PathBuf, String> {
+    if path.is_empty() {
+        return Err("Path is empty".to_string());
+    }
+
+    // Check for path traversal and other issues
+    if validate_file_path(path).is_none() {
+        return Err("Path contains invalid sequences".to_string());
+    }
+
+    let path_buf = PathBuf::from(path);
+    if !path_buf.is_absolute() {
+        return Err("Path must be absolute".to_string());
+    }
+
+    // Canonicalize to resolve symlinks
+    let canonical = dunce::canonicalize(&path_buf)
+        .map_err(|e| format!("Failed to resolve path: {}", e))?;
+
+    // Must be a file, not a directory
+    if canonical.is_dir() {
+        return Err("Path is a directory, not a file".to_string());
+    }
+
+    // Check it's in a user-accessible location
+    if !is_user_accessible_path(&canonical) {
+        eprintln!("[TiddlyDesktop] Security: Blocked access to system path: {}", canonical.display());
+        return Err("Access to system directories is not allowed".to_string());
+    }
+
+    Ok(canonical)
+}
+
+/// Validate a directory path for user access
+/// Ensures path is safe and within user-accessible directories
+pub fn validate_user_directory_path(path: &str) -> Result<PathBuf, String> {
+    if path.is_empty() {
+        return Err("Path is empty".to_string());
+    }
+
+    if validate_file_path(path).is_none() {
+        return Err("Path contains invalid sequences".to_string());
+    }
+
+    let path_buf = PathBuf::from(path);
+    if !path_buf.is_absolute() {
+        return Err("Path must be absolute".to_string());
+    }
+
+    let canonical = dunce::canonicalize(&path_buf)
+        .map_err(|e| format!("Failed to resolve path: {}", e))?;
+
+    if !canonical.is_dir() {
+        return Err("Path is not a directory".to_string());
+    }
+
+    if !is_user_accessible_path(&canonical) {
+        eprintln!("[TiddlyDesktop] Security: Blocked access to system path: {}", canonical.display());
+        return Err("Access to system directories is not allowed".to_string());
+    }
+
+    Ok(canonical)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -351,5 +522,82 @@ mod tests {
         // Percent-encoded traversal
         assert!(validate_file_path("/home/user/%2e%2e/etc/passwd").is_none());
         assert!(validate_file_path("/path/%2E%2E/secret").is_none());
+    }
+
+    #[test]
+    fn test_user_accessible_path() {
+        use std::path::Path;
+
+        // Get current user's home for testing
+        let home = dirs::home_dir().expect("Should have home dir");
+        let home_str = home.to_string_lossy();
+
+        #[cfg(target_os = "linux")]
+        {
+            // Current user's home directory should be accessible
+            assert!(is_user_accessible_path(&home));
+            assert!(is_user_accessible_path(Path::new(&format!("{}/Documents", home_str))));
+            assert!(is_user_accessible_path(Path::new(&format!("{}/.config", home_str))));
+
+            // Temp directory should be accessible
+            assert!(is_user_accessible_path(Path::new("/tmp/file.txt")));
+
+            // USB/mounted drives should be accessible
+            assert!(is_user_accessible_path(Path::new("/media/user/USB")));
+            assert!(is_user_accessible_path(Path::new("/mnt/external")));
+            assert!(is_user_accessible_path(Path::new("/run/media/user/USB")));
+
+            // Other users' home directories should NOT be accessible
+            assert!(!is_user_accessible_path(Path::new("/home/otheruser/Documents")));
+
+            // System directories should be blocked
+            assert!(!is_user_accessible_path(Path::new("/etc/passwd")));
+            assert!(!is_user_accessible_path(Path::new("/usr/bin/bash")));
+            assert!(!is_user_accessible_path(Path::new("/var/log/syslog")));
+            assert!(!is_user_accessible_path(Path::new("/root/.bashrc")));
+            assert!(!is_user_accessible_path(Path::new("/opt/app")));
+        }
+
+        #[cfg(target_os = "macos")]
+        {
+            // Current user's home directory should be accessible
+            assert!(is_user_accessible_path(&home));
+            assert!(is_user_accessible_path(Path::new(&format!("{}/Documents", home_str))));
+
+            // Mounted volumes (USB drives) should be accessible
+            assert!(is_user_accessible_path(Path::new("/Volumes/USB")));
+
+            // Applications should be accessible (for resources)
+            assert!(is_user_accessible_path(Path::new("/Applications/App.app")));
+
+            // Temp should be accessible
+            assert!(is_user_accessible_path(Path::new("/tmp/file.txt")));
+
+            // Other users' home directories should NOT be accessible
+            assert!(!is_user_accessible_path(Path::new("/Users/otheruser/Documents")));
+
+            // System directories should be blocked
+            assert!(!is_user_accessible_path(Path::new("/etc/passwd")));
+            assert!(!is_user_accessible_path(Path::new("/System/Library")));
+            assert!(!is_user_accessible_path(Path::new("/usr/bin/bash")));
+        }
+
+        #[cfg(target_os = "windows")]
+        {
+            // Current user's home directory should be accessible
+            assert!(is_user_accessible_path(&home));
+
+            // Other drives (USB, etc.) should be accessible
+            assert!(is_user_accessible_path(Path::new("D:\\Projects")));
+            assert!(is_user_accessible_path(Path::new("E:\\USB_Drive")));
+
+            // Other users' directories on C: should NOT be accessible
+            // (unless it's under current user's home)
+            assert!(!is_user_accessible_path(Path::new("C:\\Users\\otheruser\\Documents")));
+
+            // System directories should be blocked
+            assert!(!is_user_accessible_path(Path::new("C:\\Windows\\System32")));
+            assert!(!is_user_accessible_path(Path::new("C:\\Program Files\\App")));
+        }
     }
 }

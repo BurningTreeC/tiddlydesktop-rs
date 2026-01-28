@@ -2631,26 +2631,34 @@ async fn convert_wiki(app: tauri::AppHandle, source_path: String, dest_path: Str
 #[tauri::command]
 fn check_folder_status(path: String) -> Result<FolderStatus, String> {
     let path_buf = PathBuf::from(&path);
+    let name = path_buf.file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("Unknown")
+        .to_string();
 
+    // If path doesn't exist yet, return empty status (for new folder creation)
     if !path_buf.exists() {
+        // Still validate the path format
+        if drag_drop::sanitize::validate_file_path(&path).is_none() {
+            return Err("Invalid path".to_string());
+        }
+        if !path_buf.is_absolute() {
+            return Err("Path must be absolute".to_string());
+        }
         return Ok(FolderStatus {
             is_wiki: false,
             is_empty: true,
             has_files: false,
             path: path.clone(),
-            name: path_buf.file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or("Unknown")
-                .to_string(),
+            name,
         });
     }
 
-    if !path_buf.is_dir() {
-        return Err("Path is not a directory".to_string());
-    }
+    // Security: Validate path is a user-accessible directory
+    let validated_path = drag_drop::sanitize::validate_user_directory_path(&path)?;
 
-    let is_wiki = path_buf.join("tiddlywiki.info").exists();
-    let has_files = std::fs::read_dir(&path_buf)
+    let is_wiki = validated_path.join("tiddlywiki.info").exists();
+    let has_files = std::fs::read_dir(&validated_path)
         .map(|entries| entries.count() > 0)
         .unwrap_or(false);
 
@@ -2659,19 +2667,32 @@ fn check_folder_status(path: String) -> Result<FolderStatus, String> {
         is_empty: !has_files,
         has_files,
         path: path.clone(),
-        name: path_buf.file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("Unknown")
-            .to_string(),
+        name,
     })
 }
 
 /// Reveal file in system file manager
 #[tauri::command]
 async fn reveal_in_folder(path: String) -> Result<(), String> {
+    // Security: Validate path doesn't contain traversal sequences
+    if drag_drop::sanitize::validate_file_path(&path).is_none() {
+        return Err("Invalid path".to_string());
+    }
+
+    let path_buf = PathBuf::from(&path);
+
+    // Path must be absolute
+    if !path_buf.is_absolute() {
+        return Err("Path must be absolute".to_string());
+    }
+
+    // Security: Block access to system directories
+    if !drag_drop::sanitize::is_user_accessible_path(&path_buf) {
+        return Err("Access to system directories is not allowed".to_string());
+    }
+
     #[cfg(target_os = "linux")]
     {
-        let path_buf = std::path::PathBuf::from(&path);
         let folder = path_buf.parent().unwrap_or(&path_buf);
         std::process::Command::new("xdg-open")
             .arg(folder)
@@ -2704,15 +2725,16 @@ async fn reveal_in_folder(path: String) -> Result<(), String> {
 /// Used by wiki folders to support _canonical_uri with absolute paths
 #[tauri::command]
 async fn read_file_as_data_uri(path: String) -> Result<String, String> {
-    let path_buf = PathBuf::from(&path);
+    // Security: Validate path is safe and within user directories
+    let validated_path = drag_drop::sanitize::validate_user_file_path(&path)?;
 
     // Read the file
-    let data = tokio::fs::read(&path_buf)
+    let data = tokio::fs::read(&validated_path)
         .await
         .map_err(|e| format!("Failed to read file {}: {}", path, e))?;
 
     // Get MIME type and encode as base64
-    let mime_type = utils::get_mime_type(&path_buf);
+    let mime_type = utils::get_mime_type(&validated_path);
 
     use base64::{engine::general_purpose::STANDARD, Engine};
     let base64_data = STANDARD.encode(&data);
@@ -2724,9 +2746,10 @@ async fn read_file_as_data_uri(path: String) -> Result<String, String> {
 /// Used for external attachments drag-drop support
 #[tauri::command]
 async fn read_file_as_binary(path: String) -> Result<Vec<u8>, String> {
-    let path_buf = PathBuf::from(&path);
+    // Security: Validate path is safe and within user directories
+    let validated_path = drag_drop::sanitize::validate_user_file_path(&path)?;
 
-    tokio::fs::read(&path_buf)
+    tokio::fs::read(&validated_path)
         .await
         .map_err(|e| format!("Failed to read file {}: {}", path, e))
 }

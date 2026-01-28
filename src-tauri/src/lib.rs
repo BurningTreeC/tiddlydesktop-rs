@@ -5142,6 +5142,8 @@ pub fn run() {
             wiki_storage::set_language,
             wiki_storage::has_custom_language,
             wiki_storage::get_system_language,
+            wiki_storage::get_palette,
+            wiki_storage::set_palette,
             open_auth_window,
             run_command,
             show_find_in_page,

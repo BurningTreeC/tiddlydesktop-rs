@@ -412,3 +412,22 @@ pub fn has_custom_language(app: tauri::AppHandle) -> bool {
 pub fn get_system_language() -> String {
     detect_system_language()
 }
+
+/// Get current palette preference
+#[tauri::command]
+pub fn get_palette(app: tauri::AppHandle) -> Option<String> {
+    load_app_settings(&app)
+        .map(|s| s.palette)
+        .unwrap_or(None)
+}
+
+/// Set palette preference (empty string = default)
+#[tauri::command]
+pub fn set_palette(app: tauri::AppHandle, palette: String) -> Result<(), String> {
+    eprintln!("[TiddlyDesktop] set_palette called with: '{}'", palette);
+    let mut settings = load_app_settings(&app)?;
+    settings.palette = if palette.is_empty() { None } else { Some(palette.clone()) };
+    save_app_settings(&app, &settings)?;
+    eprintln!("[TiddlyDesktop] Palette saved: {:?}", settings.palette);
+    Ok(())
+}

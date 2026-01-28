@@ -120,6 +120,9 @@ pub struct AppSettings {
     /// UI language code (e.g., "en-GB", "de-DE"). None = auto-detect from OS
     #[serde(default)]
     pub language: Option<String>,
+    /// Color palette for the landing page (e.g., "$:/palettes/Vanilla"). None = default
+    #[serde(default)]
+    pub palette: Option<String>,
 }
 
 /// Information about a TiddlyWiki edition

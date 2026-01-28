@@ -6,8 +6,8 @@ tags: $:/tags/Stylesheet
 	display: flex;
 	align-items: center;
 	padding: 12px 16px;
-	background: #f0f0f0;
-	border-bottom: 1px solid #ddd;
+	background: <<colour page-background>>;
+	border-bottom: 1px solid <<colour tab-border>>;
 	box-shadow: 0 2px 4px rgba(0,0,0,0.1);
 }
 
@@ -25,28 +25,27 @@ tags: $:/tags/Stylesheet
 	align-items: center;
 	gap: 6px;
 	padding: 6px 12px;
-	background: #fff;
-	border: 1px solid #ccc;
+	background: <<colour background>>;
+	border: 1px solid <<colour tab-border>>;
 	border-radius: 4px;
 	cursor: pointer;
 	font-size: 14px;
-	color: #333;
+	color: <<colour foreground>>;
 }
 
 .td-button:hover {
-	background: #e8e8e8;
-	border-color: #bbb;
+	background: <<colour tab-background>>;
+	border-color: <<colour muted-foreground>>;
 }
 
 .td-button-create-new {
-	background: #e8f4e8;
-	border-color: #a0d0a0;
-	color: #2d7a2d;
+	background: <<colour download-background>>;
+	border-color: <<colour download-background>>;
+	color: <<colour download-foreground>>;
 }
 
 .td-button-create-new:hover {
-	background: #d8ecd8;
-	border-color: #80c080;
+	filter: brightness(0.9);
 }
 
 .td-button svg {
@@ -59,10 +58,10 @@ tags: $:/tags/Stylesheet
 .td-drop-zone {
 	margin: 16px;
 	padding: 32px;
-	border: 2px dashed #ccc;
+	border: 2px dashed <<colour tab-border>>;
 	border-radius: 8px;
 	text-align: center;
-	color: #888;
+	color: <<colour muted-foreground>>;
 	transition: all 0.2s;
 }
 
@@ -76,17 +75,17 @@ tags: $:/tags/Stylesheet
 .td-drop-zone .td-drop-hint svg {
 	width: 24px;
 	height: 24px;
-	fill: #888;
+	fill: <<colour muted-foreground>>;
 }
 
 .td-drop-zone .td-drop-active {
-	color: #4a90d9;
+	color: <<colour primary>>;
 	font-weight: bold;
 }
 
 .td-drop-zone:has(.td-drop-active) {
-	border-color: #4a90d9;
-	background: rgba(74, 144, 217, 0.05);
+	border-color: <<colour primary>>;
+	background: <<colour message-background>>;
 }
 
 /* Wiki list */
@@ -102,8 +101,8 @@ tags: $:/tags/Stylesheet
 	align-items: flex-start;
 	margin-bottom: 12px;
 	padding: 12px;
-	background: #fff;
-	border: 1px solid #e0e0e0;
+	background: <<colour tiddler-background>>;
+	border: 1px solid <<colour tiddler-border>>;
 	border-left: 4px solid transparent;
 	border-radius: 4px;
 	box-shadow: 1px 1px 4px rgba(0,0,0,0.1);
@@ -111,7 +110,7 @@ tags: $:/tags/Stylesheet
 }
 
 .td-wikilist-item:hover {
-	border-left-color: #4a90d9;
+	border-left-color: <<colour primary>>;
 	box-shadow: 2px 2px 8px rgba(0,0,0,0.15);
 }
 
@@ -154,7 +153,7 @@ tags: $:/tags/Stylesheet
 .td-wiki-title {
 	font-weight: 600;
 	font-size: 15px;
-	color: #333;
+	color: <<colour foreground>>;
 	margin-bottom: 4px;
 	display: flex;
 	align-items: center;
@@ -164,12 +163,12 @@ tags: $:/tags/Stylesheet
 .td-wiki-title svg {
 	width: 16px;
 	height: 16px;
-	fill: #666;
+	fill: <<colour muted-foreground>>;
 }
 
 .td-wiki-url {
 	font-size: 12px;
-	color: #888;
+	color: <<colour muted-foreground>>;
 	white-space: nowrap;
 	overflow: hidden;
 	text-overflow: ellipsis;
@@ -187,53 +186,53 @@ tags: $:/tags/Stylesheet
 }
 
 .td-button-open {
-	background: #e8f4e8;
-	border-color: #a0d0a0;
-	color: #2d7a2d;
+	background: <<colour download-background>>;
+	border-color: <<colour download-background>>;
+	color: <<colour download-foreground>>;
 }
 
 .td-button-open:hover {
-	background: #d0e8d0;
+	filter: brightness(0.9);
 }
 
 .td-button-reveal {
-	background: #e8f0f8;
-	border-color: #a0c0e0;
-	color: #2d5a8a;
+	background: <<colour message-background>>;
+	border-color: <<colour message-border>>;
+	color: <<colour message-foreground>>;
 }
 
 .td-button-reveal:hover {
-	background: #d0e0f0;
+	filter: brightness(0.95);
 }
 
 .td-button-remove {
-	background: #f8e8e8;
-	border-color: #e0a0a0;
-	color: #8a2d2d;
+	background: <<colour alert-background>>;
+	border-color: <<colour alert-border>>;
+	color: <<colour alert-highlight>>;
 }
 
 .td-button-remove:hover {
-	background: #f0d0d0;
+	filter: brightness(0.95);
 }
 
 .td-button-backup.td-backup-on {
-	background: #f0f8e8;
-	border-color: #b0d0a0;
-	color: #4a7a2d;
+	background: <<colour diff-insert-background>>;
+	border-color: <<colour download-background>>;
+	color: <<colour foreground>>;
 }
 
 .td-button-backup.td-backup-on:hover {
-	background: #e0f0d8;
+	filter: brightness(0.95);
 }
 
 .td-button-backup.td-backup-off {
-	background: #f8f0e8;
-	border-color: #e0c0a0;
-	color: #8a6a2d;
+	background: <<colour notification-background>>;
+	border-color: <<colour notification-border>>;
+	color: <<colour foreground>>;
 }
 
 .td-button-backup.td-backup-off:hover {
-	background: #f0e8d8;
+	filter: brightness(0.95);
 }
 
 /* Backup directory row */
@@ -243,17 +242,17 @@ tags: $:/tags/Stylesheet
 	gap: 8px;
 	margin-top: 8px;
 	padding-top: 8px;
-	border-top: 1px solid #eee;
+	border-top: 1px solid <<colour tab-divider>>;
 	font-size: 12px;
 }
 
 .td-backup-dir-label {
-	color: #666;
+	color: <<colour muted-foreground>>;
 	white-space: nowrap;
 }
 
 .td-backup-dir-path {
-	color: #444;
+	color: <<colour foreground>>;
 	flex: 1;
 	min-width: 0;
 	overflow: hidden;
@@ -262,39 +261,39 @@ tags: $:/tags/Stylesheet
 }
 
 .td-backup-dir-path.td-backup-dir-default {
-	color: #888;
+	color: <<colour muted-foreground>>;
 	font-style: italic;
 }
 
 .td-button-backup-dir {
-	background: #f0f4f8;
-	border-color: #c0d0e0;
-	color: #4a6a8a;
+	background: <<colour message-background>>;
+	border-color: <<colour message-border>>;
+	color: <<colour message-foreground>>;
 	padding: 2px 8px !important;
 	font-size: 11px !important;
 }
 
 .td-button-backup-dir:hover {
-	background: #e0ecf4;
+	filter: brightness(0.95);
 }
 
 .td-button-backup-dir-clear {
-	background: #f8f4f0;
-	border-color: #e0d0c0;
-	color: #8a6a4a;
+	background: <<colour notification-background>>;
+	border-color: <<colour notification-border>>;
+	color: <<colour foreground>>;
 	padding: 2px 8px !important;
 	font-size: 11px !important;
 }
 
 .td-button-backup-dir-clear:hover {
-	background: #f0ece4;
+	filter: brightness(0.95);
 }
 
 /* Empty message */
 .td-empty-message {
 	text-align: center;
 	padding: 48px 24px;
-	color: #888;
+	color: <<colour muted-foreground>>;
 }
 
 .td-empty-message p {
@@ -328,7 +327,7 @@ html, body {
 }
 
 body {
-	background: #f5f5f5;
+	background: <<colour page-background>>;
 	display: flex;
 	flex-direction: column;
 }
@@ -396,7 +395,7 @@ body {
 }
 
 .td-modal {
-	background: white;
+	background: <<colour modal-background>>;
 	border-radius: 8px;
 	box-shadow: 0 4px 24px rgba(0, 0, 0, 0.3);
 	max-width: 700px;
@@ -409,19 +408,19 @@ body {
 
 .td-modal-header {
 	padding: 16px 20px;
-	border-bottom: 1px solid #e0e0e0;
-	background: #f8f8f8;
+	border-bottom: 1px solid <<colour modal-header-border>>;
+	background: <<colour modal-footer-background>>;
 }
 
 .td-modal-header h2 {
 	margin: 0 0 4px 0;
 	font-size: 20px;
-	color: #333;
+	color: <<colour foreground>>;
 }
 
 .td-modal-subtitle {
 	font-size: 13px;
-	color: #666;
+	color: <<colour muted-foreground>>;
 }
 
 .td-modal-body {
@@ -432,8 +431,8 @@ body {
 
 .td-modal-footer {
 	padding: 12px 20px;
-	border-top: 1px solid #e0e0e0;
-	background: #f8f8f8;
+	border-top: 1px solid <<colour modal-footer-border>>;
+	background: <<colour modal-footer-background>>;
 	display: flex;
 	justify-content: flex-end;
 	gap: 10px;
@@ -446,12 +445,12 @@ body {
 .td-section h3 {
 	margin: 0 0 12px 0;
 	font-size: 15px;
-	color: #333;
+	color: <<colour foreground>>;
 }
 
 .td-optional {
 	font-weight: normal;
-	color: #888;
+	color: <<colour muted-foreground>>;
 	font-size: 12px;
 }
 
@@ -464,8 +463,8 @@ body {
 
 .td-edition-btn {
 	padding: 12px;
-	background: #fff;
-	border: 2px solid #e0e0e0;
+	background: <<colour background>>;
+	border: 2px solid <<colour tab-border>>;
 	border-radius: 6px;
 	cursor: pointer;
 	text-align: left;
@@ -473,26 +472,26 @@ body {
 }
 
 .td-edition-btn:hover {
-	border-color: #4a90d9;
-	background: #f8fafc;
+	border-color: <<colour primary>>;
+	background: <<colour message-background>>;
 }
 
 .td-edition-btn.td-edition-selected {
-	border-color: #4a90d9;
-	background: #e8f4ff;
-	box-shadow: 0 0 0 1px #4a90d9;
+	border-color: <<colour primary>>;
+	background: <<colour message-background>>;
+	box-shadow: 0 0 0 1px <<colour primary>>;
 }
 
 .td-edition-name {
 	font-weight: 600;
 	font-size: 14px;
-	color: #333;
+	color: <<colour foreground>>;
 	margin-bottom: 4px;
 }
 
 .td-edition-desc {
 	font-size: 12px;
-	color: #666;
+	color: <<colour muted-foreground>>;
 	line-height: 1.3;
 }
 
@@ -500,10 +499,10 @@ body {
 .td-plugin-categories {
 	max-height: 300px;
 	overflow-y: auto;
-	border: 1px solid #e0e0e0;
+	border: 1px solid <<colour tab-border>>;
 	border-radius: 6px;
 	padding: 12px;
-	background: #fafafa;
+	background: <<colour page-background>>;
 }
 
 .td-plugin-category {
@@ -517,7 +516,7 @@ body {
 .td-plugin-category h4 {
 	margin: 0 0 8px 0;
 	font-size: 13px;
-	color: #666;
+	color: <<colour muted-foreground>>;
 	text-transform: uppercase;
 	letter-spacing: 0.5px;
 }
@@ -533,8 +532,8 @@ body {
 	align-items: center;
 	gap: 8px;
 	padding: 8px 12px;
-	background: #fff;
-	border: 2px solid #e0e0e0;
+	background: <<colour background>>;
+	border: 2px solid <<colour tab-border>>;
 	border-radius: 4px;
 	cursor: pointer;
 	text-align: left;
@@ -545,13 +544,13 @@ body {
 }
 
 .td-plugin-item:hover {
-	border-color: #4a90d9;
-	background: #f8fafc;
+	border-color: <<colour primary>>;
+	background: <<colour message-background>>;
 }
 
 .td-plugin-item.td-plugin-selected {
-	border-color: #4a90d9;
-	background: #e8f4ff;
+	border-color: <<colour primary>>;
+	background: <<colour message-background>>;
 }
 
 .td-check {
@@ -566,11 +565,11 @@ body {
 .td-check svg {
 	width: 16px;
 	height: 16px;
-	fill: #4a90d9;
+	fill: <<colour primary>>;
 }
 
 .td-check.td-unchecked {
-	border: 2px solid #ccc;
+	border: 2px solid <<colour muted-foreground>>;
 	border-radius: 3px;
 	width: 16px;
 	height: 16px;
@@ -603,33 +602,33 @@ body {
 
 .td-plugin-name {
 	font-weight: 500;
-	color: #333;
+	color: <<colour foreground>>;
 }
 
 .td-plugin-desc {
-	color: #888;
+	color: <<colour muted-foreground>>;
 	font-size: 12px;
 }
 
 /* Button variants */
 .td-button-cancel {
-	background: #f0f0f0;
-	border-color: #ccc;
-	color: #666;
+	background: <<colour page-background>>;
+	border-color: <<colour tab-border>>;
+	color: <<colour muted-foreground>>;
 }
 
 .td-button-cancel:hover {
-	background: #e0e0e0;
+	background: <<colour tab-background>>;
 }
 
 .td-button-create {
-	background: #4a90d9;
-	border-color: #3a7fc8;
-	color: white;
+	background: <<colour primary>>;
+	border-color: <<colour primary>>;
+	color: <<colour background>>;
 }
 
 .td-button-create:hover {
-	background: #3a7fc8;
+	filter: brightness(0.9);
 }
 
 /* Loading state */
@@ -641,8 +640,8 @@ body {
 .td-loading-spinner {
 	width: 40px;
 	height: 40px;
-	border: 3px solid #e0e0e0;
-	border-top-color: #4a90d9;
+	border: 3px solid <<colour tab-border>>;
+	border-top-color: <<colour primary>>;
 	border-radius: 50%;
 	margin: 0 auto 16px;
 	animation: td-spin 0.8s linear infinite;
@@ -653,7 +652,7 @@ body {
 }
 
 .td-loading-text {
-	color: #666;
+	color: <<colour muted-foreground>>;
 	font-size: 14px;
 }
 
@@ -670,33 +669,31 @@ body {
 }
 
 .td-button-manage-groups {
-	background: #f0f0f8;
-	border-color: #c0c0d0;
-	color: #5a5a7a;
+	background: <<colour tag-background>>;
+	border-color: <<colour tag-background>>;
+	color: <<colour tag-foreground>>;
 }
 
 .td-button-manage-groups:hover {
-	background: #e0e0f0;
-	border-color: #a0a0c0;
+	filter: brightness(0.9);
 }
 
 /* Update available button */
 .td-button-update {
-	background: #4a90d9;
-	border-color: #3a7fc8;
-	color: white;
+	background: <<colour primary>>;
+	border-color: <<colour primary>>;
+	color: <<colour background>>;
 	text-decoration: none;
 	margin-right: 12px;
 }
 
 .td-button-update:hover {
-	background: #3a7fc8;
-	border-color: #2a6fb8;
-	color: white;
+	filter: brightness(0.9);
+	color: <<colour background>>;
 }
 
 .td-button-update:visited {
-	color: white;
+	color: <<colour background>>;
 }
 
 /* Group sections */
@@ -713,8 +710,8 @@ body {
 	align-items: center;
 	gap: 6px;
 	padding: 8px 12px;
-	background: #f8f8f8;
-	border: 1px solid #e0e0e0;
+	background: <<colour page-background>>;
+	border: 1px solid <<colour tab-border>>;
 	border-radius: 6px;
 	cursor: pointer;
 	width: 100%;
@@ -723,26 +720,26 @@ body {
 }
 
 .td-group-toggle:hover {
-	background: #f0f0f0;
-	border-color: #ccc;
+	background: <<colour tab-background>>;
+	border-color: <<colour muted-foreground>>;
 }
 
 .td-group-toggle svg {
 	width: 16px;
 	height: 16px;
-	fill: #666;
+	fill: <<colour muted-foreground>>;
 	flex-shrink: 0;
 }
 
 .td-group-name {
 	font-weight: 600;
 	font-size: 14px;
-	color: #333;
+	color: <<colour foreground>>;
 }
 
 .td-group-count {
 	font-size: 12px;
-	color: #888;
+	color: <<colour muted-foreground>>;
 	margin-left: 4px;
 }
 
@@ -753,14 +750,13 @@ body {
 
 /* Group button in wiki toolbar */
 .td-button-group {
-	background: #f8f4f0;
-	border-color: #d8d0c8;
-	color: #6a5a4a;
+	background: <<colour tag-background>>;
+	border-color: <<colour tag-background>>;
+	color: <<colour tag-foreground>>;
 }
 
 .td-button-group:hover {
-	background: #f0ece4;
-	border-color: #c8c0b8;
+	filter: brightness(0.9);
 }
 
 /* Group dropdown */
@@ -796,20 +792,60 @@ body {
 	border: none;
 	cursor: pointer;
 	font-size: 13px;
-	color: #333;
+	color: <<colour foreground>>;
 	transition: background 0.1s;
 }
 
 .td-language-option:hover {
-	background: #f0f0f0;
+	background: <<colour dropdown-tab-background>>;
 }
 
 .td-language-selected {
-	background: #e8f4fc;
+	background: <<colour message-background>>;
 	font-weight: 500;
 }
 
 .td-button-language {
+	gap: 4px;
+}
+
+/* Palette dropdown */
+.td-palette-dropdown {
+	min-width: 180px;
+}
+
+.td-palette-dropdown-content {
+	padding: 4px 0;
+}
+
+.td-palette-scrollable {
+	max-height: 400px;
+	overflow-y: auto;
+}
+
+.td-palette-option {
+	display: block;
+	width: 100%;
+	padding: 8px 12px;
+	text-align: left;
+	background: none;
+	border: none;
+	cursor: pointer;
+	font-size: 13px;
+	color: <<colour foreground>>;
+	transition: background 0.1s;
+}
+
+.td-palette-option:hover {
+	background: <<colour dropdown-tab-background>>;
+}
+
+.td-palette-selected {
+	background: <<colour message-background>>;
+	font-weight: 500;
+}
+
+.td-button-palette {
 	gap: 4px;
 }
 
@@ -822,33 +858,35 @@ body {
 	border: none;
 	cursor: pointer;
 	font-size: 13px;
-	color: #333;
+	color: <<colour foreground>>;
 	transition: background 0.1s;
 }
 
 .td-group-option:hover {
-	background: #f0f0f0;
+	background: <<colour dropdown-tab-background>>;
 }
 
 .td-group-new {
 	display: flex;
 	gap: 6px;
 	padding: 8px 12px;
-	border-top: 1px solid #e0e0e0;
+	border-top: 1px solid <<colour tab-border>>;
 	margin-top: 4px;
 }
 
 .td-group-input {
 	flex: 1;
 	padding: 6px 10px;
-	border: 1px solid #ccc;
+	border: 1px solid <<colour tab-border>>;
 	border-radius: 4px;
 	font-size: 13px;
+	background: <<colour background>>;
+	color: <<colour foreground>>;
 }
 
 .td-group-input:focus {
 	outline: none;
-	border-color: #4a90d9;
+	border-color: <<colour primary>>;
 	box-shadow: 0 0 0 2px rgba(74, 144, 217, 0.2);
 }
 
@@ -872,14 +910,14 @@ body {
 	background: none;
 	border: none;
 	cursor: pointer;
-	color: #666;
+	color: <<colour muted-foreground>>;
 	border-radius: 4px;
 	transition: all 0.15s;
 }
 
 .td-modal-close:hover {
-	background: #e0e0e0;
-	color: #333;
+	background: <<colour tab-background>>;
+	color: <<colour foreground>>;
 }
 
 .td-modal-close svg {
@@ -899,8 +937,8 @@ body {
 	align-items: center;
 	gap: 8px;
 	padding: 10px 12px;
-	background: #f8f8f8;
-	border: 1px solid #e0e0e0;
+	background: <<colour page-background>>;
+	border: 1px solid <<colour tab-border>>;
 	border-radius: 6px;
 	margin-bottom: 8px;
 }
@@ -912,13 +950,13 @@ body {
 .td-group-manager-name {
 	font-weight: 500;
 	font-size: 14px;
-	color: #333;
+	color: <<colour foreground>>;
 	flex: 1;
 }
 
 .td-group-manager-count {
 	font-size: 12px;
-	color: #888;
+	color: <<colour muted-foreground>>;
 	margin-left: auto;
 	margin-right: 8px;
 }
@@ -935,9 +973,20 @@ body {
 
 .td-no-groups {
 	text-align: center;
-	color: #888;
+	color: <<colour muted-foreground>>;
 	padding: 24px;
 	font-style: italic;
+}
+
+/* Convert button */
+.td-button-convert {
+	background: <<colour message-background>>;
+	border-color: <<colour message-border>>;
+	color: <<colour message-foreground>>;
+}
+
+.td-button-convert:hover {
+	filter: brightness(0.95);
 }
 
 /* Small window responsive styles */

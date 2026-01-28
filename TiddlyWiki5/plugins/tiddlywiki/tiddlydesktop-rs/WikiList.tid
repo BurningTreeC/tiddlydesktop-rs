@@ -263,6 +263,25 @@ title: $:/plugins/tiddlywiki/tiddlydesktop-rs/WikiList
 </div>
 </$reveal>
 </$let>
+<!-- Palette selector dropdown -->
+<$let palettePopupState=<<qualify "$:/state/palette-popup">> currentPalette={{$:/palette}}>
+<$button popup=<<palettePopupState>> class="tc-btn-invisible td-button td-button-palette" tooltip=<<td-lingo Labels/Palette>>>
+{{$:/core/images/palette}} <$text text={{{ [<currentPalette>removeprefix[$:/palettes/]] }}}/>
+</$button>
+<$reveal state=<<palettePopupState>> type="popup" position="below" animate="yes" class="tc-drop-down td-palette-dropdown tc-popup-keep">
+<div class="td-palette-dropdown-content td-palette-scrollable">
+<$list filter="[all[tiddlers+shadows]tag[$:/tags/Palette]sort[name]]" variable="paletteTitle">
+<$let paletteName={{{ [<paletteTitle>get[name]] }}} paletteDesc={{{ [<paletteTitle>get[description]] }}}>
+<$button class={{{ [<currentPalette>match<paletteTitle>then[tc-btn-invisible td-palette-option td-palette-selected]else[tc-btn-invisible td-palette-option]] }}} tooltip=<<paletteDesc>>>
+<$action-sendmessage $message="tm-tiddlydesktop-rs-set-palette" palette=<<paletteTitle>>/>
+<$action-deletetiddler $tiddler=<<palettePopupState>>/>
+<$text text=<<paletteName>>/>
+</$button>
+</$let>
+</$list>
+</div>
+</$reveal>
+</$let>
 <$button message="tm-tiddlydesktop-rs-manage-groups" class="td-button td-button-manage-groups" tooltip=<<td-lingo Tooltips/ManageGroups>>>
 {{$:/core/images/tag-button}} <<td-lingo Buttons/Groups>>
 </$button>

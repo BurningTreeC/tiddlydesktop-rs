@@ -5382,7 +5382,6 @@ pub fn run() {
                 }
             }
 
-            eprintln!("[TiddlyDesktop] Setup closure completed successfully");
             Ok(())
         })
         .register_uri_scheme_protocol("wikifile", |ctx, request| {
@@ -5460,11 +5459,6 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
         .run(|app, event| {
-            // Log first event to confirm event loop is running
-            static FIRST_EVENT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
-            if FIRST_EVENT.swap(false, std::sync::atomic::Ordering::SeqCst) {
-                eprintln!("[TiddlyDesktop] Event loop started, first event received");
-            }
             match event {
                 // Prevent app exit if wiki windows are still open
                 tauri::RunEvent::ExitRequested { api, .. } => {

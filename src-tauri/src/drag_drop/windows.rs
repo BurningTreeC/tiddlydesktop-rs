@@ -2266,70 +2266,99 @@ pub fn setup_drag_handlers(window: &WebviewWindow) {
                     "[TiddlyDesktop] Windows: Registering IDropTarget on HWND 0x{:x}",
                     target_hwnd.0 as isize
                 );
-                let _ = std::io::Write::flush(&mut std::io::stderr());
 
-                // Try to get the original IDropTarget before revoking
-                // This is stored by OLE as a window property "OleDropTargetInterface"
+                // Try to get the original IDropTarget before revoking.
+                // WebView2 registers its IDropTarget asynchronously, so we retry with delays.
+                // The property "OleDropTargetInterface" is set by OLE when RegisterDragDrop is called.
                 let original_drop_target: Option<IDropTarget> = {
-                    use std::mem::ManuallyDrop;
                     use windows::core::w;
-                    eprintln!("[TiddlyDesktop] Windows: DEBUG 1 - About to call GetPropW");
-                    let _ = std::io::Write::flush(&mut std::io::stderr());
-                    let prop = GetPropW(target_hwnd, w!("OleDropTargetInterface"));
-                    eprintln!("[TiddlyDesktop] Windows: DEBUG 2 - GetPropW returned, is_null={}", prop.0.is_null());
-                    let _ = std::io::Write::flush(&mut std::io::stderr());
-                    if !prop.0.is_null() {
-                        // The property value is a raw COM pointer owned by OLE
-                        // Use ManuallyDrop to borrow it without affecting reference count
-                        // (we don't want to Release OLE's reference when this goes out of scope)
-                        let raw_ptr = prop.0 as *mut std::ffi::c_void;
-                        eprintln!("[TiddlyDesktop] Windows: DEBUG 3 - raw_ptr={:?}", raw_ptr);
-                        eprintln!("[TiddlyDesktop] Windows: DEBUG 4 - About to transmute");
-                        let borrowed: ManuallyDrop<windows::core::IUnknown> = ManuallyDrop::new(
-                            std::mem::transmute(raw_ptr)
-                        );
-                        eprintln!("[TiddlyDesktop] Windows: DEBUG 5 - Transmute done, about to cast");
-                        // cast() calls QueryInterface which AddRefs the result,
-                        // giving us our own properly reference-counted IDropTarget
-                        match (*borrowed).cast::<IDropTarget>() {
-                            Ok(dt) => {
-                                eprintln!("[TiddlyDesktop] Windows: Got original IDropTarget from OleDropTargetInterface property");
-                                Some(dt)
+
+                    let mut result: Option<IDropTarget> = None;
+
+                    // Retry up to 20 times with 50ms delay (total 1 second max wait)
+                    for attempt in 0..20 {
+                        let prop = GetPropW(target_hwnd, w!("OleDropTargetInterface"));
+
+                        if prop.0.is_null() {
+                            // Property not set yet - WebView2 hasn't registered its IDropTarget
+                            if attempt < 19 {
+                                std::thread::sleep(std::time::Duration::from_millis(50));
+                                continue;
                             }
-                            Err(e) => {
-                                eprintln!("[TiddlyDesktop] Windows: Failed to cast to IDropTarget: {:?}", e);
-                                None
+                            eprintln!("[TiddlyDesktop] Windows: No OleDropTargetInterface property found after {} attempts", attempt + 1);
+                            break;
+                        }
+
+                        // Got a non-null property - try to validate and use it
+                        let raw_ptr = prop.0 as *mut std::ffi::c_void;
+
+                        // Validate the COM pointer by checking if memory is accessible
+                        // Read the first pointer (vtable) to verify it's a valid COM object
+                        let vtable_ptr = std::ptr::read_volatile(raw_ptr as *const *const std::ffi::c_void);
+                        if vtable_ptr.is_null() {
+                            eprintln!("[TiddlyDesktop] Windows: OleDropTargetInterface has null vtable on attempt {}", attempt + 1);
+                            if attempt < 19 {
+                                std::thread::sleep(std::time::Duration::from_millis(50));
+                                continue;
+                            }
+                            break;
+                        }
+
+                        // Pointer looks valid - try QueryInterface via manual vtable call
+                        // This is safer than transmute + cast because we control the call
+                        let iid_idroptarget = <IDropTarget as Interface>::IID;
+                        let mut out_ptr: *mut std::ffi::c_void = std::ptr::null_mut();
+
+                        // COM vtable layout: QueryInterface is at offset 0
+                        // QueryInterface signature: fn(this, riid, ppvObject) -> HRESULT
+                        type QueryInterfaceFn = unsafe extern "system" fn(
+                            *mut std::ffi::c_void,
+                            *const windows::core::GUID,
+                            *mut *mut std::ffi::c_void
+                        ) -> windows::core::HRESULT;
+
+                        let vtable = vtable_ptr as *const *const std::ffi::c_void;
+                        let query_interface: QueryInterfaceFn = std::mem::transmute(*vtable);
+
+                        let hr = query_interface(raw_ptr, &iid_idroptarget, &mut out_ptr);
+
+                        if hr.is_ok() && !out_ptr.is_null() {
+                            eprintln!(
+                                "[TiddlyDesktop] Windows: Got original IDropTarget on attempt {}",
+                                attempt + 1
+                            );
+                            // We got a valid AddRef'd IDropTarget pointer
+                            result = Some(IDropTarget::from_raw(out_ptr));
+                            break;
+                        } else {
+                            eprintln!(
+                                "[TiddlyDesktop] Windows: QueryInterface failed on attempt {}: hr={:?}",
+                                attempt + 1, hr
+                            );
+                            if attempt < 19 {
+                                std::thread::sleep(std::time::Duration::from_millis(50));
+                                continue;
                             }
                         }
-                    } else {
-                        eprintln!("[TiddlyDesktop] Windows: No existing OleDropTargetInterface property found");
-                        None
                     }
+
+                    result
                 };
 
-                eprintln!("[TiddlyDesktop] Windows: DEBUG 6 - original_drop_target done, has_value={}", original_drop_target.is_some());
+                eprintln!("[TiddlyDesktop] Windows: original_drop_target acquired: {}", original_drop_target.is_some());
 
-                eprintln!("[TiddlyDesktop] Windows: DEBUG 7 - About to create DropTargetImpl");
                 let drop_target_ptr = DropTargetImpl::new(window_for_drop.clone(), target_hwnd, original_drop_target);
-                eprintln!("[TiddlyDesktop] Windows: DEBUG 8 - DropTargetImpl created at {:?}", drop_target_ptr);
                 let drop_target = DropTargetImpl::as_idroptarget(drop_target_ptr);
-                eprintln!("[TiddlyDesktop] Windows: DEBUG 9 - as_idroptarget done");
-
-                eprintln!("[TiddlyDesktop] Windows: DEBUG 10 - About to lock DROP_TARGET_MAP");
                 DROP_TARGET_MAP
                     .lock()
                     .unwrap()
                     .insert(target_hwnd.0 as isize, SendDropTarget(drop_target_ptr));
-                eprintln!("[TiddlyDesktop] Windows: DEBUG 11 - Inserted into map");
 
-                eprintln!("[TiddlyDesktop] Windows: DEBUG 12 - About to RevokeDragDrop");
                 let _ = RevokeDragDrop(target_hwnd);
-                eprintln!("[TiddlyDesktop] Windows: DEBUG 13 - RevokeDragDrop done, about to RegisterDragDrop");
                 match RegisterDragDrop(target_hwnd, &drop_target) {
                     Ok(()) => eprintln!("[TiddlyDesktop] Windows: RegisterDragDrop succeeded"),
                     Err(e) => eprintln!("[TiddlyDesktop] Windows: RegisterDragDrop failed: {:?}", e),
                 }
-                eprintln!("[TiddlyDesktop] Windows: DEBUG 14 - setup_drag_handlers completed");
             }
         }
     });

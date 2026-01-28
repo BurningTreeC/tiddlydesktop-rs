@@ -1051,6 +1051,79 @@ fn close_window_by_label(app: tauri::AppHandle, label: String) -> Result<(), Str
     }
 }
 
+/// Toggle fullscreen mode for the current window (used by tm-full-screen)
+#[tauri::command]
+fn toggle_fullscreen(window: tauri::WebviewWindow) -> Result<bool, String> {
+    let is_fullscreen = window.is_fullscreen().map_err(|e| e.to_string())?;
+    window
+        .set_fullscreen(!is_fullscreen)
+        .map_err(|e| e.to_string())?;
+    Ok(!is_fullscreen)
+}
+
+/// Print the current page (used by tm-print)
+#[tauri::command]
+fn print_page(window: tauri::WebviewWindow) -> Result<(), String> {
+    window.print().map_err(|e| e.to_string())
+}
+
+/// Show a save file dialog and write content to the selected file (used by tm-download-file)
+#[tauri::command]
+async fn download_file(
+    app: tauri::AppHandle,
+    filename: String,
+    content: String,
+    content_type: Option<String>,
+) -> Result<String, String> {
+    use tauri_plugin_dialog::DialogExt;
+
+    // Determine file filter based on content type or filename extension
+    let extension = std::path::Path::new(&filename)
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("");
+
+    let filter_name = match content_type.as_deref() {
+        Some("application/json") => "JSON files",
+        Some("text/html") => "HTML files",
+        Some("text/plain") => "Text files",
+        Some("text/csv") => "CSV files",
+        _ => match extension {
+            "json" => "JSON files",
+            "html" | "htm" => "HTML files",
+            "txt" => "Text files",
+            "csv" => "CSV files",
+            "tid" => "Tiddler files",
+            _ => "All files",
+        },
+    };
+
+    let extensions: &[&str] = match extension {
+        "" => &["*"],
+        ext => &[ext],
+    };
+
+    // Show save dialog
+    let file_path = app
+        .dialog()
+        .file()
+        .set_file_name(&filename)
+        .add_filter(filter_name, extensions)
+        .blocking_save_file();
+
+    match file_path {
+        Some(path) => {
+            // Write the content to the file
+            let path_str = path.to_string();
+            tokio::fs::write(&path_str, &content)
+                .await
+                .map_err(|e| format!("Failed to write file: {}", e))?;
+            Ok(path_str)
+        }
+        None => Err("Save cancelled".to_string()),
+    }
+}
+
 /// Check if a path is a directory (used for file drop handling)
 /// Security: Validates path before checking to prevent filesystem reconnaissance
 #[tauri::command]
@@ -4781,6 +4854,9 @@ fn run_wiki_mode(args: WikiModeArgs) {
             // Tiddler window commands (same process, shares $tw.wiki)
             open_tiddler_window,
             close_window_by_label,
+            toggle_fullscreen,
+            print_page,
+            download_file,
             is_directory,
             get_window_state_info,
             get_saved_window_state,
@@ -5066,6 +5142,9 @@ fn run_wiki_folder_mode(args: WikiFolderModeArgs) {
             show_alert,
             show_confirm,
             close_window,
+            toggle_fullscreen,
+            print_page,
+            download_file,
             is_directory,
             get_window_state_info,
             get_saved_window_state,
@@ -5363,6 +5442,9 @@ pub fn run() {
             open_auth_window,
             run_command,
             show_find_in_page,
+            toggle_fullscreen,
+            print_page,
+            download_file,
             wiki_storage::js_log,
             clipboard::get_clipboard_content,
             clipboard::set_clipboard_content,

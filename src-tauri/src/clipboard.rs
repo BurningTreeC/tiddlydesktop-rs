@@ -409,7 +409,7 @@ fn set_clipboard_content_windows(text: &str) -> Result<bool, String> {
         std::ptr::copy_nonoverlapping(wide.as_ptr(), ptr, wide.len());
         let _ = GlobalUnlock(h_mem);
 
-        let result = SetClipboardData(CF_UNICODETEXT.0 as u32, HANDLE(h_mem.0));
+        let result = SetClipboardData(CF_UNICODETEXT.0 as u32, Some(HANDLE(h_mem.0)));
         let _ = CloseClipboard();
 
         if result.is_err() {

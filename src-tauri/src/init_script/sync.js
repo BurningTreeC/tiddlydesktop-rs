@@ -1,5 +1,6 @@
 // TiddlyDesktop Initialization Script - Sync Module
-// Handles: tm-open-window handlers, cross-window tiddler synchronization (via IPC for multi-process)
+// Handles: tm-open-window, tm-full-screen, tm-print, tm-download-file handlers,
+//          cross-window tiddler synchronization (via IPC for multi-process)
 
 (function(TD) {
     'use strict';
@@ -111,6 +112,52 @@
                         console.error('[TiddlyDesktop] Failed to open external URL:', err);
                     });
                 }
+                return false;
+            });
+
+            // tm-full-screen handler - toggle fullscreen using Tauri window API
+            // TiddlyWiki's native Fullscreen API doesn't work reliably in webviews
+            $tw.rootWidget.addEventListener('tm-full-screen', function(event) {
+                invoke('toggle_fullscreen').then(function(isFullscreen) {
+                    console.log('[TiddlyDesktop] Fullscreen:', isFullscreen);
+                }).catch(function(err) {
+                    console.error('[TiddlyDesktop] Failed to toggle fullscreen:', err);
+                });
+                return false;
+            });
+
+            // tm-print handler - print using Tauri's webview print API
+            // More reliable than window.print() in webviews
+            $tw.rootWidget.addEventListener('tm-print', function(event) {
+                invoke('print_page').then(function() {
+                    console.log('[TiddlyDesktop] Print dialog opened');
+                }).catch(function(err) {
+                    console.error('[TiddlyDesktop] Failed to print:', err);
+                });
+                return false;
+            });
+
+            // tm-download-file handler - download files using Tauri's save dialog
+            // TiddlyWiki's Blob + download attribute doesn't work reliably in webviews
+            $tw.rootWidget.addEventListener('tm-download-file', function(event) {
+                var paramObject = event.paramObject || {};
+                var filename = paramObject.filename || event.param || 'download.txt';
+                var content = paramObject.content || '';
+                var contentType = paramObject.type || 'text/plain';
+
+                invoke('download_file', {
+                    filename: filename,
+                    content: content,
+                    contentType: contentType
+                }).then(function(savedPath) {
+                    console.log('[TiddlyDesktop] File saved to:', savedPath);
+                    $tw.notifier.display('$:/language/Notifications/Save/Done');
+                }).catch(function(err) {
+                    if (err !== 'Save cancelled') {
+                        console.error('[TiddlyDesktop] Failed to save file:', err);
+                        $tw.notifier.display('$:/language/Notifications/Save/Error');
+                    }
+                });
                 return false;
             });
 

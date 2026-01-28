@@ -282,6 +282,8 @@ struct OutgoingDragState {
 }
 
 /// Global storage for outgoing drag data (needed because GTK callbacks can't capture owned data easily)
+/// NOTE: Each Tauri window runs in a separate process on Linux/WebKitGTK, so this static
+/// is NOT shared across windows. Cross-wiki detection uses preview data content instead.
 fn outgoing_drag_state() -> &'static Mutex<Option<OutgoingDragState>> {
     static INSTANCE: OnceLock<Mutex<Option<OutgoingDragState>>> = OnceLock::new();
     INSTANCE.get_or_init(|| Mutex::new(None))
@@ -333,6 +335,8 @@ fn has_outgoing_data_for_window(window_label: &str) -> bool {
 }
 
 /// Check if we have any outgoing drag data (from any window of our app)
+/// NOTE: Due to multi-process architecture, this only returns true for same-window drags.
+/// Cross-wiki detection uses preview data content instead (data:text/vnd.tiddler, prefix).
 fn has_any_outgoing_data() -> bool {
     outgoing_drag_state()
         .lock()
@@ -361,6 +365,14 @@ struct DragState {
     /// Set to true while processing drop data
     drop_in_progress: bool,
     last_position: Option<(i32, i32)>,
+    /// Set to true when preview data indicates this is a cross-wiki tiddler drag
+    /// (detected by data:text/vnd.tiddler, prefix in uri-list)
+    detected_cross_wiki_drag: bool,
+    /// Set to true when we've requested preview data during this drag session
+    preview_data_requested: bool,
+    /// Set to true when preview data confirms this is an external drag (not cross-wiki)
+    /// Once set, we stop handling and let WebKit handle natively
+    confirmed_external_drag: bool,
 }
 
 /// Set up drag-drop handling for a webview window
@@ -455,6 +467,9 @@ fn setup_gtk_drag_handlers(gtk_window: &gtk::ApplicationWindow, window: WebviewW
         drop_requested: false,
         drop_in_progress: false,
         last_position: None,
+        detected_cross_wiki_drag: false,
+        preview_data_requested: false,
+        confirmed_external_drag: false,
     }));
 
     // Set up handlers on the GTK window itself to intercept before WebKitGTK
@@ -480,7 +495,8 @@ fn setup_gtk_drag_handlers(gtk_window: &gtk::ApplicationWindow, window: WebviewW
         eprintln!("[TiddlyDesktop] Linux: Letting WebKit remain drag source (preserves caret)");
 
         // Set up drag destination handlers on WebKitWebView
-        setup_webkit_drag_handlers(&webview_widget, state);
+        // Use the full implementation to handle cross-wiki drops correctly
+        setup_webkit_drag_handlers_full(&webview_widget, state);
 
         // Set up outgoing drag handlers (drag SOURCE) for when we drag TO external apps
         setup_outgoing_drag_handlers(&webview_widget, window.clone());
@@ -934,15 +950,14 @@ fn setup_widget_drag_handlers(_widget: &gtk::Widget, _state: Rc<RefCell<DragStat
     );
 }
 
-/// Set up drag handlers on WebKit widget
+/// Set up drag handlers on WebKit widget (currently a no-op, kept for potential future use)
+#[allow(dead_code)]
 fn setup_webkit_drag_handlers(_widget: &gtk::Widget, _state: Rc<RefCell<DragState>>) {
     // Let vanilla WebKitGTK handle drops natively.
-    // File URL filtering happens in JavaScript (internal_drag.js getData patch)
     eprintln!("[TiddlyDesktop] Linux: setup_webkit_drag_handlers - NO-OP (native WebKit handling)");
 }
 
-#[allow(dead_code)]
-/// Set up drag handlers on WebKit widget (disabled - using native WebKit handling)
+/// Set up drag handlers on WebKit widget for cross-wiki drop handling
 fn setup_webkit_drag_handlers_full(widget: &gtk::Widget, state: Rc<RefCell<DragState>>) {
     // NOTE: We do NOT call drag_dest_set() on the WebView!
     // WebKitWebView is already a fully configured drag destination.
@@ -959,16 +974,30 @@ fn setup_webkit_drag_handlers_full(widget: &gtk::Widget, state: Rc<RefCell<DragS
     // Connect drag-motion signal
     let state_motion = state.clone();
     widget.connect_drag_motion(move |_widget, context, x, y, time| {
-        // Get window label first (need to borrow state)
-        let window_label = {
-            let s = state_motion.borrow();
-            s.window.label().to_string()
+        // Get window label and detected_cross_wiki flag
+        let (window_label, detected_cross_wiki) = {
+            let mut s = state_motion.borrow_mut();
+            s.last_position = Some((x, y)); // Store position for later
+            (s.window.label().to_string(), s.detected_cross_wiki_drag)
         };
 
         // Check if the drag source is one of our registered WebKit widgets
-        // This is reliable regardless of async prepare_native_drag timing
         let source_window_label = get_source_window_label(context);
-        let is_our_drag = source_window_label.is_some();
+
+        // On Linux, we cannot distinguish cross-wiki from external during drag-motion
+        // because preview data requests don't work across processes (multi-process WebKitGTK).
+        // For cross-process drags: accept and let WebKit handle native events.
+        // The drop handler will determine the type based on actual data.
+        if source_window_label.is_none() && !detected_cross_wiki {
+            context.drag_status(DragAction::COPY, time);
+            return false;
+        }
+
+        // For cross-wiki drags, source_window_label may be None because:
+        // 1. GTK widget lookup fails across processes (each window is a separate process)
+        // 2. We detect cross-wiki via preview data containing data:text/vnd.tiddler,
+        let is_cross_wiki_drag = detected_cross_wiki || (source_window_label.is_none() && has_any_outgoing_data());
+        let is_our_drag = source_window_label.is_some() || is_cross_wiki_drag;
 
         // Check if this is an internal drag (source is same widget/window)
         let is_internal = source_window_label.as_ref() == Some(&window_label);
@@ -1028,15 +1057,21 @@ fn setup_webkit_drag_handlers_full(widget: &gtk::Widget, state: Rc<RefCell<DragS
         };
 
         if should_log {
-            eprintln!("[TiddlyDesktop] Linux: WebKit drag-motion at ({}, {}), source={:?}, target={}, is_our_drag={}, should_emit={}",
-                x, y, source_window_label, window_label, is_our_drag, should_emit);
+            eprintln!("[TiddlyDesktop] Linux: WebKit drag-motion at ({}, {}), source={:?}, target={}, is_our_drag={}, is_cross_wiki={}, should_emit={}",
+                x, y, source_window_label, window_label, is_our_drag, is_cross_wiki_drag, should_emit);
         }
+
+        // For all cross-process drags, we need to call drag_status() to continue
+        // receiving the drag and get preview data. We can only distinguish cross-wiki
+        // from external (file manager) after preview data is received.
+        //
+        // For external drags: drag-drop handler returns false to let WebKit handle
+        // For cross-wiki drags: we handle with td-cross-wiki-data and synthetic events
 
         // Only update drag_active and emit events if this window should handle the drag
         if should_emit {
             {
                 let mut s = state_motion.borrow_mut();
-                s.last_position = Some((x, y));
                 s.drag_active = true;
             }
             let s = state_motion.borrow();
@@ -1053,26 +1088,32 @@ fn setup_webkit_drag_handlers_full(widget: &gtk::Widget, state: Rc<RefCell<DragS
             );
         }
 
-        // Tell GTK we accept this drag
-        context.drag_status(DragAction::COPY, time);
+        // On Linux with multi-process WebKitGTK, we accept all non-internal drags
+        // and let WebKit handle native events. Drop handler determines type from actual data.
+        if !is_internal {
+            context.drag_status(DragAction::COPY, time);
+        }
 
-        // Return false to let WebKit handle caret positioning
-        // WebKit's internal drag handling will update the caret over editable elements
+        // Return false to let WebKit handle caret positioning and native events
         false
     });
 
     // Connect drag-leave signal
     let state_leave = state.clone();
     widget.connect_drag_leave(move |_widget, context, _time| {
-        // Get window label and drag_active state
-        let (window_label, was_drag_active) = {
+        // Get window label, drag_active state, and detected_cross_wiki flag
+        let (window_label, was_drag_active, detected_cross_wiki) = {
             let s = state_leave.borrow();
-            (s.window.label().to_string(), s.drag_active)
+            eprintln!("[TiddlyDesktop] Linux: drag-leave reading detected_cross_wiki_drag={} for {}", s.detected_cross_wiki_drag, s.window.label());
+            (s.window.label().to_string(), s.drag_active, s.detected_cross_wiki_drag)
         };
 
         // Check if the drag source is one of our registered WebKit widgets
         let source_window_label = get_source_window_label(context);
-        let is_our_drag = source_window_label.is_some();
+
+        // For cross-wiki drags, source_window_label may be None but we detected via preview data
+        let is_cross_wiki_drag = detected_cross_wiki || (source_window_label.is_none() && has_any_outgoing_data());
+        let is_our_drag = source_window_label.is_some() || is_cross_wiki_drag;
 
         // For cross-wiki drags, clear the current target if we were it
         // This allows the next window to claim the drag on its drag-motion
@@ -1089,7 +1130,9 @@ fn setup_webkit_drag_handlers_full(widget: &gtk::Widget, state: Rc<RefCell<DragS
 
         // Only emit drag-leave if we had an active drag in this window
         // This prevents spurious drag-leave events to windows that never had the drag
-        if was_drag_active {
+        // BUT: Don't emit for detected cross-wiki drags - GTK fires drag-leave right before
+        // drag-drop, which would unhighlight the dropzone at the wrong moment
+        if was_drag_active && !detected_cross_wiki {
             eprintln!("[TiddlyDesktop] Linux: drag-leave emitting td-drag-leave for {}", window_label);
             let s = state_leave.borrow();
             let _ = s.window.emit("td-drag-leave", serde_json::json!({
@@ -1097,13 +1140,19 @@ fn setup_webkit_drag_handlers_full(widget: &gtk::Widget, state: Rc<RefCell<DragS
                 "sourceWindow": source_window_label,
                 "targetWindow": window_label
             }));
+        } else if detected_cross_wiki {
+            eprintln!("[TiddlyDesktop] Linux: drag-leave suppressed for cross-wiki drag on {}", window_label);
         }
 
-        // Update state
+        // Update state - only reset drag_active, keep detected_cross_wiki_drag
+        // (it will be reset on drag-end or drop, not on intermediate leave events)
         {
             let mut s = state_leave.borrow_mut();
             if !s.drop_in_progress {
                 s.drag_active = false;
+                // Don't reset detected_cross_wiki_drag here - drag-leave fires frequently
+                // during cross-wiki drags (e.g., when entering different elements).
+                // It will be reset when the drag actually ends.
             }
         }
     });
@@ -1113,45 +1162,61 @@ fn setup_webkit_drag_handlers_full(widget: &gtk::Widget, state: Rc<RefCell<DragS
     // Strategy:
     //   - Internal drops (source_widget exists): return false → WebKit handles natively
     //     (preserves text insertion into inputs/textareas/contenteditables)
+    //   - Cross-wiki drops (detected via preview data): return false → let WebKit handle
+    //     (we've pre-emitted tiddler data, patched getData() will return it)
     //   - External drops (source_widget is None): we do GTK data transfer → emit to JS
     let state_drop_signal = state.clone();
     widget.connect_drag_drop(move |widget, context, x, y, time| {
-        let window_label = {
+        // Get window label AND detected_cross_wiki_drag flag from state
+        let (window_label, detected_cross_wiki) = {
             let s = state_drop_signal.borrow();
-            s.window.label().to_string()
+            (s.window.label().to_string(), s.detected_cross_wiki_drag)
         };
 
         let source_widget = context.drag_get_source_widget();
-        let is_external = source_widget.is_none();
+        let source_window_label = get_source_window_label(context);
 
-        eprintln!("[TiddlyDesktop] Linux: drag-drop at ({}, {}) is_external={}, target={}",
-            x, y, is_external, window_label);
+        // Determine the type of drop:
+        // - Same-window: source_widget exists AND source window matches target
+        // - Cross-wiki: detected via preview data (detected_cross_wiki_drag flag)
+        // - External: source_widget is None AND not detected as cross-wiki
+        let is_same_window = source_widget.is_some() && source_window_label.as_ref() == Some(&window_label);
+        // Use detected_cross_wiki_drag flag instead of has_any_outgoing_data()
+        // because static data doesn't share across processes on Linux
+        let is_cross_wiki = detected_cross_wiki;
+        let is_external = source_widget.is_none() && !is_cross_wiki;
 
-        if is_external {
-            // External drop - do GTK data transfer ourselves
+        eprintln!("[TiddlyDesktop] Linux: drag-drop at ({}, {}) target={}, source_widget={}, source_window={:?}, detected_cross_wiki={}, is_same_window={}, is_cross_wiki={}, is_external={}",
+            x, y, window_label, source_widget.is_some(), source_window_label, detected_cross_wiki, is_same_window, is_cross_wiki, is_external);
+
+        if is_same_window {
+            // Same-window drop - let WebKit handle natively
+            eprintln!("[TiddlyDesktop] Linux: Same-window drop - WebKit handles");
+            false
+        } else if is_cross_wiki {
+            // Cross-wiki drop - handle via synthetic events
+            // WebKitGTK doesn't fire native DOM drop events for cross-process drags
+            eprintln!("[TiddlyDesktop] Linux: Cross-wiki drop - handling with synthetic events");
             {
                 let mut s = state_drop_signal.borrow_mut();
                 s.drop_requested = true;
+                s.drop_in_progress = true;
                 s.last_position = Some((x, y));
             }
-
+            // Request any data type just to trigger drag-data-received
+            // We'll use our stored data anyway
             let targets = context.list_targets();
-            let priority = ["text/uri-list", "text/html", "text/plain", "UTF8_STRING", "STRING"];
-
-            let target = priority.iter()
-                .find_map(|&p| targets.iter().find(|t| t.name() == p).cloned())
-                .or_else(|| targets.first().cloned());
-
-            if let Some(t) = target {
-                eprintln!("[TiddlyDesktop] Linux: Requesting external data: {}", t.name());
+            if let Some(t) = targets.first() {
                 widget.drag_get_data(context, &t, time);
                 true
             } else {
-                false
+                let dummy = gdk::Atom::intern("text/plain");
+                widget.drag_get_data(context, &dummy, time);
+                true
             }
         } else {
-            // Internal drop - let WebKit handle natively
-            eprintln!("[TiddlyDesktop] Linux: Internal drop - WebKit handles");
+            // External drop (file manager, etc.) - let native handling work
+            eprintln!("[TiddlyDesktop] Linux: External drop - letting native handling work");
             false
         }
     });
@@ -1428,12 +1493,93 @@ fn handle_drag_data_received(
     let mut s = state.borrow_mut();
 
     // Only process as a drop if drag-drop signal has fired (user released mouse)
-    // Otherwise this is just a preview/validation request
+    // Otherwise this is just a preview/validation request - but check for cross-wiki drag
     if !s.drop_requested {
+        let data_type = selection_data.data_type().name();
         eprintln!(
-            "[TiddlyDesktop] Linux: drag-data-received (preview, ignoring) type: {}",
-            selection_data.data_type().name()
+            "[TiddlyDesktop] Linux: drag-data-received (preview) type: {}",
+            data_type
         );
+
+        // Check preview data for cross-wiki tiddler drag signature
+        // This works because each window is a separate process, so we can't use shared state
+        // IMPORTANT: Only do this if source_window_label is None (cross-process drag)
+        // Same-wiki drags also have data:text/vnd.tiddler, but we can identify them by source widget
+        let source_window_label = get_source_window_label(context);
+        let is_cross_process = source_window_label.is_none();
+
+        eprintln!("[TiddlyDesktop] Linux: Preview check: is_cross_process={}, data_type={}, detected_cross_wiki={}, confirmed_external={}",
+            is_cross_process, data_type, s.detected_cross_wiki_drag, s.confirmed_external_drag);
+
+        // For external drags, we may receive various data types - set confirmed_external for any non-tiddler cross-process drag
+        if is_cross_process && !s.detected_cross_wiki_drag && !s.confirmed_external_drag {
+            let dominated_type = data_type == "text/uri-list" || data_type == "_NETSCAPE_URL";
+
+            if dominated_type {
+                // This is a type we can check for tiddler data
+                let data = selection_data.data();
+                let mut found_tiddler = false;
+
+                if !data.is_empty() {
+                    if let Ok(text) = std::str::from_utf8(&data) {
+                        if text.starts_with("data:text/vnd.tiddler,") {
+                            found_tiddler = true;
+                            eprintln!("[TiddlyDesktop] Linux: Detected cross-wiki tiddler drag from preview data! Setting flag for {}", s.window.label());
+                            s.detected_cross_wiki_drag = true;
+
+                            // Extract and decode the tiddler JSON from the data: URI
+                            let encoded = &text["data:text/vnd.tiddler,".len()..];
+                            if let Ok(tiddler_json) = urlencoding::decode(encoded) {
+                                eprintln!("[TiddlyDesktop] Linux: Extracted tiddler JSON for native drop: {} chars", tiddler_json.len());
+
+                                // Emit the tiddler data to JavaScript BEFORE the drop occurs
+                                let window_label = s.window.label().to_string();
+                                let _ = s.window.emit(
+                                    "td-cross-wiki-data",
+                                    serde_json::json!({
+                                        "tiddlerJson": tiddler_json,
+                                        "targetWindow": window_label
+                                    }),
+                                );
+                                eprintln!("[TiddlyDesktop] Linux: Emitted td-cross-wiki-data to {}", window_label);
+                            }
+
+                            // Emit updated td-drag-motion with isOurDrag=true for dropzone highlighting
+                            if let Some((x, y)) = s.last_position {
+                                let window_label = s.window.label().to_string();
+                                let _ = s.window.emit(
+                                    "td-drag-motion",
+                                    serde_json::json!({
+                                        "x": x,
+                                        "y": y,
+                                        "screenCoords": false,
+                                        "isOurDrag": true,
+                                        "isCrossWiki": true,
+                                        "sourceWindow": serde_json::Value::Null,
+                                        "targetWindow": window_label
+                                    }),
+                                );
+                            }
+                        } else {
+                            // Preview data received but NOT a tiddler - this is an external drag
+                            eprintln!("[TiddlyDesktop] Linux: Preview data is NOT a tiddler ({}), marking as external drag",
+                                if text.len() > 50 { &text[..50] } else { text });
+                        }
+                    }
+                }
+
+                // If we received dominated type preview data but didn't find a tiddler, it's external
+                if !found_tiddler {
+                    eprintln!("[TiddlyDesktop] Linux: Confirmed external drag (not cross-wiki) - will let WebKit handle");
+                    s.confirmed_external_drag = true;
+                }
+            } else {
+                // Non-dominated type (not uri-list or netscape URL) - if cross-process, it's external
+                // This handles cases where file managers provide different data types
+                eprintln!("[TiddlyDesktop] Linux: Received non-dominated preview type '{}', marking as external drag", data_type);
+                s.confirmed_external_drag = true;
+            }
+        }
         return;
     }
 
@@ -1442,25 +1588,94 @@ fn handle_drag_data_received(
 
     let window_label = s.window.label().to_string();
     let source_window_label = get_source_window_label(context);
+    let source_widget_exists = context.drag_get_source_widget().is_some();
 
-    // Check if this drop is from our app (same-window OR cross-wiki)
-    // GTK's data transfer returns NONE for intra-process drops, so we use our stored data directly
-    let is_our_drag = source_window_label.is_some();
+    // Determine the type of drop using same logic as drag-drop handler:
+    // - Same-window: source_widget exists AND source window matches target
+    // - Cross-wiki: source_widget is None (cross-window) BUT we have stored outgoing drag data
+    // - External: source_widget is None AND no stored outgoing drag data
+    let is_same_window = source_widget_exists && source_window_label.as_ref() == Some(&window_label);
+    let has_our_drag_data = has_any_outgoing_data();
+    let is_cross_wiki = !source_widget_exists && has_our_drag_data;
 
-    if is_our_drag {
-        let source_label = source_window_label.clone().unwrap_or_default();
-        let is_same_window = source_label == window_label;
-        eprintln!(
-            "[TiddlyDesktop] Linux: Drop from our app detected: {} -> {} (same_window={})",
-            source_label, window_label, is_same_window
-        );
+    eprintln!(
+        "[TiddlyDesktop] Linux: handle_drop_data: target={}, source_widget={}, source_window={:?}, has_our_data={}, is_same_window={}, is_cross_wiki={}",
+        window_label, source_widget_exists, source_window_label, has_our_drag_data, is_same_window, is_cross_wiki
+    );
 
-        // Let WebKit handle all internal drops natively
+    if is_same_window {
+        // Let WebKit handle same-window drops natively
         // This allows dropping into inputs/textareas to work correctly
-        // WebKit will receive the data via the standard drag-data-get mechanism
-        eprintln!("[TiddlyDesktop] Linux: Internal drop - letting WebKit handle natively");
+        eprintln!("[TiddlyDesktop] Linux: Same-window drop - letting WebKit handle natively");
         s.drop_in_progress = false;
-        // Don't call drag_finish - let the native handling continue
+        s.detected_cross_wiki_drag = false; // Reset for next drag
+        s.preview_data_requested = false;
+        s.confirmed_external_drag = false;
+        return;
+    }
+
+    if is_cross_wiki {
+        // Cross-wiki drop: emit td-drag-content with our stored data
+        // We can't rely on WebKit native handling because tauri://drag-drop goes to wrong window
+        eprintln!("[TiddlyDesktop] Linux: Cross-wiki drop - emitting td-drag-content");
+
+        // Get coordinates
+        let (final_x, final_y) = if x == 0 && y == 0 {
+            s.last_position.unwrap_or((x, y))
+        } else {
+            (x, y)
+        };
+
+        // Get the stored drag data
+        if let Ok(guard) = outgoing_drag_state().lock() {
+            if let Some(state) = guard.as_ref() {
+                let mut types = Vec::new();
+                let mut data = HashMap::new();
+
+                if let Some(ref tiddler) = state.data.text_vnd_tiddler {
+                    types.push("text/vnd.tiddler".to_string());
+                    data.insert("text/vnd.tiddler".to_string(), tiddler.clone());
+                }
+                if let Some(ref text) = state.data.text_plain {
+                    types.push("text/plain".to_string());
+                    data.insert("text/plain".to_string(), text.clone());
+                }
+
+                if !types.is_empty() {
+                    eprintln!(
+                        "[TiddlyDesktop] Linux: Cross-wiki drop - emitting td-drag-content, types: {:?}",
+                        types
+                    );
+
+                    if let Err(e) = s.window.emit(
+                        "td-drag-drop-position",
+                        serde_json::json!({
+                            "x": final_x,
+                            "y": final_y,
+                            "screenCoords": false,
+                            "targetWindow": window_label
+                        }),
+                    ) {
+                        eprintln!("[TiddlyDesktop] Linux: ERROR emitting td-drag-drop-position (cross-wiki): {:?}", e);
+                    }
+
+                    let content_data = DragContentData { types, data, target_window: window_label.clone() };
+                    eprintln!("[TiddlyDesktop] Linux: Emitting td-drag-content (cross-wiki) to window '{}' with data: {:?}", window_label, content_data);
+                    if let Err(e) = s.window.emit("td-drag-content", &content_data) {
+                        eprintln!("[TiddlyDesktop] Linux: ERROR emitting td-drag-content (cross-wiki): {:?}", e);
+                    }
+                }
+            } else {
+                eprintln!("[TiddlyDesktop] Linux: Cross-wiki drop - no stored drag data!");
+            }
+        }
+
+        context.drag_finish(true, false, time);
+        s.drop_in_progress = false;
+        s.drag_active = false;
+        s.detected_cross_wiki_drag = false; // Reset for next drag
+        s.preview_data_requested = false;
+        s.confirmed_external_drag = false;
         return;
     }
 
@@ -1607,8 +1822,23 @@ fn handle_drag_data_received(
             &text_content[..std::cmp::min(200, text_content.len())]
         );
 
-        // Check for file URIs first (not tiddler data)
-        if text_content.starts_with("file://") || data_type == "text/uri-list" {
+        // Check for data:text/vnd.tiddler URIs - this is a cross-wiki drop from our app!
+        // TiddlyWiki sets text/x-moz-url and URL to data:text/vnd.tiddler,<encoded-json>
+        // When this is received as text/uri-list, we should extract the tiddler data
+        if text_content.starts_with("data:text/vnd.tiddler,") {
+            eprintln!("[TiddlyDesktop] Linux: Detected cross-wiki tiddler drop via data: URI!");
+
+            // Extract the tiddler JSON from the data URI
+            if let Some(encoded) = text_content.strip_prefix("data:text/vnd.tiddler,") {
+                if let Ok(decoded) = urlencoding::decode(encoded) {
+                    tiddler_json = Some(decoded.into_owned());
+                    eprintln!("[TiddlyDesktop] Linux: Extracted tiddler JSON from data: URI");
+                }
+            }
+        }
+
+        // Check for file URIs (not tiddler data)
+        if tiddler_json.is_none() && (text_content.starts_with("file://") || data_type == "text/uri-list") {
             let paths: Vec<String> = text_content
                 .lines()
                 .filter(|line| !line.is_empty() && !line.starts_with('#'))
@@ -1652,6 +1882,9 @@ fn handle_drag_data_received(
                 context.drag_finish(true, false, time);
                 s.drag_active = false;
                 s.drop_in_progress = false;
+                s.detected_cross_wiki_drag = false; // Reset for next drag
+                s.preview_data_requested = false;
+                s.confirmed_external_drag = false;
                 return;
             }
         }
@@ -1707,32 +1940,59 @@ fn handle_drag_data_received(
 
     // 5. Emit the final content
     let has_content = !types.is_empty();
+
+    // Get app handle to fetch fresh window reference later
+    let app_handle = s.window.app_handle().clone();
+    let window_label_for_emit = window_label.clone();
+    let final_x_for_emit = final_x;
+    let final_y_for_emit = final_y;
+
+    // Finish GTK drag and update state FIRST, before emitting
+    context.drag_finish(has_content, false, time);
+    s.drag_active = false;
+    s.drop_in_progress = false;
+    s.detected_cross_wiki_drag = false; // Reset for next drag
+    s.preview_data_requested = false;
+    s.confirmed_external_drag = false;
+
+    // Drop the state borrow before emitting to avoid potential deadlocks
+    drop(s);
+
     if has_content {
         eprintln!(
             "[TiddlyDesktop] Linux: Content drop with types: {:?}",
             types
         );
 
-        let _ = s.window.emit(
-            "td-drag-drop-position",
-            serde_json::json!({
-                "x": final_x,
-                "y": final_y,
-                "screenCoords": false,
-                "targetWindow": window_label
-            }),
-        );
+        // Defer the emit to an idle callback to ensure it runs outside the GTK drag callback context
+        // This helps avoid issues with nested event loops and ensures JS receives the event
+        glib::idle_add_once(move || {
+            eprintln!("[TiddlyDesktop] Linux: (idle) Emitting td-drag-drop-position and td-drag-content to '{}'", window_label_for_emit);
 
-        let content_data = DragContentData { types, data, target_window: window_label.clone() };
-        let _ = s.window.emit("td-drag-content", &content_data);
+            // Get fresh window reference from app handle
+            if let Some(window) = app_handle.get_webview_window(&window_label_for_emit) {
+                if let Err(e) = window.emit(
+                    "td-drag-drop-position",
+                    serde_json::json!({
+                        "x": final_x_for_emit,
+                        "y": final_y_for_emit,
+                        "screenCoords": false,
+                        "targetWindow": window_label_for_emit
+                    }),
+                ) {
+                    eprintln!("[TiddlyDesktop] Linux: ERROR emitting td-drag-drop-position: {:?}", e);
+                }
+
+                let content_data = DragContentData { types, data, target_window: window_label_for_emit.clone() };
+                eprintln!("[TiddlyDesktop] Linux: Emitting td-drag-content with data: {:?}", content_data);
+                if let Err(e) = window.emit("td-drag-content", &content_data) {
+                    eprintln!("[TiddlyDesktop] Linux: ERROR emitting td-drag-content: {:?}", e);
+                }
+            } else {
+                eprintln!("[TiddlyDesktop] Linux: ERROR - could not find window '{}' for emit!", window_label_for_emit);
+            }
+        });
     }
-
-    // Note: Source window cleanup happens in its drag-end handler
-    // No special cross-wiki handling needed with native GTK DnD
-
-    context.drag_finish(has_content, false, time);
-    s.drag_active = false;
-    s.drop_in_progress = false;
 }
 
 /// Global flag to track if we have a pending outgoing drag source setup

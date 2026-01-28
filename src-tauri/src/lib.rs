@@ -4297,17 +4297,23 @@ fn run_wiki_mode(args: WikiModeArgs) {
         }
     }
 
-    // Create window label from filename
+    // Create window label from filename + path hash to avoid conflicts
+    // when multiple files have the same name in different locations
     let filename = wiki_path.file_name()
         .map(|n| n.to_string_lossy().to_string())
         .unwrap_or_else(|| "wiki".to_string());
 
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    wiki_path.hash(&mut hasher);
+    let path_hash = hasher.finish();
+
     // For tiddler windows, include tiddler name in label
     let label = if let Some(ref tiddler) = tiddler_title {
         let safe_tiddler = tiddler.replace(|c: char| !c.is_alphanumeric(), "-");
-        format!("tiddler-{}-{}", filename.replace(|c: char| !c.is_alphanumeric(), "-"), safe_tiddler)
+        format!("tiddler-{}-{}-{:x}", filename.replace(|c: char| !c.is_alphanumeric(), "-"), safe_tiddler, path_hash & 0xFFFF)
     } else {
-        format!("wiki-{}", filename.replace(|c: char| !c.is_alphanumeric(), "-"))
+        format!("wiki-{}-{:x}", filename.replace(|c: char| !c.is_alphanumeric(), "-"), path_hash & 0xFFFF)
     };
 
     // Window title
@@ -4704,6 +4710,16 @@ fn run_wiki_folder_mode(args: WikiFolderModeArgs) {
     let folder_name_for_state = folder_name.clone();
     let ipc_client_for_state = ipc_client.clone();
 
+    // Create unique window label from folder name + path hash to avoid conflicts
+    // when multiple folders have the same name in different locations
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    folder_path.hash(&mut hasher);
+    let path_hash = hasher.finish();
+    // Label must start with "folder-" to match Tauri capability pattern "folder-*"
+    let label = format!("folder-{}-{:x}", folder_name.replace(|c: char| !c.is_alphanumeric(), "-"), path_hash & 0xFFFF);
+    let label_for_state = label.clone();
+
     // Build the Tauri app for this wiki folder
     tauri::Builder::default()
         .setup(move |app| {
@@ -4729,7 +4745,7 @@ fn run_wiki_folder_mode(args: WikiFolderModeArgs) {
 
             let mut builder = WebviewWindowBuilder::new(
                 app,
-                "main",
+                &label_for_state,
                 WebviewUrl::External(server_url.parse().unwrap())
             )
             .title(&folder_name_for_state)
@@ -4738,7 +4754,7 @@ fn run_wiki_folder_mode(args: WikiFolderModeArgs) {
             .window_classname("tiddlydesktop-rs-wiki")
             .initialization_script(&init_script::get_wiki_init_script(
                 &folder_path_for_state.to_string_lossy(),
-                "main",
+                &label_for_state,
                 false
             ))
             .devtools(true);

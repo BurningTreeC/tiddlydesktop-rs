@@ -29,6 +29,7 @@
     // === State ===
     var internalDragActive = false;  // True when we started a drag (we are the source)
     var externalDragActive = false;  // True when receiving an external drag
+    var crossWikiDragData = null;    // Tiddler JSON pre-emitted from Rust for cross-wiki drops
     var isTextSelectionDrag = false; // True when dragging text selection (not a draggable element)
     var dragData = null;             // Current drag data (for internal drags)
     var dragSource = null;           // Element that started the drag
@@ -67,6 +68,21 @@
         // Patch getData to return captured data during internal drags
         var originalGetData = DataTransfer.prototype.getData;
         DataTransfer.prototype.getData = function(type) {
+            // For cross-wiki drops, return pre-emitted tiddler data
+            // This allows native WebKit drop events to work with cross-wiki tiddler data
+            if (crossWikiDragData) {
+                if (type === 'text/vnd.tiddler') {
+                    return crossWikiDragData;
+                }
+                // Also provide title as text/plain for fallback
+                if (type === 'text/plain') {
+                    try {
+                        var parsed = JSON.parse(crossWikiDragData);
+                        return parsed.title || '';
+                    } catch (e) {}
+                }
+            }
+
             // If internal drag is active, check our captured data
             if (internalDragActive) {
                 // Check dragData first (data we've already processed)
@@ -78,6 +94,18 @@
                 // handler runs after ours and its setData calls go here)
                 if (type in pendingDragData) {
                     return pendingDragData[type];
+                }
+                // For internal drags, filter out browser-resolved wikifile:// URLs
+                // When dragging links (<a href="#TiddlerTitle">), the browser resolves the
+                // relative href to the full page URL: wikifile://localhost/...#TiddlerTitle
+                // TiddlyWiki doesn't set text/uri-list, so we'd fall through to the browser's
+                // value which causes the wikifile:// URL to be used instead of the tiddler data
+                if (type === 'text/uri-list' || type === 'text/x-moz-url' || type === 'URL') {
+                    var nativeResult = originalGetData.call(this, type);
+                    if (nativeResult && nativeResult.indexOf('wikifile://') !== -1) {
+                        return '';  // Filter out browser-resolved wikifile:// URLs
+                    }
+                    return nativeResult;
                 }
             }
 
@@ -120,6 +148,19 @@
             Object.defineProperty(DataTransfer.prototype, 'types', {
                 get: function() {
                     var originalTypes = originalTypesGetter.call(this);
+
+                    // For cross-wiki drops, ensure text/vnd.tiddler is in types
+                    if (crossWikiDragData) {
+                        var original = Array.from(originalTypes || []);
+                        if (original.indexOf('text/vnd.tiddler') === -1) {
+                            original.unshift('text/vnd.tiddler');
+                        }
+                        if (original.indexOf('text/plain') === -1) {
+                            original.push('text/plain');
+                        }
+                        return original;
+                    }
+
                     if (internalDragActive) {
                         // Merge types from dragData, pendingDragData, and original
                         var capturedTypes = dragData ? Object.keys(dragData) : [];
@@ -634,6 +675,7 @@
         log('Cleanup');
         internalDragActive = false;
         externalDragActive = false;
+        crossWikiDragData = null;
         isTextSelectionDrag = false;
         dragData = null;
         dragSource = null;
@@ -651,9 +693,8 @@
             $tw.dragInProgress = null;
         }
 
-        document.querySelectorAll('.tc-dragover').forEach(function(el) {
-            el.classList.remove('tc-dragover');
-        });
+        // Note: Don't manually remove tc-dragover - TiddlyWiki's dropzone widget
+        // handles that through its own state management
 
         // Dispatch synthetic pointerup to reset pointer state
         // This ensures the next pointerdown fires correctly
@@ -703,7 +744,7 @@
             }
         }
 
-        log('Captured drag data types: ' + Object.keys(dragData).join(', '));
+        log('Captured drag data types (immediate): ' + Object.keys(dragData).join(', '));
 
         // For text-selection drags, capture the selection if not in DataTransfer
         if (isTextSelectionDrag && !dragData['text/plain']) {
@@ -715,23 +756,36 @@
         }
 
         // Send data to Rust for inter-wiki drops
+        // Use setTimeout(0) to defer until after TiddlyWiki's bubble-phase dragstart handler
+        // has called setData() - our capture-phase handler runs first, before TiddlyWiki sets data
         if (window.__TAURI__?.core?.invoke) {
-            var tiddlerJson = dragData['text/vnd.tiddler'] || null;
-            var tiddlerUri = tiddlerJson ? 'data:text/vnd.tiddler,' + encodeURIComponent(tiddlerJson) : null;
+            setTimeout(function() {
+                // Merge pendingDragData into dragData (TiddlyWiki's setData calls after our handler)
+                var pending = TD._getPendingDragData ? TD._getPendingDragData() : {};
+                for (var key in pending) {
+                    if (pending.hasOwnProperty(key) && !dragData[key]) {
+                        dragData[key] = pending[key];
+                    }
+                }
+                log('Captured drag data types (after TW): ' + Object.keys(dragData).join(', '));
 
-            var data = {
-                text_plain: dragData['text/plain'] || null,
-                text_html: dragData['text/html'] || null,
-                text_vnd_tiddler: tiddlerJson,
-                text_uri_list: dragData['text/uri-list'] || null,
-                text_x_moz_url: dragData['text/x-moz-url'] || tiddlerUri,
-                url: dragData['URL'] || tiddlerUri,
-                is_text_selection_drag: isTextSelectionDrag
-            };
+                var tiddlerJson = dragData['text/vnd.tiddler'] || null;
+                var tiddlerUri = tiddlerJson ? 'data:text/vnd.tiddler,' + encodeURIComponent(tiddlerJson) : null;
 
-            window.__TAURI__.core.invoke('prepare_native_drag', { data: data })
-                .then(function() { log('Native drag prepared'); })
-                .catch(function(err) { log('prepare_native_drag failed: ' + err); });
+                var data = {
+                    text_plain: dragData['text/plain'] || null,
+                    text_html: dragData['text/html'] || null,
+                    text_vnd_tiddler: tiddlerJson,
+                    text_uri_list: dragData['text/uri-list'] || null,
+                    text_x_moz_url: dragData['text/x-moz-url'] || tiddlerUri,
+                    url: dragData['URL'] || tiddlerUri,
+                    is_text_selection_drag: isTextSelectionDrag
+                };
+
+                window.__TAURI__.core.invoke('prepare_native_drag', { data: data })
+                    .then(function() { log('Native drag prepared'); })
+                    .catch(function(err) { log('prepare_native_drag failed: ' + err); });
+            }, 0);
 
             // Also generate PNG as backup (in case pointerdown didn't fire)
             // This won't arrive in time for the first idle callback, but Rust will
@@ -773,20 +827,19 @@
         cleanup();
     }, true);
 
-    // === Block native events ONLY for external drags ===
-    // For internal drags, let WebKit handle everything (including caret updates)
+    // === Block native events ONLY for cross-wiki drags that need synthetic handling ===
+    // For internal drags: let WebKit handle everything naturally
+    // For cross-wiki drags: let native events flow (patched getData() returns tiddler data)
+    // For external drags (file manager): let native WebKitGTK events flow
     function blockExternalDragEvent(event) {
         if (event.__tiddlyDesktopSynthetic) return;
 
         // If this is our internal drag, let WebKit handle it naturally
         if (internalDragActive) return;
 
-        // For external drags, we handle via td-drag-* events
-        if (externalDragActive) {
-            event.preventDefault();
-            event.stopPropagation();
-            event.stopImmediatePropagation();
-        }
+        // For cross-wiki and external drags, let native events flow
+        // - Cross-wiki: patched getData() returns the pre-emitted tiddler data
+        // - External (file manager): WebKitGTK fires native events, let them through
     }
     document.addEventListener("dragenter", blockExternalDragEvent, true);
     document.addEventListener("dragover", blockExternalDragEvent, true);
@@ -800,6 +853,50 @@
         }
     }, false);
 
+    // Safety net: Prevent browser navigation on file drops
+    // If a file is dropped and nothing handles it, the browser would navigate to the file URL
+    // This handler runs in bubble phase (after TiddlyWiki dropzone) and prevents that
+    document.addEventListener("drop", function(event) {
+        // Only intervene for file drops that weren't handled
+        if (event.dataTransfer && event.dataTransfer.files && event.dataTransfer.files.length > 0) {
+            if (!event.defaultPrevented) {
+                log('Safety net: preventing browser navigation on unhandled file drop');
+                event.preventDefault();
+            }
+        }
+    }, false);
+
+    // Also prevent dragover default to allow drops (required for drop events to fire)
+    document.addEventListener("dragover", function(event) {
+        if (event.dataTransfer && event.dataTransfer.types) {
+            // Check if this contains files
+            var hasFiles = false;
+            for (var i = 0; i < event.dataTransfer.types.length; i++) {
+                if (event.dataTransfer.types[i] === 'Files') {
+                    hasFiles = true;
+                    break;
+                }
+            }
+            if (hasFiles && !event.defaultPrevented) {
+                event.preventDefault();
+            }
+        }
+    }, false);
+
+    // Clear cross-wiki data after native drop completes
+    document.addEventListener("drop", function(event) {
+        if (crossWikiDragData) {
+            log('Native drop with cross-wiki data');
+            // Clear after a short delay to ensure getData() has been called
+            setTimeout(function() {
+                crossWikiDragData = null;
+                externalDragActive = false;
+                enableIframePointerEvents();
+                log('Cross-wiki drag cleanup complete');
+            }, 0);
+        }
+    }, false);
+
     // === GTK event handlers (for external drags coming INTO our window) ===
     function setupGtkEventHandlers() {
         setupTauriListen();
@@ -810,14 +907,48 @@
 
         log('Setting up GTK event handlers');
 
-        // td-drag-motion: External or cross-wiki drag is over this window
-        tauriListen("td-drag-motion", function(event) {
+        // td-cross-wiki-data: Rust detected a cross-wiki drag and pre-emitted the tiddler data
+        // Store it so the patched getData() can return it when native drop happens
+        tauriListen("td-cross-wiki-data", function(event) {
             var p = event.payload || {};
             if (p.targetWindow && p.targetWindow !== window.__WINDOW_LABEL__) return;
 
-            // Skip same-window drags - WebKit/internal JS handles them natively
-            // But process cross-wiki drags (isOurDrag=true, isSameWindow=false)
-            if (p.isSameWindow) return;
+            var tiddlerJson = p.tiddlerJson || null;
+
+            // Validate JSON before storing to catch corruption early
+            if (tiddlerJson) {
+                try {
+                    var parsed = JSON.parse(tiddlerJson);
+                    log('td-cross-wiki-data received, valid JSON, length=' + tiddlerJson.length + ', title=' + (parsed.title || '(no title)'));
+                } catch (e) {
+                    log('td-cross-wiki-data received INVALID JSON: ' + e + ', data preview=' + tiddlerJson.substring(0, 100));
+                    return; // Don't store invalid JSON
+                }
+            } else {
+                log('td-cross-wiki-data received, tiddlerJson is null/empty');
+            }
+
+            crossWikiDragData = tiddlerJson;
+
+            // Reset lastTarget so the next td-drag-motion will dispatch a fresh dragenter
+            // with the correct types (text/vnd.tiddler). This is needed because the initial
+            // dragenter was dispatched before we had the cross-wiki data.
+            lastTarget = null;
+        });
+
+        // td-drag-motion: Handle all external drags (cross-wiki and file manager)
+        // WebKitGTK doesn't fire native DOM events for cross-process drags,
+        // so we dispatch synthetic events here.
+        tauriListen("td-drag-motion", function(event) {
+            var p = event.payload || {};
+            if (p.targetWindow && p.targetWindow !== window.__WINDOW_LABEL__) {
+                return;
+            }
+
+            // Skip same-window drags - WebKit handles them natively
+            if (p.isSameWindow) {
+                return;
+            }
 
             var x = p.x || 0;
             var y = p.y || 0;
@@ -825,22 +956,31 @@
             if (!externalDragActive) {
                 externalDragActive = true;
                 disableIframePointerEvents();
-                log('External drag entered window');
+                log('External drag entered window at (' + x + ', ' + y + ')');
             }
 
-            // Create DataTransfer for synthetic events
+            // Create DataTransfer - populate with cross-wiki data if available
             var dataTransfer = new DataTransfer();
+            if (crossWikiDragData) {
+                try {
+                    dataTransfer.setData('text/vnd.tiddler', crossWikiDragData);
+                    var parsed = JSON.parse(crossWikiDragData);
+                    if (parsed.title) {
+                        dataTransfer.setData('text/plain', parsed.title);
+                    }
+                } catch (e) {}
+            }
 
             var target = getElementAt(x, y);
 
-            // Dispatch dragenter if target changed
+            // Dispatch dragenter/dragleave if target changed
             if (target !== lastTarget) {
+                var enterEvent = createDragEvent("dragenter", x, y, dataTransfer, lastTarget);
+                target.dispatchEvent(enterEvent);
                 if (lastTarget) {
                     var leaveEvent = createDragEvent("dragleave", x, y, dataTransfer, target);
                     lastTarget.dispatchEvent(leaveEvent);
                 }
-                var enterEvent = createDragEvent("dragenter", x, y, dataTransfer, lastTarget);
-                target.dispatchEvent(enterEvent);
                 lastTarget = target;
             }
 
@@ -849,16 +989,19 @@
             target.dispatchEvent(overEvent);
         });
 
-        // td-drag-leave: External or cross-wiki drag left this window
+        // td-drag-leave: Dispatch synthetic dragleave for external drags
         tauriListen("td-drag-leave", function(event) {
             var p = event.payload || {};
             if (p.targetWindow && p.targetWindow !== window.__WINDOW_LABEL__) return;
 
-            // Skip same-window drags - WebKit/internal JS handles them natively
+            // Skip same-window drags - WebKit handles them natively
             if (p.isSameWindow) return;
+
+            if (!externalDragActive) return;
 
             log('td-drag-leave');
 
+            // Dispatch synthetic dragleave
             if (lastTarget) {
                 var dataTransfer = new DataTransfer();
                 var leaveEvent = createDragEvent("dragleave", 0, 0, dataTransfer, null);
@@ -866,11 +1009,8 @@
                 lastTarget = null;
             }
 
-            document.querySelectorAll('.tc-dragover').forEach(function(el) {
-                el.classList.remove('tc-dragover');
-            });
-
             externalDragActive = false;
+            crossWikiDragData = null;
             enableIframePointerEvents();
         });
 
@@ -916,6 +1056,12 @@
         tauriListen("td-drag-content", function(event) {
             var p = event.payload || {};
             if (p.targetWindow && p.targetWindow !== window.__WINDOW_LABEL__) return;
+
+            // Skip if we already handled this via native drop with crossWikiDragData
+            if (crossWikiDragData) {
+                log('td-drag-content: skipping, native drop already handled with cross-wiki data');
+                return;
+            }
 
             var pos = window.__pendingDropPosition || { x: 0, y: 0 };
             delete window.__pendingDropPosition;
@@ -964,15 +1110,169 @@
             cleanup();
         });
 
+        // === Tauri native drag events for CROSS-WIKI drags only ===
+        // These dispatch synthetic DOM events with the pre-loaded tiddler data.
+        // For file manager drags, native WebKitGTK events handle everything.
+
+        tauriListen("tauri://drag-enter", function(event) {
+            var p = event.payload || {};
+
+            // Skip if we're the drag source (internal drag)
+            if (internalDragActive) return;
+
+            // Only dispatch synthetic events for cross-wiki drags
+            // File manager drags use native WebKitGTK events
+            if (!crossWikiDragData) return;
+
+            var pos = p.position || { x: 0, y: 0 };
+            log('tauri://drag-enter (cross-wiki) at (' + pos.x + ', ' + pos.y + ')');
+
+            externalDragActive = true;
+            disableIframePointerEvents();
+
+            var dataTransfer = new DataTransfer();
+            try {
+                dataTransfer.setData('text/vnd.tiddler', crossWikiDragData);
+                var parsed = JSON.parse(crossWikiDragData);
+                if (parsed.title) {
+                    dataTransfer.setData('text/plain', parsed.title);
+                }
+            } catch (e) {}
+
+            var target = getElementAt(pos.x, pos.y);
+            var enterEvent = createDragEvent("dragenter", pos.x, pos.y, dataTransfer, null);
+            target.dispatchEvent(enterEvent);
+            lastTarget = target;
+
+            // Also dispatch initial dragover
+            var overEvent = createDragEvent("dragover", pos.x, pos.y, dataTransfer, null);
+            target.dispatchEvent(overEvent);
+        });
+
+        tauriListen("tauri://drag-over", function(event) {
+            var p = event.payload || {};
+
+            // Skip if we're the drag source (internal drag)
+            if (internalDragActive) return;
+
+            // Only dispatch synthetic events for cross-wiki drags
+            if (!crossWikiDragData) return;
+
+            var pos = p.position || { x: 0, y: 0 };
+
+            // Mark as external drag if not already (in case we missed drag-enter)
+            if (!externalDragActive) {
+                externalDragActive = true;
+                disableIframePointerEvents();
+            }
+
+            var dataTransfer = new DataTransfer();
+            try {
+                dataTransfer.setData('text/vnd.tiddler', crossWikiDragData);
+                var parsed = JSON.parse(crossWikiDragData);
+                if (parsed.title) {
+                    dataTransfer.setData('text/plain', parsed.title);
+                }
+            } catch (e) {}
+
+            var target = getElementAt(pos.x, pos.y);
+
+            // Dispatch dragenter/dragleave if target changed
+            if (target !== lastTarget) {
+                var enterEvent = createDragEvent("dragenter", pos.x, pos.y, dataTransfer, lastTarget);
+                target.dispatchEvent(enterEvent);
+                if (lastTarget) {
+                    var leaveEvent = createDragEvent("dragleave", pos.x, pos.y, dataTransfer, target);
+                    lastTarget.dispatchEvent(leaveEvent);
+                }
+                lastTarget = target;
+            }
+
+            // Dispatch dragover
+            var overEvent = createDragEvent("dragover", pos.x, pos.y, dataTransfer, null);
+            target.dispatchEvent(overEvent);
+        });
+
+        tauriListen("tauri://drag-leave", function(event) {
+            // Skip if we're the drag source (internal drag)
+            if (internalDragActive) return;
+
+            // Only dispatch synthetic events for cross-wiki drags
+            if (!crossWikiDragData) return;
+
+            log('tauri://drag-leave (cross-wiki)');
+
+            if (lastTarget) {
+                var dataTransfer = new DataTransfer();
+                var leaveEvent = createDragEvent("dragleave", 0, 0, dataTransfer, null);
+                lastTarget.dispatchEvent(leaveEvent);
+                lastTarget = null;
+            }
+
+            // Note: Don't manually remove tc-dragover - TiddlyWiki's dropzone widget
+            // handles that through its resetState() when it receives dragleave
+
+            externalDragActive = false;
+            enableIframePointerEvents();
+        });
+
         // tauri://drag-drop: Tauri's native drop handler intercepted a drop
         // Convert it to a DOM drop event for TiddlyWiki
         tauriListen("tauri://drag-drop", function(event) {
             var p = event.payload || {};
             var paths = p.paths || [];
 
-            log('tauri://drag-drop received, paths=' + paths.length);
+            // IMPORTANT: Save cross-wiki data immediately before any cleanup can clear it
+            // The cleanup() function may be called by other event handlers (dragend, td-drag-end)
+            // before this handler completes
+            var savedCrossWikiData = crossWikiDragData;
+
+            log('tauri://drag-drop received, paths=' + paths.length + ', hasCrossWikiData=' + !!savedCrossWikiData);
+
+            // For cross-wiki drops, we have the tiddler data pre-loaded
+            // Dispatch a synthetic drop event with that data
+            if (savedCrossWikiData) {
+                log('tauri://drag-drop: dispatching synthetic drop with cross-wiki data, length=' + savedCrossWikiData.length);
+
+                var pos = p.position || { x: 0, y: 0 };
+                var target = getElementAt(pos.x, pos.y) || lastTarget || document.body;
+
+                var dataTransfer = new DataTransfer();
+                var tiddlerTitle = null;
+
+                // Parse the tiddler data to extract title
+                try {
+                    var parsed = JSON.parse(savedCrossWikiData);
+                    tiddlerTitle = parsed.title || null;
+                    log('Parsed cross-wiki tiddler: title=' + tiddlerTitle);
+                } catch (e) {
+                    log('Error parsing cross-wiki JSON: ' + e + ', data preview=' + savedCrossWikiData.substring(0, 100));
+                }
+
+                // Set the data on DataTransfer
+                try {
+                    dataTransfer.setData('text/vnd.tiddler', savedCrossWikiData);
+                    if (tiddlerTitle) {
+                        dataTransfer.setData('text/plain', tiddlerTitle);
+                    }
+                } catch (e) {
+                    log('Error setting DataTransfer: ' + e);
+                }
+
+                var dropEvent = createDragEvent("drop", pos.x, pos.y, dataTransfer, null);
+                target.dispatchEvent(dropEvent);
+                log('Dispatched cross-wiki drop to ' + target.tagName);
+
+                cleanup();
+                return;
+            }
 
             if (paths.length === 0) {
+                // If external drag is active, td-drag-content will handle the drop
+                if (externalDragActive) {
+                    log('tauri://drag-drop: no paths, but external drag active - td-drag-content will handle');
+                    return;
+                }
                 cleanup();
                 return;
             }
@@ -997,6 +1297,12 @@
             }
 
             if (!tiddlerData && !textData) {
+                // If this is an external drag (from file manager etc.), td-drag-content will handle it
+                // Don't cleanup here or we'll clear the state before td-drag-content fires
+                if (externalDragActive) {
+                    log('tauri://drag-drop: no tiddler/text data, but external drag active - td-drag-content will handle');
+                    return; // Let td-drag-content handle the drop
+                }
                 log('No usable data in tauri://drag-drop');
                 cleanup();
                 return;

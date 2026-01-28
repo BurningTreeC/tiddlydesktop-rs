@@ -76,7 +76,7 @@
                 "<p>Session cookies will be stored in this wiki's isolated session data.</p>\n\n" +
                 "<h2>Authentication URLs</h2>\n\n" +
                 "<$list filter=\"[prefix[$:/temp/tiddlydesktop-rs/session-auth/url/]]\" variable=\"urlTiddler\">\n" +
-                "<div style=\"display:flex;align-items:center;gap:8px;margin-bottom:8px;padding:8px;background:#f8f8f8;border-radius:4px;\">\n" +
+                "<div class=\"tc-tiddler-info\" style=\"display:flex;align-items:center;gap:8px;margin-bottom:8px;padding:8px;border-radius:4px;\">\n" +
                 "<div style=\"flex:1;\">\n" +
                 "<strong><$text text={{{ [<urlTiddler>get[name]] }}}/></strong><br/>\n" +
                 "<small><$text text={{{ [<urlTiddler>get[url]] }}}/></small>\n" +

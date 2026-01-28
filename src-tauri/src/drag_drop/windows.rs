@@ -35,7 +35,7 @@ use windows::Win32::System::Ole::{
     DROPEFFECT_LINK, DROPEFFECT_MOVE, DROPEFFECT_NONE,
 };
 use windows::Win32::UI::Shell::{DragQueryFileW, HDROP};
-use windows::Win32::UI::WindowsAndMessaging::{EnumChildWindows, GetClassNameW};
+use windows::Win32::UI::WindowsAndMessaging::{EnumChildWindows, GetClassNameW, GetPropW};
 
 /// Thread-safe wrapper for our drop target
 #[allow(dead_code)]
@@ -120,6 +120,13 @@ fn get_cf_chromium_custom_data() -> u16 {
 pub struct DragContentData {
     pub types: Vec<String>,
     pub data: HashMap<String, String>,
+    /// True if this is a text-selection drag (for filtering text/html in JS)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub is_text_selection_drag: Option<bool>,
+    /// True if this is a same-window drag (for Issue 4b handling in JS)
+    #[serde(rename = "isSameWindow")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub is_same_window: Option<bool>,
 }
 
 /// IDropTarget vtable - must match COM layout exactly
@@ -164,6 +171,8 @@ struct DropTargetImpl {
     window: WebviewWindow,
     drag_active: Mutex<bool>,
     hwnd: isize,
+    /// Original IDropTarget from WebView2 (if any) - called for same-window drops on editable elements
+    original_drop_target: Option<IDropTarget>,
 }
 
 /// Static vtable instance
@@ -178,13 +187,14 @@ static DROPTARGET_VTBL: IDropTargetVtbl = IDropTargetVtbl {
 };
 
 impl DropTargetImpl {
-    fn new(window: WebviewWindow, hwnd: HWND) -> *mut Self {
+    fn new(window: WebviewWindow, hwnd: HWND, original_drop_target: Option<IDropTarget>) -> *mut Self {
         let obj = Box::new(Self {
             vtbl: &DROPTARGET_VTBL,
             ref_count: AtomicU32::new(1),
             window,
             drag_active: Mutex::new(false),
             hwnd: hwnd.0 as isize,
+            original_drop_target,
         });
         Box::into_raw(obj)
     }
@@ -271,6 +281,26 @@ impl DropTargetImpl {
         None
     }
 
+    /// Check if the outgoing drag has tiddler data
+    fn has_tiddler_data() -> bool {
+        if let Ok(guard) = OUTGOING_DRAG_STATE.lock() {
+            if let Some(state) = guard.as_ref() {
+                return state.data.text_vnd_tiddler.is_some();
+            }
+        }
+        false
+    }
+
+    /// Check if the outgoing drag is a text selection drag
+    fn is_text_selection_drag() -> bool {
+        if let Ok(guard) = OUTGOING_DRAG_STATE.lock() {
+            if let Some(state) = guard.as_ref() {
+                return state.data.is_text_selection_drag;
+            }
+        }
+        false
+    }
+
     // IDropTarget::DragEnter - native event when drag enters this window
     unsafe extern "system" fn drag_enter(
         this: *mut Self,
@@ -289,6 +319,8 @@ impl DropTargetImpl {
         let is_our_drag = Self::is_any_outgoing_drag();
         let source_window_label = Self::get_source_window_label();
         let is_same_window = obj.is_same_window_drag();
+        let has_tiddler = Self::has_tiddler_data();
+        let is_text_sel = Self::is_text_selection_drag();
 
         eprintln!(
             "[TiddlyDesktop] Windows IDropTarget::DragEnter at ({}, {}), isOurDrag={}, sourceWindow={:?}, isSameWindow={}",
@@ -302,6 +334,7 @@ impl DropTargetImpl {
         }
 
         // Emit td-drag-motion with full context for cross-wiki support
+        // Include hasTiddlerData and isTextSelectionDrag for Issue 4b handling in JS
         let _ = obj.window.emit(
             "td-drag-motion",
             serde_json::json!({
@@ -312,7 +345,9 @@ impl DropTargetImpl {
                 "isOurDrag": is_our_drag,
                 "isSameWindow": is_same_window,
                 "sourceWindowLabel": source_window_label,
-                "windowLabel": obj.window.label()
+                "windowLabel": obj.window.label(),
+                "hasTiddlerData": has_tiddler,
+                "isTextSelectionDrag": is_text_sel
             }),
         );
 
@@ -347,6 +382,8 @@ impl DropTargetImpl {
         let is_our_drag = Self::is_any_outgoing_drag();
         let source_window_label = Self::get_source_window_label();
         let is_same_window = obj.is_same_window_drag();
+        let has_tiddler = Self::has_tiddler_data();
+        let is_text_sel = Self::is_text_selection_drag();
 
         // Rate-limited logging
         static LAST_LOG: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
@@ -364,6 +401,7 @@ impl DropTargetImpl {
         }
 
         // Emit td-drag-motion with full context for cross-wiki support
+        // Include hasTiddlerData and isTextSelectionDrag for Issue 4b handling in JS
         let _ = obj.window.emit(
             "td-drag-motion",
             serde_json::json!({
@@ -374,7 +412,9 @@ impl DropTargetImpl {
                 "isOurDrag": is_our_drag,
                 "isSameWindow": is_same_window,
                 "sourceWindowLabel": source_window_label,
-                "windowLabel": obj.window.label()
+                "windowLabel": obj.window.label(),
+                "hasTiddlerData": has_tiddler,
+                "isTextSelectionDrag": is_text_sel
             }),
         );
 
@@ -443,11 +483,35 @@ impl DropTargetImpl {
             client_x, client_y, is_our_drag, source_window_label, is_same_window
         );
 
-        // For same-window drags, we need to provide the data to JS because
-        // IDropTarget intercepts the drop before WebView2 can handle it natively.
-        // This is different from Linux where WebKit can still handle same-window drops.
+        // For same-window drags, first let the browser try to handle it natively.
+        // This is critical for editable elements (input/textarea/contenteditable) which
+        // need browser-trusted drop events to work correctly.
         if is_same_window {
-            eprintln!("[TiddlyDesktop] Windows IDropTarget::Drop - same-window drag, providing data to JS");
+            eprintln!("[TiddlyDesktop] Windows IDropTarget::Drop - same-window drag, trying native handler first");
+
+            // Call the original IDropTarget if we have one
+            let browser_handled = if let Some(ref original) = obj.original_drop_target {
+                eprintln!("[TiddlyDesktop] Windows IDropTarget::Drop - calling original IDropTarget");
+                let result = original.Drop(
+                    std::mem::transmute(p_data_obj),
+                    _grf_key_state,
+                    pt,
+                    pdw_effect
+                );
+                result.is_ok()
+            } else {
+                eprintln!("[TiddlyDesktop] Windows IDropTarget::Drop - no original IDropTarget available");
+                false
+            };
+
+            if browser_handled {
+                // Browser handled it (e.g., drop on editable element)
+                eprintln!("[TiddlyDesktop] Windows IDropTarget::Drop - browser handled same-window drop natively");
+                return S_OK;
+            }
+
+            // Browser didn't handle it - emit td-drag-content for $droppable handlers etc.
+            eprintln!("[TiddlyDesktop] Windows IDropTarget::Drop - browser didn't handle, emitting td-drag-content");
             let _ = obj.window.emit(
                 "td-drag-drop-position",
                 serde_json::json!({
@@ -463,17 +527,12 @@ impl DropTargetImpl {
             );
 
             // Get the stored drag data and emit td-drag-content so JS can process the drop.
-            // For same-window drags, only emit text/plain and text/vnd.tiddler.
-            // We explicitly EXCLUDE text/html and text/uri-list because:
-            // - TiddlyWiki's $droppable prefers text/html over text/plain, causing HTML markup to be inserted
-            // - Inputs may use text/uri-list (wikifile://...) instead of text/plain
-            // This matches Linux behavior where the DataTransfer.getData patch ensures
-            // TiddlyWiki handlers see the correct data types.
             if let Ok(guard) = OUTGOING_DRAG_STATE.lock() {
                 if let Some(state) = guard.as_ref() {
                     let mut types = Vec::new();
                     let mut data = HashMap::new();
 
+                    // Include text/vnd.tiddler for $droppable handlers
                     if let Some(ref tiddler) = state.data.text_vnd_tiddler {
                         types.push("text/vnd.tiddler".to_string());
                         data.insert("text/vnd.tiddler".to_string(), tiddler.clone());
@@ -488,7 +547,12 @@ impl DropTargetImpl {
                             "[TiddlyDesktop] Windows IDropTarget::Drop - emitting td-drag-content for same-window drag, types: {:?}",
                             types
                         );
-                        let content_data = DragContentData { types, data };
+                        let content_data = DragContentData {
+                            types,
+                            data,
+                            is_text_selection_drag: if state.data.is_text_selection_drag { Some(true) } else { None },
+                            is_same_window: Some(true)
+                        };
                         let _ = obj.window.emit("td-drag-content", &content_data);
                     }
                 }
@@ -546,7 +610,18 @@ impl DropTargetImpl {
             }
 
             // Content drop - extract text/html/urls
-            if let Some(content_data) = obj.extract_data(data_object) {
+            if let Some(mut content_data) = obj.extract_data(data_object) {
+                // For cross-wiki drags from our app, propagate the is_text_selection_drag flag
+                // This allows JS to filter text/html for text-selection drags (Issue 3)
+                if is_our_drag {
+                    if let Ok(guard) = OUTGOING_DRAG_STATE.lock() {
+                        if let Some(state) = guard.as_ref() {
+                            if state.data.is_text_selection_drag {
+                                content_data.is_text_selection_drag = Some(true);
+                            }
+                        }
+                    }
+                }
                 eprintln!(
                     "[TiddlyDesktop] Windows IDropTarget::Drop - content types: {:?}",
                     content_data.types
@@ -739,38 +814,45 @@ impl DropTargetImpl {
         }
 
         // 5. text/plain (CF_UNICODETEXT)
-        if let Some(text) = self.get_unicode_text(data_object) {
-            // Check if plain text looks like tiddler JSON (browser may not expose text/vnd.tiddler)
-            let looks_like_tiddler_json = text.trim_start().starts_with('[')
-                && text.contains("\"title\"")
-                && (text.contains("\"text\"") || text.contains("\"fields\""));
+        // Skip if text/vnd.tiddler is already present to avoid duplicate data
+        // This fixes Issue 1 & 2: external drops from browsers include both tiddler and plain text
+        if !data.contains_key("text/vnd.tiddler") {
+            if let Some(text) = self.get_unicode_text(data_object) {
+                // Check if plain text looks like tiddler JSON (browser may not expose text/vnd.tiddler)
+                let looks_like_tiddler_json = text.trim_start().starts_with('[')
+                    && text.contains("\"title\"")
+                    && (text.contains("\"text\"") || text.contains("\"fields\""));
 
-            if looks_like_tiddler_json && !data.contains_key("text/vnd.tiddler") {
-                eprintln!("[TiddlyDesktop] Windows: Detected tiddler JSON in plain text!");
-                types.push("text/vnd.tiddler".to_string());
-                data.insert("text/vnd.tiddler".to_string(), text);
-                // Don't also add as text/plain - that would cause duplicate imports
-            } else {
-                types.push("text/plain".to_string());
-                data.insert("text/plain".to_string(), text);
+                if looks_like_tiddler_json {
+                    eprintln!("[TiddlyDesktop] Windows: Detected tiddler JSON in plain text!");
+                    types.push("text/vnd.tiddler".to_string());
+                    data.insert("text/vnd.tiddler".to_string(), text);
+                    // Don't also add as text/plain - that would cause duplicate imports
+                } else {
+                    types.push("text/plain".to_string());
+                    data.insert("text/plain".to_string(), text);
+                }
             }
         }
 
         // 6. Text (CF_TEXT fallback)
-        if let Some(text) = self.get_ansi_text(data_object) {
-            // Check if ANSI text looks like tiddler JSON
-            let looks_like_tiddler_json = text.trim_start().starts_with('[')
-                && text.contains("\"title\"")
-                && (text.contains("\"text\"") || text.contains("\"fields\""));
+        // Skip if text/vnd.tiddler is already present to avoid duplicate data
+        if !data.contains_key("text/vnd.tiddler") && !data.contains_key("text/plain") {
+            if let Some(text) = self.get_ansi_text(data_object) {
+                // Check if ANSI text looks like tiddler JSON
+                let looks_like_tiddler_json = text.trim_start().starts_with('[')
+                    && text.contains("\"title\"")
+                    && (text.contains("\"text\"") || text.contains("\"fields\""));
 
-            if looks_like_tiddler_json && !data.contains_key("text/vnd.tiddler") {
-                eprintln!("[TiddlyDesktop] Windows: Detected tiddler JSON in ANSI text!");
-                types.push("text/vnd.tiddler".to_string());
-                data.insert("text/vnd.tiddler".to_string(), text);
-                // Don't also add as Text - that would cause duplicate imports
-            } else {
-                types.push("Text".to_string());
-                data.insert("Text".to_string(), text);
+                if looks_like_tiddler_json {
+                    eprintln!("[TiddlyDesktop] Windows: Detected tiddler JSON in ANSI text!");
+                    types.push("text/vnd.tiddler".to_string());
+                    data.insert("text/vnd.tiddler".to_string(), text);
+                    // Don't also add as Text - that would cause duplicate imports
+                } else {
+                    types.push("Text".to_string());
+                    data.insert("Text".to_string(), text);
+                }
             }
         }
 
@@ -786,7 +868,7 @@ impl DropTargetImpl {
         if types.is_empty() {
             None
         } else {
-            Some(DragContentData { types, data })
+            Some(DragContentData { types, data, is_text_selection_drag: None, is_same_window: None })
         }
     }
 
@@ -2174,7 +2256,33 @@ pub fn setup_drag_handlers(window: &WebviewWindow) {
                     target_hwnd.0 as isize
                 );
 
-                let drop_target_ptr = DropTargetImpl::new(window_for_drop.clone(), target_hwnd);
+                // Try to get the original IDropTarget before revoking
+                // This is stored by OLE as a window property "OleDropTargetInterface"
+                let original_drop_target: Option<IDropTarget> = {
+                    use windows::core::w;
+                    let prop = GetPropW(target_hwnd, w!("OleDropTargetInterface"));
+                    if !prop.0.is_null() {
+                        // The property value is a pointer to IUnknown, we need to QueryInterface for IDropTarget
+                        let unknown_ptr = prop.0 as *mut std::ffi::c_void;
+                        // Cast to IUnknown and QueryInterface
+                        let unknown: &windows::Win32::System::Com::IUnknown = std::mem::transmute(&unknown_ptr);
+                        match unknown.cast::<IDropTarget>() {
+                            Ok(dt) => {
+                                eprintln!("[TiddlyDesktop] Windows: Got original IDropTarget from OleDropTargetInterface property");
+                                Some(dt)
+                            }
+                            Err(e) => {
+                                eprintln!("[TiddlyDesktop] Windows: Failed to cast to IDropTarget: {:?}", e);
+                                None
+                            }
+                        }
+                    } else {
+                        eprintln!("[TiddlyDesktop] Windows: No existing OleDropTargetInterface property found");
+                        None
+                    }
+                };
+
+                let drop_target_ptr = DropTargetImpl::new(window_for_drop.clone(), target_hwnd, original_drop_target);
                 let drop_target = DropTargetImpl::as_idroptarget(drop_target_ptr);
 
                 DROP_TARGET_MAP

@@ -16,6 +16,21 @@
     var promptWrapper = null;
     var confirmationBypassed = false;
 
+    // Get a color from TiddlyWiki's palette using the <<colour>> macro
+    function getColour(name, fallback) {
+        if (typeof $tw !== 'undefined' && $tw.wiki && $tw.wiki.renderText) {
+            try {
+                var result = $tw.wiki.renderText("text/plain", "text/vnd.tiddlywiki", "<<colour " + name + ">>").trim();
+                if (result && result !== "<<colour " + name + ">>") {
+                    return result;
+                }
+            } catch (e) {
+                // Fall through to fallback
+            }
+        }
+        return fallback;
+    }
+
     function ensureWrapper() {
         if (!promptWrapper && document.body) {
             promptWrapper = document.createElement('div');
@@ -33,19 +48,29 @@
             return;
         }
 
+        // Get colors from palette using <<colour>> macro
+        var modalBackground = getColour('modal-background', getColour('tiddler-background', '#ffffff'));
+        var modalBorder = getColour('modal-border', getColour('tiddler-border', '#cccccc'));
+        var foreground = getColour('foreground', '#333333');
+        var primary = getColour('primary', '#5778d8');
+        var mutedForeground = getColour('muted-foreground', '#999999');
+        var buttonBackground = getColour('button-background', '#f0f0f0');
+        var buttonForeground = getColour('button-foreground', foreground);
+        var buttonBorder = getColour('button-border', '#cccccc');
+
         var modal = document.createElement('div');
-        modal.style.cssText = 'background:white;padding:20px;border-radius:8px;box-shadow:0 4px 20px rgba(0,0,0,0.3);max-width:400px;text-align:center;';
+        modal.style.cssText = 'background:' + modalBackground + ';color:' + foreground + ';padding:20px;border-radius:8px;border:1px solid ' + modalBorder + ';box-shadow:0 4px 20px rgba(0,0,0,0.3);max-width:400px;text-align:center;';
 
         var msgP = document.createElement('p');
         msgP.textContent = message;
-        msgP.style.cssText = 'margin:0 0 20px 0;font-size:16px;';
+        msgP.style.cssText = 'margin:0 0 20px 0;font-size:16px;color:' + foreground + ';';
 
         var btnContainer = document.createElement('div');
         btnContainer.style.cssText = 'display:flex;gap:10px;justify-content:center;';
 
         var cancelBtn = document.createElement('button');
         cancelBtn.textContent = 'Cancel';
-        cancelBtn.style.cssText = 'padding:8px 20px;background:#e0e0e0;border:none;border-radius:4px;cursor:pointer;font-size:14px;';
+        cancelBtn.style.cssText = 'padding:8px 20px;background:' + buttonBackground + ';color:' + buttonForeground + ';border:1px solid ' + buttonBorder + ';border-radius:4px;cursor:pointer;font-size:14px;';
         cancelBtn.onclick = function() {
             wrapper.style.display = 'none';
             wrapper.innerHTML = '';
@@ -54,7 +79,7 @@
 
         var okBtn = document.createElement('button');
         okBtn.textContent = 'OK';
-        okBtn.style.cssText = 'padding:8px 20px;background:#4a90d9;color:white;border:none;border-radius:4px;cursor:pointer;font-size:14px;';
+        okBtn.style.cssText = 'padding:8px 20px;background:' + primary + ';color:' + modalBackground + ';border:1px solid ' + primary + ';border-radius:4px;cursor:pointer;font-size:14px;';
         okBtn.onclick = function() {
             wrapper.style.display = 'none';
             wrapper.innerHTML = '';

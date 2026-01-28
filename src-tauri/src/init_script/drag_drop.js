@@ -789,6 +789,24 @@
             }
             var target = getTargetElement(pos);
 
+            // Issue 4b: For same-wiki tiddler drags (not text selection), only dispatch events
+            // to $droppable elements - NOT to the main dropzone
+            // This prevents dropzone from showing tc-dragover for same-wiki tiddler drags
+            var isSameWikiTiddlerDrag = event.payload.isSameWindow &&
+                                        !event.payload.isTextSelectionDrag &&
+                                        event.payload.hasTiddlerData;
+
+            if (isSameWikiTiddlerDrag) {
+                var droppable = target.closest('.tc-droppable');
+                if (!droppable) {
+                    // Not over a $droppable - skip synthetic events
+                    // This prevents dropzone from showing tc-dragover
+                    // But still update caret position for potential input drops
+                    updateCaretForDrag(pos.x, pos.y);
+                    return;
+                }
+            }
+
             var dt = new DataTransfer();
             ["text/plain", "text/html", "text/uri-list", "text/vnd.tiddler"].forEach(function(type) {
                 try { dt.setData(type, ""); } catch(e) {}
@@ -895,7 +913,9 @@
                 pendingContentDropData = {
                     types: event.payload.types || [],
                     data: sanitizedData,
-                    files: []
+                    files: [],
+                    isTextSelectionDrag: event.payload.is_text_selection_drag || false,
+                    isSameWindow: event.payload.isSameWindow || false
                 };
                 if (pendingContentDropPos) {
                     processContentDrop();
@@ -905,10 +925,10 @@
 
         listen("td-drag-drop-position", function(event) {
             // Skip if internal drag is active (handled by internal_drag.js)
+            // Note: On Windows/macOS, same-window drops are also handled here because
+            // IDropTarget/NSDraggingDestination intercepts the drop before WebView can handle it.
+            // The isInternalDragActive check covers the case where internal_drag.js is handling it.
             if (TD.isInternalDragActive && TD.isInternalDragActive()) return;
-            // Skip same-window drags (handled by internal_drag.js)
-            // But process cross-wiki drags (isOurDrag=true, isSameWindow=false)
-            if (event.payload && event.payload.isSameWindow) return;
             if (event.payload) {
                 var pos;
                 if (event.payload.screenCoords) {
@@ -1046,11 +1066,47 @@
             var pos = pendingContentDropPos;
             var dropTarget = getTargetElement(pos);
 
-            // Skip synthetic drops for editable elements - let native handling work
-            if (isEditableElement(dropTarget)) {
+            // Issue 3: For text-selection drags, filter out text/html to prevent styled content import
+            // This applies to cross-wiki text selection drags where we want plain text only
+            if (capturedData.isTextSelectionDrag && capturedData.data['text/html']) {
+                invoke("js_log", { message: "Filtering text/html from text-selection drag" });
+                delete capturedData.data['text/html'];
+                var htmlIdx = capturedData.types.indexOf('text/html');
+                if (htmlIdx !== -1) {
+                    capturedData.types.splice(htmlIdx, 1);
+                }
+            }
+
+            // For same-window drops on editable elements, the native browser handler
+            // should have already processed them (via original IDropTarget on Windows,
+            // ORIGINAL_PERFORM_DRAG on macOS). If we reach here, just skip - don't
+            // dispatch synthetic events to editable elements.
+            if (capturedData.isSameWindow && isEditableElement(dropTarget)) {
+                invoke("js_log", { message: "Same-window drop on editable - should have been handled natively" });
                 pendingContentDropData = null;
                 pendingContentDropPos = null;
+                resetGtkDragState();
                 return;
+            }
+
+            // Issue 4b: For same-wiki tiddler drags (not text-selection), only dispatch to $droppable elements
+            // Don't dispatch to main dropzone (prevents import of already-existing tiddler)
+            var isSameWikiTiddlerDrag = capturedData.isSameWindow &&
+                                        !capturedData.isTextSelectionDrag &&
+                                        capturedData.data['text/vnd.tiddler'];
+
+            if (isSameWikiTiddlerDrag) {
+                var droppable = dropTarget.closest('.tc-droppable');
+                if (!droppable) {
+                    // Dropped on main dropzone, not on $droppable
+                    // Don't dispatch - no import for same-wiki tiddlers
+                    invoke("js_log", { message: "Same-wiki tiddler drop on dropzone - skipping import" });
+                    pendingContentDropData = null;
+                    pendingContentDropPos = null;
+                    resetGtkDragState();
+                    return;
+                }
+                // Dropped on $droppable - continue to dispatch event for reordering etc.
             }
 
             // Merge in any captured internal drag data (from TiddlyWiki's dataTransfer.setData)

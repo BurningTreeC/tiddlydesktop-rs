@@ -28,15 +28,43 @@ exports.startup = function() {
 
         console.log("[TiddlyDesktop] Setting language to:", language, "paramObject:", event.paramObject);
 
-        // Call Tauri to save the language preference
-        window.__TAURI__.core.invoke("set_language", { language: language })
-            .then(function() {
-                // Reload the page to apply the new language
-                window.location.reload();
-            })
-            .catch(function(err) {
-                console.error("Failed to set language:", err);
-            });
+        // Check if wiki has unsaved changes
+        var isDirty = false;
+        try {
+            if ($tw.wiki && typeof $tw.wiki.isDirty === 'function') {
+                isDirty = $tw.wiki.isDirty();
+            } else if ($tw.saverHandler && typeof $tw.saverHandler.isDirty === 'function') {
+                isDirty = $tw.saverHandler.isDirty();
+            } else if ($tw.saverHandler && typeof $tw.saverHandler.numChanges === 'function') {
+                isDirty = $tw.saverHandler.numChanges() > 0;
+            } else if (document.title && document.title.startsWith('*')) {
+                isDirty = true;
+            }
+        } catch (e) {
+            console.warn("[TiddlyDesktop] Could not check dirty state:", e);
+        }
+
+        // Function to save language and reload
+        var saveLanguageAndReload = function() {
+            window.__TAURI__.core.invoke("set_language", { language: language })
+                .then(function() {
+                    window.location.reload();
+                })
+                .catch(function(err) {
+                    console.error("Failed to set language:", err);
+                });
+        };
+
+        // If dirty, save wiki first, then change language
+        if (isDirty) {
+            console.log("[TiddlyDesktop] Wiki has unsaved changes, saving before language change...");
+            // Trigger wiki save
+            $tw.rootWidget.dispatchEvent({type: "tm-save-wiki"});
+            // Wait a moment for save to process, then save language and reload
+            setTimeout(saveLanguageAndReload, 500);
+        } else {
+            saveLanguageAndReload();
+        }
     });
 };
 

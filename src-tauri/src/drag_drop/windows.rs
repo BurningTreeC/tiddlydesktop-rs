@@ -2266,21 +2266,29 @@ pub fn setup_drag_handlers(window: &WebviewWindow) {
                     "[TiddlyDesktop] Windows: Registering IDropTarget on HWND 0x{:x}",
                     target_hwnd.0 as isize
                 );
+                let _ = std::io::Write::flush(&mut std::io::stderr());
 
                 // Try to get the original IDropTarget before revoking
                 // This is stored by OLE as a window property "OleDropTargetInterface"
                 let original_drop_target: Option<IDropTarget> = {
                     use std::mem::ManuallyDrop;
                     use windows::core::w;
+                    eprintln!("[TiddlyDesktop] Windows: DEBUG 1 - About to call GetPropW");
+                    let _ = std::io::Write::flush(&mut std::io::stderr());
                     let prop = GetPropW(target_hwnd, w!("OleDropTargetInterface"));
+                    eprintln!("[TiddlyDesktop] Windows: DEBUG 2 - GetPropW returned, is_null={}", prop.0.is_null());
+                    let _ = std::io::Write::flush(&mut std::io::stderr());
                     if !prop.0.is_null() {
                         // The property value is a raw COM pointer owned by OLE
                         // Use ManuallyDrop to borrow it without affecting reference count
                         // (we don't want to Release OLE's reference when this goes out of scope)
                         let raw_ptr = prop.0 as *mut std::ffi::c_void;
+                        eprintln!("[TiddlyDesktop] Windows: DEBUG 3 - raw_ptr={:?}", raw_ptr);
+                        eprintln!("[TiddlyDesktop] Windows: DEBUG 4 - About to transmute");
                         let borrowed: ManuallyDrop<windows::core::IUnknown> = ManuallyDrop::new(
                             std::mem::transmute(raw_ptr)
                         );
+                        eprintln!("[TiddlyDesktop] Windows: DEBUG 5 - Transmute done, about to cast");
                         // cast() calls QueryInterface which AddRefs the result,
                         // giving us our own properly reference-counted IDropTarget
                         match (*borrowed).cast::<IDropTarget>() {
@@ -2299,19 +2307,29 @@ pub fn setup_drag_handlers(window: &WebviewWindow) {
                     }
                 };
 
-                let drop_target_ptr = DropTargetImpl::new(window_for_drop.clone(), target_hwnd, original_drop_target);
-                let drop_target = DropTargetImpl::as_idroptarget(drop_target_ptr);
+                eprintln!("[TiddlyDesktop] Windows: DEBUG 6 - original_drop_target done, has_value={}", original_drop_target.is_some());
 
+                eprintln!("[TiddlyDesktop] Windows: DEBUG 7 - About to create DropTargetImpl");
+                let drop_target_ptr = DropTargetImpl::new(window_for_drop.clone(), target_hwnd, original_drop_target);
+                eprintln!("[TiddlyDesktop] Windows: DEBUG 8 - DropTargetImpl created at {:?}", drop_target_ptr);
+                let drop_target = DropTargetImpl::as_idroptarget(drop_target_ptr);
+                eprintln!("[TiddlyDesktop] Windows: DEBUG 9 - as_idroptarget done");
+
+                eprintln!("[TiddlyDesktop] Windows: DEBUG 10 - About to lock DROP_TARGET_MAP");
                 DROP_TARGET_MAP
                     .lock()
                     .unwrap()
                     .insert(target_hwnd.0 as isize, SendDropTarget(drop_target_ptr));
+                eprintln!("[TiddlyDesktop] Windows: DEBUG 11 - Inserted into map");
 
+                eprintln!("[TiddlyDesktop] Windows: DEBUG 12 - About to RevokeDragDrop");
                 let _ = RevokeDragDrop(target_hwnd);
+                eprintln!("[TiddlyDesktop] Windows: DEBUG 13 - RevokeDragDrop done, about to RegisterDragDrop");
                 match RegisterDragDrop(target_hwnd, &drop_target) {
                     Ok(()) => eprintln!("[TiddlyDesktop] Windows: RegisterDragDrop succeeded"),
                     Err(e) => eprintln!("[TiddlyDesktop] Windows: RegisterDragDrop failed: {:?}", e),
                 }
+                eprintln!("[TiddlyDesktop] Windows: DEBUG 14 - setup_drag_handlers completed");
             }
         }
     });

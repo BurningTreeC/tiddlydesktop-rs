@@ -1092,6 +1092,37 @@ fn setup_webkit_drag_handlers_full(widget: &gtk::Widget, state: Rc<RefCell<DragS
         // and let WebKit handle native events. Drop handler determines type from actual data.
         if !is_internal {
             context.drag_status(DragAction::COPY, time);
+
+            // Check if text/vnd.tiddler is in available targets to detect cross-wiki drags
+            // This is non-blocking (just checks the list, doesn't request data)
+            if !detected_cross_wiki {
+                let targets = context.list_targets();
+                let tiddler_atom = gdk::Atom::intern("text/vnd.tiddler");
+                let has_tiddler_type = targets.iter().any(|t| *t == tiddler_atom);
+
+                if has_tiddler_type {
+                    eprintln!("[TiddlyDesktop] Linux: Detected cross-wiki drag from target list (has text/vnd.tiddler)");
+                    let mut s = state_motion.borrow_mut();
+                    s.detected_cross_wiki_drag = true;
+                    s.confirmed_external_drag = false;
+                    s.drag_active = true;
+                    set_current_drag_target(Some(window_label.clone()));
+
+                    // Emit td-drag-motion with cross-wiki info for dropzone highlighting
+                    let _ = s.window.emit(
+                        "td-drag-motion",
+                        serde_json::json!({
+                            "x": x,
+                            "y": y,
+                            "screenCoords": false,
+                            "isOurDrag": true,
+                            "isCrossWiki": true,
+                            "sourceWindow": serde_json::Value::Null,
+                            "targetWindow": window_label
+                        }),
+                    );
+                }
+            }
         }
 
         // Return false to let WebKit handle caret positioning and native events
@@ -1522,13 +1553,15 @@ fn handle_drag_data_received(
 
                 if !data.is_empty() {
                     if let Ok(text) = std::str::from_utf8(&data) {
-                        if text.starts_with("data:text/vnd.tiddler,") {
+                        // For _NETSCAPE_URL format: URL\nTitle - get first line only
+                        let first_line = text.lines().next().unwrap_or(text);
+                        if first_line.starts_with("data:text/vnd.tiddler,") {
                             found_tiddler = true;
                             eprintln!("[TiddlyDesktop] Linux: Detected cross-wiki tiddler drag from preview data! Setting flag for {}", s.window.label());
                             s.detected_cross_wiki_drag = true;
 
                             // Extract and decode the tiddler JSON from the data: URI
-                            let encoded = &text["data:text/vnd.tiddler,".len()..];
+                            let encoded = &first_line["data:text/vnd.tiddler,".len()..];
                             if let Ok(tiddler_json) = urlencoding::decode(encoded) {
                                 eprintln!("[TiddlyDesktop] Linux: Extracted tiddler JSON for native drop: {} chars", tiddler_json.len());
 
@@ -1825,11 +1858,13 @@ fn handle_drag_data_received(
         // Check for data:text/vnd.tiddler URIs - this is a cross-wiki drop from our app!
         // TiddlyWiki sets text/x-moz-url and URL to data:text/vnd.tiddler,<encoded-json>
         // When this is received as text/uri-list, we should extract the tiddler data
-        if text_content.starts_with("data:text/vnd.tiddler,") {
+        // For _NETSCAPE_URL format: URL\nTitle - get first line only
+        let first_line = text_content.lines().next().unwrap_or(&text_content);
+        if first_line.starts_with("data:text/vnd.tiddler,") {
             eprintln!("[TiddlyDesktop] Linux: Detected cross-wiki tiddler drop via data: URI!");
 
             // Extract the tiddler JSON from the data URI
-            if let Some(encoded) = text_content.strip_prefix("data:text/vnd.tiddler,") {
+            if let Some(encoded) = first_line.strip_prefix("data:text/vnd.tiddler,") {
                 if let Ok(decoded) = urlencoding::decode(encoded) {
                     tiddler_json = Some(decoded.into_owned());
                     eprintln!("[TiddlyDesktop] Linux: Extracted tiddler JSON from data: URI");

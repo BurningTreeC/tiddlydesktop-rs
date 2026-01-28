@@ -1017,9 +1017,20 @@
                 if (tagName === 'IFRAME') {
                     try {
                         var iframeDoc = el.contentDocument || el.contentWindow.document;
-                        if (iframeDoc && (iframeDoc.designMode === 'on' ||
-                            (iframeDoc.body && iframeDoc.body.isContentEditable))) {
-                            return true;
+                        if (iframeDoc) {
+                            // Check if iframe body is editable
+                            if (iframeDoc.designMode === 'on' ||
+                                (iframeDoc.body && iframeDoc.body.isContentEditable)) {
+                                return true;
+                            }
+                            // Check if active element inside iframe is editable
+                            var activeEl = iframeDoc.activeElement;
+                            if (activeEl) {
+                                var activeTag = activeEl.tagName;
+                                if (activeTag === 'INPUT' || activeTag === 'TEXTAREA' || activeEl.isContentEditable) {
+                                    return true;
+                                }
+                            }
                         }
                     } catch (e) {}
                 }
@@ -1279,7 +1290,7 @@
 
             // Skip for editable elements - let native handling work
             var target = document.elementFromPoint(event.clientX, event.clientY);
-            if (target && isEditableElement(target)) return;
+            if ((target && isEditableElement(target)) || event.__tdEditableDrop) return;
 
             if (nativeDragActive) {
                 event.preventDefault();

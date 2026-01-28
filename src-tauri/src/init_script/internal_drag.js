@@ -232,17 +232,10 @@
         document.addEventListener('drop', function(event) {
             // Skip synthetic events we created
             if (event.__tdFiltered) return;
+            if (event.__tiddlyDesktopSynthetic) return;
 
             var dt = event.dataTransfer;
             if (!dt || !dt.items) return;
-
-            // If dropping into an editable element, let native handling work
-            // Stop immediate propagation to prevent ANY other handlers (including TiddlyWiki's dropzone)
-            // from calling preventDefault() which would block native input handling
-            if (isEditableElement(event.target)) {
-                event.stopImmediatePropagation();
-                return;
-            }
 
             // If no files but has file:// URLs, this is likely an external file drop
             // where WebKitGTK provides the file URL but not the actual file data.
@@ -770,15 +763,17 @@
                 log('Captured drag data types (after TW): ' + Object.keys(dragData).join(', '));
 
                 var tiddlerJson = dragData['text/vnd.tiddler'] || null;
-                var tiddlerUri = tiddlerJson ? 'data:text/vnd.tiddler,' + encodeURIComponent(tiddlerJson) : null;
 
+                // Don't include data:text/vnd.tiddler URLs - WebKitGTK prioritizes URLs
+                // over text/plain and tries to navigate, breaking native input text insertion.
+                // Cross-wiki detection uses text/vnd.tiddler type in target list instead.
                 var data = {
                     text_plain: dragData['text/plain'] || null,
                     text_html: dragData['text/html'] || null,
                     text_vnd_tiddler: tiddlerJson,
                     text_uri_list: dragData['text/uri-list'] || null,
-                    text_x_moz_url: dragData['text/x-moz-url'] || tiddlerUri,
-                    url: dragData['URL'] || tiddlerUri,
+                    text_x_moz_url: dragData['text/x-moz-url'] || null,
+                    url: dragData['URL'] || null,
                     is_text_selection_drag: isTextSelectionDrag
                 };
 
@@ -857,6 +852,10 @@
     // If something is dropped and nothing handles it, the browser might navigate away
     // This handler runs in bubble phase (after TiddlyWiki dropzone) and prevents that
     document.addEventListener("drop", function(event) {
+        // Don't interfere with drops into editable elements - native handling needed
+        if (isEditable(event.target)) {
+            return;
+        }
         // Prevent default for any unhandled drop with content
         if (event.dataTransfer && !event.defaultPrevented) {
             var hasContent = (event.dataTransfer.files && event.dataTransfer.files.length > 0) ||
@@ -870,8 +869,42 @@
 
     // Also prevent dragover default to allow drops (required for drop events to fire)
     // This handles both file drops and text selection drags from external apps
+    // BUT: Don't prevent default for editable elements - let native text insertion work
+    function isEditable(el) {
+        if (!el) return false;
+        var tagName = el.tagName;
+        if (tagName === 'INPUT' || tagName === 'TEXTAREA' || el.isContentEditable) {
+            return true;
+        }
+        // Check if it's an iframe - the actual target might be inside
+        if (tagName === 'IFRAME') {
+            try {
+                var iframeDoc = el.contentDocument || el.contentWindow.document;
+                if (iframeDoc) {
+                    var activeEl = iframeDoc.activeElement;
+                    if (activeEl) {
+                        var activeTag = activeEl.tagName;
+                        if (activeTag === 'INPUT' || activeTag === 'TEXTAREA' || activeEl.isContentEditable) {
+                            return true;
+                        }
+                    }
+                    // Also check if iframe body is editable
+                    if (iframeDoc.designMode === 'on' || (iframeDoc.body && iframeDoc.body.isContentEditable)) {
+                        return true;
+                    }
+                }
+            } catch (e) {
+                // Cross-origin iframe, can't check
+            }
+        }
+        return false;
+    }
     document.addEventListener("dragover", function(event) {
         if (event.dataTransfer && event.dataTransfer.types && event.dataTransfer.types.length > 0) {
+            // For editable elements, let native handling work (enables text insertion)
+            if (isEditable(event.target)) {
+                return;
+            }
             // For any external drag with content, prevent default to enable dropping
             if (!event.defaultPrevented) {
                 event.preventDefault();
@@ -1230,9 +1263,18 @@
             // For cross-wiki drops, we have the tiddler data pre-loaded
             // Dispatch a synthetic drop event with that data
             if (savedCrossWikiData) {
+                var pos = p.position || { x: 0, y: 0 };
+
+                // If dropping into an editable element, skip synthetic drop
+                // Native WebKit drop already inserted the text, no need for TiddlyWiki import
+                if (findEditableAt(pos.x, pos.y)) {
+                    log('Cross-wiki drop target is editable, skipping synthetic drop (native already handled)');
+                    cleanup();
+                    return;
+                }
+
                 log('tauri://drag-drop: dispatching synthetic drop with cross-wiki data, length=' + savedCrossWikiData.length);
 
-                var pos = p.position || { x: 0, y: 0 };
                 var target = getElementAt(pos.x, pos.y) || lastTarget || document.body;
 
                 var dataTransfer = new DataTransfer();
@@ -1306,13 +1348,21 @@
                 return;
             }
 
-            // Get drop position - use tracked position, pending position, or center of viewport
-            var pos = lastDragPosition || window.__pendingDropPosition || { x: window.innerWidth / 2, y: window.innerHeight / 2 };
+            // Get drop position - prefer event payload position, then tracked position
+            var pos = p.position || lastDragPosition || window.__pendingDropPosition || { x: window.innerWidth / 2, y: window.innerHeight / 2 };
             delete window.__pendingDropPosition;
             log('Drop position: (' + pos.x + ', ' + pos.y + ')');
 
             // Find drop target
             var target = getElementAt(pos.x, pos.y);
+
+            // If dropping into an editable element, skip synthetic drop
+            // Native WebKit drop already inserted the text, no need for TiddlyWiki import
+            if (findEditableAt(pos.x, pos.y)) {
+                log('Drop target is editable, skipping synthetic drop (native already handled)');
+                cleanup();
+                return;
+            }
 
             // Create DataTransfer with the data
             var dataTransfer = new DataTransfer();

@@ -248,6 +248,16 @@ Blank windows or rendering artifacts (common with nouveau driver):
 TIDDLYDESKTOP_DISABLE_GPU=1 ./tiddlydesktop-rs
 ```
 
+### Linux: Scrollbar and Scrolling Tweaks
+
+```bash
+# Disable overlay scrollbars (always show classic scrollbars)
+GTK_OVERLAY_SCROLLING=0 ./tiddlydesktop-rs
+
+# Use older input handling (can fix some scrolling issues)
+GDK_CORE_DEVICE_EVENTS=1 ./tiddlydesktop-rs
+```
+
 ### Linux: Missing Libraries
 
 If the app fails to start, ensure all dependencies are installed:

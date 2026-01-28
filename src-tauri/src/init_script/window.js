@@ -63,6 +63,15 @@
                 return;
             }
 
+            // Landing page (main wiki) should close without prompting
+            // It doesn't have user data that needs saving
+            if (window.__IS_MAIN_WIKI__) {
+                saveWindowState(function() {
+                    invoke('close_window');
+                });
+                return;
+            }
+
             // Check if TiddlyWiki has unsaved changes
             var isDirty = false;
             if (typeof $tw !== 'undefined' && $tw.wiki) {

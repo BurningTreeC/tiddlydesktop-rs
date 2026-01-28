@@ -3,16 +3,57 @@
 //! The main process runs an IPC server that coordinates between wiki processes.
 //! Each wiki file has a "wiki group" - the primary wiki window plus any tiddler windows.
 //! Changes in one window are broadcast to all windows in the same group.
+//!
+//! ## Security
+//!
+//! IPC uses a shared secret token to authenticate clients. The token is generated
+//! at app startup and must be provided by clients when registering. This prevents
+//! other processes on localhost from connecting and spoofing messages.
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
 use std::net::{TcpListener, TcpStream};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
+use rand::Rng;
 
 /// Default port for IPC server (main process)
 pub const IPC_PORT: u16 = 45678;
+
+/// Length of the authentication token in bytes
+const AUTH_TOKEN_LENGTH: usize = 32;
+
+/// Global authentication token (generated once at startup)
+static AUTH_TOKEN: OnceLock<String> = OnceLock::new();
+
+/// Generate and store the authentication token
+/// Should be called once at app startup
+pub fn init_auth_token() -> String {
+    AUTH_TOKEN.get_or_init(|| {
+        let mut rng = rand::rng();
+        let token: String = (0..AUTH_TOKEN_LENGTH)
+            .map(|_| {
+                let idx = rng.random_range(0..62);
+                let c = if idx < 10 {
+                    (b'0' + idx) as char
+                } else if idx < 36 {
+                    (b'a' + idx - 10) as char
+                } else {
+                    (b'A' + idx - 36) as char
+                };
+                c
+            })
+            .collect();
+        eprintln!("[IPC] Generated authentication token");
+        token
+    }).clone()
+}
+
+/// Get the authentication token (must call init_auth_token first)
+pub fn get_auth_token() -> Option<String> {
+    AUTH_TOKEN.get().cloned()
+}
 
 /// IPC message types
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -24,6 +65,8 @@ pub enum IpcMessage {
         pid: u32,
         is_tiddler_window: bool,
         tiddler_title: Option<String>,
+        /// Authentication token (required for security)
+        auth_token: String,
     },
     /// Wiki process unregistering (closing)
     Unregister {
@@ -106,16 +149,21 @@ pub struct IpcServer {
     open_tiddler_callback: Arc<Mutex<Option<Box<dyn Fn(String, String, Option<String>) + Send + 'static>>>>,
     /// Callback for updating wiki favicon
     update_favicon_callback: Arc<Mutex<Option<Box<dyn Fn(String, Option<String>) + Send + 'static>>>>,
+    /// Authentication token for validating clients
+    auth_token: String,
 }
 
 impl IpcServer {
     pub fn new() -> Self {
+        // Get or initialize the auth token
+        let token = init_auth_token();
         Self {
             wiki_groups: Arc::new(Mutex::new(HashMap::new())),
             clients_by_pid: Arc::new(Mutex::new(HashMap::new())),
             open_wiki_callback: Arc::new(Mutex::new(None)),
             open_tiddler_callback: Arc::new(Mutex::new(None)),
             update_favicon_callback: Arc::new(Mutex::new(None)),
+            auth_token: token,
         }
     }
 
@@ -156,6 +204,7 @@ impl IpcServer {
                     let open_wiki_cb = self.open_wiki_callback.clone();
                     let open_tiddler_cb = self.open_tiddler_callback.clone();
                     let update_favicon_cb = self.update_favicon_callback.clone();
+                    let auth_token = self.auth_token.clone();
 
                     thread::spawn(move || {
                         if let Err(e) = handle_client(
@@ -165,6 +214,7 @@ impl IpcServer {
                             open_wiki_cb,
                             open_tiddler_cb,
                             update_favicon_cb,
+                            auth_token,
                         ) {
                             eprintln!("[IPC] Client handler error: {}", e);
                         }
@@ -203,6 +253,7 @@ fn handle_client(
     open_wiki_cb: Arc<Mutex<Option<Box<dyn Fn(String) + Send + 'static>>>>,
     open_tiddler_cb: Arc<Mutex<Option<Box<dyn Fn(String, String, Option<String>) + Send + 'static>>>>,
     update_favicon_cb: Arc<Mutex<Option<Box<dyn Fn(String, Option<String>) + Send + 'static>>>>,
+    expected_auth_token: String,
 ) -> std::io::Result<()> {
     let peer_addr = stream.peer_addr()?;
     eprintln!("[IPC] New connection from {}", peer_addr);
@@ -211,6 +262,7 @@ fn handle_client(
     let mut write_stream = stream.try_clone()?;
     let mut client_wiki_path: Option<String> = None;
     let mut client_pid: Option<u32> = None;
+    let mut client_authenticated = false;
 
     loop {
         let mut line = String::new();
@@ -229,10 +281,23 @@ fn handle_client(
                 match serde_json::from_str::<IpcMessage>(line) {
                     Ok(msg) => {
                         match &msg {
-                            IpcMessage::Register { wiki_path, pid, is_tiddler_window, .. } => {
-                                eprintln!("[IPC] Register: wiki={}, pid={}, tiddler_window={}",
+                            IpcMessage::Register { wiki_path, pid, is_tiddler_window, auth_token, .. } => {
+                                // Security: Validate authentication token
+                                if auth_token != &expected_auth_token {
+                                    eprintln!("[IPC] Security: Invalid auth token from pid={}, rejecting", pid);
+                                    let ack = IpcMessage::Ack {
+                                        success: false,
+                                        message: Some("Invalid authentication token".to_string()),
+                                    };
+                                    let _ = writeln!(write_stream, "{}", serde_json::to_string(&ack)?);
+                                    // Close connection on auth failure
+                                    break;
+                                }
+
+                                eprintln!("[IPC] Register: wiki={}, pid={}, tiddler_window={} (authenticated)",
                                     wiki_path, pid, is_tiddler_window);
 
+                                client_authenticated = true;
                                 client_wiki_path = Some(wiki_path.clone());
                                 client_pid = Some(*pid);
 
@@ -255,6 +320,10 @@ fn handle_client(
                             }
 
                             IpcMessage::Unregister { wiki_path, pid } => {
+                                if !client_authenticated {
+                                    eprintln!("[IPC] Security: Unauthenticated Unregister attempt, ignoring");
+                                    continue;
+                                }
                                 eprintln!("[IPC] Unregister: wiki={}, pid={}", wiki_path, pid);
 
                                 // Remove from wiki group
@@ -271,6 +340,10 @@ fn handle_client(
                             }
 
                             IpcMessage::OpenWiki { path } => {
+                                if !client_authenticated {
+                                    eprintln!("[IPC] Security: Unauthenticated OpenWiki attempt, ignoring");
+                                    continue;
+                                }
                                 eprintln!("[IPC] OpenWiki request: {}", path);
                                 if let Some(ref cb) = *open_wiki_cb.lock().unwrap() {
                                     cb(path.clone());
@@ -280,6 +353,10 @@ fn handle_client(
                             }
 
                             IpcMessage::OpenTiddlerWindow { wiki_path, tiddler_title, startup_tiddler } => {
+                                if !client_authenticated {
+                                    eprintln!("[IPC] Security: Unauthenticated OpenTiddlerWindow attempt, ignoring");
+                                    continue;
+                                }
                                 eprintln!("[IPC] OpenTiddlerWindow request: wiki={}, tiddler={}",
                                     wiki_path, tiddler_title);
                                 if let Some(ref cb) = *open_tiddler_cb.lock().unwrap() {
@@ -290,6 +367,10 @@ fn handle_client(
                             }
 
                             IpcMessage::TiddlerChanged { wiki_path, sender_pid, .. } => {
+                                if !client_authenticated {
+                                    eprintln!("[IPC] Security: Unauthenticated TiddlerChanged attempt, ignoring");
+                                    continue;
+                                }
                                 // Broadcast to all other clients in the same wiki group
                                 let groups = wiki_groups.lock().unwrap();
                                 if let Some(clients) = groups.get(wiki_path) {
@@ -305,6 +386,10 @@ fn handle_client(
                             }
 
                             IpcMessage::TiddlerDeleted { wiki_path, sender_pid, .. } => {
+                                if !client_authenticated {
+                                    eprintln!("[IPC] Security: Unauthenticated TiddlerDeleted attempt, ignoring");
+                                    continue;
+                                }
                                 // Broadcast to all other clients in the same wiki group
                                 let groups = wiki_groups.lock().unwrap();
                                 if let Some(clients) = groups.get(wiki_path) {
@@ -320,6 +405,10 @@ fn handle_client(
                             }
 
                             IpcMessage::RequestSync { wiki_path, requester_pid } => {
+                                if !client_authenticated {
+                                    eprintln!("[IPC] Security: Unauthenticated RequestSync attempt, ignoring");
+                                    continue;
+                                }
                                 eprintln!("[IPC] SyncRequest from pid {} for {}", requester_pid, wiki_path);
                                 // Find the primary (non-tiddler) window for this wiki and ask it to send state
                                 let groups = wiki_groups.lock().unwrap();
@@ -338,6 +427,10 @@ fn handle_client(
                             }
 
                             IpcMessage::SyncState { wiki_path, .. } => {
+                                if !client_authenticated {
+                                    eprintln!("[IPC] Security: Unauthenticated SyncState attempt, ignoring");
+                                    continue;
+                                }
                                 // Forward to all tiddler windows that need sync
                                 let groups = wiki_groups.lock().unwrap();
                                 if let Some(clients) = groups.get(wiki_path) {
@@ -353,6 +446,10 @@ fn handle_client(
                             }
 
                             IpcMessage::UpdateFavicon { wiki_path, favicon } => {
+                                if !client_authenticated {
+                                    eprintln!("[IPC] Security: Unauthenticated UpdateFavicon attempt, ignoring");
+                                    continue;
+                                }
                                 eprintln!("[IPC] UpdateFavicon request: wiki={}", wiki_path);
                                 if let Some(ref cb) = *update_favicon_cb.lock().unwrap() {
                                     cb(wiki_path.clone(), favicon.clone());
@@ -403,15 +500,17 @@ pub struct IpcClient {
     wiki_path: String,
     is_tiddler_window: bool,
     tiddler_title: Option<String>,
+    auth_token: String,
 }
 
 impl IpcClient {
-    pub fn new(wiki_path: String, is_tiddler_window: bool, tiddler_title: Option<String>) -> Self {
+    pub fn new(wiki_path: String, is_tiddler_window: bool, tiddler_title: Option<String>, auth_token: String) -> Self {
         Self {
             stream: None,
             wiki_path,
             is_tiddler_window,
             tiddler_title,
+            auth_token,
         }
     }
 
@@ -421,13 +520,14 @@ impl IpcClient {
         stream.set_nodelay(true)?;
         self.stream = Some(stream);
 
-        // Register with the server
+        // Register with the server (includes auth token)
         let pid = std::process::id();
         let msg = IpcMessage::Register {
             wiki_path: self.wiki_path.clone(),
             pid,
             is_tiddler_window: self.is_tiddler_window,
             tiddler_title: self.tiddler_title.clone(),
+            auth_token: self.auth_token.clone(),
         };
         self.send(&msg)?;
 
@@ -522,9 +622,12 @@ impl Drop for IpcClient {
     }
 }
 
-/// Try to connect to existing IPC server, returns None if server not running
+/// Try to connect to existing IPC server, returns None if server not running or no auth token
 pub fn try_connect(wiki_path: &str, is_tiddler_window: bool, tiddler_title: Option<String>) -> Option<IpcClient> {
-    let mut client = IpcClient::new(wiki_path.to_string(), is_tiddler_window, tiddler_title);
+    // Get the auth token (must have been initialized by the server)
+    let auth_token = get_auth_token()?;
+
+    let mut client = IpcClient::new(wiki_path.to_string(), is_tiddler_window, tiddler_title, auth_token);
     match client.connect() {
         Ok(_) => Some(client),
         Err(_) => None,

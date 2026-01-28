@@ -93,15 +93,28 @@ pub fn is_absolute_filesystem_path(path: &str) -> bool {
     false
 }
 
-/// Compare two paths for equality (case-insensitive on Windows)
+/// Compare two paths for equality
+/// Uses canonical path comparison when possible to handle symlinks and different representations
+/// Falls back to string comparison if canonicalization fails
 pub fn paths_equal(path1: &str, path2: &str) -> bool {
-    #[cfg(target_os = "windows")]
-    {
-        path1.eq_ignore_ascii_case(path2)
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
-        path1 == path2
+    // Try to canonicalize both paths for robust comparison
+    let canonical1 = dunce::canonicalize(path1);
+    let canonical2 = dunce::canonicalize(path2);
+
+    match (canonical1, canonical2) {
+        (Ok(c1), Ok(c2)) => c1 == c2,
+        _ => {
+            // Fall back to string comparison if canonicalization fails
+            // (e.g., for paths that don't exist yet)
+            #[cfg(target_os = "windows")]
+            {
+                path1.eq_ignore_ascii_case(path2)
+            }
+            #[cfg(not(target_os = "windows"))]
+            {
+                path1 == path2
+            }
+        }
     }
 }
 

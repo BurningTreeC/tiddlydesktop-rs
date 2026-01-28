@@ -198,11 +198,21 @@ pub fn set_wiki_backups(app: tauri::AppHandle, path: String, enabled: bool) -> R
 /// Set custom backup directory for a wiki (None to use default .backups folder)
 #[tauri::command]
 pub fn set_wiki_backup_dir(app: tauri::AppHandle, path: String, backup_dir: Option<String>) -> Result<(), String> {
+    // Security: Validate the backup directory path if provided
+    let validated_backup_dir = match backup_dir {
+        Some(dir) => {
+            // Use the security validation function
+            let validated = crate::drag_drop::sanitize::validate_directory_path(&dir)?;
+            Some(validated.to_string_lossy().to_string())
+        }
+        None => None,
+    };
+
     let mut entries = load_recent_files_from_disk(&app);
 
     for entry in entries.iter_mut() {
         if utils::paths_equal(&entry.path, &path) {
-            entry.backup_dir = backup_dir;
+            entry.backup_dir = validated_backup_dir;
             break;
         }
     }
@@ -257,10 +267,24 @@ pub fn save_window_state(
     save_wiki_configs(&app, &configs)
 }
 
+/// Maximum size for favicon data URIs (1MB)
+const MAX_FAVICON_SIZE: usize = 1024 * 1024;
+
 /// Update favicon for a wiki (used after decryption when favicon wasn't available initially)
 #[tauri::command]
 pub fn update_wiki_favicon(app: tauri::AppHandle, path: String, favicon: Option<String>) -> Result<(), String> {
     use tauri::Emitter;
+
+    // Security: Validate favicon size
+    if let Some(ref fav) = favicon {
+        if fav.len() > MAX_FAVICON_SIZE {
+            return Err(format!(
+                "Favicon too large ({} bytes, max {} bytes)",
+                fav.len(),
+                MAX_FAVICON_SIZE
+            ));
+        }
+    }
 
     let mut entries = load_recent_files_from_disk(&app);
 

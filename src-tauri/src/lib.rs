@@ -752,7 +752,10 @@ async fn cleanup_old_backups(backup_dir: &PathBuf, keep: usize) {
 /// Load wiki content from disk
 #[tauri::command]
 async fn load_wiki(_app: tauri::AppHandle, path: String) -> Result<String, String> {
-    tokio::fs::read_to_string(&path)
+    // Security: Validate the path before reading
+    let validated_path = drag_drop::sanitize::validate_wiki_path(&path)?;
+
+    tokio::fs::read_to_string(&validated_path)
         .await
         .map_err(|e| format!("Failed to read wiki: {}", e))
 }
@@ -760,26 +763,27 @@ async fn load_wiki(_app: tauri::AppHandle, path: String) -> Result<String, Strin
 /// Save wiki content to disk with backup
 #[tauri::command]
 async fn save_wiki(app: tauri::AppHandle, path: String, content: String) -> Result<(), String> {
-    let path_buf = PathBuf::from(&path);
+    // Security: Validate the path before writing
+    let validated_path = drag_drop::sanitize::validate_wiki_path_for_write(&path)?;
 
     // Check if backups are enabled for this wiki
     let state = app.state::<AppState>();
     if should_create_backup(&app, &state, &path) {
         let backup_dir = get_wiki_backup_dir(&app, &path);
-        create_backup(&path_buf, backup_dir.as_deref()).await?;
+        create_backup(&validated_path, backup_dir.as_deref()).await?;
     }
 
     // Write to a temp file first, then rename for atomic operation
-    let temp_path = path_buf.with_extension("tmp");
+    let temp_path = validated_path.with_extension("tmp");
 
     tokio::fs::write(&temp_path, &content)
         .await
         .map_err(|e| format!("Failed to write temp file: {}", e))?;
 
     // Try rename first, fall back to direct write if it fails (Windows file locking)
-    if let Err(_) = tokio::fs::rename(&temp_path, &path_buf).await {
+    if let Err(_) = tokio::fs::rename(&temp_path, &validated_path).await {
         let _ = tokio::fs::remove_file(&temp_path).await;
-        tokio::fs::write(&path_buf, &content)
+        tokio::fs::write(&validated_path, &content)
             .await
             .map_err(|e| format!("Failed to save file: {}", e))?;
     }
@@ -827,6 +831,10 @@ async fn set_window_title(app: tauri::AppHandle, label: String, title: String) -
     Ok(())
 }
 
+/// Maximum size for favicon data URIs (1MB encoded, ~750KB decoded)
+/// This prevents memory exhaustion from maliciously large favicons
+const MAX_FAVICON_DATA_URI_SIZE: usize = 1024 * 1024;
+
 /// Internal helper to set window icon from favicon data URI
 /// Used by both the Tauri command and window creation code
 fn set_window_icon_internal(
@@ -842,6 +850,15 @@ fn set_window_icon_internal(
     // Decode the favicon bytes (used for both window icon and headerbar on Linux)
     let favicon_bytes = match favicon_data_uri {
         Some(data_uri) => {
+            // Security: Check data URI size to prevent memory exhaustion
+            if data_uri.len() > MAX_FAVICON_DATA_URI_SIZE {
+                return Err(format!(
+                    "Favicon data URI too large ({} bytes, max {} bytes)",
+                    data_uri.len(),
+                    MAX_FAVICON_DATA_URI_SIZE
+                ));
+            }
+
             // Parse data URI: "data:image/png;base64,iVBOR..."
             let base64_data = data_uri
                 .split(',')
@@ -1034,10 +1051,22 @@ fn close_window_by_label(app: tauri::AppHandle, label: String) -> Result<(), Str
     }
 }
 
-/// Check if a path is a directory
+/// Check if a path is a directory (used for file drop handling)
+/// Security: Validates path before checking to prevent filesystem reconnaissance
 #[tauri::command]
-fn is_directory(path: String) -> bool {
-    std::path::Path::new(&path).is_dir()
+fn is_directory(path: String) -> Result<bool, String> {
+    // Security: Validate path doesn't contain traversal sequences
+    if drag_drop::sanitize::validate_file_path(&path).is_none() {
+        return Err("Invalid path".to_string());
+    }
+
+    // Path must be absolute
+    let path_buf = PathBuf::from(&path);
+    if !path_buf.is_absolute() {
+        return Err("Path must be absolute".to_string());
+    }
+
+    Ok(path_buf.is_dir())
 }
 
 /// Get current window state (size, position, monitor) for saving

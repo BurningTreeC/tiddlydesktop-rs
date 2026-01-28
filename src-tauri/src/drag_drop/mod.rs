@@ -41,8 +41,9 @@
 mod encoding;
 
 // Sanitization utilities - needed on all platforms with drag-drop
+// Made pub(crate) so lib.rs can use validate_wiki_path for Tauri commands
 #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
-mod sanitize;
+pub(crate) mod sanitize;
 
 #[cfg(target_os = "windows")]
 mod windows;

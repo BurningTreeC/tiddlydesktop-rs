@@ -648,12 +648,21 @@
 
     // === Get element at point ===
     function getElementAt(x, y) {
+        // Validate coordinates are finite numbers (elementFromPoint throws on NaN/Infinity)
+        if (!Number.isFinite(x) || !Number.isFinite(y)) {
+            return document.body;
+        }
         var el = document.elementFromPoint(x, y);
         return el || document.body;
     }
 
     // === Find editable element at position ===
     function findEditableAt(x, y) {
+        // Validate coordinates are finite numbers (elementFromPoint throws on NaN/Infinity)
+        if (!Number.isFinite(x) || !Number.isFinite(y)) {
+            return null;
+        }
+
         // First check iframes manually (they may have pointer-events: none during drag)
         var iframes = document.querySelectorAll('iframe');
         for (var i = 0; i < iframes.length; i++) {

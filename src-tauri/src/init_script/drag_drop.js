@@ -187,6 +187,10 @@
 
     // Get element at point, handling iframes
     function getElementAtPointForCaret(x, y) {
+        // Validate coordinates are finite numbers (elementFromPoint throws on NaN/Infinity)
+        if (!Number.isFinite(x) || !Number.isFinite(y)) {
+            return { element: null, adjustedX: x, adjustedY: y };
+        }
         var el = document.elementFromPoint(x, y);
         if (!el) return { element: null, adjustedX: x, adjustedY: y };
 
@@ -554,7 +558,7 @@
         // ========================================
 
         function getTargetElement(position) {
-            if (position && position.x !== undefined && position.y !== undefined) {
+            if (position && Number.isFinite(position.x) && Number.isFinite(position.y)) {
                 var el = document.elementFromPoint(position.x, position.y);
                 if (el) return el;
             }

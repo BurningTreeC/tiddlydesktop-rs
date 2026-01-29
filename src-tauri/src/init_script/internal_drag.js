@@ -634,11 +634,15 @@
 
     // === Create synthetic drag event ===
     function createDragEvent(type, x, y, dataTransfer, relatedTarget) {
+        // Sanitize coordinates - TiddlyWiki's handlers use these with elementFromPoint
+        // which throws on non-finite values
+        var safeX = Number.isFinite(x) ? x : 0;
+        var safeY = Number.isFinite(y) ? y : 0;
         var event = new DragEvent(type, {
             bubbles: true,
             cancelable: true,
-            clientX: x,
-            clientY: y,
+            clientX: safeX,
+            clientY: safeY,
             dataTransfer: dataTransfer,
             relatedTarget: relatedTarget || null
         });

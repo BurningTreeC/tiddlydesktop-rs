@@ -5335,8 +5335,8 @@ fn check_webview2_version() {
 
     // Type for GetAvailableCoreWebView2BrowserVersionString
     type GetVersionFn = unsafe extern "system" fn(
-        browserExecutableFolder: PCWSTR,
-        versionInfo: *mut PWSTR,
+        browser_executable_folder: PCWSTR,
+        version_info: *mut PWSTR,
     ) -> windows::core::HRESULT;
 
     unsafe {

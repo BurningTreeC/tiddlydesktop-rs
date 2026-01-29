@@ -652,6 +652,8 @@
             enteredTarget = null;
             currentTarget = null;
             isDragging = false;
+            // Clear pending external files since drag was cancelled
+            window.__pendingExternalFiles = {};
         }
 
         function cancelContentDrag(reason) {
@@ -739,6 +741,18 @@
             // File drag only (paths.length > 0)
             pendingFilePaths = paths;
             isDragging = true;
+
+            // Pre-populate __pendingExternalFiles with file paths NOW, before any native
+            // drop event fires. On Windows, WebView2 handles drops natively and dispatches
+            // the drop event before tauri://drag-drop fires. By setting the paths here,
+            // the th-importing-file hook will have access to the original file paths.
+            paths.forEach(function(filepath) {
+                if (filepath && !filepath.startsWith("data:")) {
+                    var filename = filepath.split(/[/\\]/).pop();
+                    window.__pendingExternalFiles[filename] = filepath;
+                }
+            });
+
             var dt = createDataTransferWithFiles();
             var enterEvent = createSyntheticDragEvent("dragenter", event.payload.position, dt);
             target.dispatchEvent(enterEvent);

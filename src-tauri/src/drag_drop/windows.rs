@@ -1,8 +1,8 @@
 //! Windows drag-drop handling
 //!
-//! Incoming drops: Handled natively by WebView2 (SetAllowExternalDrop=true).
-//! JavaScript patches DataTransfer.getData/setData for custom format handling.
-//! Cross-wiki drag data is shared via Tauri IPC.
+//! Incoming drops: Custom IDropTarget intercepts drops, emits events to JavaScript,
+//! and dispatches synthetic DOM drop events with real File objects.
+//! This enables external attachment support (storing file paths instead of embedding).
 //!
 //! Outgoing drags: Implemented via OLE DoDragDrop with custom IDataObject.
 //! This allows dragging tiddlers to external apps with proper MIME types.
@@ -16,15 +16,23 @@ use std::sync::Mutex;
 
 use tauri::{Emitter, WebviewWindow};
 
-use webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2Controller4;
 use windows::core::{GUID, HRESULT, BOOL};
 use windows::Win32::Foundation::{HWND, LPARAM, E_NOINTERFACE, E_POINTER, S_OK};
 use windows::Win32::System::Com::{DVASPECT_CONTENT, FORMATETC, IDataObject, TYMED_HGLOBAL};
 use windows::Win32::System::Memory::{GlobalLock, GlobalUnlock};
 use windows::Win32::System::Ole::{
-    OleInitialize, DROPEFFECT, DROPEFFECT_COPY, DROPEFFECT_LINK, DROPEFFECT_MOVE, DROPEFFECT_NONE,
+    OleInitialize, RegisterDragDrop, RevokeDragDrop,
+    DROPEFFECT, DROPEFFECT_COPY, DROPEFFECT_LINK, DROPEFFECT_MOVE, DROPEFFECT_NONE,
 };
 use windows::Win32::UI::WindowsAndMessaging::{EnumChildWindows, GetClassNameW};
+
+/// POINTL structure for drag-drop coordinates
+#[repr(C)]
+#[derive(Copy, Clone)]
+struct POINTL {
+    x: i32,
+    y: i32,
+}
 
 /// Clipboard format constants
 const CF_UNICODETEXT: u16 = 13;
@@ -929,6 +937,374 @@ fn setup_drag_image(
     }
 }
 
+// ============================================================================
+// IDropTarget implementation for incoming drops
+// ============================================================================
+
+/// CF_HDROP clipboard format for file drops
+fn get_cf_hdrop() -> u16 {
+    15 // CF_HDROP is always 15
+}
+
+/// IDropTarget vtable
+#[repr(C)]
+#[allow(non_snake_case)]
+struct IDropTargetVtbl {
+    QueryInterface: unsafe extern "system" fn(*mut DropTargetImpl, *const GUID, *mut *mut std::ffi::c_void) -> HRESULT,
+    AddRef: unsafe extern "system" fn(*mut DropTargetImpl) -> u32,
+    Release: unsafe extern "system" fn(*mut DropTargetImpl) -> u32,
+    DragEnter: unsafe extern "system" fn(*mut DropTargetImpl, *mut std::ffi::c_void, u32, POINTL, *mut u32) -> HRESULT,
+    DragOver: unsafe extern "system" fn(*mut DropTargetImpl, u32, POINTL, *mut u32) -> HRESULT,
+    DragLeave: unsafe extern "system" fn(*mut DropTargetImpl) -> HRESULT,
+    Drop: unsafe extern "system" fn(*mut DropTargetImpl, *mut std::ffi::c_void, u32, POINTL, *mut u32) -> HRESULT,
+}
+
+const IID_IDROPTARGET: GUID = GUID::from_u128(0x00000122_0000_0000_c000_000000000046);
+
+/// State for the drop target
+/// Note: COM interfaces don't implement Send/Sync, so we use raw pointers
+/// This is safe because IDropTarget callbacks are always called on the UI thread
+struct DropTargetState {
+    window: WebviewWindow,
+    /// Raw pointer to ICoreWebView2CompositionController3 (set after async creation)
+    composition_controller3: std::cell::UnsafeCell<*mut std::ffi::c_void>,
+    last_key_state: AtomicU32,
+}
+
+// Safety: IDropTarget callbacks are only called on the UI thread
+unsafe impl Send for DropTargetState {}
+unsafe impl Sync for DropTargetState {}
+
+/// Our IDropTarget implementation
+#[repr(C)]
+struct DropTargetImpl {
+    vtbl: *const IDropTargetVtbl,
+    ref_count: AtomicU32,
+    state: std::sync::Arc<DropTargetState>,
+}
+
+static DROPTARGET_VTBL: IDropTargetVtbl = IDropTargetVtbl {
+    QueryInterface: DropTargetImpl::query_interface,
+    AddRef: DropTargetImpl::add_ref,
+    Release: DropTargetImpl::release,
+    DragEnter: DropTargetImpl::drag_enter,
+    DragOver: DropTargetImpl::drag_over,
+    DragLeave: DropTargetImpl::drag_leave,
+    Drop: DropTargetImpl::drop,
+};
+
+impl DropTargetImpl {
+    fn new(window: WebviewWindow) -> *mut Self {
+        let state = std::sync::Arc::new(DropTargetState {
+            window,
+            composition_controller3: std::cell::UnsafeCell::new(std::ptr::null_mut()),
+            last_key_state: AtomicU32::new(0),
+        });
+        let obj = Box::new(Self {
+            vtbl: &DROPTARGET_VTBL,
+            ref_count: AtomicU32::new(1),
+            state,
+        });
+        Box::into_raw(obj)
+    }
+
+    fn get_state(&self) -> &std::sync::Arc<DropTargetState> {
+        &self.state
+    }
+
+    /// Set the CompositionController3 pointer (called after async creation completes)
+    unsafe fn set_composition_controller3(&self, cc3: *mut std::ffi::c_void) {
+        *self.state.composition_controller3.get() = cc3;
+    }
+
+    /// Get the CompositionController3 pointer
+    unsafe fn get_composition_controller3(&self) -> *mut std::ffi::c_void {
+        *self.state.composition_controller3.get()
+    }
+
+    unsafe extern "system" fn query_interface(
+        this: *mut Self,
+        riid: *const GUID,
+        ppv: *mut *mut std::ffi::c_void,
+    ) -> HRESULT {
+        if ppv.is_null() {
+            return E_POINTER;
+        }
+        let iid = &*riid;
+        if *iid == IID_IUNKNOWN || *iid == IID_IDROPTARGET {
+            Self::add_ref(this);
+            *ppv = this as *mut std::ffi::c_void;
+            S_OK
+        } else {
+            *ppv = std::ptr::null_mut();
+            E_NOINTERFACE
+        }
+    }
+
+    unsafe extern "system" fn add_ref(this: *mut Self) -> u32 {
+        (*this).ref_count.fetch_add(1, Ordering::SeqCst) + 1
+    }
+
+    unsafe extern "system" fn release(this: *mut Self) -> u32 {
+        let count = (*this).ref_count.fetch_sub(1, Ordering::SeqCst) - 1;
+        if count == 0 {
+            drop(Box::from_raw(this));
+        }
+        count
+    }
+
+    unsafe extern "system" fn drag_enter(
+        this: *mut Self,
+        p_data_obj: *mut std::ffi::c_void,
+        grf_key_state: u32,
+        pt: POINTL,
+        pdw_effect: *mut u32,
+    ) -> HRESULT {
+        eprintln!("[TiddlyDesktop] Windows IDropTarget::DragEnter at ({}, {})", pt.x, pt.y);
+
+        let obj = &*this;
+        let state = obj.get_state();
+        state.last_key_state.store(grf_key_state, Ordering::SeqCst);
+
+        // Extract file paths and emit event
+        let paths = extract_file_paths_from_data_object(p_data_obj);
+        if !paths.is_empty() {
+            eprintln!("[TiddlyDesktop] Windows IDropTarget::DragEnter - {} files", paths.len());
+            // Inject paths into JS immediately
+            inject_drag_paths(&state.window, &paths.iter().map(std::path::PathBuf::from).collect::<Vec<_>>());
+
+            // Emit td-drag-motion for dropzone highlighting
+            let _ = state.window.emit("td-drag-motion", serde_json::json!({
+                "x": pt.x,
+                "y": pt.y,
+                "hasFiles": true,
+                "fileCount": paths.len(),
+            }));
+        }
+
+        // Forward to CompositionController3 if available
+        let cc3_ptr = obj.get_composition_controller3();
+        if !cc3_ptr.is_null() {
+            use webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2CompositionController3;
+            let cc3: &ICoreWebView2CompositionController3 = &*(cc3_ptr as *const ICoreWebView2CompositionController3);
+            let data_obj: IDataObject = std::mem::transmute_copy(&p_data_obj);
+            let point = windows::Win32::Foundation::POINT { x: pt.x, y: pt.y };
+            let mut effect = if !pdw_effect.is_null() { *pdw_effect } else { DROPEFFECT_COPY.0 };
+            let _ = cc3.DragEnter(&data_obj, grf_key_state, point, &mut effect);
+            if !pdw_effect.is_null() {
+                *pdw_effect = effect;
+            }
+            return S_OK;
+        }
+
+        // Default: allow copy
+        if !pdw_effect.is_null() {
+            *pdw_effect = DROPEFFECT_COPY.0;
+        }
+        S_OK
+    }
+
+    unsafe extern "system" fn drag_over(
+        this: *mut Self,
+        grf_key_state: u32,
+        pt: POINTL,
+        pdw_effect: *mut u32,
+    ) -> HRESULT {
+        let obj = &*this;
+        let state = obj.get_state();
+        state.last_key_state.store(grf_key_state, Ordering::SeqCst);
+
+        // Forward to CompositionController3 if available
+        let cc3_ptr = obj.get_composition_controller3();
+        if !cc3_ptr.is_null() {
+            use webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2CompositionController3;
+            let cc3: &ICoreWebView2CompositionController3 = &*(cc3_ptr as *const ICoreWebView2CompositionController3);
+            let point = windows::Win32::Foundation::POINT { x: pt.x, y: pt.y };
+            let mut effect = if !pdw_effect.is_null() { *pdw_effect } else { DROPEFFECT_COPY.0 };
+            let _ = cc3.DragOver(grf_key_state, point, &mut effect);
+            if !pdw_effect.is_null() {
+                *pdw_effect = effect;
+            }
+            return S_OK;
+        }
+
+        // Default: allow copy
+        if !pdw_effect.is_null() {
+            *pdw_effect = DROPEFFECT_COPY.0;
+        }
+        S_OK
+    }
+
+    unsafe extern "system" fn drag_leave(this: *mut Self) -> HRESULT {
+        eprintln!("[TiddlyDesktop] Windows IDropTarget::DragLeave");
+
+        let obj = &*this;
+        let state = obj.get_state();
+
+        // Emit leave event
+        let _ = state.window.emit("td-drag-leave", serde_json::json!({}));
+
+        // Forward to CompositionController3 if available
+        let cc3_ptr = obj.get_composition_controller3();
+        if !cc3_ptr.is_null() {
+            use webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2CompositionController3;
+            let cc3: &ICoreWebView2CompositionController3 = &*(cc3_ptr as *const ICoreWebView2CompositionController3);
+            let _ = cc3.DragLeave();
+        }
+
+        S_OK
+    }
+
+    unsafe extern "system" fn drop(
+        this: *mut Self,
+        p_data_obj: *mut std::ffi::c_void,
+        grf_key_state: u32,
+        pt: POINTL,
+        pdw_effect: *mut u32,
+    ) -> HRESULT {
+        eprintln!("[TiddlyDesktop] Windows IDropTarget::Drop at ({}, {})", pt.x, pt.y);
+
+        let obj = &*this;
+        let state = obj.get_state();
+
+        // Extract file paths
+        let paths = extract_file_paths_from_data_object(p_data_obj);
+        if !paths.is_empty() {
+            eprintln!("[TiddlyDesktop] Windows IDropTarget::Drop - {} files: {:?}", paths.len(), paths);
+
+            // Inject paths into __pendingExternalFiles BEFORE forwarding to WebView2
+            inject_drag_paths(&state.window, &paths.iter().map(std::path::PathBuf::from).collect::<Vec<_>>());
+
+            // Emit td-file-drop event
+            let _ = state.window.emit("td-file-drop", serde_json::json!({
+                "paths": paths,
+                "x": pt.x,
+                "y": pt.y,
+            }));
+        }
+
+        // Forward to CompositionController3 - this generates NATIVE DOM drop events!
+        let cc3_ptr = obj.get_composition_controller3();
+        if !cc3_ptr.is_null() {
+            use webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2CompositionController3;
+            let cc3: &ICoreWebView2CompositionController3 = &*(cc3_ptr as *const ICoreWebView2CompositionController3);
+            let data_obj: IDataObject = std::mem::transmute_copy(&p_data_obj);
+            let point = windows::Win32::Foundation::POINT { x: pt.x, y: pt.y };
+            let mut effect = if !pdw_effect.is_null() { *pdw_effect } else { DROPEFFECT_COPY.0 };
+            eprintln!("[TiddlyDesktop] Windows IDropTarget::Drop - forwarding to CompositionController3");
+            let result = cc3.Drop(&data_obj, grf_key_state, point, &mut effect);
+            eprintln!("[TiddlyDesktop] Windows IDropTarget::Drop - CompositionController3.Drop result: {:?}", result);
+            if !pdw_effect.is_null() {
+                *pdw_effect = effect;
+            }
+            return S_OK;
+        }
+
+        eprintln!("[TiddlyDesktop] Windows IDropTarget::Drop - no CompositionController3, drop may not generate DOM events");
+
+        // Default effect
+        if !pdw_effect.is_null() {
+            *pdw_effect = DROPEFFECT_COPY.0;
+        }
+        S_OK
+    }
+}
+
+/// DROPFILES structure header for CF_HDROP
+#[repr(C)]
+#[allow(non_snake_case)]
+struct DROPFILES {
+    pFiles: u32,  // Offset to file list
+    pt: windows::Win32::Foundation::POINT,
+    fNC: i32,
+    fWide: i32,   // Non-zero if file names are Unicode
+}
+
+/// Extract file paths from an IDataObject using CF_HDROP format
+unsafe fn extract_file_paths_from_data_object(p_data_obj: *mut std::ffi::c_void) -> Vec<String> {
+    if p_data_obj.is_null() {
+        return Vec::new();
+    }
+
+    let data_obj: &IDataObject = &*(p_data_obj as *const IDataObject);
+
+    let format = FORMATETC {
+        cfFormat: get_cf_hdrop(),
+        ptd: std::ptr::null_mut(),
+        dwAspect: DVASPECT_CONTENT.0 as u32,
+        lindex: -1,
+        tymed: TYMED_HGLOBAL.0 as u32,
+    };
+
+    // Try to get CF_HDROP data
+    let medium = match data_obj.GetData(&format) {
+        Ok(m) => m,
+        Err(_) => return Vec::new(),
+    };
+
+    let hglobal = medium.u.hGlobal;
+    if hglobal.0.is_null() {
+        return Vec::new();
+    }
+
+    let ptr = GlobalLock(hglobal);
+    if ptr.is_null() {
+        return Vec::new();
+    }
+
+    let mut paths = Vec::new();
+
+    // Parse DROPFILES structure
+    let dropfiles = &*(ptr as *const DROPFILES);
+    let is_unicode = dropfiles.fWide != 0;
+    let file_list_ptr = (ptr as *const u8).add(dropfiles.pFiles as usize);
+
+    if is_unicode {
+        // Unicode file names (UTF-16)
+        let mut current = file_list_ptr as *const u16;
+        loop {
+            if *current == 0 {
+                break;
+            }
+            // Find end of string
+            let mut len = 0;
+            while *current.add(len) != 0 {
+                len += 1;
+            }
+            if len > 0 {
+                let slice = std::slice::from_raw_parts(current, len);
+                let path = OsString::from_wide(slice).to_string_lossy().to_string();
+                paths.push(path);
+            }
+            current = current.add(len + 1); // Skip null terminator
+        }
+    } else {
+        // ANSI file names
+        let mut current = file_list_ptr;
+        loop {
+            if *current == 0 {
+                break;
+            }
+            // Find end of string
+            let mut len = 0;
+            while *current.add(len) != 0 {
+                len += 1;
+            }
+            if len > 0 {
+                let slice = std::slice::from_raw_parts(current, len);
+                if let Ok(path) = std::str::from_utf8(slice) {
+                    paths.push(path.to_string());
+                }
+            }
+            current = current.add(len + 1); // Skip null terminator
+        }
+    }
+
+    let _ = GlobalUnlock(hglobal);
+
+    paths
+}
+
 /// Prepare for a potential native drag (called when internal drag starts)
 /// This sets the outgoing drag state so that IDropTarget can detect same-window drags
 /// and avoid emitting td-drag-content events that would trigger imports.
@@ -1046,67 +1422,138 @@ pub fn start_native_drag(window: &WebviewWindow, data: OutgoingDragData, _x: i32
 
 /// Set up drag-drop handling for a webview window.
 ///
-/// On Windows, we let WebView2 handle drops natively (no custom IDropTarget).
-/// This ensures native DOM drop events fire correctly on all elements including inputs.
-/// Custom format handling (text/vnd.tiddler etc.) is done via JavaScript DataTransfer
-/// patching and Tauri IPC for cross-wiki drag data sharing.
+/// On Windows, we register a custom IDropTarget that:
+/// 1. Intercepts drag events to extract file paths
+/// 2. Injects paths into JavaScript's __pendingExternalFiles
+/// 3. Forwards to ICoreWebView2CompositionController3 for NATIVE DOM event generation
 ///
-/// This function also sets up a window event listener to inject file paths into
-/// JavaScript synchronously when drag events occur, ensuring __pendingExternalFiles
-/// is populated BEFORE the native WebView2 drop fires.
+/// This enables external attachment support while preserving native drop behavior.
 pub fn setup_drag_handlers(window: &WebviewWindow) {
+    let window_label = window.label().to_string();
     eprintln!(
         "[TiddlyDesktop] Windows: setup_drag_handlers called for window '{}'",
-        window.label()
+        window_label
     );
 
-    // Set up drag event listener to inject file paths synchronously
-    // This runs BEFORE the native DOM drop event fires in WebView2
-    let window_clone = window.clone();
-    window.on_window_event(move |event| {
-        use tauri::DragDropEvent;
-
-        if let tauri::WindowEvent::DragDrop(drag_event) = event {
-            let paths = match drag_event {
-                DragDropEvent::Enter { paths, .. } => Some(paths),
-                DragDropEvent::Drop { paths, .. } => Some(paths),
-                _ => None,
-            };
-
-            if let Some(paths) = paths {
-                if !paths.is_empty() {
-                    inject_drag_paths(&window_clone, paths);
-                }
-            }
-        }
-    });
+    let window_for_drop_target = window.clone();
 
     let _ = window.with_webview(move |webview| {
         #[cfg(windows)]
         unsafe {
             use windows::core::Interface;
+            use webview2_com::Microsoft::Web::WebView2::Win32::{
+                ICoreWebView2_2, ICoreWebView2Environment3,
+            };
 
             let controller = webview.controller();
 
-            // Ensure WebView2's native external drop is enabled (should be default, but be explicit)
-            // This allows native DOM drop events to fire on all elements including inputs.
-            if let Ok(controller4) = controller.cast::<ICoreWebView2Controller4>() {
-                let result = controller4.SetAllowExternalDrop(true);
-                eprintln!(
-                    "[TiddlyDesktop] Windows: SetAllowExternalDrop(true) result: {:?}",
-                    result
-                );
-            }
-
-            // Initialize OLE for outgoing drags (DoDragDrop)
+            // Initialize OLE (required for drag-drop)
             match OleInitialize(None) {
                 Ok(()) => eprintln!("[TiddlyDesktop] Windows: OleInitialize succeeded"),
                 Err(e) => eprintln!("[TiddlyDesktop] Windows: OleInitialize: {:?}", e),
             }
 
-            // No custom IDropTarget registration - let WebView2 handle drops natively.
-            // JavaScript patches DataTransfer.getData/setData to handle custom formats.
-            eprintln!("[TiddlyDesktop] Windows: Native drop handling enabled (no custom IDropTarget)");
+            // Get the HWND for the WebView2 content window
+            let mut hwnd = HWND::default();
+            if controller.ParentWindow(&mut hwnd).is_err() || hwnd.0.is_null() {
+                eprintln!("[TiddlyDesktop] Windows: Failed to get parent HWND");
+                return;
+            }
+
+            // Find the actual Chrome content window (deeper child)
+            let target_hwnd = find_webview2_content_hwnd(hwnd).unwrap_or(hwnd);
+            eprintln!("[TiddlyDesktop] Windows: Target HWND for IDropTarget: {:?}", target_hwnd);
+
+            // Revoke any existing drop target on this HWND
+            let _ = RevokeDragDrop(target_hwnd);
+
+            // Create our IDropTarget
+            let drop_target_ptr = DropTargetImpl::new(window_for_drop_target.clone());
+
+            // Register our IDropTarget
+            let drop_target: windows::Win32::System::Ole::IDropTarget = std::mem::transmute(drop_target_ptr);
+            match RegisterDragDrop(target_hwnd, &drop_target) {
+                Ok(()) => eprintln!("[TiddlyDesktop] Windows: RegisterDragDrop succeeded"),
+                Err(e) => eprintln!("[TiddlyDesktop] Windows: RegisterDragDrop failed: {:?}", e),
+            }
+
+            // Now try to get the CompositionController for native DOM event forwarding
+            // Path: Controller -> CoreWebView2 -> ICoreWebView2_2 -> Environment -> Environment3 -> CreateCompositionController
+
+            let core_webview2 = match controller.CoreWebView2() {
+                Ok(wv) => wv,
+                Err(e) => {
+                    eprintln!("[TiddlyDesktop] Windows: Failed to get CoreWebView2: {:?}", e);
+                    return;
+                }
+            };
+
+            let webview2_2: ICoreWebView2_2 = match core_webview2.cast() {
+                Ok(wv) => wv,
+                Err(e) => {
+                    eprintln!("[TiddlyDesktop] Windows: Failed to cast to ICoreWebView2_2: {:?}", e);
+                    return;
+                }
+            };
+
+            let environment = match webview2_2.Environment() {
+                Ok(env) => env,
+                Err(e) => {
+                    eprintln!("[TiddlyDesktop] Windows: Failed to get Environment: {:?}", e);
+                    return;
+                }
+            };
+
+            let environment3: ICoreWebView2Environment3 = match environment.cast() {
+                Ok(env) => env,
+                Err(e) => {
+                    eprintln!("[TiddlyDesktop] Windows: Failed to cast to ICoreWebView2Environment3: {:?}", e);
+                    eprintln!("[TiddlyDesktop] Windows: Native DOM drop events will NOT work - CompositionController not available");
+                    return;
+                }
+            };
+
+            eprintln!("[TiddlyDesktop] Windows: Got ICoreWebView2Environment3, creating CompositionController...");
+
+            // Create CompositionController asynchronously
+            // We need to store the pointer in our DropTargetImpl when it completes
+            let drop_target_ptr_for_callback = drop_target_ptr;
+            let callback = webview2_com::CreateCoreWebView2CompositionControllerCompletedHandler::create(
+                Box::new(move |result, composition_controller| {
+                    use webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2CompositionController3;
+
+                    if result.is_ok() {
+                        if let Some(cc) = composition_controller {
+                            eprintln!("[TiddlyDesktop] Windows: CompositionController created successfully!");
+
+                            // Cast to CompositionController3 for drag-drop methods
+                            match cc.cast::<ICoreWebView2CompositionController3>() {
+                                Ok(cc3) => {
+                                    // Store raw pointer in DropTargetImpl
+                                    // Safety: We're on the UI thread and the COM object is valid
+                                    let cc3_ptr = std::mem::ManuallyDrop::new(cc3);
+                                    let raw_ptr = &*cc3_ptr as *const ICoreWebView2CompositionController3 as *mut std::ffi::c_void;
+                                    (*drop_target_ptr_for_callback).set_composition_controller3(raw_ptr);
+                                    eprintln!("[TiddlyDesktop] Windows: CompositionController3 stored - native DOM events enabled!");
+                                }
+                                Err(e) => {
+                                    eprintln!("[TiddlyDesktop] Windows: Failed to cast to CompositionController3: {:?}", e);
+                                }
+                            }
+                        } else {
+                            eprintln!("[TiddlyDesktop] Windows: CompositionController is None");
+                        }
+                    } else {
+                        eprintln!("[TiddlyDesktop] Windows: CreateCompositionController failed: {:?}", result);
+                    }
+                    Ok(())
+                })
+            );
+
+            match environment3.CreateCoreWebView2CompositionController(hwnd, &callback) {
+                Ok(()) => eprintln!("[TiddlyDesktop] Windows: CreateCoreWebView2CompositionController initiated"),
+                Err(e) => eprintln!("[TiddlyDesktop] Windows: CreateCoreWebView2CompositionController failed: {:?}", e),
+            }
         }
     });
 }

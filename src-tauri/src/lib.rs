@@ -2184,6 +2184,11 @@ async fn open_wiki_folder(app: tauri::AppHandle, path: String) -> Result<WikiEnt
     cmd.arg("--wiki-folder").arg(&path)
        .arg("--port").arg(port.to_string());
 
+    // Pass IPC auth token to child process via environment variable
+    if let Some(token) = ipc::get_auth_token() {
+        cmd.env(ipc::AUTH_TOKEN_ENV_VAR, token);
+    }
+
     #[cfg(target_os = "windows")]
     {
         cmd.creation_flags(CREATE_NO_WINDOW);
@@ -3160,6 +3165,11 @@ async fn open_wiki_window(app: tauri::AppHandle, path: String) -> Result<WikiEnt
     let mut cmd = Command::new(&exe_path);
     cmd.arg("--wiki").arg(&path);
 
+    // Pass IPC auth token to child process via environment variable
+    if let Some(token) = ipc::get_auth_token() {
+        cmd.env(ipc::AUTH_TOKEN_ENV_VAR, token);
+    }
+
     // Platform-specific process configuration
     #[cfg(target_os = "windows")]
     {
@@ -3374,6 +3384,11 @@ fn spawn_wiki_process_sync(wiki_path: &str) -> Result<u32, String> {
     let mut cmd = Command::new(&exe_path);
     cmd.arg("--wiki").arg(wiki_path);
 
+    // Pass IPC auth token to child process via environment variable
+    if let Some(token) = ipc::get_auth_token() {
+        cmd.env(ipc::AUTH_TOKEN_ENV_VAR, token);
+    }
+
     // Platform-specific process configuration
     #[cfg(target_os = "windows")]
     {
@@ -3416,6 +3431,11 @@ fn spawn_tiddler_process(wiki_path: &str, tiddler_title: &str, startup_tiddler: 
 
     if let Some(startup) = startup_tiddler {
         cmd.arg("--startup-tiddler").arg(startup);
+    }
+
+    // Pass IPC auth token to child process via environment variable
+    if let Some(token) = ipc::get_auth_token() {
+        cmd.env(ipc::AUTH_TOKEN_ENV_VAR, token);
     }
 
     // Platform-specific process configuration

@@ -59,9 +59,19 @@ pub fn init_auth_token() -> String {
     }).clone()
 }
 
-/// Get the authentication token (must call init_auth_token first)
+/// Environment variable name for passing auth token to child processes
+pub const AUTH_TOKEN_ENV_VAR: &str = "TIDDLYDESKTOP_IPC_AUTH";
+
+/// Get the authentication token
+/// First checks the static (for main process), then environment variable (for spawned processes)
 pub fn get_auth_token() -> Option<String> {
-    AUTH_TOKEN.get().cloned()
+    // First try the static (set by main process)
+    if let Some(token) = AUTH_TOKEN.get().cloned() {
+        return Some(token);
+    }
+
+    // Fallback: check environment variable (for spawned wiki processes)
+    std::env::var(AUTH_TOKEN_ENV_VAR).ok()
 }
 
 /// IPC message types

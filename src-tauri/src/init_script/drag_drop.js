@@ -555,6 +555,10 @@
         var pendingContentDropPos = null;
         var contentDropTimeout = null;
 
+        // Windows-specific: track pending native file drop waiting for tauri://drag-drop
+        var pendingWindowsFileDrop = null;
+        var isWindows = navigator.platform.indexOf('Win') !== -1 || navigator.userAgent.indexOf('Windows') !== -1;
+
         window.__pendingExternalFiles = window.__pendingExternalFiles || {};
 
         // ========================================
@@ -720,9 +724,28 @@
         // ========================================
 
         listen("tauri://drag-enter", function(event) {
+            var paths = event.payload.paths || [];
+
+            invoke("js_log", { message: "tauri://drag-enter on " + windowLabel + ": paths=" + JSON.stringify(paths) });
+
+            // CRITICAL: Always populate __pendingExternalFiles for file drags, BEFORE any
+            // other checks. On Windows, td-drag-motion fires first which sets nativeDragActive,
+            // but we still need to capture file paths here so the external attachments hook
+            // can find them when the native WebView2 drop event fires.
+            if (paths.length > 0) {
+                invoke("js_log", { message: "tauri://drag-enter: populating __pendingExternalFiles with " + paths.length + " paths" });
+                paths.forEach(function(filepath) {
+                    if (filepath && !filepath.startsWith("data:")) {
+                        var filename = filepath.split(/[/\\]/).pop();
+                        window.__pendingExternalFiles[filename] = filepath;
+                        invoke("js_log", { message: "tauri://drag-enter: set __pendingExternalFiles['" + filename + "'] = '" + filepath + "'" });
+                    }
+                });
+            }
+
+            // Now check if we should skip the rest of the handler
             if (nativeDragActive) return;
 
-            var paths = event.payload.paths || [];
             var isInternalDrag = (typeof $tw !== "undefined" && $tw.dragInProgress) ||
                 (paths.length > 0 && paths.every(function(p) { return p.startsWith("data:"); }));
 
@@ -742,23 +765,27 @@
             pendingFilePaths = paths;
             isDragging = true;
 
-            // Pre-populate __pendingExternalFiles with file paths NOW, before any native
-            // drop event fires. On Windows, WebView2 handles drops natively and dispatches
-            // the drop event before tauri://drag-drop fires. By setting the paths here,
-            // the th-importing-file hook will have access to the original file paths.
-            paths.forEach(function(filepath) {
-                if (filepath && !filepath.startsWith("data:")) {
-                    var filename = filepath.split(/[/\\]/).pop();
-                    window.__pendingExternalFiles[filename] = filepath;
-                }
-            });
-
             var dt = createDataTransferWithFiles();
             var enterEvent = createSyntheticDragEvent("dragenter", event.payload.position, dt);
             target.dispatchEvent(enterEvent);
         });
 
         listen("tauri://drag-over", function(event) {
+            var paths = event.payload.paths || [];
+
+            // CRITICAL: Always populate __pendingExternalFiles for file drags, BEFORE any
+            // other checks. This ensures paths are available when native drop fires.
+            if (paths.length > 0) {
+                paths.forEach(function(filepath) {
+                    if (filepath && !filepath.startsWith("data:")) {
+                        var filename = filepath.split(/[/\\]/).pop();
+                        if (!window.__pendingExternalFiles[filename]) {
+                            window.__pendingExternalFiles[filename] = filepath;
+                        }
+                    }
+                });
+            }
+
             if (nativeDragActive) return;
             if (!isDragging && !contentDragActive) return;
             if (typeof $tw !== "undefined" && $tw.dragInProgress) return;
@@ -977,7 +1004,20 @@
             if (TD.isInternalDragActive && TD.isInternalDragActive()) return;
             if (!event.payload || !event.payload.paths || event.payload.paths.length === 0) return;
 
-            pendingGtkFileDrop = event.payload.paths;
+            var paths = event.payload.paths;
+
+            // CRITICAL: Immediately populate __pendingExternalFiles with file paths.
+            // On Windows, the native WebView2 drop event may fire before processGtkFileDrop
+            // completes its async file reading. By populating paths here, the external
+            // attachments hook will have access to the original file paths.
+            paths.forEach(function(filepath) {
+                if (filepath && !filepath.startsWith("data:")) {
+                    var filename = filepath.split(/[/\\]/).pop();
+                    window.__pendingExternalFiles[filename] = filepath;
+                }
+            });
+
+            pendingGtkFileDrop = paths;
             setTimeout(function() {
                 if (!pendingGtkFileDrop) return;
                 processGtkFileDrop();
@@ -1274,7 +1314,9 @@
             if (typeof $tw !== "undefined" && $tw.dragInProgress) return;
 
             // Skip for editable elements - let native handling work
-            var target = document.elementFromPoint(event.clientX, event.clientY);
+            var target = (Number.isFinite(event.clientX) && Number.isFinite(event.clientY))
+                ? document.elementFromPoint(event.clientX, event.clientY)
+                : null;
             if (target && isEditableElement(target)) return;
 
             var hasFiles = false;
@@ -1302,7 +1344,9 @@
             if (hasFiles && !hasContent) return;
 
             contentDragActive = true;
-            contentDragTarget = document.elementFromPoint(event.clientX, event.clientY) || document.body;
+            contentDragTarget = (Number.isFinite(event.clientX) && Number.isFinite(event.clientY))
+                ? (document.elementFromPoint(event.clientX, event.clientY) || document.body)
+                : document.body;
             contentDragTypes = types;
             contentDragEnterCount = 1;
             currentTarget = contentDragTarget;
@@ -1321,12 +1365,14 @@
             if (typeof $tw !== "undefined" && $tw.dragInProgress) return;
 
             // Skip for editable elements - let native handling work
-            var target = document.elementFromPoint(event.clientX, event.clientY);
+            var target = (Number.isFinite(event.clientX) && Number.isFinite(event.clientY))
+                ? document.elementFromPoint(event.clientX, event.clientY)
+                : null;
             if (target && isEditableElement(target)) return;
 
             event.preventDefault();
 
-            var target = document.elementFromPoint(event.clientX, event.clientY) || document.body;
+            target = target || document.body;
             var oldTarget = contentDragTarget;
             contentDragTarget = target;
             currentTarget = target;
@@ -1351,7 +1397,9 @@
             if (!contentDragActive || event.__tiddlyDesktopSynthetic || isDragging) return;
 
             // Skip for editable elements - let native handling work
-            var target = document.elementFromPoint(event.clientX, event.clientY);
+            var target = (Number.isFinite(event.clientX) && Number.isFinite(event.clientY))
+                ? document.elementFromPoint(event.clientX, event.clientY)
+                : null;
             if (target && isEditableElement(target)) return;
 
             contentDragEnterCount--;
@@ -1367,7 +1415,9 @@
             if (isDragging) return;
 
             // Skip for editable elements - let native handling work
-            var target = document.elementFromPoint(event.clientX, event.clientY);
+            var target = (Number.isFinite(event.clientX) && Number.isFinite(event.clientY))
+                ? document.elementFromPoint(event.clientX, event.clientY)
+                : null;
             if ((target && isEditableElement(target)) || event.__tdEditableDrop) return;
 
             if (nativeDragActive) {
@@ -1472,6 +1522,18 @@
                 return;
             }
 
+            // CRITICAL: Populate __pendingExternalFiles IMMEDIATELY, before any async operations.
+            // On Windows, the native DOM drop may have already fired and TiddlyWiki may be
+            // processing the import RIGHT NOW. The th-importing-file hook needs these paths
+            // to be available synchronously.
+            paths.forEach(function(filepath) {
+                if (filepath && !filepath.startsWith("data:") && (filepath.startsWith("/") || filepath.match(/^[A-Za-z]:\\/))) {
+                    var filename = filepath.split(/[/\\]/).pop();
+                    window.__pendingExternalFiles[filename] = filepath;
+                    invoke("js_log", { message: "tauri://drag-drop: IMMEDIATE set __pendingExternalFiles['" + filename + "'] = '" + filepath + "'" });
+                }
+            });
+
             var dropTarget = getTargetElement(event.payload.position);
             var pos = event.payload.position;
 
@@ -1484,6 +1546,7 @@
                 var mimeType = getMimeType(filename);
 
                 return invoke("read_file_as_binary", { path: filepath }).then(function(bytes) {
+                    // Path already set above, but ensure it's still there
                     window.__pendingExternalFiles[filename] = filepath;
                     return new File([new Uint8Array(bytes)], filename, { type: mimeType });
                 }).catch(function(err) {
@@ -1720,6 +1783,19 @@
                 var filename = file.name;
                 var type = info.type;
 
+                // Debug logging for Windows troubleshooting
+                invoke("js_log", { message: "th-importing-file hook: filename='" + filename + "', type='" + type + "', isBinary=" + info.isBinary });
+                invoke("js_log", { message: "th-importing-file: __pendingExternalFiles keys: " + Object.keys(window.__pendingExternalFiles || {}).join(", ") });
+
+                // Check if File object has a path property (Tauri/Electron sometimes provide this)
+                if (file.path) {
+                    invoke("js_log", { message: "th-importing-file: file.path available: " + file.path });
+                    // Use file.path directly if available and not already in pendingExternalFiles
+                    if (!window.__pendingExternalFiles[filename]) {
+                        window.__pendingExternalFiles[filename] = file.path;
+                    }
+                }
+
                 var hasDeserializer = false;
                 if ($tw.Wiki.tiddlerDeserializerModules) {
                     if ($tw.Wiki.tiddlerDeserializerModules[type]) {
@@ -1749,6 +1825,7 @@
                 var useAbsNonDesc = $tw.wiki.getTiddlerText(CONFIG_ABS_NONDESC, "no") === "yes";
 
                 var originalPath = window.__pendingExternalFiles && window.__pendingExternalFiles[filename];
+                invoke("js_log", { message: "th-importing-file: originalPath=" + (originalPath || "null") + ", externalEnabled=" + externalEnabled });
 
                 if (originalPath && externalEnabled && info.isBinary) {
                     var canonicalUri = makePathRelative(originalPath, wikiPath, {

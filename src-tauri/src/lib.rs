@@ -1633,6 +1633,14 @@ fn get_pending_drag_data(target_window: String) -> Option<drag_drop::PendingDrag
     drag_drop::get_pending_drag_data_impl(&target_window)
 }
 
+/// Get external drop file paths stored by WRY patch via FFI.
+/// Called from JavaScript when a native DOM drop fires to get the original file paths.
+/// Returns the paths and clears the storage (one-time read).
+#[tauri::command]
+fn get_external_drop_paths() -> Option<Vec<String>> {
+    drag_drop::get_external_drop_paths_impl()
+}
+
 /// Update the drag icon during an active native drag operation
 /// Called from JavaScript to change the drag image mid-drag
 #[tauri::command]
@@ -5009,6 +5017,7 @@ fn run_wiki_mode(args: WikiModeArgs) {
             prepare_native_drag,
             cleanup_native_drag,
             get_pending_drag_data,
+            get_external_drop_paths,
             update_drag_icon,
             set_pending_drag_icon,
             set_drag_dest_enabled,
@@ -5759,6 +5768,7 @@ pub fn run() {
             prepare_native_drag,
             cleanup_native_drag,
             get_pending_drag_data,
+            get_external_drop_paths,
             update_drag_icon,
             set_pending_drag_icon,
             set_drag_dest_enabled,

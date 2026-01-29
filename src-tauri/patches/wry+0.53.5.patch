@@ -1,6 +1,8 @@
+diff --git a/src/webkitgtk/drag_drop.rs b/src/webkitgtk/drag_drop.rs
+index 5133713..931ae82 100644
 --- a/src/webkitgtk/drag_drop.rs
 +++ b/src/webkitgtk/drag_drop.rs
-@@ -104,14 +104,28 @@
+@@ -104,14 +104,28 @@ pub(crate) fn connect_drag_event(webview: &WebView, handler: Box<dyn Fn(DragDrop
    {
      let controller = controller.clone();
      webview.connect_drag_drop(move |_, ctx, x, y, time| {
@@ -30,13 +32,101 @@
 +          return false;
          }
        }
-
+ 
+diff --git a/src/webview2/drag_drop.rs b/src/webview2/drag_drop.rs
+index 960a07f..933cd71 100644
+--- a/src/webview2/drag_drop.rs
++++ b/src/webview2/drag_drop.rs
+@@ -184,6 +184,22 @@ impl IDropTarget_Impl for DragDropTarget_Impl {
+       position: (pt.x as _, pt.y as _),
+     });
+ 
++
++    // PATCH: Call FFI to store file paths for TiddlyDesktop
++    // This allows JavaScript to access paths when native DOM drop fires
++    unsafe {
++      extern "C" {
++        fn tiddlydesktop_store_drop_paths(paths_json: *const std::ffi::c_char);
++      }
++      // Convert paths to JSON array string
++      let paths_str: Vec<String> = paths.iter().map(|p| p.to_string_lossy().to_string()).collect();
++      if let Ok(json) = serde_json::to_string(&paths_str) {
++        if let Ok(cstr) = std::ffi::CString::new(json) {
++          tiddlydesktop_store_drop_paths(cstr.as_ptr());
++        }
++      }
++    }
++
+     let cursor_effect = if enter_is_valid {
+       DROPEFFECT_COPY
+     } else {
+@@ -219,6 +235,14 @@ impl IDropTarget_Impl for DragDropTarget_Impl {
+   fn DragLeave(&self) -> windows::core::Result<()> {
+     if unsafe { *self.enter_is_valid.get() } {
+       (self.listener)(DragDropEvent::Leave);
++
++      // PATCH: Clear stored paths on drag leave
++      unsafe {
++        extern "C" {
++          fn tiddlydesktop_clear_drop_paths();
++        }
++        tiddlydesktop_clear_drop_paths();
++      }
+     }
+     Ok(())
+   }
+@@ -241,6 +265,22 @@ impl IDropTarget_Impl for DragDropTarget_Impl {
+         position: (pt.x as _, pt.y as _),
+       });
+ 
++      // PATCH: Call FFI to store file paths for TiddlyDesktop
++      // This ensures paths are available when native DOM drop event fires
++      unsafe {
++        extern "C" {
++          fn tiddlydesktop_store_drop_paths(paths_json: *const std::ffi::c_char);
++        }
++        // Convert paths to JSON array string
++        let paths_str: Vec<String> = paths.iter().map(|p| p.to_string_lossy().to_string()).collect();
++        if let Ok(json) = serde_json::to_string(&paths_str) {
++          if let Ok(cstr) = std::ffi::CString::new(json) {
++            tiddlydesktop_store_drop_paths(cstr.as_ptr());
++          }
++        }
++      }
++
++
+       if let Some(hdrop) = hdrop {
+         unsafe { DragFinish(hdrop) };
+       }
+diff --git a/src/webview2/mod.rs b/src/webview2/mod.rs
+index a2f5d5b..2cf1007 100644
+--- a/src/webview2/mod.rs
++++ b/src/webview2/mod.rs
+@@ -146,13 +146,10 @@ impl InnerWebView {
+       is_child,
+     )?;
+ 
++    // PATCH: Don't disable external drops - let WebView2 also handle them natively
++    // WRY's IDropTarget extracts paths via FFI, WebView2 generates DOM events
+     let drag_drop_controller = drop_handler.map(|handler| {
+-      // Disable file drops, so our handler can capture it
+-      unsafe {
+-        let _ = controller
+-          .cast::<ICoreWebView2Controller4>()
+-          .and_then(|c| c.SetAllowExternalDrop(false));
+-      }
++      // Don't call SetAllowExternalDrop(false) - let WebView2 also handle drops natively
+       DragDropController::new(hwnd, handler)
+     });
+ 
+diff --git a/src/wkwebview/drag_drop.rs b/src/wkwebview/drag_drop.rs
+index e28364e..b9043a9 100644
 --- a/src/wkwebview/drag_drop.rs
 +++ b/src/wkwebview/drag_drop.rs
-@@ -86,13 +86,54 @@
+@@ -86,13 +86,54 @@ pub(crate) fn perform_drag_operation(
    let frame: NSRect = this.frame();
    let position = (dl.x as i32, (frame.size.height - dl.y) as i32);
-
+ 
 +  // PATCH: Emit the event so JS knows about the drop
    let listener = &this.ivars().drag_drop_handler;
 -  if !listener(DragDropEvent::Drop { paths, position }) {
@@ -91,55 +181,5 @@
 +  // This allows text/file paths to be inserted into inputs natively
 +  unsafe { objc2::msg_send![super(this), performDragOperation: drag_info] }
  }
-
+ 
  pub(crate) fn dragging_exited(this: &WryWebView, drag_info: &ProtocolObject<dyn NSDraggingInfo>) {
-
---- a/src/webview2/drag_drop.rs
-+++ b/src/webview2/drag_drop.rs
-@@ -47,18 +47,10 @@
-
-     let handler = Rc::new(handler);
-
--    // Enumerate child windows to find the WebView2 "window" and override!
--    {
--      let mut callback = |hwnd| controller.inject_in_hwnd(hwnd, handler.clone());
--      let mut trait_obj: &mut dyn FnMut(HWND) -> bool = &mut callback;
--      let closure_pointer_pointer: *mut c_void = unsafe { std::mem::transmute(&mut trait_obj) };
--      let lparam = LPARAM(closure_pointer_pointer as _);
--      unsafe extern "system" fn enumerate_callback(hwnd: HWND, lparam: LPARAM) -> BOOL {
--        let closure = &mut *(lparam.0 as *mut c_void as *mut &mut dyn FnMut(HWND) -> bool);
--        closure(hwnd).into()
--      }
--      let _ = unsafe { EnumChildWindows(Some(hwnd), Some(enumerate_callback), lparam) };
--    }
-+    // PATCHED: Only register on parent HWND, not child windows.
-+    // This allows WebView2's internal drop handling on child windows to work,
-+    // enabling native HTML5 drag events while still extracting file paths.
-+    controller.inject_in_hwnd(hwnd, handler);
-
-     controller
-   }
-
---- a/src/webview2/mod.rs
-+++ b/src/webview2/mod.rs
-@@ -146,13 +146,14 @@
-       is_child,
-     )?;
-
-+    // PATCHED: Keep DragDropController for file path extraction (tauri://drag-drop events)
-+    // BUT don't disable WebView2's external drop handling, so native DOM events also fire.
-+    // This enables:
-+    // - Native HTML5 drag events for internal/cross-wiki drags
-+    // - File paths via tauri://drag-drop for external file drops
-+    // - Parent HWND IDropTarget for file paths, child windows for native DOM
-     let drag_drop_controller = drop_handler.map(|handler| {
--      // Disable file drops, so our handler can capture it
--      unsafe {
--        let _ = controller
--          .cast::<ICoreWebView2Controller4>()
--          .and_then(|c| c.SetAllowExternalDrop(false));
--      }
-+      // Don't call SetAllowExternalDrop(false) - let WebView2 also handle drops natively
-       DragDropController::new(hwnd, handler)
-     });
-

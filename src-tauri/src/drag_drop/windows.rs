@@ -1426,6 +1426,59 @@ pub extern "C" fn tiddlydesktop_has_internal_drag() -> i32 {
         .unwrap_or(0)
 }
 
+// ============================================================================
+// FFI functions for WRY patch: External file drop path extraction
+// ============================================================================
+
+lazy_static::lazy_static! {
+    /// Global storage for file paths from external drops (populated by WRY patch via FFI)
+    static ref EXTERNAL_DROP_PATHS: Mutex<Option<Vec<String>>> = Mutex::new(None);
+}
+
+/// FFI function called by WRY patch to store file paths when a drop occurs.
+/// The paths are stored as a JSON array string.
+/// This allows JavaScript to access the original file paths when the native DOM drop fires.
+#[no_mangle]
+pub extern "C" fn tiddlydesktop_store_drop_paths(paths_json: *const std::ffi::c_char) {
+    if paths_json.is_null() {
+        return;
+    }
+
+    unsafe {
+        let cstr = std::ffi::CStr::from_ptr(paths_json);
+        if let Ok(json_str) = cstr.to_str() {
+            if let Ok(paths) = serde_json::from_str::<Vec<String>>(json_str) {
+                eprintln!("[TiddlyDesktop] Windows FFI: Storing {} drop paths", paths.len());
+                for path in &paths {
+                    eprintln!("[TiddlyDesktop] Windows FFI:   - {}", path);
+                }
+                if let Ok(mut guard) = EXTERNAL_DROP_PATHS.lock() {
+                    *guard = Some(paths);
+                }
+            }
+        }
+    }
+}
+
+/// FFI function called by WRY patch to clear stored file paths (e.g., on drag leave).
+#[no_mangle]
+pub extern "C" fn tiddlydesktop_clear_drop_paths() {
+    eprintln!("[TiddlyDesktop] Windows FFI: Clearing drop paths");
+    if let Ok(mut guard) = EXTERNAL_DROP_PATHS.lock() {
+        *guard = None;
+    }
+}
+
+/// Get the stored external drop paths (called from Tauri command).
+/// Returns the paths and clears the storage.
+pub fn take_external_drop_paths() -> Option<Vec<String>> {
+    if let Ok(mut guard) = EXTERNAL_DROP_PATHS.lock() {
+        guard.take()
+    } else {
+        None
+    }
+}
+
 /// Response structure for get_pending_drag_data command
 #[derive(Clone, Debug, serde::Serialize)]
 pub struct PendingDragDataResponse {

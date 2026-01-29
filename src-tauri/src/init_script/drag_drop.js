@@ -741,6 +741,21 @@
                         invoke("js_log", { message: "tauri://drag-enter: set __pendingExternalFiles['" + filename + "'] = '" + filepath + "'" });
                     }
                 });
+            } else {
+                // Windows fallback: Try to get paths from WRY patch FFI storage
+                // This handles cases where WRY extracted paths but they weren't in the event payload
+                invoke("get_external_drop_paths").then(function(ffiPaths) {
+                    if (ffiPaths && ffiPaths.length > 0) {
+                        invoke("js_log", { message: "tauri://drag-enter: Got " + ffiPaths.length + " paths from FFI storage" });
+                        ffiPaths.forEach(function(filepath) {
+                            if (filepath && !filepath.startsWith("data:")) {
+                                var filename = filepath.split(/[/\\]/).pop();
+                                window.__pendingExternalFiles[filename] = filepath;
+                                invoke("js_log", { message: "tauri://drag-enter: FFI set __pendingExternalFiles['" + filename + "']" });
+                            }
+                        });
+                    }
+                }).catch(function() {});
             }
 
             // Now check if we should skip the rest of the handler
@@ -784,6 +799,20 @@
                         }
                     }
                 });
+            } else if (Object.keys(window.__pendingExternalFiles).length === 0) {
+                // Windows fallback: Try to get paths from WRY patch FFI storage
+                invoke("get_external_drop_paths").then(function(ffiPaths) {
+                    if (ffiPaths && ffiPaths.length > 0) {
+                        ffiPaths.forEach(function(filepath) {
+                            if (filepath && !filepath.startsWith("data:")) {
+                                var filename = filepath.split(/[/\\]/).pop();
+                                if (!window.__pendingExternalFiles[filename]) {
+                                    window.__pendingExternalFiles[filename] = filepath;
+                                }
+                            }
+                        });
+                    }
+                }).catch(function() {});
             }
 
             if (nativeDragActive) return;
@@ -1794,6 +1823,23 @@
                     if (!window.__pendingExternalFiles[filename]) {
                         window.__pendingExternalFiles[filename] = file.path;
                     }
+                }
+
+                // Windows: Try to get paths from WRY patch FFI storage (fallback if tauri://drag-drop didn't populate)
+                if (!window.__pendingExternalFiles[filename]) {
+                    // This is async but we try it anyway - if paths were stored by WRY, they'll be available
+                    invoke("get_external_drop_paths").then(function(paths) {
+                        if (paths && paths.length > 0) {
+                            invoke("js_log", { message: "th-importing-file: Got " + paths.length + " paths from FFI storage" });
+                            paths.forEach(function(filepath) {
+                                var pathFilename = filepath.split(/[/\\]/).pop();
+                                if (!window.__pendingExternalFiles[pathFilename]) {
+                                    window.__pendingExternalFiles[pathFilename] = filepath;
+                                    invoke("js_log", { message: "th-importing-file: FFI populated __pendingExternalFiles['" + pathFilename + "']" });
+                                }
+                            });
+                        }
+                    }).catch(function() {});
                 }
 
                 var hasDeserializer = false;

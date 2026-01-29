@@ -335,3 +335,16 @@ pub fn get_pending_drag_data_impl(target_window: &str) -> Option<PendingDragData
         is_text_selection_drag: r.is_text_selection_drag,
     })
 }
+
+/// Get external drop file paths stored by WRY patch via FFI.
+/// This is only used on Windows where the WRY patch calls FFI functions
+/// to store file paths extracted from CF_HDROP.
+#[cfg(target_os = "windows")]
+pub fn get_external_drop_paths_impl() -> Option<Vec<String>> {
+    windows::take_external_drop_paths()
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn get_external_drop_paths_impl() -> Option<Vec<String>> {
+    None
+}

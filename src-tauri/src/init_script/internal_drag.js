@@ -133,14 +133,15 @@
                 return '';
             }
 
-            // Filter out file URLs when files are present (prevents double import on Linux)
-            // This happens during native drops where WebKitGTK provides both the file AND its URL
+            // Filter out file URLs when files are present (prevents double import on Linux/Windows)
+            // This happens during native drops where the browser provides both the file AND its URL/path
             if (!internalDragActive && (type === 'text/plain' || type === 'text/uri-list' || type === 'text/x-moz-url')) {
                 // Check if result looks like a file URL or absolute path
                 if (result) {
                     var trimmed = result.trim();
                     var isFileUrl = trimmed.indexOf('file://') === 0;
-                    var isAbsPath = trimmed.indexOf('/') === 0 && trimmed.indexOf('\n') === -1;
+                    var isWindowsPath = /^[A-Za-z]:[\\\/]/.test(trimmed);
+                    var isAbsPath = (trimmed.indexOf('/') === 0 || isWindowsPath) && trimmed.indexOf('\n') === -1;
                     if (isFileUrl || isAbsPath) {
                         // Check if this DataTransfer has files using types array (more reliable than files property)
                         try {
@@ -293,11 +294,13 @@
                 try {
                     var uriList = dt.getData('text/uri-list') || '';
                     var plainText = dt.getData('text/plain') || '';
-                    // Check if any URL is a file:// URL or absolute path
+                    // Check if any URL is a file:// URL or absolute path (Unix or Windows)
                     var urls = (uriList + '\n' + plainText).split('\n');
                     for (var i = 0; i < urls.length; i++) {
                         var url = urls[i].trim();
-                        if (url && (url.indexOf('file://') === 0 || (url.indexOf('/') === 0 && url.indexOf('//') !== 0))) {
+                        var isUnixPath = url.indexOf('/') === 0 && url.indexOf('//') !== 0;
+                        var isWindowsPath = /^[A-Za-z]:[\\\/]/.test(url);
+                        if (url && (url.indexOf('file://') === 0 || isUnixPath || isWindowsPath)) {
                             hasFileUrl = true;
                             break;
                         }

@@ -3220,8 +3220,7 @@ async fn open_tiddler_window(
         .build()
         .map_err(|e| format!("Failed to create tiddler window: {}", e))?;
 
-    // Set up platform-specific drag handlers for content drops from external apps
-    drag_drop::setup_drag_handlers(&window);
+    // Note: Drag handlers are set up via the drag_drop plugin's on_webview_ready hook
 
     // Linux: Set up HeaderBar and center window (tiddler windows don't save state)
     #[cfg(target_os = "linux")]
@@ -4389,8 +4388,7 @@ fn reveal_or_create_main_window(app_handle: &tauri::AppHandle) {
 
         if let Ok(main_window) = builder.build()
         {
-            // Set up platform-specific drag handlers for content drops from external apps
-            drag_drop::setup_drag_handlers(&main_window);
+            // Note: Drag handlers are set up via the drag_drop plugin's on_webview_ready hook
 
             // Linux: Set up HeaderBar and finalize window state (centering, unmaximize workaround)
             #[cfg(target_os = "linux")]
@@ -4620,6 +4618,7 @@ fn run_wiki_mode(args: WikiModeArgs) {
     let startup_tiddler_for_state = startup_tiddler.clone();
 
     tauri::Builder::default()
+        .plugin(drag_drop::init_plugin())
         .setup(move |app| {
             // Store state for this wiki process
             let wiki_path_clone = wiki_path.clone();
@@ -4717,8 +4716,7 @@ fn run_wiki_mode(args: WikiModeArgs) {
 
             let window = builder.build()?;
 
-            // Set up drag handlers
-            drag_drop::setup_drag_handlers(&window);
+            // Note: Drag handlers are set up via the drag_drop plugin's on_webview_ready hook
 
             // Linux: Set up HeaderBar and finalize window state (centering, unmaximize workaround)
             #[cfg(target_os = "linux")]
@@ -5013,6 +5011,7 @@ fn run_wiki_folder_mode(args: WikiFolderModeArgs) {
 
     // Build the Tauri app for this wiki folder
     tauri::Builder::default()
+        .plugin(drag_drop::init_plugin())
         .setup(move |app| {
             let icon = Image::from_bytes(include_bytes!("../icons/icon.png"))?;
 
@@ -5058,8 +5057,7 @@ fn run_wiki_folder_mode(args: WikiFolderModeArgs) {
 
             let window = builder.build()?;
 
-            // Set up drag handlers
-            drag_drop::setup_drag_handlers(&window);
+            // Note: Drag handlers are set up via the drag_drop plugin's on_webview_ready hook
 
             // Linux: Set up HeaderBar and finalize window state (centering, unmaximize workaround)
             #[cfg(target_os = "linux")]
@@ -5257,6 +5255,7 @@ pub fn run() {
     }
 
     tauri::Builder::default()
+        .plugin(drag_drop::init_plugin())
         .setup(|app| {
             // Store global AppHandle for IPC callbacks
             let _ = GLOBAL_APP_HANDLE.set(app.handle().clone());
@@ -5342,8 +5341,7 @@ pub fn run() {
 
             let main_window = builder.build()?;
 
-            // Set up platform-specific drag handlers for content drops from external apps
-            drag_drop::setup_drag_handlers(&main_window);
+            // Note: Drag handlers are set up via the drag_drop plugin's on_webview_ready hook
 
             // Linux: Set up HeaderBar and finalize window state (centering, unmaximize workaround)
             #[cfg(target_os = "linux")]

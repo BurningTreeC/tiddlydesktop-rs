@@ -64,10 +64,11 @@ pub(crate) mod native_dnd;
 #[cfg(target_os = "macos")]
 mod macos;
 
-use tauri::WebviewWindow;
+use tauri::plugin::{Builder as PluginBuilder, TauriPlugin};
+use tauri::{Manager, Wry, WebviewWindow};
 
 /// Set up platform-specific drag-drop handling for a webview window
-pub fn setup_drag_handlers(window: &WebviewWindow) {
+fn setup_drag_handlers(window: &WebviewWindow) {
     #[cfg(target_os = "windows")]
     windows::setup_drag_handlers(window);
 
@@ -76,6 +77,34 @@ pub fn setup_drag_handlers(window: &WebviewWindow) {
 
     #[cfg(target_os = "macos")]
     macos::setup_drag_handlers(window);
+}
+
+/// Create the drag-drop plugin that sets up handlers when webviews are ready.
+///
+/// This uses `on_webview_ready` to ensure the webview (and on Windows, WebView2's
+/// IDropTarget) is fully initialized before we try to access it. Without this,
+/// Windows would crash at startup because we'd be calling into uninitialized COM objects.
+pub fn init_plugin() -> TauriPlugin<Wry> {
+    PluginBuilder::<Wry, ()>::new("drag-drop")
+        .on_webview_ready(|webview| {
+            // Get the WebviewWindow from the webview
+            let app_handle = webview.app_handle();
+            let label = webview.label();
+
+            if let Some(window) = app_handle.get_webview_window(label) {
+                eprintln!(
+                    "[TiddlyDesktop] on_webview_ready: setting up drag handlers for '{}'",
+                    label
+                );
+                setup_drag_handlers(&window);
+            } else {
+                eprintln!(
+                    "[TiddlyDesktop] on_webview_ready: could not get WebviewWindow for '{}'",
+                    label
+                );
+            }
+        })
+        .build()
 }
 
 /// Data for starting a native drag operation (cross-platform structure)

@@ -4,13 +4,17 @@
 //! applications during drag-and-drop operations. External content is untrusted and
 //! must be sanitized before being passed to JavaScript/TiddlyWiki.
 
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 use regex::Regex;
 #[cfg(target_os = "windows")]
 use std::path::Path;
 use std::path::PathBuf;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 use std::sync::LazyLock;
 
 /// Dangerous URL schemes that could execute code or access local files
+/// Used by Linux and macOS for incoming drag content sanitization
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 const DANGEROUS_URL_SCHEMES: &[&str] = &[
     "javascript:",
     "vbscript:",
@@ -22,6 +26,7 @@ const DANGEROUS_URL_SCHEMES: &[&str] = &[
 ];
 
 /// Check if a URL has a dangerous scheme
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 pub fn is_dangerous_url(url: &str) -> bool {
     let url_lower = url.trim().to_lowercase();
     DANGEROUS_URL_SCHEMES.iter().any(|scheme| url_lower.starts_with(scheme))
@@ -29,7 +34,7 @@ pub fn is_dangerous_url(url: &str) -> bool {
 
 /// Sanitize a list of URLs (e.g., text/uri-list format)
 /// Removes any dangerous URLs from the list
-#[cfg(any(target_os = "windows", target_os = "linux"))]
+#[cfg(target_os = "linux")]
 pub fn sanitize_uri_list(uri_list: &str) -> String {
     uri_list
         .lines()
@@ -51,23 +56,28 @@ pub fn sanitize_uri_list(uri_list: &str) -> String {
 }
 
 // Regex patterns for HTML sanitization (compiled once)
+// Only needed on Linux and macOS where we handle incoming drag content
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 static SCRIPT_TAG_REGEX: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(?is)<script[^>]*>.*?</script>")
         .expect("Failed to compile SCRIPT_TAG_REGEX - this is a bug in the regex pattern")
 });
 
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 static EVENT_HANDLER_REGEX: LazyLock<Regex> = LazyLock::new(|| {
     // Match on* attributes like onclick, onload, onerror, etc.
     Regex::new(r#"(?i)\s+on\w+\s*=\s*["'][^"']*["']"#)
         .expect("Failed to compile EVENT_HANDLER_REGEX - this is a bug in the regex pattern")
 });
 
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 static JAVASCRIPT_URL_ATTR_REGEX: LazyLock<Regex> = LazyLock::new(|| {
     // Match href="javascript:..." or src="javascript:..." etc.
     Regex::new(r#"(?i)(href|src|action|formaction|data)\s*=\s*["']\s*javascript:[^"']*["']"#)
         .expect("Failed to compile JAVASCRIPT_URL_ATTR_REGEX - this is a bug in the regex pattern")
 });
 
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 static STYLE_EXPRESSION_REGEX: LazyLock<Regex> = LazyLock::new(|| {
     // Match CSS expressions (IE) and javascript in style attributes
     Regex::new(r#"(?i)expression\s*\([^)]*\)|javascript:"#)
@@ -76,6 +86,7 @@ static STYLE_EXPRESSION_REGEX: LazyLock<Regex> = LazyLock::new(|| {
 
 /// Sanitize HTML content by removing dangerous elements and attributes
 /// This provides defense-in-depth; TiddlyWiki also sanitizes HTML
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 pub fn sanitize_html(html: &str) -> String {
     let mut result = html.to_string();
 
@@ -296,6 +307,8 @@ pub fn validate_directory_path(path: &str) -> Result<PathBuf, String> {
 
 /// Sanitize a list of file paths
 /// Returns only the valid paths
+/// Used by Linux and macOS for incoming drag content sanitization
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 pub fn sanitize_file_paths(paths: Vec<String>) -> Vec<String> {
     paths
         .into_iter()

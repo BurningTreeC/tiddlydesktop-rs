@@ -95,7 +95,7 @@
  pub(crate) fn dragging_exited(this: &WryWebView, drag_info: &ProtocolObject<dyn NSDraggingInfo>) {
 --- a/src/webview2/mod.rs
 +++ b/src/webview2/mod.rs
-@@ -146,15 +146,12 @@
+@@ -146,15 +146,11 @@
        is_child,
      )?;
 
@@ -108,12 +108,11 @@
 -      }
 -      DragDropController::new(hwnd, handler)
 -    });
-+    // PATCH: Create DragDropController but DON'T disable external drops.
-+    // WRY normally calls SetAllowExternalDrop(false) which blocks native text insertion
-+    // into inputs/textareas. By removing that call but keeping the DragDropController,
-+    // we get a proper COM IDropTarget that TiddlyDesktop can capture and wrap,
-+    // while TiddlyDesktop's SetAllowExternalDrop(true) call preserves native drop behavior.
-+    let drag_drop_controller = drop_handler.map(|handler| DragDropController::new(hwnd, handler));
++    // PATCH: Don't install WRY's DragDropController on Windows.
++    // Let WebView2 handle drops natively (SetAllowExternalDrop defaults to true).
++    // TiddlyDesktop uses JavaScript DataTransfer patching for custom formats
++    // and Tauri IPC for cross-wiki drag data sharing.
++    let drag_drop_controller: Option<DragDropController> = None;
 
      let w = Self {
        id,

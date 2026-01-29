@@ -38,6 +38,7 @@
     var lastDragPosition = null;     // Last known drag position (for drop targeting)
     var pendingDragElement = null;   // Element that might be dragged (set on pointerdown)
     var lastPointerType = 'mouse';   // Pointer type from last pointerdown (for synthetic pointerup)
+    var currentDragEventTarget = null; // Track current drag event target for Issue 4b filtering
 
     // === Patch DataTransfer.prototype for Windows/macOS ===
     // On these platforms, the webview strips custom MIME types like text/vnd.tiddler
@@ -85,6 +86,21 @@
 
             // If internal drag is active, check our captured data
             if (internalDragActive) {
+                // Issue 4b: For same-wiki tiddler drags (not text-selection),
+                // filter text/vnd.tiddler when NOT over a $droppable element.
+                // This prevents the main dropzone from importing tiddlers that already exist.
+                if (type === 'text/vnd.tiddler' && !isTextSelectionDrag) {
+                    var droppable = null;
+                    try {
+                        if (currentDragEventTarget && currentDragEventTarget.closest) {
+                            droppable = currentDragEventTarget.closest('.tc-droppable');
+                        }
+                    } catch (e) {}
+                    if (!droppable) {
+                        return ''; // Don't return tiddler data when not over $droppable
+                    }
+                }
+
                 // Check dragData first (data we've already processed)
                 if (dragData && type in dragData) {
                     return dragData[type];
@@ -178,6 +194,24 @@
                                 merged.push(original[i]);
                             }
                         }
+
+                        // Issue 4b: For same-wiki tiddler drags (not text-selection),
+                        // filter text/vnd.tiddler from types when NOT over a $droppable element.
+                        // This prevents the main dropzone from showing the import indicator
+                        // for tiddlers that already exist in this wiki.
+                        // $droppable elements (for reordering) still see text/vnd.tiddler.
+                        if (!isTextSelectionDrag && merged.indexOf('text/vnd.tiddler') !== -1) {
+                            var droppable = null;
+                            try {
+                                if (currentDragEventTarget && currentDragEventTarget.closest) {
+                                    droppable = currentDragEventTarget.closest('.tc-droppable');
+                                }
+                            } catch (e) {}
+                            if (!droppable) {
+                                merged = merged.filter(function(t) { return t !== 'text/vnd.tiddler'; });
+                            }
+                        }
+
                         return merged;
                     }
                     return originalTypes;
@@ -186,6 +220,19 @@
                 enumerable: true
             });
         }
+
+        // Track current drag event target for Issue 4b filtering (capture phase)
+        document.addEventListener('dragenter', function(e) {
+            if (internalDragActive) {
+                currentDragEventTarget = e.target;
+            }
+        }, true);
+
+        document.addEventListener('dragover', function(e) {
+            if (internalDragActive) {
+                currentDragEventTarget = e.target;
+            }
+        }, true);
 
         // Export functions to access pending data from dragstart handler
         TD._getPendingDragData = function() {
@@ -675,6 +722,7 @@
         lastTarget = null;
         lastDragPosition = null;
         pendingDragElement = null;
+        currentDragEventTarget = null;
         enableIframePointerEvents();
 
         // Clear any pending setData captures
@@ -1144,6 +1192,10 @@
         // === Tauri native drag events for CROSS-WIKI drags only ===
         // These dispatch synthetic DOM events with the pre-loaded tiddler data.
         // For file manager drags, native WebKitGTK events handle everything.
+        //
+        // IMPORTANT: On Windows/macOS, without custom IDropTarget/NSDraggingDestination,
+        // Rust can't emit td-cross-wiki-data directly. Instead, we query Rust for
+        // pending drag data when tauri://drag-enter fires (IPC approach).
 
         tauriListen("tauri://drag-enter", function(event) {
             var p = event.payload || {};
@@ -1151,13 +1203,40 @@
             // Skip if we're the drag source (internal drag)
             if (internalDragActive) return;
 
-            // Only dispatch synthetic events for cross-wiki drags
-            // File manager drags use native WebKitGTK events
-            if (!crossWikiDragData) return;
-
             var pos = p.position || { x: 0, y: 0 };
-            log('tauri://drag-enter (cross-wiki) at (' + pos.x + ', ' + pos.y + ')');
+            var paths = p.paths || [];
 
+            // If crossWikiDragData is already set (from td-cross-wiki-data on Linux),
+            // proceed with synthetic events
+            if (crossWikiDragData) {
+                log('tauri://drag-enter (cross-wiki) at (' + pos.x + ', ' + pos.y + ')');
+                dispatchCrossWikiDragEnter(pos);
+                return;
+            }
+
+            // For file drags (paths.length > 0), let Tauri handle natively
+            if (paths.length > 0) return;
+
+            // For content drags without crossWikiDragData, query Rust via IPC
+            // This is the Windows/macOS path where native drag handlers don't exist
+            if (window.__TAURI__?.core?.invoke) {
+                window.__TAURI__.core.invoke('get_pending_drag_data', {
+                    targetWindow: window.__WINDOW_LABEL__
+                }).then(function(data) {
+                    if (data && data.text_vnd_tiddler) {
+                        log('Cross-wiki drag detected via IPC: tiddler data received');
+                        crossWikiDragData = data.text_vnd_tiddler;
+                        dispatchCrossWikiDragEnter(pos);
+                    }
+                }).catch(function(err) {
+                    // Command might not exist yet, that's OK - fallback to existing flow
+                    log('get_pending_drag_data not available: ' + err);
+                });
+            }
+        });
+
+        // Helper to dispatch cross-wiki dragenter events
+        function dispatchCrossWikiDragEnter(pos) {
             externalDragActive = true;
             disableIframePointerEvents();
 
@@ -1178,7 +1257,7 @@
             // Also dispatch initial dragover
             var overEvent = createDragEvent("dragover", pos.x, pos.y, dataTransfer, null);
             target.dispatchEvent(overEvent);
-        });
+        }
 
         tauriListen("tauri://drag-over", function(event) {
             var p = event.payload || {};
@@ -1186,11 +1265,37 @@
             // Skip if we're the drag source (internal drag)
             if (internalDragActive) return;
 
-            // Only dispatch synthetic events for cross-wiki drags
-            if (!crossWikiDragData) return;
-
             var pos = p.position || { x: 0, y: 0 };
+            var paths = p.paths || [];
 
+            // If crossWikiDragData is set, dispatch synthetic events
+            if (crossWikiDragData) {
+                dispatchCrossWikiDragOver(pos);
+                return;
+            }
+
+            // For file drags (paths.length > 0), let Tauri handle natively
+            if (paths.length > 0) return;
+
+            // For content drags without crossWikiDragData, query Rust via IPC
+            // This handles the case where drag-enter IPC was still pending
+            if (window.__TAURI__?.core?.invoke && !externalDragActive) {
+                window.__TAURI__.core.invoke('get_pending_drag_data', {
+                    targetWindow: window.__WINDOW_LABEL__
+                }).then(function(data) {
+                    if (data && data.text_vnd_tiddler) {
+                        log('Cross-wiki drag detected via IPC (dragover): tiddler data received');
+                        crossWikiDragData = data.text_vnd_tiddler;
+                        dispatchCrossWikiDragEnter(pos);
+                    }
+                }).catch(function(err) {
+                    // Ignore - command might not exist
+                });
+            }
+        });
+
+        // Helper to dispatch cross-wiki dragover events
+        function dispatchCrossWikiDragOver(pos) {
             // Mark as external drag if not already (in case we missed drag-enter)
             if (!externalDragActive) {
                 externalDragActive = true;
@@ -1222,7 +1327,7 @@
             // Dispatch dragover
             var overEvent = createDragEvent("dragover", pos.x, pos.y, dataTransfer, null);
             target.dispatchEvent(overEvent);
-        });
+        }
 
         tauriListen("tauri://drag-leave", function(event) {
             // Skip if we're the drag source (internal drag)

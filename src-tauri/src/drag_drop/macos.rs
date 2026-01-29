@@ -1531,3 +1531,45 @@ pub extern "C" fn tiddlydesktop_has_internal_drag() -> i32 {
         .map(|guard| if guard.is_some() { 1 } else { 0 })
         .unwrap_or(0)
 }
+
+/// Response structure for get_pending_drag_data command
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct PendingDragDataResponse {
+    pub text_plain: Option<String>,
+    pub text_html: Option<String>,
+    pub text_vnd_tiddler: Option<String>,
+    pub text_uri_list: Option<String>,
+    pub source_window: String,
+    pub is_text_selection_drag: bool,
+}
+
+/// Get pending drag data for cross-wiki drops.
+/// Returns the drag data if there's an active drag from a DIFFERENT window,
+/// otherwise returns None (same-window drags are handled natively).
+pub fn get_pending_drag_data(target_window: &str) -> Option<PendingDragDataResponse> {
+    let guard = outgoing_drag_state().lock().ok()?;
+    let state = guard.as_ref()?;
+
+    // Only return data if it's a cross-wiki drag (different window)
+    if state.source_window_label == target_window {
+        eprintln!(
+            "[TiddlyDesktop] macOS: get_pending_drag_data - same window '{}', returning None",
+            target_window
+        );
+        return None;
+    }
+
+    eprintln!(
+        "[TiddlyDesktop] macOS: get_pending_drag_data - cross-wiki from '{}' to '{}', returning data",
+        state.source_window_label, target_window
+    );
+
+    Some(PendingDragDataResponse {
+        text_plain: state.data.text_plain.clone(),
+        text_html: state.data.text_html.clone(),
+        text_vnd_tiddler: state.data.text_vnd_tiddler.clone(),
+        text_uri_list: state.data.text_uri_list.clone(),
+        source_window: state.source_window_label.clone(),
+        is_text_selection_drag: state.data.is_text_selection_drag,
+    })
+}

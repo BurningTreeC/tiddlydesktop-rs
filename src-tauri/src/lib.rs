@@ -1607,6 +1607,15 @@ fn cleanup_native_drag() -> Result<(), String> {
     drag_drop::cleanup_native_drag_impl()
 }
 
+/// Get pending drag data for cross-wiki drops.
+/// Called from JavaScript when a drag enters the window to check if there's
+/// cross-wiki drag data available (IPC-based fallback for platforms where
+/// native drag tracking doesn't work, e.g., Windows without custom IDropTarget).
+#[tauri::command]
+fn get_pending_drag_data(target_window: String) -> Option<drag_drop::PendingDragDataResponse> {
+    drag_drop::get_pending_drag_data_impl(&target_window)
+}
+
 /// Update the drag icon during an active native drag operation
 /// Called from JavaScript to change the drag image mid-drag
 #[tauri::command]
@@ -4941,6 +4950,7 @@ fn run_wiki_mode(args: WikiModeArgs) {
             start_native_drag,
             prepare_native_drag,
             cleanup_native_drag,
+            get_pending_drag_data,
             update_drag_icon,
             set_pending_drag_icon,
             set_drag_dest_enabled,
@@ -5547,6 +5557,7 @@ pub fn run() {
             start_native_drag,
             prepare_native_drag,
             cleanup_native_drag,
+            get_pending_drag_data,
             update_drag_icon,
             set_pending_drag_icon,
             set_drag_dest_enabled,

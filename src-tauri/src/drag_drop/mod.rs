@@ -36,8 +36,8 @@
 //! - HTML: Script tags and event handlers are stripped
 //! - File paths: Path traversal sequences are rejected
 
-// Encoding utilities - only needed on Windows and Linux
-#[cfg(any(target_os = "windows", target_os = "linux"))]
+// Encoding utilities - only needed on Linux (Windows no longer uses custom IDropTarget)
+#[cfg(target_os = "linux")]
 mod encoding;
 
 // Sanitization utilities - needed on all platforms with drag-drop
@@ -281,4 +281,57 @@ pub fn ungrab_seat_for_focus_impl(_label: &str) {
 #[cfg(target_os = "macos")]
 pub fn ungrab_seat_for_focus_impl(_label: &str) {
     // No-op for macOS currently
+}
+
+/// Response structure for get_pending_drag_data command
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct PendingDragDataResponse {
+    pub text_plain: Option<String>,
+    pub text_html: Option<String>,
+    pub text_vnd_tiddler: Option<String>,
+    pub text_uri_list: Option<String>,
+    pub source_window: String,
+    pub is_text_selection_drag: bool,
+}
+
+/// Get pending drag data for cross-wiki drops.
+/// This is used as a fallback mechanism on platforms where native drag tracking
+/// doesn't work (e.g., Windows without custom IDropTarget).
+///
+/// Returns the drag data if there's an active drag from a DIFFERENT window,
+/// otherwise returns None (same-window drags are handled natively).
+#[cfg(target_os = "linux")]
+pub fn get_pending_drag_data_impl(target_window: &str) -> Option<PendingDragDataResponse> {
+    linux::get_pending_drag_data(target_window).map(|r| PendingDragDataResponse {
+        text_plain: r.text_plain,
+        text_html: r.text_html,
+        text_vnd_tiddler: r.text_vnd_tiddler,
+        text_uri_list: r.text_uri_list,
+        source_window: r.source_window,
+        is_text_selection_drag: r.is_text_selection_drag,
+    })
+}
+
+#[cfg(target_os = "windows")]
+pub fn get_pending_drag_data_impl(target_window: &str) -> Option<PendingDragDataResponse> {
+    windows::get_pending_drag_data(target_window).map(|r| PendingDragDataResponse {
+        text_plain: r.text_plain,
+        text_html: r.text_html,
+        text_vnd_tiddler: r.text_vnd_tiddler,
+        text_uri_list: r.text_uri_list,
+        source_window: r.source_window,
+        is_text_selection_drag: r.is_text_selection_drag,
+    })
+}
+
+#[cfg(target_os = "macos")]
+pub fn get_pending_drag_data_impl(target_window: &str) -> Option<PendingDragDataResponse> {
+    macos::get_pending_drag_data(target_window).map(|r| PendingDragDataResponse {
+        text_plain: r.text_plain,
+        text_html: r.text_html,
+        text_vnd_tiddler: r.text_vnd_tiddler,
+        text_uri_list: r.text_uri_list,
+        source_window: r.source_window,
+        is_text_selection_drag: r.is_text_selection_drag,
+    })
 }

@@ -94,15 +94,44 @@
 
  pub(crate) fn dragging_exited(this: &WryWebView, drag_info: &ProtocolObject<dyn NSDraggingInfo>) {
 
+--- a/src/webview2/drag_drop.rs
++++ b/src/webview2/drag_drop.rs
+@@ -47,18 +47,10 @@
+
+     let handler = Rc::new(handler);
+
+-    // Enumerate child windows to find the WebView2 "window" and override!
+-    {
+-      let mut callback = |hwnd| controller.inject_in_hwnd(hwnd, handler.clone());
+-      let mut trait_obj: &mut dyn FnMut(HWND) -> bool = &mut callback;
+-      let closure_pointer_pointer: *mut c_void = unsafe { std::mem::transmute(&mut trait_obj) };
+-      let lparam = LPARAM(closure_pointer_pointer as _);
+-      unsafe extern "system" fn enumerate_callback(hwnd: HWND, lparam: LPARAM) -> BOOL {
+-        let closure = &mut *(lparam.0 as *mut c_void as *mut &mut dyn FnMut(HWND) -> bool);
+-        closure(hwnd).into()
+-      }
+-      let _ = unsafe { EnumChildWindows(Some(hwnd), Some(enumerate_callback), lparam) };
+-    }
++    // PATCHED: Only register on parent HWND, not child windows.
++    // This allows WebView2's internal drop handling on child windows to work,
++    // enabling native HTML5 drag events while still extracting file paths.
++    controller.inject_in_hwnd(hwnd, handler);
+
+     controller
+   }
+
 --- a/src/webview2/mod.rs
 +++ b/src/webview2/mod.rs
-@@ -146,13 +146,10 @@
+@@ -146,13 +146,14 @@
        is_child,
      )?;
 
-+    // PATCHED: Don't disable external drops - we want native behavior
-+    // Our IDropTarget extracts file paths for Tauri events.
-+    // DOM drag events will be handled via CoreWebView2 DragStarting API.
++    // PATCHED: Keep DragDropController for file path extraction (tauri://drag-drop events)
++    // BUT don't disable WebView2's external drop handling, so native DOM events also fire.
++    // This enables:
++    // - Native HTML5 drag events for internal/cross-wiki drags
++    // - File paths via tauri://drag-drop for external file drops
++    // - Parent HWND IDropTarget for file paths, child windows for native DOM
      let drag_drop_controller = drop_handler.map(|handler| {
 -      // Disable file drops, so our handler can capture it
 -      unsafe {
@@ -110,6 +139,7 @@
 -          .cast::<ICoreWebView2Controller4>()
 -          .and_then(|c| c.SetAllowExternalDrop(false));
 -      }
++      // Don't call SetAllowExternalDrop(false) - let WebView2 also handle drops natively
        DragDropController::new(hwnd, handler)
      });
 

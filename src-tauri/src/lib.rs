@@ -5322,96 +5322,145 @@ fn run_wiki_folder_mode(args: WikiFolderModeArgs) {
         .run(|_app, _event| {});
 }
 
-/// Windows: Check if WebView2 runtime version 131+ is installed
+/// Windows: Check if Microsoft Edge version 131+ is installed
 /// Required for DragStarting API (SDK 1.0.3719.77)
+/// Edge includes the WebView2 runtime - they share the same binaries.
+/// Uses registry detection (same method as the NSIS installer).
 #[cfg(target_os = "windows")]
 fn check_webview2_version() {
-    use windows::core::{PCWSTR, PWSTR, w};
-    use windows::Win32::Foundation::FreeLibrary;
-    use windows::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryW};
+    use windows::core::PCWSTR;
+    use windows::Win32::System::Registry::HKEY_LOCAL_MACHINE;
     use windows::Win32::UI::WindowsAndMessaging::{MessageBoxW, MB_OK, MB_ICONWARNING};
 
     const REQUIRED_MAJOR_VERSION: u32 = 131;
+    // WebView2 Runtime client GUID (shared by Edge and standalone runtime)
+    const WEBVIEW2_GUID: &str = "{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}";
 
-    // Type for GetAvailableCoreWebView2BrowserVersionString
-    type GetVersionFn = unsafe extern "system" fn(
-        browser_executable_folder: PCWSTR,
-        version_info: *mut PWSTR,
-    ) -> windows::core::HRESULT;
+    // Try to read version from registry (same locations as NSIS installer)
+    let registry_paths = [
+        format!("SOFTWARE\\WOW6432Node\\Microsoft\\EdgeUpdate\\Clients\\{}", WEBVIEW2_GUID),
+        format!("SOFTWARE\\Microsoft\\EdgeUpdate\\Clients\\{}", WEBVIEW2_GUID),
+    ];
 
-    unsafe {
-        // Dynamically load WebView2Loader.dll
-        let lib = LoadLibraryW(w!("WebView2Loader.dll"));
-        let lib = match lib {
-            Ok(h) => h,
-            Err(_) => {
-                eprintln!("[TiddlyDesktop] Could not load WebView2Loader.dll - WebView2 may not be installed");
-                let title: Vec<u16> = "TiddlyDesktop - WebView2 Required\0".encode_utf16().collect();
-                let message: Vec<u16> = "WebView2 runtime is not installed.\n\n\
-                    Please install Microsoft Edge or the WebView2 Runtime from:\n\
-                    https://developer.microsoft.com/en-us/microsoft-edge/webview2/\0"
-                    .encode_utf16().collect();
-                MessageBoxW(None, PCWSTR(message.as_ptr()), PCWSTR(title.as_ptr()), MB_OK | MB_ICONWARNING);
-                return;
+    let mut version_str: Option<String> = None;
+
+    for path in &registry_paths {
+        if let Some(ver) = read_registry_string(HKEY_LOCAL_MACHINE, path, "pv") {
+            if !ver.is_empty() {
+                version_str = Some(ver);
+                break;
             }
-        };
+        }
+    }
 
-        // Get function pointer
-        let func_name = windows::core::s!("GetAvailableCoreWebView2BrowserVersionString");
-        let func_ptr = GetProcAddress(lib, func_name);
-        let get_version: GetVersionFn = match func_ptr {
-            Some(f) => std::mem::transmute(f),
-            None => {
-                eprintln!("[TiddlyDesktop] Could not find GetAvailableCoreWebView2BrowserVersionString");
-                let _ = FreeLibrary(lib);
-                return;
-            }
-        };
-
-        // Get the version string
-        let mut version_ptr: PWSTR = PWSTR::null();
-        let hr = get_version(PCWSTR::null(), &mut version_ptr);
-
-        if hr.is_err() || version_ptr.is_null() {
-            eprintln!("[TiddlyDesktop] WebView2 runtime not found or error getting version");
-            let title: Vec<u16> = "TiddlyDesktop - WebView2 Required\0".encode_utf16().collect();
-            let message: Vec<u16> = "WebView2 runtime is not installed.\n\n\
-                Please install Microsoft Edge or the WebView2 Runtime from:\n\
-                https://developer.microsoft.com/en-us/microsoft-edge/webview2/\0"
+    let version_str = match version_str {
+        Some(v) => v,
+        None => {
+            eprintln!("[TiddlyDesktop] Microsoft Edge not found in registry");
+            let title: Vec<u16> = "TiddlyDesktop - Microsoft Edge Required\0".encode_utf16().collect();
+            let message: Vec<u16> = "Microsoft Edge is required to run TiddlyDesktop.\n\n\
+                Please install Microsoft Edge from:\n\
+                https://www.microsoft.com/edge\0"
                 .encode_utf16().collect();
-            MessageBoxW(None, PCWSTR(message.as_ptr()), PCWSTR(title.as_ptr()), MB_OK | MB_ICONWARNING);
-            let _ = FreeLibrary(lib);
+            unsafe {
+                MessageBoxW(None, PCWSTR(message.as_ptr()), PCWSTR(title.as_ptr()), MB_OK | MB_ICONWARNING);
+            }
             return;
         }
+    };
 
-        // Convert PWSTR to String
-        let version_str = version_ptr.to_string().unwrap_or_default();
-        eprintln!("[TiddlyDesktop] WebView2 version: {}", version_str);
+    eprintln!("[TiddlyDesktop] Microsoft Edge version: {}", version_str);
 
-        // Free the allocated string
-        windows::Win32::System::Com::CoTaskMemFree(Some(version_ptr.as_ptr() as *const std::ffi::c_void));
-        let _ = FreeLibrary(lib);
-
-        // Parse major version (format: "131.0.2903.112")
-        if let Some(major_str) = version_str.split('.').next() {
-            if let Ok(major) = major_str.parse::<u32>() {
-                if major < REQUIRED_MAJOR_VERSION {
-                    eprintln!("[TiddlyDesktop] WebView2 version {} is below required version {}", major, REQUIRED_MAJOR_VERSION);
-                    let title: Vec<u16> = "TiddlyDesktop - WebView2 Update Required\0".encode_utf16().collect();
-                    let message = format!(
-                        "Your WebView2 runtime version ({}) is outdated.\n\n\
-                        TiddlyDesktop requires version {} or newer for full functionality.\n\n\
-                        Please update Microsoft Edge or install the latest WebView2 Runtime from:\n\
-                        https://developer.microsoft.com/en-us/microsoft-edge/webview2/\0",
-                        version_str, REQUIRED_MAJOR_VERSION
-                    );
-                    let message_wide: Vec<u16> = message.encode_utf16().collect();
+    // Parse major version (format: "131.0.2903.112")
+    if let Some(major_str) = version_str.split('.').next() {
+        if let Ok(major) = major_str.parse::<u32>() {
+            if major < REQUIRED_MAJOR_VERSION {
+                eprintln!("[TiddlyDesktop] Edge version {} is below required version {}", major, REQUIRED_MAJOR_VERSION);
+                let title: Vec<u16> = "TiddlyDesktop - Edge Update Recommended\0".encode_utf16().collect();
+                let message = format!(
+                    "Your Microsoft Edge version ({}) is older than recommended.\n\n\
+                    TiddlyDesktop works best with Edge {} or newer \
+                    (needed for drag-and-drop functionality).\n\n\
+                    Please update Microsoft Edge via Settings > About Microsoft Edge.\0",
+                    version_str, REQUIRED_MAJOR_VERSION
+                );
+                let message_wide: Vec<u16> = message.encode_utf16().collect();
+                unsafe {
                     MessageBoxW(None, PCWSTR(message_wide.as_ptr()), PCWSTR(title.as_ptr()), MB_OK | MB_ICONWARNING);
-                } else {
-                    eprintln!("[TiddlyDesktop] WebView2 version {} meets requirement (>= {})", major, REQUIRED_MAJOR_VERSION);
                 }
+            } else {
+                eprintln!("[TiddlyDesktop] Edge version {} meets requirement (>= {})", major, REQUIRED_MAJOR_VERSION);
             }
         }
+    }
+}
+
+/// Helper to read a string value from the Windows registry
+#[cfg(target_os = "windows")]
+fn read_registry_string(hkey: windows::Win32::System::Registry::HKEY, path: &str, value_name: &str) -> Option<String> {
+    use windows::Win32::System::Registry::{
+        RegOpenKeyExW, RegQueryValueExW, RegCloseKey, KEY_READ, REG_SZ,
+    };
+
+    unsafe {
+        let path_wide: Vec<u16> = path.encode_utf16().chain(std::iter::once(0)).collect();
+        let value_wide: Vec<u16> = value_name.encode_utf16().chain(std::iter::once(0)).collect();
+
+        let mut key_handle = windows::Win32::System::Registry::HKEY::default();
+        let result = RegOpenKeyExW(
+            hkey,
+            windows::core::PCWSTR(path_wide.as_ptr()),
+            Some(0),
+            KEY_READ,
+            &mut key_handle,
+        );
+
+        if result.is_err() {
+            return None;
+        }
+
+        // First call to get required buffer size
+        let mut data_type = REG_SZ;
+        let mut data_size: u32 = 0;
+        let result = RegQueryValueExW(
+            key_handle,
+            windows::core::PCWSTR(value_wide.as_ptr()),
+            None,
+            Some(&mut data_type),
+            None,
+            Some(&mut data_size),
+        );
+
+        if result.is_err() || data_size == 0 {
+            let _ = RegCloseKey(key_handle);
+            return None;
+        }
+
+        // Allocate buffer and read the value
+        let mut buffer: Vec<u8> = vec![0u8; data_size as usize];
+        let result = RegQueryValueExW(
+            key_handle,
+            windows::core::PCWSTR(value_wide.as_ptr()),
+            None,
+            Some(&mut data_type),
+            Some(buffer.as_mut_ptr()),
+            Some(&mut data_size),
+        );
+
+        let _ = RegCloseKey(key_handle);
+
+        if result.is_err() {
+            return None;
+        }
+
+        // Convert wide string to Rust String
+        let wide_chars: Vec<u16> = buffer
+            .chunks_exact(2)
+            .map(|c| u16::from_le_bytes([c[0], c[1]]))
+            .take_while(|&c| c != 0)
+            .collect();
+
+        String::from_utf16(&wide_chars).ok()
     }
 }
 

@@ -1009,15 +1009,11 @@ impl ICoreWebView2DragStartingEventHandler_Impl for DragStartingHandler_Impl {
             }
         }
 
-        // Set Handled = true to prevent WebView2 from initiating OLE drag.
-        // This allows native HTML5 drag events to work within the webview.
-        // Cross-wiki drags still work: we've captured the data in OUTGOING_DRAG_STATE above,
-        // and target windows query it via get_pending_drag_data IPC when tauri://drag-enter fires.
-        if let Some(args_inner) = args.cloned() {
-            unsafe {
-                let _ = args_inner.SetHandled(true);
-            }
-        }
+        // Don't set Handled = true - let WebView2 continue with its default drag behavior.
+        // Setting Handled = true suppresses the OLE drag, which breaks cursor feedback
+        // even for internal HTML5 drags.
+        // We've captured the data above for cross-window scenarios - target windows
+        // query OUTGOING_DRAG_STATE via get_pending_drag_data IPC when tauri://drag-enter fires.
 
         Ok(())
     }

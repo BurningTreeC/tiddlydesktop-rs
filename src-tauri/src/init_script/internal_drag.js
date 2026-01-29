@@ -886,24 +886,56 @@
         cleanup();
     }, true);
 
-    // === Block native events ONLY for cross-wiki drags that need synthetic handling ===
-    // For internal drags: let WebKit handle everything naturally
-    // For cross-wiki drags: let native events flow (patched getData() returns tiddler data)
-    // For external drags (file manager): let native WebKitGTK events flow
-    function blockExternalDragEvent(event) {
-        if (event.__tiddlyDesktopSynthetic) return;
+    // === Handle native drag events ===
+    // For internal drags: let browser handle everything naturally
+    // For cross-wiki drags: query Rust for tiddler data, patched getData() returns it
+    // For external drags (file manager): let native events flow
+    var crossWikiQueryDone = false;
 
-        // If this is our internal drag, let WebKit handle it naturally
+    // On dragenter, query Rust for cross-wiki data if this isn't our own drag
+    document.addEventListener("dragenter", function(event) {
+        if (event.__tiddlyDesktopSynthetic) return;
         if (internalDragActive) return;
 
-        // For cross-wiki and external drags, let native events flow
-        // - Cross-wiki: patched getData() returns the pre-emitted tiddler data
-        // - External (file manager): WebKitGTK fires native events, let them through
-    }
-    document.addEventListener("dragenter", blockExternalDragEvent, true);
-    document.addEventListener("dragover", blockExternalDragEvent, true);
-    document.addEventListener("dragleave", blockExternalDragEvent, true);
-    document.addEventListener("drop", blockExternalDragEvent, true);
+        // Query Rust for cross-wiki data (only once per drag session)
+        if (!crossWikiDragData && !crossWikiQueryDone && window.__TAURI__?.core?.invoke) {
+            crossWikiQueryDone = true;
+            window.__TAURI__.core.invoke('get_pending_drag_data', {
+                targetWindow: window.__WINDOW_LABEL__
+            }).then(function(data) {
+                if (data && data.text_vnd_tiddler) {
+                    log('Cross-wiki drag data received via native dragenter');
+                    crossWikiDragData = data.text_vnd_tiddler;
+                    externalDragActive = true;
+                }
+            }).catch(function(err) {
+                log('get_pending_drag_data error: ' + err);
+            });
+        }
+    }, true);
+
+    // Reset cross-wiki query state when drag leaves
+    document.addEventListener("dragleave", function(event) {
+        if (event.__tiddlyDesktopSynthetic) return;
+        if (internalDragActive) return;
+        // Only reset if leaving the document entirely
+        if (event.relatedTarget === null) {
+            crossWikiQueryDone = false;
+            crossWikiDragData = null;
+            externalDragActive = false;
+        }
+    }, true);
+
+    // Clean up after drop
+    document.addEventListener("drop", function(event) {
+        if (event.__tiddlyDesktopSynthetic) return;
+        if (internalDragActive) return;
+        // Reset state after drop (with small delay to let getData() work)
+        setTimeout(function() {
+            crossWikiQueryDone = false;
+            // Don't clear crossWikiDragData here - cleanup() will do it
+        }, 100);
+    }, true);
 
     // Track position during internal drags for tauri://drag-drop handler
     document.addEventListener("dragover", function(event) {
@@ -1373,6 +1405,12 @@
         tauriListen("tauri://drag-drop", function(event) {
             var p = event.payload || {};
             var paths = p.paths || [];
+
+            // Skip if we're the drag source - let native DOM drop handle it
+            if (internalDragActive) {
+                log('tauri://drag-drop skipped - internal drag, letting native DOM handle');
+                return;
+            }
 
             // IMPORTANT: Save cross-wiki data immediately before any cleanup can clear it
             // The cleanup() function may be called by other event handlers (dragend, td-drag-end)

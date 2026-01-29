@@ -1051,12 +1051,35 @@ pub fn start_native_drag(window: &WebviewWindow, data: OutgoingDragData, _x: i32
 /// Custom format handling (text/vnd.tiddler etc.) is done via JavaScript DataTransfer
 /// patching and Tauri IPC for cross-wiki drag data sharing.
 ///
-/// This function only initializes OLE for outgoing drags (DoDragDrop).
+/// This function also sets up a window event listener to inject file paths into
+/// JavaScript synchronously when drag events occur, ensuring __pendingExternalFiles
+/// is populated BEFORE the native WebView2 drop fires.
 pub fn setup_drag_handlers(window: &WebviewWindow) {
     eprintln!(
         "[TiddlyDesktop] Windows: setup_drag_handlers called for window '{}'",
         window.label()
     );
+
+    // Set up drag event listener to inject file paths synchronously
+    // This runs BEFORE the native DOM drop event fires in WebView2
+    let window_clone = window.clone();
+    window.on_window_event(move |event| {
+        use tauri::DragDropEvent;
+
+        if let tauri::WindowEvent::DragDrop(drag_event) = event {
+            let paths = match drag_event {
+                DragDropEvent::Enter { paths, .. } => Some(paths),
+                DragDropEvent::Drop { paths, .. } => Some(paths),
+                _ => None,
+            };
+
+            if let Some(paths) = paths {
+                if !paths.is_empty() {
+                    inject_drag_paths(&window_clone, paths);
+                }
+            }
+        }
+    });
 
     let _ = window.with_webview(move |webview| {
         #[cfg(windows)]
@@ -1086,6 +1109,48 @@ pub fn setup_drag_handlers(window: &WebviewWindow) {
             eprintln!("[TiddlyDesktop] Windows: Native drop handling enabled (no custom IDropTarget)");
         }
     });
+}
+
+/// Inject file paths into JavaScript's window.__pendingExternalFiles
+/// This is called synchronously when drag events occur, ensuring paths are
+/// available before the native DOM drop event fires.
+fn inject_drag_paths(window: &WebviewWindow, paths: &[std::path::PathBuf]) {
+    if paths.is_empty() {
+        return;
+    }
+
+    // Build JavaScript to inject paths into __pendingExternalFiles
+    let mut js_parts = Vec::new();
+    js_parts.push("(function() { window.__pendingExternalFiles = window.__pendingExternalFiles || {};".to_string());
+
+    for path in paths {
+        let path_str = path.to_string_lossy();
+        // Skip non-file paths (data: URIs, etc.)
+        if path_str.starts_with("data:") {
+            continue;
+        }
+
+        // Extract filename from path
+        if let Some(filename) = path.file_name().and_then(|n| n.to_str()) {
+            // Escape for JavaScript string
+            let escaped_path = path_str.replace('\\', "\\\\").replace('\'', "\\'");
+            let escaped_filename = filename.replace('\\', "\\\\").replace('\'', "\\'");
+            js_parts.push(format!(
+                "window.__pendingExternalFiles['{}'] = '{}';",
+                escaped_filename, escaped_path
+            ));
+        }
+    }
+
+    js_parts.push("})();".to_string());
+    let js = js_parts.join(" ");
+
+    // Execute synchronously - this runs before the native drop event fires
+    if let Err(e) = window.eval(&js) {
+        eprintln!("[TiddlyDesktop] Windows: Failed to inject drag paths: {}", e);
+    } else {
+        eprintln!("[TiddlyDesktop] Windows: Injected {} file paths into __pendingExternalFiles", paths.len());
+    }
 }
 
 // ============================================================================

@@ -36,7 +36,11 @@ use windows::Win32::System::Ole::{
 };
 use windows::Win32::System::SystemServices::MODIFIERKEYS_FLAGS;
 use windows::Win32::UI::Shell::{DragQueryFileW, HDROP};
-use windows::Win32::UI::WindowsAndMessaging::{EnumChildWindows, GetClassNameW, GetPropW};
+use windows::Win32::UI::WindowsAndMessaging::{EnumChildWindows, GetClassNameW, GetPropW, IsWindow};
+use windows::Win32::System::Diagnostics::Debug::{
+    AddVectoredExceptionHandler, RemoveVectoredExceptionHandler, EXCEPTION_POINTERS,
+};
+use windows::Win32::Foundation::{EXCEPTION_ACCESS_VIOLATION, EXCEPTION_CONTINUE_SEARCH};
 
 /// Thread-safe wrapper for our drop target
 #[allow(dead_code)]
@@ -2270,45 +2274,176 @@ pub fn setup_drag_handlers(window: &WebviewWindow) {
                 // Get the original IDropTarget before we revoke it.
                 // WebView2 registers its IDropTarget asynchronously, so we retry with delays.
                 // The property "OleDropTargetInterface" is set by OLE's RegisterDragDrop().
+                //
+                // SAFETY NOTE: The OleDropTargetInterface property is an undocumented OLE
+                // implementation detail. WebView2/Chromium can change when/how they register it.
+                // We must be defensive because calling AddRef on an invalid pointer will crash.
                 let original_drop_target: Option<IDropTarget> = {
                     use windows::core::w;
+                    use windows::Win32::System::Memory::{VirtualQuery, MEMORY_BASIC_INFORMATION, MEM_COMMIT, PAGE_READONLY, PAGE_READWRITE, PAGE_EXECUTE_READ, PAGE_EXECUTE_READWRITE};
 
                     let mut result: Option<IDropTarget> = None;
 
-                    // Retry up to 20 times with 50ms delay (total 1 second max wait)
-                    for attempt in 0..20 {
-                        let prop = GetPropW(target_hwnd, w!("OleDropTargetInterface"));
-
-                        if prop.0.is_null() {
-                            // Property not set yet - WebView2 hasn't registered its IDropTarget
-                            if attempt < 19 {
-                                std::thread::sleep(std::time::Duration::from_millis(50));
-                                continue;
+                    // DEBUG: Allow skipping IDropTarget capture via environment variable
+                    if std::env::var("TD_SKIP_ORIGINAL_DROPTARGET").is_ok() {
+                        eprintln!("[TiddlyDesktop] Windows: TD_SKIP_ORIGINAL_DROPTARGET set, skipping IDropTarget capture");
+                    // Guard: verify the window still exists before we start poking at it
+                    } else if !IsWindow(target_hwnd).as_bool() {
+                        eprintln!("[TiddlyDesktop] Windows: target_hwnd is not a valid window, skipping IDropTarget capture");
+                    } else {
+                        // Retry up to 20 times with 50ms delay (total 1 second max wait)
+                        for attempt in 0..20 {
+                            // Re-check window validity on each attempt (it could be destroyed mid-loop)
+                            if !IsWindow(target_hwnd).as_bool() {
+                                eprintln!("[TiddlyDesktop] Windows: target_hwnd became invalid during retry loop");
+                                break;
                             }
-                            eprintln!("[TiddlyDesktop] Windows: No OleDropTargetInterface property found after {} attempts", attempt + 1);
+
+                            let prop = GetPropW(target_hwnd, w!("OleDropTargetInterface"));
+
+                            if prop.0.is_null() {
+                                // Property not set yet - WebView2 hasn't registered its IDropTarget
+                                if attempt < 19 {
+                                    std::thread::sleep(std::time::Duration::from_millis(50));
+                                    continue;
+                                }
+                                eprintln!("[TiddlyDesktop] Windows: No OleDropTargetInterface property found after {} attempts", attempt + 1);
+                                break;
+                            }
+
+                            // OLE stores the raw IDropTarget* directly in this property.
+                            // GetPropW returns it without AddRef, so we wrap in ManuallyDrop
+                            // and clone to get our own properly ref-counted reference.
+                            let raw_ptr = prop.0 as *mut std::ffi::c_void;
+                            eprintln!(
+                                "[TiddlyDesktop] Windows: Found OleDropTargetInterface property: {:p}",
+                                raw_ptr
+                            );
+
+                            // Extra null check (should be redundant but be explicit)
+                            if raw_ptr.is_null() {
+                                eprintln!("[TiddlyDesktop] Windows: OleDropTargetInterface pointer is null, skipping");
+                                break;
+                            }
+
+                            // Validate that the pointer points to readable committed memory
+                            // This helps catch obviously invalid pointers before we crash
+                            let mut mem_info: MEMORY_BASIC_INFORMATION = std::mem::zeroed();
+                            let query_size = VirtualQuery(
+                                Some(raw_ptr),
+                                &mut mem_info,
+                                std::mem::size_of::<MEMORY_BASIC_INFORMATION>(),
+                            );
+                            if query_size == 0 {
+                                eprintln!("[TiddlyDesktop] Windows: VirtualQuery failed for {:p}, skipping", raw_ptr);
+                                break;
+                            }
+
+                            // Check if memory is committed and readable
+                            let is_committed = mem_info.State == MEM_COMMIT;
+                            let is_readable = matches!(
+                                mem_info.Protect,
+                                PAGE_READONLY | PAGE_READWRITE | PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE
+                            );
+                            eprintln!(
+                                "[TiddlyDesktop] Windows: Memory at {:p}: State={:?}, Protect={:?}, committed={}, readable={}",
+                                raw_ptr, mem_info.State, mem_info.Protect, is_committed, is_readable
+                            );
+
+                            if !is_committed || !is_readable {
+                                eprintln!("[TiddlyDesktop] Windows: Memory not accessible, skipping IDropTarget capture");
+                                break;
+                            }
+
+                            // Also validate the vtable pointer (first pointer at raw_ptr)
+                            let vtable_ptr = *(raw_ptr as *const *const std::ffi::c_void);
+                            eprintln!("[TiddlyDesktop] Windows: vtable pointer: {:p}", vtable_ptr);
+                            if vtable_ptr.is_null() {
+                                eprintln!("[TiddlyDesktop] Windows: vtable pointer is null, skipping");
+                                break;
+                            }
+
+                            let mut vtable_mem_info: MEMORY_BASIC_INFORMATION = std::mem::zeroed();
+                            let vtable_query_size = VirtualQuery(
+                                Some(vtable_ptr),
+                                &mut vtable_mem_info,
+                                std::mem::size_of::<MEMORY_BASIC_INFORMATION>(),
+                            );
+                            if vtable_query_size == 0 {
+                                eprintln!("[TiddlyDesktop] Windows: VirtualQuery failed for vtable {:p}, skipping", vtable_ptr);
+                                break;
+                            }
+
+                            let vtable_is_committed = vtable_mem_info.State == MEM_COMMIT;
+                            let vtable_is_readable = matches!(
+                                vtable_mem_info.Protect,
+                                PAGE_READONLY | PAGE_READWRITE | PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE
+                            );
+                            eprintln!(
+                                "[TiddlyDesktop] Windows: vtable memory: State={:?}, Protect={:?}, committed={}, readable={}",
+                                vtable_mem_info.State, vtable_mem_info.Protect, vtable_is_committed, vtable_is_readable
+                            );
+
+                            if !vtable_is_committed || !vtable_is_readable {
+                                eprintln!("[TiddlyDesktop] Windows: vtable memory not accessible, skipping IDropTarget capture");
+                                break;
+                            }
+
+                            // DEFENSIVE: Wrap the COM calls in catch_unwind.
+                            // Note: This won't catch Windows SEH exceptions (access violations),
+                            // but it provides some safety and will catch Rust panics.
+                            // If the pointer is invalid and AddRef crashes, the process will still die,
+                            // but at least we've done our due diligence with validation above.
+                            //
+                            // We use QueryInterface (via cast) instead of direct clone because it's
+                            // the proper COM way and might handle edge cases better.
+                            let query_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                                use windows::core::Interface;
+
+                                eprintln!("[TiddlyDesktop] Windows: About to call IDropTarget::from_raw");
+                                // Create a temporary wrapper without taking ownership (ManuallyDrop)
+                                // from_raw doesn't call AddRef, it just wraps the pointer
+                                let temp = std::mem::ManuallyDrop::new(
+                                    IDropTarget::from_raw(raw_ptr)
+                                );
+                                eprintln!("[TiddlyDesktop] Windows: from_raw succeeded");
+
+                                // Use QueryInterface (via cast) to properly obtain a reference.
+                                // This is the correct COM way - it calls QueryInterface which:
+                                // 1. Validates the interface is actually supported
+                                // 2. Calls AddRef on success
+                                // 3. Returns an error if the interface isn't supported
+                                eprintln!("[TiddlyDesktop] Windows: About to QueryInterface for IDropTarget");
+                                let qi_result: windows::core::Result<IDropTarget> = (*temp).cast();
+                                eprintln!("[TiddlyDesktop] Windows: QueryInterface result: {:?}", qi_result.is_ok());
+                                qi_result
+                            }));
+
+                            match query_result {
+                                Ok(Ok(drop_target)) => {
+                                    eprintln!(
+                                        "[TiddlyDesktop] Windows: Got original IDropTarget on attempt {}",
+                                        attempt + 1
+                                    );
+                                    result = Some(drop_target);
+                                }
+                                Ok(Err(e)) => {
+                                    eprintln!(
+                                        "[TiddlyDesktop] Windows: QueryInterface for IDropTarget failed: {:?}",
+                                        e
+                                    );
+                                    // The pointer exists but doesn't support IDropTarget - don't retry
+                                }
+                                Err(e) => {
+                                    eprintln!(
+                                        "[TiddlyDesktop] Windows: COM call panicked: {:?}",
+                                        e
+                                    );
+                                    // Don't retry - if it panicked, something is seriously wrong
+                                }
+                            }
                             break;
                         }
-
-                        // OLE stores the raw IDropTarget* directly in this property.
-                        // GetPropW returns it without AddRef, so we wrap in ManuallyDrop
-                        // and clone to get our own properly ref-counted reference.
-                        let raw_ptr = prop.0 as *mut std::ffi::c_void;
-                        eprintln!(
-                            "[TiddlyDesktop] Windows: Found OleDropTargetInterface property: {:p}",
-                            raw_ptr
-                        );
-
-                        let temp = std::mem::ManuallyDrop::new(
-                            IDropTarget::from_raw(raw_ptr)
-                        );
-
-                        // Clone calls AddRef, giving us our own reference
-                        result = Some((*temp).clone());
-                        eprintln!(
-                            "[TiddlyDesktop] Windows: Got original IDropTarget on attempt {}",
-                            attempt + 1
-                        );
-                        break;
                     }
 
                     result

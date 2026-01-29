@@ -12,6 +12,23 @@ A modern, cross-platform desktop application for [TiddlyWiki](https://tiddlywiki
 - **Lightweight**: Small download size (~15MB) and low resource usage thanks to Tauri
 - **Native experience**: System tray, native file dialogs, and platform-specific installers
 
+## Screenshots
+
+![Landing Page](docs/screenshots/screenshot1.png)
+*Landing page - Open or create wikis*
+
+![Create Wiki - Edition Selection](docs/screenshots/screenshot2.png)
+*Create a new wiki - Choose from available editions*
+
+![Create Wiki - Plugin Selection](docs/screenshots/screenshot3.png)
+*Create a new wiki - Select additional plugins*
+
+![Wiki Window](docs/screenshots/screenshot4.png)
+*TiddlyWiki running in its own window*
+
+![Dark Theme](docs/screenshots/screenshot5.png)
+*Landing page with dark palette and wiki listed*
+
 ## Quick Start
 
 1. Download the installer for your platform from the [Releases page](../../releases)

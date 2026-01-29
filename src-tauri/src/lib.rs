@@ -1292,6 +1292,23 @@ const FIND_BAR_JS: &str = r#"
     var HIGHLIGHT_CLASS = 'td-find-highlight';
     var CURRENT_CLASS = 'td-find-current';
 
+    // Get colour from palette via TiddlyDesktop helper or use fallback
+    function getColour(name, fallback) {
+        if (window.TiddlyDesktop && typeof window.TiddlyDesktop.getColour === 'function') {
+            return window.TiddlyDesktop.getColour(name, fallback);
+        }
+        return fallback;
+    }
+
+    // Get palette colors
+    var pageBackground = getColour('page-background', '#f0f0f0');
+    var background = getColour('background', '#ffffff');
+    var foreground = getColour('foreground', '#333333');
+    var tabBorder = getColour('tab-border', '#cccccc');
+    var tabBackground = getColour('tab-background', '#eeeeee');
+    var mutedForeground = getColour('muted-foreground', '#666666');
+    var primary = getColour('primary', '#5778d8');
+
     // Add highlight styles if not present
     if (!document.getElementById('td-find-styles')) {
         var style = document.createElement('style');
@@ -1316,31 +1333,31 @@ const FIND_BAR_JS: &str = r#"
     // Create find bar
     var bar = document.createElement('div');
     bar.id = 'td-find-bar';
-    bar.style.cssText = 'position:fixed;top:0;left:0;right:0;display:flex;align-items:center;gap:8px;padding:8px 12px;background:#f0f0f0;border-bottom:1px solid #ccc;z-index:999999;font-family:system-ui,sans-serif;font-size:14px;box-shadow:0 2px 8px rgba(0,0,0,0.15);';
+    bar.style.cssText = 'position:fixed;top:0;left:0;right:0;display:flex;align-items:center;gap:8px;padding:8px 12px;background:' + pageBackground + ';border-bottom:1px solid ' + tabBorder + ';z-index:999999;font-family:system-ui,sans-serif;font-size:14px;box-shadow:0 2px 8px rgba(0,0,0,0.15);';
 
     var input = document.createElement('input');
     input.type = 'text';
     input.placeholder = 'Find in page...';
-    input.style.cssText = 'flex:1;max-width:300px;padding:6px 10px;border:1px solid #ccc;border-radius:4px;font-size:14px;outline:none;';
+    input.style.cssText = 'flex:1;max-width:300px;padding:6px 10px;border:1px solid ' + tabBorder + ';border-radius:4px;font-size:14px;outline:none;background:' + background + ';color:' + foreground + ';';
 
     var info = document.createElement('span');
-    info.style.cssText = 'color:#666;min-width:100px;text-align:center;';
+    info.style.cssText = 'color:' + mutedForeground + ';min-width:100px;text-align:center;';
     info.textContent = '';
 
     var prevBtn = document.createElement('button');
     prevBtn.textContent = '▲';
     prevBtn.title = 'Previous (Shift+F3, Shift+Enter, Ctrl/Cmd+Shift+G)';
-    prevBtn.style.cssText = 'padding:4px 10px;border:1px solid #ccc;border-radius:4px;background:#fff;cursor:pointer;font-size:12px;';
+    prevBtn.style.cssText = 'padding:4px 10px;border:1px solid ' + tabBorder + ';border-radius:4px;background:' + background + ';color:' + foreground + ';cursor:pointer;font-size:12px;';
 
     var nextBtn = document.createElement('button');
     nextBtn.textContent = '▼';
     nextBtn.title = 'Next (F3, Enter, Ctrl/Cmd+G)';
-    nextBtn.style.cssText = 'padding:4px 10px;border:1px solid #ccc;border-radius:4px;background:#fff;cursor:pointer;font-size:12px;';
+    nextBtn.style.cssText = 'padding:4px 10px;border:1px solid ' + tabBorder + ';border-radius:4px;background:' + background + ';color:' + foreground + ';cursor:pointer;font-size:12px;';
 
     var closeBtn = document.createElement('button');
     closeBtn.textContent = '✕';
     closeBtn.title = 'Close (Escape)';
-    closeBtn.style.cssText = 'padding:4px 10px;border:none;background:transparent;cursor:pointer;font-size:16px;color:#666;';
+    closeBtn.style.cssText = 'padding:4px 10px;border:none;background:transparent;cursor:pointer;font-size:16px;color:' + mutedForeground + ';';
 
     bar.appendChild(input);
     bar.appendChild(info);
@@ -1434,10 +1451,10 @@ const FIND_BAR_JS: &str = r#"
             currentIndex = 0;
             updateCurrent();
             info.textContent = '1 of ' + highlights.length;
-            info.style.color = '#666';
+            info.style.color = mutedForeground;
         } else {
             info.textContent = 'No matches';
-            info.style.color = '#c00';
+            info.style.color = getColour('alert-highlight', '#c00');
         }
     }
 

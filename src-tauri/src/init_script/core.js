@@ -195,13 +195,78 @@
         });
     }
 
-    // Note: Headerbar colors are initialized by set-palette.js after the saved palette is loaded
-    // This ensures the correct colors are used from the start
+    // Update find bar colors when palette changes
+    function updateFindBarColors() {
+        var bar = document.getElementById('td-find-bar');
+        if (!bar) return;
+
+        var pageBackground = getColour('page-background', '#f0f0f0');
+        var background = getColour('background', '#ffffff');
+        var foreground = getColour('foreground', '#333333');
+        var tabBorder = getColour('tab-border', '#cccccc');
+        var mutedForeground = getColour('muted-foreground', '#666666');
+
+        bar.style.background = pageBackground;
+        bar.style.borderBottomColor = tabBorder;
+
+        var input = bar.querySelector('input');
+        if (input) {
+            input.style.background = background;
+            input.style.color = foreground;
+            input.style.borderColor = tabBorder;
+        }
+
+        var info = bar.querySelector('span');
+        if (info) {
+            info.style.color = mutedForeground;
+        }
+
+        var buttons = bar.querySelectorAll('button');
+        buttons.forEach(function(btn) {
+            if (btn.textContent === '✕') {
+                btn.style.color = mutedForeground;
+            } else {
+                btn.style.background = background;
+                btn.style.color = foreground;
+                btn.style.borderColor = tabBorder;
+            }
+        });
+    }
+
+    // Initialize headerbar colors and palette change listener for ALL windows (including user wikis)
+    function initPaletteSync() {
+        if (typeof $tw !== 'undefined' && $tw.wiki) {
+            // Update headerbar colors immediately
+            updateHeaderBarColors();
+
+            // Listen for palette changes
+            $tw.wiki.addEventListener('change', function(changes) {
+                if (changes['$:/palette']) {
+                    // Small delay to let TiddlyWiki process the palette change
+                    setTimeout(function() {
+                        updateHeaderBarColors();
+                        updateFindBarColors();
+                    }, 50);
+                }
+            });
+        } else {
+            // TiddlyWiki not ready yet, retry
+            setTimeout(initPaletteSync, 100);
+        }
+    }
+
+    // Start palette sync after DOM is ready
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', initPaletteSync);
+    } else {
+        initPaletteSync();
+    }
 
     // Export to TD namespace
     TD.showConfirmModal = showConfirmModal;
     TD.getColour = getColour;
     TD.updateHeaderBarColors = updateHeaderBarColors;
+    TD.updateFindBarColors = updateFindBarColors;
 
     return true; // Signal successful initialization
 })(window.TiddlyDesktop = window.TiddlyDesktop || {});

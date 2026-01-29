@@ -1893,9 +1893,34 @@ async fn validate_tiddlywiki_file_async(path: &std::path::Path) -> Result<(), St
     Ok(())
 }
 
+/// Check if a port is available by attempting to bind to it
+fn is_port_available(port: u16) -> bool {
+    std::net::TcpListener::bind(("127.0.0.1", port)).is_ok()
+}
+
 /// Get the next available port for a wiki folder server
+/// Checks that the port is actually free before returning it
 fn allocate_port(state: &AppState) -> u16 {
     let mut port = state.next_port.lock().unwrap();
+
+    // Find an available port, starting from the current value
+    let mut attempts = 0;
+    const MAX_ATTEMPTS: u16 = 1000; // Don't search forever
+
+    while attempts < MAX_ATTEMPTS {
+        if is_port_available(*port) {
+            let allocated = *port;
+            *port += 1;
+            eprintln!("[TiddlyDesktop] Allocated port {} for wiki folder server", allocated);
+            return allocated;
+        }
+        eprintln!("[TiddlyDesktop] Port {} is in use, trying next", *port);
+        *port += 1;
+        attempts += 1;
+    }
+
+    // Fallback: return the current port and hope for the best
+    eprintln!("[TiddlyDesktop] Warning: Could not find available port after {} attempts", MAX_ATTEMPTS);
     let allocated = *port;
     *port += 1;
     allocated

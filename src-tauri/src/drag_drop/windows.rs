@@ -1066,6 +1066,17 @@ impl DropTargetImpl {
         let state = obj.get_state();
         state.last_key_state.store(grf_key_state, Ordering::SeqCst);
 
+        // Check for cross-wiki tiddler data first
+        if let Some(tiddler_json) = extract_tiddler_data_from_data_object(p_data_obj) {
+            eprintln!("[TiddlyDesktop] Windows IDropTarget::DragEnter - cross-wiki tiddler detected");
+            // Emit td-cross-wiki-data for cross-wiki tiddler drops
+            let _ = state.window.emit("td-cross-wiki-data", serde_json::json!({
+                "text_vnd_tiddler": tiddler_json,
+                "x": pt.x,
+                "y": pt.y,
+            }));
+        }
+
         // Extract file paths and emit event
         let paths = extract_file_paths_from_data_object(p_data_obj);
         if !paths.is_empty() {
@@ -1167,6 +1178,18 @@ impl DropTargetImpl {
         let obj = &*this;
         let state = obj.get_state();
 
+        // Check for cross-wiki tiddler data
+        if let Some(tiddler_json) = extract_tiddler_data_from_data_object(p_data_obj) {
+            eprintln!("[TiddlyDesktop] Windows IDropTarget::Drop - cross-wiki tiddler: {}",
+                &tiddler_json[..tiddler_json.len().min(100)]);
+            // Emit td-cross-wiki-drop for cross-wiki tiddler import
+            let _ = state.window.emit("td-cross-wiki-drop", serde_json::json!({
+                "text_vnd_tiddler": tiddler_json,
+                "x": pt.x,
+                "y": pt.y,
+            }));
+        }
+
         // Extract file paths
         let paths = extract_file_paths_from_data_object(p_data_obj);
         if !paths.is_empty() {
@@ -1218,6 +1241,56 @@ struct DROPFILES {
     pt: windows::Win32::Foundation::POINT,
     fNC: i32,
     fWide: i32,   // Non-zero if file names are Unicode
+}
+
+/// Extract text/vnd.tiddler data from an IDataObject (for cross-wiki drops)
+unsafe fn extract_tiddler_data_from_data_object(p_data_obj: *mut std::ffi::c_void) -> Option<String> {
+    if p_data_obj.is_null() {
+        return None;
+    }
+
+    let data_obj: &IDataObject = &*(p_data_obj as *const IDataObject);
+
+    let format = FORMATETC {
+        cfFormat: get_cf_tiddler(),
+        ptd: std::ptr::null_mut(),
+        dwAspect: DVASPECT_CONTENT.0 as u32,
+        lindex: -1,
+        tymed: TYMED_HGLOBAL.0 as u32,
+    };
+
+    // Try to get tiddler data
+    let medium = match data_obj.GetData(&format) {
+        Ok(m) => m,
+        Err(_) => return None,
+    };
+
+    let hglobal = medium.u.hGlobal;
+    if hglobal.0.is_null() {
+        return None;
+    }
+
+    let ptr = GlobalLock(hglobal);
+    if ptr.is_null() {
+        return None;
+    }
+
+    // Read as UTF-8 string (null-terminated)
+    let mut len = 0;
+    while *(ptr as *const u8).add(len) != 0 {
+        len += 1;
+    }
+
+    let result = if len > 0 {
+        let slice = std::slice::from_raw_parts(ptr as *const u8, len);
+        std::str::from_utf8(slice).ok().map(|s| s.to_string())
+    } else {
+        None
+    };
+
+    let _ = GlobalUnlock(hglobal);
+
+    result
 }
 
 /// Extract file paths from an IDataObject using CF_HDROP format

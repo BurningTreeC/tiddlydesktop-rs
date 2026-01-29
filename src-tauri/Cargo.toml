@@ -75,7 +75,11 @@ windows = { version = "0.61", features = [
     "Win32_Graphics_Gdi",
 ] }
 lazy_static = "1.5"
-webview2-com = "0.38"
+# Using forked webview2-com with DragStarting API (SDK 1.0.3719.77)
+webview2-com = { git = "https://github.com/BurningTreeC/webview2-rs", branch = "main" }
+# Required for implementing COM interfaces (ICoreWebView2DragStartingEventHandler)
+windows-implement = "0.60"
+windows-core = "0.61"
 image = { version = "0.25", default-features = false, features = ["png"] }
 
 # macOS drag-drop handling via objc2 (versions must match Tauri's objc2 dependency)

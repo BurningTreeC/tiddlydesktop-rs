@@ -26,6 +26,16 @@ use windows::Win32::System::Ole::{
 };
 use windows::Win32::UI::WindowsAndMessaging::{EnumChildWindows, GetClassNameW};
 
+// WebView2 DragStarting API (from our forked webview2-com with SDK 1.0.3719.77)
+use webview2_com::Microsoft::Web::WebView2::Win32::{
+    ICoreWebView2CompositionController,
+    ICoreWebView2CompositionController5,
+    ICoreWebView2DragStartingEventArgs,
+    ICoreWebView2DragStartingEventHandler,
+    ICoreWebView2DragStartingEventHandler_Impl,
+};
+use windows_core::Interface;
+
 
 /// Clipboard format constants
 const CF_UNICODETEXT: u16 = 13;
@@ -933,6 +943,209 @@ fn setup_drag_image(
 // NOTE: IDropTarget implementation removed - we now rely on WebView2's native drop handling.
 // See setup_drag_handlers() for details.
 
+// ============================================================================
+// DragStarting event handler (WebView2 SDK 1.0.3719.77+)
+// ============================================================================
+
+/// Handler for WebView2 DragStarting events.
+/// This fires when a drag operation starts inside the WebView (e.g., dragging a tiddler).
+/// We use this to intercept the drag data and populate OUTGOING_DRAG_STATE for cross-window drags.
+#[windows_implement::implement(ICoreWebView2DragStartingEventHandler)]
+struct DragStartingHandler {
+    window_label: String,
+}
+
+impl DragStartingHandler {
+    fn new(window_label: String) -> Self {
+        Self { window_label }
+    }
+}
+
+impl ICoreWebView2DragStartingEventHandler_Impl for DragStartingHandler_Impl {
+    fn Invoke(
+        &self,
+        _sender: windows_core::Ref<'_, ICoreWebView2CompositionController>,
+        args: windows_core::Ref<'_, ICoreWebView2DragStartingEventArgs>,
+    ) -> windows_core::Result<()> {
+        eprintln!(
+            "[TiddlyDesktop] Windows DragStarting: Drag started in window '{}'",
+            self.window_label
+        );
+
+        // Get the IDataObject from the drag event
+        // Use cloned() to get the underlying interface from the Ref wrapper
+        let data_object = match args.cloned() {
+            Some(args_inner) => unsafe { args_inner.Data() },
+            None => {
+                eprintln!("[TiddlyDesktop] Windows DragStarting: args was null");
+                return Ok(());
+            }
+        };
+        match data_object {
+            Ok(data_obj) => {
+                // Extract drag data from the IDataObject
+                let drag_data = extract_drag_data_from_idataobject(&data_obj);
+
+                eprintln!(
+                    "[TiddlyDesktop] Windows DragStarting: Extracted data - text_plain: {:?}, has_tiddler: {}",
+                    drag_data.text_plain.as_ref().map(|s| s.chars().take(50).collect::<String>()),
+                    drag_data.text_vnd_tiddler.is_some()
+                );
+
+                // Store the drag data for potential cross-window drops
+                if let Ok(mut guard) = OUTGOING_DRAG_STATE.lock() {
+                    *guard = Some(OutgoingDragState {
+                        data: drag_data,
+                        source_window_label: self.window_label.clone(),
+                        data_was_requested: false,
+                    });
+                }
+            }
+            Err(e) => {
+                eprintln!(
+                    "[TiddlyDesktop] Windows DragStarting: Failed to get IDataObject: {:?}",
+                    e
+                );
+            }
+        }
+
+        // Don't set Handled - let WebView2 handle the drag natively
+        // This ensures the native OLE drag operation proceeds normally
+        Ok(())
+    }
+}
+
+/// Extract drag data from an IDataObject (used by DragStarting handler)
+fn extract_drag_data_from_idataobject(data_object: &IDataObject) -> OutgoingDragData {
+    let mut data = OutgoingDragData::default();
+
+    // Try to get text/plain (CF_UNICODETEXT)
+    data.text_plain = get_unicode_text_from_idataobject(data_object, CF_UNICODETEXT);
+
+    // Try to get text/vnd.tiddler
+    let cf_tiddler = get_cf_tiddler();
+    data.text_vnd_tiddler = get_string_from_idataobject(data_object, cf_tiddler);
+
+    // Try to get HTML
+    let cf_html = get_cf_html();
+    data.text_html = get_string_from_idataobject(data_object, cf_html);
+
+    // Try to get URL
+    let cf_url_w = get_cf_url_w();
+    data.url = get_unicode_text_from_idataobject(data_object, cf_url_w);
+
+    // Try to get text/x-moz-url
+    let cf_moz_url = get_cf_moz_url();
+    data.text_x_moz_url = get_unicode_text_from_idataobject(data_object, cf_moz_url);
+
+    data
+}
+
+/// Get Unicode text from an IDataObject for a specific clipboard format
+fn get_unicode_text_from_idataobject(data_object: &IDataObject, cf: u16) -> Option<String> {
+    use windows::Win32::System::Memory::GlobalSize;
+
+    let format = FORMATETC {
+        cfFormat: cf,
+        ptd: std::ptr::null_mut(),
+        dwAspect: DVASPECT_CONTENT.0 as u32,
+        lindex: -1,
+        tymed: TYMED_HGLOBAL.0 as u32,
+    };
+
+    unsafe {
+        match data_object.GetData(&format) {
+            Ok(medium) => {
+                let hglobal = medium.u.hGlobal;
+                if hglobal.0.is_null() {
+                    return None;
+                }
+
+                let ptr = GlobalLock(hglobal);
+                if ptr.is_null() {
+                    return None;
+                }
+
+                let size = GlobalSize(hglobal);
+                if size == 0 {
+                    let _ = GlobalUnlock(hglobal);
+                    return None;
+                }
+
+                // Read as UTF-16
+                let wide_chars = std::slice::from_raw_parts(ptr as *const u16, size / 2);
+                // Find null terminator
+                let len = wide_chars.iter().position(|&c| c == 0).unwrap_or(wide_chars.len());
+                let text = String::from_utf16_lossy(&wide_chars[..len]);
+
+                let _ = GlobalUnlock(hglobal);
+
+                if text.is_empty() {
+                    None
+                } else {
+                    Some(text)
+                }
+            }
+            Err(_) => None,
+        }
+    }
+}
+
+/// Get a string (UTF-8) from an IDataObject for a specific clipboard format
+fn get_string_from_idataobject(data_object: &IDataObject, cf: u16) -> Option<String> {
+    use windows::Win32::System::Memory::GlobalSize;
+
+    let format = FORMATETC {
+        cfFormat: cf,
+        ptd: std::ptr::null_mut(),
+        dwAspect: DVASPECT_CONTENT.0 as u32,
+        lindex: -1,
+        tymed: TYMED_HGLOBAL.0 as u32,
+    };
+
+    unsafe {
+        match data_object.GetData(&format) {
+            Ok(medium) => {
+                let hglobal = medium.u.hGlobal;
+                if hglobal.0.is_null() {
+                    return None;
+                }
+
+                let ptr = GlobalLock(hglobal);
+                if ptr.is_null() {
+                    return None;
+                }
+
+                let size = GlobalSize(hglobal);
+                if size == 0 {
+                    let _ = GlobalUnlock(hglobal);
+                    return None;
+                }
+
+                // Read as UTF-8 bytes
+                let bytes = std::slice::from_raw_parts(ptr as *const u8, size);
+                // Find null terminator
+                let len = bytes.iter().position(|&c| c == 0).unwrap_or(bytes.len());
+                let text = String::from_utf8_lossy(&bytes[..len]).to_string();
+
+                let _ = GlobalUnlock(hglobal);
+
+                if text.is_empty() {
+                    None
+                } else {
+                    Some(text)
+                }
+            }
+            Err(_) => None,
+        }
+    }
+}
+
+// Global storage for the DragStarting event token (to remove handler on cleanup)
+lazy_static::lazy_static! {
+    static ref DRAG_STARTING_TOKENS: Mutex<std::collections::HashMap<String, i64>> = Mutex::new(std::collections::HashMap::new());
+}
+
 /// Prepare for a potential native drag (called when internal drag starts)
 /// This sets the outgoing drag state so that IDropTarget can detect same-window drags
 /// and avoid emitting td-drag-content events that would trigger imports.
@@ -1050,24 +1263,25 @@ pub fn start_native_drag(window: &WebviewWindow, data: OutgoingDragData, _x: i32
 
 /// Set up drag-drop handling for a webview window.
 ///
-/// On Windows, our WRY patch registers a pass-through IDropTarget that:
-/// 1. Intercepts drop events and extracts file paths
-/// 2. Emits tauri://drag-enter, tauri://drag-over, tauri://drag-leave, tauri://drag-drop events
-/// 3. Forwards to WebView2's native IDropTarget for DOM events
+/// On Windows, we set up:
+/// 1. OLE initialization for DoDragDrop (outgoing drags)
+/// 2. DragStarting event handler to intercept drags starting in WebView2
+/// 3. WRY's patched IDropTarget handles incoming drops (file path extraction + DOM events)
 ///
-/// This allows BOTH:
-/// - Tauri events with file paths (for external attachment support)
-/// - Native DOM drag events in the WebView (for internal drags and input drops)
-///
-/// This function just initializes OLE for outgoing drags (DoDragDrop).
+/// This enables full native OLE drag-and-drop:
+/// - Inside → Inside: Native DOM events + DragStarting for cross-window data
+/// - Inside → Outside: DragStarting captures data, OLE DoDragDrop handles transfer
+/// - Outside → Inside: WRY IDropTarget extracts paths, forwards to WebView2
 pub fn setup_drag_handlers(window: &WebviewWindow) {
     let window_label = window.label().to_string();
+    let window_label_clone = window_label.clone();
+
     eprintln!(
         "[TiddlyDesktop] Windows: setup_drag_handlers called for window '{}'",
         window_label
     );
 
-    let _ = window.with_webview(move |_webview| {
+    let _ = window.with_webview(move |webview| {
         #[cfg(windows)]
         unsafe {
             // Initialize OLE (required for DoDragDrop when starting outgoing drags)
@@ -1076,9 +1290,50 @@ pub fn setup_drag_handlers(window: &WebviewWindow) {
                 Err(e) => eprintln!("[TiddlyDesktop] Windows: OleInitialize: {:?}", e),
             }
 
-            // WRY's patched IDropTarget handles incoming drops:
-            // - Extracts file paths and emits tauri://drag-* events
-            // - Forwards to WebView2's native handler for DOM events
+            // Get the WebView2 controller and try to register DragStarting handler
+            let controller = webview.controller();
+
+            // Try to cast to ICoreWebView2CompositionController5 for DragStarting API
+            match controller.cast::<ICoreWebView2CompositionController5>() {
+                Ok(controller5) => {
+                    eprintln!("[TiddlyDesktop] Windows: Got ICoreWebView2CompositionController5");
+
+                    // Create the DragStarting handler
+                    let handler: ICoreWebView2DragStartingEventHandler =
+                        DragStartingHandler::new(window_label_clone.clone()).into();
+
+                    // Register the handler
+                    let mut token: i64 = 0;
+                    match controller5.add_DragStarting(&handler, &mut token) {
+                        Ok(()) => {
+                            eprintln!(
+                                "[TiddlyDesktop] Windows: DragStarting handler registered (token: {})",
+                                token
+                            );
+                            // Store the token for potential cleanup later
+                            if let Ok(mut tokens) = DRAG_STARTING_TOKENS.lock() {
+                                tokens.insert(window_label_clone.clone(), token);
+                            }
+                        }
+                        Err(e) => {
+                            eprintln!(
+                                "[TiddlyDesktop] Windows: Failed to register DragStarting handler: {:?}",
+                                e
+                            );
+                        }
+                    }
+                }
+                Err(e) => {
+                    eprintln!(
+                        "[TiddlyDesktop] Windows: Failed to get ICoreWebView2CompositionController5: {:?}",
+                        e
+                    );
+                    eprintln!(
+                        "[TiddlyDesktop] Windows: DragStarting API not available (need WebView2 Runtime 131+)"
+                    );
+                }
+            }
+
             eprintln!("[TiddlyDesktop] Windows: Using WRY patched IDropTarget for file path extraction");
         }
     });

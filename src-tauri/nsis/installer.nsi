@@ -115,7 +115,8 @@ Function InstallModePageLeave
         StrCpy $INSTDIR "$LOCALAPPDATA\${PRODUCTNAME}"
     ${Else}
         StrCpy $InstallModeChoice "portable"
-        ; For portable, user will choose directory on next page
+        ; Default portable to Downloads folder (user can still change on next page)
+        StrCpy $INSTDIR "$PROFILE\Downloads\${PRODUCTNAME}"
     ${EndIf}
 FunctionEnd
 

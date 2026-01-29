@@ -5322,7 +5322,104 @@ fn run_wiki_folder_mode(args: WikiFolderModeArgs) {
         .run(|_app, _event| {});
 }
 
+/// Windows: Check if WebView2 runtime version 131+ is installed
+/// Required for DragStarting API (SDK 1.0.3719.77)
+#[cfg(target_os = "windows")]
+fn check_webview2_version() {
+    use windows::core::{PCWSTR, PWSTR, w};
+    use windows::Win32::Foundation::FreeLibrary;
+    use windows::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryW};
+    use windows::Win32::UI::WindowsAndMessaging::{MessageBoxW, MB_OK, MB_ICONWARNING};
+
+    const REQUIRED_MAJOR_VERSION: u32 = 131;
+
+    // Type for GetAvailableCoreWebView2BrowserVersionString
+    type GetVersionFn = unsafe extern "system" fn(
+        browserExecutableFolder: PCWSTR,
+        versionInfo: *mut PWSTR,
+    ) -> windows::core::HRESULT;
+
+    unsafe {
+        // Dynamically load WebView2Loader.dll
+        let lib = LoadLibraryW(w!("WebView2Loader.dll"));
+        let lib = match lib {
+            Ok(h) => h,
+            Err(_) => {
+                eprintln!("[TiddlyDesktop] Could not load WebView2Loader.dll - WebView2 may not be installed");
+                let title: Vec<u16> = "TiddlyDesktop - WebView2 Required\0".encode_utf16().collect();
+                let message: Vec<u16> = "WebView2 runtime is not installed.\n\n\
+                    Please install Microsoft Edge or the WebView2 Runtime from:\n\
+                    https://developer.microsoft.com/en-us/microsoft-edge/webview2/\0"
+                    .encode_utf16().collect();
+                MessageBoxW(None, PCWSTR(message.as_ptr()), PCWSTR(title.as_ptr()), MB_OK | MB_ICONWARNING);
+                return;
+            }
+        };
+
+        // Get function pointer
+        let func_name = windows::core::s!("GetAvailableCoreWebView2BrowserVersionString");
+        let func_ptr = GetProcAddress(lib, func_name);
+        let get_version: GetVersionFn = match func_ptr {
+            Some(f) => std::mem::transmute(f),
+            None => {
+                eprintln!("[TiddlyDesktop] Could not find GetAvailableCoreWebView2BrowserVersionString");
+                let _ = FreeLibrary(lib);
+                return;
+            }
+        };
+
+        // Get the version string
+        let mut version_ptr: PWSTR = PWSTR::null();
+        let hr = get_version(PCWSTR::null(), &mut version_ptr);
+
+        if hr.is_err() || version_ptr.is_null() {
+            eprintln!("[TiddlyDesktop] WebView2 runtime not found or error getting version");
+            let title: Vec<u16> = "TiddlyDesktop - WebView2 Required\0".encode_utf16().collect();
+            let message: Vec<u16> = "WebView2 runtime is not installed.\n\n\
+                Please install Microsoft Edge or the WebView2 Runtime from:\n\
+                https://developer.microsoft.com/en-us/microsoft-edge/webview2/\0"
+                .encode_utf16().collect();
+            MessageBoxW(None, PCWSTR(message.as_ptr()), PCWSTR(title.as_ptr()), MB_OK | MB_ICONWARNING);
+            let _ = FreeLibrary(lib);
+            return;
+        }
+
+        // Convert PWSTR to String
+        let version_str = version_ptr.to_string().unwrap_or_default();
+        eprintln!("[TiddlyDesktop] WebView2 version: {}", version_str);
+
+        // Free the allocated string
+        windows::Win32::System::Com::CoTaskMemFree(Some(version_ptr.as_ptr() as *const std::ffi::c_void));
+        let _ = FreeLibrary(lib);
+
+        // Parse major version (format: "131.0.2903.112")
+        if let Some(major_str) = version_str.split('.').next() {
+            if let Ok(major) = major_str.parse::<u32>() {
+                if major < REQUIRED_MAJOR_VERSION {
+                    eprintln!("[TiddlyDesktop] WebView2 version {} is below required version {}", major, REQUIRED_MAJOR_VERSION);
+                    let title: Vec<u16> = "TiddlyDesktop - WebView2 Update Required\0".encode_utf16().collect();
+                    let message = format!(
+                        "Your WebView2 runtime version ({}) is outdated.\n\n\
+                        TiddlyDesktop requires version {} or newer for full functionality.\n\n\
+                        Please update Microsoft Edge or install the latest WebView2 Runtime from:\n\
+                        https://developer.microsoft.com/en-us/microsoft-edge/webview2/\0",
+                        version_str, REQUIRED_MAJOR_VERSION
+                    );
+                    let message_wide: Vec<u16> = message.encode_utf16().collect();
+                    MessageBoxW(None, PCWSTR(message_wide.as_ptr()), PCWSTR(title.as_ptr()), MB_OK | MB_ICONWARNING);
+                } else {
+                    eprintln!("[TiddlyDesktop] WebView2 version {} meets requirement (>= {})", major, REQUIRED_MAJOR_VERSION);
+                }
+            }
+        }
+    }
+}
+
 pub fn run() {
+    // Windows: Check WebView2 version at startup
+    #[cfg(target_os = "windows")]
+    check_webview2_version();
+
     // Check if we're running in a special mode (wiki file or wiki folder)
     if let Some(mode) = parse_special_mode_args() {
         match mode {

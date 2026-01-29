@@ -34,10 +34,10 @@ index 5133713..931ae82 100644
        }
  
 diff --git a/src/webview2/drag_drop.rs b/src/webview2/drag_drop.rs
-index 960a07f..933cd71 100644
+index 960a07f..82e8c36 100644
 --- a/src/webview2/drag_drop.rs
 +++ b/src/webview2/drag_drop.rs
-@@ -184,6 +184,22 @@ impl IDropTarget_Impl for DragDropTarget_Impl {
+@@ -184,6 +184,26 @@ impl IDropTarget_Impl for DragDropTarget_Impl {
        position: (pt.x as _, pt.y as _),
      });
  
@@ -48,19 +48,23 @@ index 960a07f..933cd71 100644
 +      extern "C" {
 +        fn tiddlydesktop_store_drop_paths(paths_json: *const std::ffi::c_char);
 +      }
-+      // Convert paths to JSON array string
-+      let paths_str: Vec<String> = paths.iter().map(|p| p.to_string_lossy().to_string()).collect();
-+      if let Ok(json) = serde_json::to_string(&paths_str) {
-+        if let Ok(cstr) = std::ffi::CString::new(json) {
-+          tiddlydesktop_store_drop_paths(cstr.as_ptr());
-+        }
++      // Manually construct JSON array (avoids serde_json dependency)
++      let json_parts: Vec<String> = paths.iter().map(|p| {
++        let s = p.to_string_lossy();
++        // Escape backslashes and quotes for JSON
++        let escaped = s.replace('\\', "\\\\").replace('"', "\\\"");
++        format!("\"{}\"", escaped)
++      }).collect();
++      let json = format!("[{}]", json_parts.join(","));
++      if let Ok(cstr) = std::ffi::CString::new(json) {
++        tiddlydesktop_store_drop_paths(cstr.as_ptr());
 +      }
 +    }
 +
      let cursor_effect = if enter_is_valid {
        DROPEFFECT_COPY
      } else {
-@@ -219,6 +235,14 @@ impl IDropTarget_Impl for DragDropTarget_Impl {
+@@ -219,6 +239,14 @@ impl IDropTarget_Impl for DragDropTarget_Impl {
    fn DragLeave(&self) -> windows::core::Result<()> {
      if unsafe { *self.enter_is_valid.get() } {
        (self.listener)(DragDropEvent::Leave);
@@ -75,7 +79,7 @@ index 960a07f..933cd71 100644
      }
      Ok(())
    }
-@@ -241,6 +265,22 @@ impl IDropTarget_Impl for DragDropTarget_Impl {
+@@ -241,6 +269,26 @@ impl IDropTarget_Impl for DragDropTarget_Impl {
          position: (pt.x as _, pt.y as _),
        });
  
@@ -85,12 +89,16 @@ index 960a07f..933cd71 100644
 +        extern "C" {
 +          fn tiddlydesktop_store_drop_paths(paths_json: *const std::ffi::c_char);
 +        }
-+        // Convert paths to JSON array string
-+        let paths_str: Vec<String> = paths.iter().map(|p| p.to_string_lossy().to_string()).collect();
-+        if let Ok(json) = serde_json::to_string(&paths_str) {
-+          if let Ok(cstr) = std::ffi::CString::new(json) {
-+            tiddlydesktop_store_drop_paths(cstr.as_ptr());
-+          }
++        // Manually construct JSON array (avoids serde_json dependency)
++        let json_parts: Vec<String> = paths.iter().map(|p| {
++          let s = p.to_string_lossy();
++          // Escape backslashes and quotes for JSON
++          let escaped = s.replace('\\', "\\\\").replace('"', "\\\"");
++          format!("\"{}\"", escaped)
++        }).collect();
++        let json = format!("[{}]", json_parts.join(","));
++        if let Ok(cstr) = std::ffi::CString::new(json) {
++          tiddlydesktop_store_drop_paths(cstr.as_ptr());
 +        }
 +      }
 +

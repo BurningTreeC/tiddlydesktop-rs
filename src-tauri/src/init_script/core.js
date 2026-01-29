@@ -16,16 +16,42 @@
     var promptWrapper = null;
     var confirmationBypassed = false;
 
-    // Get a color from TiddlyWiki's palette using the <<colour>> macro
-    function getColour(name, fallback) {
-        if (typeof $tw !== 'undefined' && $tw.wiki && $tw.wiki.renderText) {
+    // Get a color from TiddlyWiki's current palette (with recursive resolution)
+    function getColour(name, fallback, depth) {
+        depth = depth || 0;
+        if (depth > 10) return fallback; // Prevent infinite recursion
+
+        if (typeof $tw !== 'undefined' && $tw.wiki) {
             try {
-                var result = $tw.wiki.renderText("text/plain", "text/vnd.tiddlywiki", "<<colour " + name + ">>").trim();
-                if (result && result !== "<<colour " + name + ">>") {
-                    return result;
+                // Get the current palette title
+                var paletteName = $tw.wiki.getTiddlerText("$:/palette");
+                if (paletteName) {
+                    paletteName = paletteName.trim();
+                    var paletteTiddler = $tw.wiki.getTiddler(paletteName);
+                    if (paletteTiddler) {
+                        // Colors are in the tiddler text (one per line: name: value)
+                        var text = paletteTiddler.fields.text || "";
+                        var lines = text.split("\n");
+                        for (var i = 0; i < lines.length; i++) {
+                            var line = lines[i].trim();
+                            var colonIndex = line.indexOf(":");
+                            if (colonIndex > 0) {
+                                var colorName = line.substring(0, colonIndex).trim();
+                                var colorValue = line.substring(colonIndex + 1).trim();
+                                if (colorName === name && colorValue) {
+                                    // Handle references to other colors like <<colour background>>
+                                    var match = colorValue.match(/<<colour\s+([^>]+)>>/);
+                                    if (match) {
+                                        return getColour(match[1].trim(), fallback, depth + 1);
+                                    }
+                                    return colorValue;
+                                }
+                            }
+                        }
+                    }
                 }
             } catch (e) {
-                // Fall through to fallback
+                console.error('[TiddlyDesktop] getColour error:', e);
             }
         }
         return fallback;
@@ -148,8 +174,34 @@
     }
     window.addEventListener('load', installConfirmOverride);
 
+    // Update Linux HeaderBar colors from TiddlyWiki's current palette
+    function updateHeaderBarColors() {
+        if (typeof $tw === 'undefined' || !window.__TAURI__ || !window.__WINDOW_LABEL__) {
+            console.log('[TiddlyDesktop] updateHeaderBarColors: prerequisites not ready');
+            return;
+        }
+
+        var bg = getColour('page-background', '#ffffff');
+        var fg = getColour('foreground', '#333333');
+
+        console.log('[TiddlyDesktop] updateHeaderBarColors: bg=' + bg + ', fg=' + fg);
+
+        window.__TAURI__.core.invoke('set_headerbar_colors', {
+            label: window.__WINDOW_LABEL__,
+            background: bg,
+            foreground: fg
+        }).catch(function(err) {
+            console.error('[TiddlyDesktop] Failed to set headerbar colors:', err);
+        });
+    }
+
+    // Note: Headerbar colors are initialized by set-palette.js after the saved palette is loaded
+    // This ensures the correct colors are used from the start
+
     // Export to TD namespace
     TD.showConfirmModal = showConfirmModal;
+    TD.getColour = getColour;
+    TD.updateHeaderBarColors = updateHeaderBarColors;
 
     return true; // Signal successful initialization
 })(window.TiddlyDesktop = window.TiddlyDesktop || {});

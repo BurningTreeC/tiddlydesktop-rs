@@ -22,6 +22,15 @@ exports.startup = function() {
         return;
     }
 
+    // Listen for palette changes and update headerbar colors
+    $tw.wiki.addEventListener("change", function(changes) {
+        if (changes["$:/palette"]) {
+            if (window.TiddlyDesktop && window.TiddlyDesktop.updateHeaderBarColors) {
+                window.TiddlyDesktop.updateHeaderBarColors();
+            }
+        }
+    });
+
     $tw.rootWidget.addEventListener("tm-tiddlydesktop-rs-set-palette", function(event) {
         var palette = (event.paramObject && event.paramObject.palette) || "";
 
@@ -51,6 +60,11 @@ exports.startup = function() {
             if (palette) {
                 console.log("[TiddlyDesktop] Loading saved palette:", palette);
                 $tw.wiki.setText("$:/palette", "text", null, palette);
+            } else {
+                // No saved palette - trigger initial headerbar update with current palette
+                if (window.TiddlyDesktop && window.TiddlyDesktop.updateHeaderBarColors) {
+                    window.TiddlyDesktop.updateHeaderBarColors();
+                }
             }
         })
         .catch(function(err) {

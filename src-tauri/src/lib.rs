@@ -831,6 +831,101 @@ async fn set_window_title(app: tauri::AppHandle, label: String, title: String) -
     Ok(())
 }
 
+/// Set headerbar colors on Linux
+/// Applies custom CSS to style the HeaderBar background and title color
+#[tauri::command]
+async fn set_headerbar_colors(
+    app: tauri::AppHandle,
+    label: String,
+    background: String,
+    foreground: String,
+) -> Result<(), String> {
+    #[cfg(target_os = "linux")]
+    {
+        eprintln!("[TiddlyDesktop] set_headerbar_colors called: label={}, bg={}, fg={}", label, background, foreground);
+
+        // Schedule GTK operations on the main thread via Tauri
+        let app_clone = app.clone();
+        let _ = app.run_on_main_thread(move || {
+            use gtk::prelude::{CssProviderExt, GtkWindowExt, WidgetExt};
+            use gtk::glib::Cast;
+
+            eprintln!("[TiddlyDesktop] HeaderBar: on main thread, looking for window '{}'", label);
+
+            if let Some(window) = app_clone.get_webview_window(&label) {
+                eprintln!("[TiddlyDesktop] HeaderBar: found webview window");
+                if let Ok(gtk_window) = window.gtk_window() {
+                    eprintln!("[TiddlyDesktop] HeaderBar: got gtk_window");
+                    if let Some(titlebar) = gtk_window.titlebar() {
+                        eprintln!("[TiddlyDesktop] HeaderBar: got titlebar");
+                        if let Some(header_bar) = titlebar.downcast_ref::<gtk::HeaderBar>() {
+                            eprintln!("[TiddlyDesktop] HeaderBar: got header_bar, applying CSS");
+
+                            // Use widget name for specific targeting
+                            header_bar.set_widget_name("td-headerbar");
+
+                            let css = format!(
+                                r#"
+                                #td-headerbar {{
+                                    background: {};
+                                    background-image: none;
+                                    box-shadow: none;
+                                    border: none;
+                                }}
+                                #td-headerbar * {{
+                                    color: {};
+                                }}
+                                #td-headerbar .title {{
+                                    color: {};
+                                }}
+                                #td-headerbar button.titlebutton:hover {{
+                                    background: alpha({}, 0.15);
+                                }}
+                                "#,
+                                background, foreground, foreground, foreground
+                            );
+
+                            let css_provider = gtk::CssProvider::new();
+                            if let Err(e) = css_provider.load_from_data(css.as_bytes()) {
+                                eprintln!("[TiddlyDesktop] Failed to load headerbar CSS: {}", e);
+                                return;
+                            }
+
+                            // Add to the default screen so it applies globally
+                            if let Some(screen) = gtk::gdk::Screen::default() {
+                                gtk::StyleContext::add_provider_for_screen(
+                                    &screen,
+                                    &css_provider,
+                                    gtk::STYLE_PROVIDER_PRIORITY_USER,
+                                );
+                                eprintln!("[TiddlyDesktop] HeaderBar: CSS applied to screen successfully");
+                            } else {
+                                eprintln!("[TiddlyDesktop] HeaderBar: no default screen found");
+                            }
+                        } else {
+                            eprintln!("[TiddlyDesktop] HeaderBar: titlebar is not a HeaderBar");
+                        }
+                    } else {
+                        eprintln!("[TiddlyDesktop] HeaderBar: no titlebar found");
+                    }
+                } else {
+                    eprintln!("[TiddlyDesktop] HeaderBar: failed to get gtk_window");
+                }
+            } else {
+                eprintln!("[TiddlyDesktop] HeaderBar: window '{}' not found", label);
+            }
+        });
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    {
+        // Headerbar colors only apply to Linux GTK headerbar
+        let _ = (app, label, background, foreground);
+    }
+
+    Ok(())
+}
+
 /// Maximum size for favicon data URIs (1MB encoded, ~750KB decoded)
 /// This prevents memory exhaustion from maliciously large favicons
 const MAX_FAVICON_DATA_URI_SIZE: usize = 1024 * 1024;
@@ -4826,6 +4921,7 @@ fn run_wiki_mode(args: WikiModeArgs) {
             save_wiki,
             set_window_title,
             set_window_icon,
+            set_headerbar_colors,
             get_window_label,
             get_main_wiki_path,
             reveal_in_folder,
@@ -5136,6 +5232,7 @@ fn run_wiki_folder_mode(args: WikiFolderModeArgs) {
             save_wiki,
             set_window_title,
             set_window_icon,
+            set_headerbar_colors,
             get_window_label,
             show_alert,
             show_confirm,
@@ -5403,6 +5500,7 @@ pub fn run() {
             convert_wiki,
             set_window_title,
             set_window_icon,
+            set_headerbar_colors,
             get_window_label,
             get_main_wiki_path,
             reveal_in_folder,

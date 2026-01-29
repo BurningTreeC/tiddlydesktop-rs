@@ -1050,17 +1050,16 @@ pub fn start_native_drag(window: &WebviewWindow, data: OutgoingDragData, _x: i32
 
 /// Set up drag-drop handling for a webview window.
 ///
-/// On Windows, we register a custom IDropTarget that:
-/// 1. Intercepts drag events to extract file paths
-/// Initialize OLE for drag-drop support on Windows.
+/// On Windows, our WRY patch registers a pass-through IDropTarget that:
+/// 1. Intercepts drop events and extracts file paths
+/// 2. Emits tauri://drag-enter, tauri://drag-over, tauri://drag-leave, tauri://drag-drop events
+/// 3. Forwards to WebView2's native IDropTarget for DOM events
 ///
-/// We do NOT register a custom IDropTarget here. Instead, we rely on WebView2's
-/// native drop handling (enabled by patching WRY to not register its IDropTarget).
+/// This allows BOTH:
+/// - Tauri events with file paths (for external attachment support)
+/// - Native DOM drag events in the WebView (for internal drags and input drops)
 ///
-/// This allows:
-/// - Native DOM drag events to fire in the WebView
-/// - Our outgoing IDataObject (from DoDragDrop) to provide text/vnd.tiddler data
-/// - JavaScript to read DataTransfer.getData('text/vnd.tiddler') naturally
+/// This function just initializes OLE for outgoing drags (DoDragDrop).
 pub fn setup_drag_handlers(window: &WebviewWindow) {
     let window_label = window.label().to_string();
     eprintln!(
@@ -1077,12 +1076,10 @@ pub fn setup_drag_handlers(window: &WebviewWindow) {
                 Err(e) => eprintln!("[TiddlyDesktop] Windows: OleInitialize: {:?}", e),
             }
 
-            // NOTE: We intentionally do NOT register a custom IDropTarget here.
-            // WebView2's native IDropTarget handles incoming drops and generates
-            // native DOM drag events. Our outgoing IDataObject (used when dragging
-            // tiddlers via DoDragDrop) provides text/vnd.tiddler data that WebView2
-            // passes through to JavaScript's DataTransfer.
-            eprintln!("[TiddlyDesktop] Windows: Using WebView2 native drop handling (no custom IDropTarget)");
+            // WRY's patched IDropTarget handles incoming drops:
+            // - Extracts file paths and emits tauri://drag-* events
+            // - Forwards to WebView2's native handler for DOM events
+            eprintln!("[TiddlyDesktop] Windows: Using WRY patched IDropTarget for file path extraction");
         }
     });
 }

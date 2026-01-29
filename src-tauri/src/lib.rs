@@ -3365,9 +3365,11 @@ async fn open_tiddler_window(
     }
 
     // Tauri's drag/drop handler intercepts drops before WebKit/DOM gets them.
-    // On Windows/macOS, we disable it and use custom handlers.
-    // On Linux, we're testing if vanilla WebKitGTK handles drops like Epiphany.
-    #[cfg(not(target_os = "linux"))]
+    // On macOS, we disable it and use custom handlers.
+    // On Windows, we keep it ENABLED - our WRY patch intercepts drops, extracts file paths,
+    // emits tauri://drag-* events, then forwards to WebView2's native handler for DOM events.
+    // On Linux, vanilla WebKitGTK handles drops natively.
+    #[cfg(target_os = "macos")]
     {
         builder = builder.disable_drag_drop_handler();
     }
@@ -4545,12 +4547,9 @@ fn reveal_or_create_main_window(app_handle: &tauri::AppHandle) {
             builder = builder.position(x, y);
         }
 
-        // Tauri's drag/drop handler intercepts drops before WebKit/DOM gets them.
-        // On Windows/macOS, we disable it. On Linux, testing vanilla WebKitGTK.
-        #[cfg(target_os = "windows")]
-        {
-            builder = builder.disable_drag_drop_handler();
-        }
+        // Tauri's drag/drop handler: On Windows, our WRY patch intercepts drops,
+        // extracts file paths, emits tauri://drag-* events, then forwards to WebView2.
+        // On Linux, vanilla WebKitGTK handles drops natively.
 
         if let Ok(main_window) = builder.build()
         {
@@ -4873,12 +4872,9 @@ fn run_wiki_mode(args: WikiModeArgs) {
                 builder = builder.position(x, y);
             }
 
-            // Tauri's drag/drop handler intercepts drops before WebKit/DOM gets them.
-            // On Windows, we disable it. On Linux, testing vanilla WebKitGTK.
-            #[cfg(target_os = "windows")]
-            {
-                builder = builder.disable_drag_drop_handler();
-            }
+            // Tauri's drag/drop handler: On Windows, our WRY patch intercepts drops,
+            // extracts file paths, emits tauri://drag-* events, then forwards to WebView2.
+            // On Linux, vanilla WebKitGTK handles drops natively.
 
             let window = builder.build()?;
 
@@ -5501,12 +5497,9 @@ pub fn run() {
                 builder = builder.position(x, y);
             }
 
-            // Tauri's drag/drop handler intercepts drops before WebKit/DOM gets them.
-            // On Windows, we disable it. On Linux, testing vanilla WebKitGTK.
-            #[cfg(target_os = "windows")]
-            {
-                builder = builder.disable_drag_drop_handler();
-            }
+            // Tauri's drag/drop handler: On Windows, our WRY patch intercepts drops,
+            // extracts file paths, emits tauri://drag-* events, then forwards to WebView2.
+            // On Linux, vanilla WebKitGTK handles drops natively.
 
             let main_window = builder.build()?;
 

@@ -82,6 +82,8 @@ webview2-com = { git = "https://github.com/BurningTreeC/webview2-rs", branch = "
 windows-implement = "0.60"
 windows-core = "0.61"
 image = { version = "0.25", default-features = false, features = ["png"] }
+# Function hooking for wrapping WebView2's IDropTarget
+minhook = "0.5"
 
 # macOS drag-drop handling via objc2 (versions must match Tauri's objc2 dependency)
 [target.'cfg(target_os = "macos")'.dependencies]

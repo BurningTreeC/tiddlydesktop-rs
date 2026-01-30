@@ -1,8 +1,9 @@
 //! Windows drag-drop handling
 //!
-//! Incoming drops: Custom IDropTarget intercepts drops, emits events to JavaScript,
-//! and dispatches synthetic DOM drop events with real File objects.
-//! This enables external attachment support (storing file paths instead of embedding).
+//! Incoming drops: We hook RegisterDragDrop to wrap WebView2's IDropTarget with our proxy.
+//! The proxy captures file paths and stores them via FFI, then forwards to WebView2's
+//! original IDropTarget so native HTML5 drop events fire normally.
+//! JavaScript retrieves file paths from FFI after handling the native drop event.
 //!
 //! Outgoing drags: Implemented via OLE DoDragDrop with custom IDataObject.
 //! This allows dragging tiddlers to external apps with proper MIME types.
@@ -11,8 +12,11 @@
 
 use std::ffi::OsString;
 use std::os::windows::ffi::OsStringExt;
+use std::path::PathBuf;
+use std::ptr;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Mutex;
+use std::sync::Once;
 
 use tauri::{Emitter, WebviewWindow};
 
@@ -21,10 +25,15 @@ use windows::Win32::Foundation::{HWND, LPARAM, E_NOINTERFACE, E_POINTER, S_OK};
 use windows::Win32::System::Com::{DVASPECT_CONTENT, FORMATETC, IDataObject, TYMED_HGLOBAL};
 use windows::Win32::System::Memory::{GlobalLock, GlobalUnlock};
 use windows::Win32::System::Ole::{
-    OleInitialize,
+    OleInitialize, IDropTarget, CF_HDROP,
     DROPEFFECT, DROPEFFECT_COPY, DROPEFFECT_LINK, DROPEFFECT_MOVE, DROPEFFECT_NONE,
 };
+use windows::Win32::System::SystemServices::MODIFIERKEYS_FLAGS;
+use windows::Win32::UI::Shell::{DragQueryFileW, HDROP};
 use windows::Win32::UI::WindowsAndMessaging::{EnumChildWindows, GetClassNameW};
+use windows::Win32::Foundation::POINTL;
+
+use minhook::MinHook;
 
 // WebView2 DragStarting API (from our forked webview2-com with SDK 1.0.3719.77)
 use webview2_com::Microsoft::Web::WebView2::Win32::{
@@ -1520,4 +1529,386 @@ pub fn get_pending_drag_data(target_window: &str) -> Option<PendingDragDataRespo
         source_window: state.source_window_label.clone(),
         is_text_selection_drag: state.data.is_text_selection_drag,
     })
+}
+
+// ============================================================================
+// RegisterDragDrop Hook: Wraps WebView2's IDropTarget to capture file paths
+// while still allowing native HTML5 drop events to fire
+// ============================================================================
+
+// Type alias for the RegisterDragDrop function signature
+type FnRegisterDragDrop = unsafe extern "system" fn(HWND, *mut std::ffi::c_void) -> HRESULT;
+
+static HOOK_INIT: Once = Once::new();
+
+/// Global storage for the original RegisterDragDrop function pointer (trampoline)
+static mut ORIGINAL_REGISTER_DRAG_DROP: Option<FnRegisterDragDrop> = None;
+
+/// Initialize the RegisterDragDrop hook. Must be called before WebView2 initializes.
+pub fn init_drop_target_hook() {
+    HOOK_INIT.call_once(|| {
+        unsafe {
+            // Get the address of RegisterDragDrop from ole32.dll
+            let module = windows::Win32::System::LibraryLoader::GetModuleHandleW(
+                windows::core::w!("ole32.dll")
+            );
+
+            if let Ok(module) = module {
+                let proc_addr = windows::Win32::System::LibraryLoader::GetProcAddress(
+                    module,
+                    windows::core::s!("RegisterDragDrop")
+                );
+
+                if let Some(addr) = proc_addr {
+                    let target_fn: FnRegisterDragDrop = std::mem::transmute(addr);
+                    let detour_fn: FnRegisterDragDrop = hooked_register_drag_drop;
+
+                    match MinHook::create_hook(target_fn as *mut _, detour_fn as *mut _) {
+                        Ok(trampoline) => {
+                            // Store the trampoline so we can call the original
+                            ORIGINAL_REGISTER_DRAG_DROP = Some(std::mem::transmute(trampoline));
+
+                            // Enable the hook
+                            match MinHook::enable_hook(target_fn as *mut _) {
+                                Ok(()) => {
+                                    eprintln!("[TiddlyDesktop] Windows: RegisterDragDrop hook installed successfully");
+                                }
+                                Err(e) => {
+                                    eprintln!("[TiddlyDesktop] Windows: Failed to enable RegisterDragDrop hook: {:?}", e);
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            eprintln!("[TiddlyDesktop] Windows: Failed to create RegisterDragDrop hook: {:?}", e);
+                        }
+                    }
+                } else {
+                    eprintln!("[TiddlyDesktop] Windows: GetProcAddress failed for RegisterDragDrop");
+                }
+            } else {
+                eprintln!("[TiddlyDesktop] Windows: GetModuleHandleW failed for ole32.dll");
+            }
+        }
+    });
+}
+
+/// Hooked RegisterDragDrop - wraps the IDropTarget with our proxy
+unsafe extern "system" fn hooked_register_drag_drop(hwnd: HWND, drop_target: *mut std::ffi::c_void) -> HRESULT {
+    eprintln!("[TiddlyDesktop] Windows: RegisterDragDrop hook called for hwnd {:?}", hwnd.0);
+
+    // Get the original function
+    let original_fn = match ORIGINAL_REGISTER_DRAG_DROP {
+        Some(f) => f,
+        None => {
+            eprintln!("[TiddlyDesktop] Windows: No original function stored, returning error");
+            return HRESULT::from_win32(0x80004005); // E_FAIL
+        }
+    };
+
+    if drop_target.is_null() {
+        return original_fn(hwnd, drop_target);
+    }
+
+    // The drop_target pointer is an IDropTarget COM interface pointer.
+    // We need to:
+    // 1. Create an IDropTarget from the raw pointer (takes ownership of that ref)
+    // 2. Clone it to AddRef since we're going to pass a NEW IDropTarget (our wrapper) to the original function
+    //    but we still need to hold on to the original
+    let original_target: IDropTarget = std::mem::transmute(drop_target);
+    // Clone to AddRef on the original since we're keeping a reference to it in our wrapper
+    // The original caller still owns their reference which RegisterDragDrop will consume
+    let original_for_wrapper = original_target.clone();
+    // Forget the first one since we got it via transmute (it shares the same refcount slot as caller's pointer)
+    std::mem::forget(original_target);
+
+    // Create our wrapper
+    let wrapper = DropTargetWrapper::new(original_for_wrapper);
+    let wrapper_ptr = Box::into_raw(Box::new(wrapper));
+
+    // Register the wrapper instead
+    let result = original_fn(hwnd, wrapper_ptr as *mut std::ffi::c_void);
+
+    if result.is_ok() {
+        eprintln!("[TiddlyDesktop] Windows: Wrapped IDropTarget registered successfully");
+        // The wrapper is now owned by the system - it will be released via RevokeDragDrop
+    } else {
+        eprintln!("[TiddlyDesktop] Windows: RegisterDragDrop failed: {:?}", result);
+        // Clean up the wrapper if registration failed
+        let _ = Box::from_raw(wrapper_ptr);
+    }
+
+    result
+}
+
+// IDropTarget interface GUID
+const IID_IDROPTARGET: GUID = GUID::from_u128(0x00000122_0000_0000_c000_000000000046);
+
+/// IDropTarget vtable
+#[repr(C)]
+#[allow(non_snake_case)]
+struct IDropTargetVtbl {
+    // IUnknown
+    QueryInterface: unsafe extern "system" fn(*mut DropTargetWrapper, *const GUID, *mut *mut std::ffi::c_void) -> HRESULT,
+    AddRef: unsafe extern "system" fn(*mut DropTargetWrapper) -> u32,
+    Release: unsafe extern "system" fn(*mut DropTargetWrapper) -> u32,
+    // IDropTarget
+    DragEnter: unsafe extern "system" fn(*mut DropTargetWrapper, *mut std::ffi::c_void, u32, i64, *mut u32) -> HRESULT,
+    DragOver: unsafe extern "system" fn(*mut DropTargetWrapper, u32, i64, *mut u32) -> HRESULT,
+    DragLeave: unsafe extern "system" fn(*mut DropTargetWrapper) -> HRESULT,
+    Drop: unsafe extern "system" fn(*mut DropTargetWrapper, *mut std::ffi::c_void, u32, i64, *mut u32) -> HRESULT,
+}
+
+static DROP_TARGET_WRAPPER_VTBL: IDropTargetVtbl = IDropTargetVtbl {
+    QueryInterface: DropTargetWrapper::query_interface,
+    AddRef: DropTargetWrapper::add_ref,
+    Release: DropTargetWrapper::release,
+    DragEnter: DropTargetWrapper::drag_enter,
+    DragOver: DropTargetWrapper::drag_over,
+    DragLeave: DropTargetWrapper::drag_leave,
+    Drop: DropTargetWrapper::drop,
+};
+
+/// Our IDropTarget wrapper that captures file paths and forwards to the original
+#[repr(C)]
+struct DropTargetWrapper {
+    vtbl: *const IDropTargetVtbl,
+    ref_count: AtomicU32,
+    original: IDropTarget,
+}
+
+// Safety: IDropTarget COM objects are Send+Sync on Windows
+unsafe impl Send for DropTargetWrapper {}
+unsafe impl Sync for DropTargetWrapper {}
+
+impl DropTargetWrapper {
+    fn new(original: IDropTarget) -> Self {
+        Self {
+            vtbl: &DROP_TARGET_WRAPPER_VTBL,
+            ref_count: AtomicU32::new(1),
+            original,
+        }
+    }
+
+    /// Extract file paths from IDataObject
+    unsafe fn extract_file_paths(data_obj: *mut std::ffi::c_void) -> Vec<PathBuf> {
+        let mut paths = Vec::new();
+
+        if data_obj.is_null() {
+            return paths;
+        }
+
+        // Cast to IDataObject
+        let data_object: &IDataObject = match (data_obj as *const IDataObject).as_ref() {
+            Some(obj) => obj,
+            None => return paths,
+        };
+
+        // Set up FORMATETC for CF_HDROP
+        let format = FORMATETC {
+            cfFormat: CF_HDROP.0,
+            ptd: ptr::null_mut(),
+            dwAspect: DVASPECT_CONTENT.0 as u32,
+            lindex: -1,
+            tymed: TYMED_HGLOBAL.0 as u32,
+        };
+
+        // Try to get the data
+        match data_object.GetData(&format) {
+            Ok(medium) => {
+                let hglobal = medium.u.hGlobal;
+                if !hglobal.0.is_null() {
+                    let hdrop = HDROP(hglobal.0 as _);
+
+                    // Get the number of files
+                    let file_count = DragQueryFileW(hdrop, 0xFFFFFFFF, None);
+
+                    for i in 0..file_count {
+                        // Get the length of the file path
+                        let len = DragQueryFileW(hdrop, i, None) as usize;
+                        if len > 0 {
+                            let mut buffer = vec![0u16; len + 1];
+                            DragQueryFileW(hdrop, i, Some(&mut buffer));
+                            let path_str = OsString::from_wide(&buffer[..len]);
+                            paths.push(PathBuf::from(path_str));
+                        }
+                    }
+
+                    // Note: Don't call DragFinish here - the original IDropTarget will do that
+                }
+            }
+            Err(_) => {
+                // Not a file drop, that's OK
+            }
+        }
+
+        paths
+    }
+
+    unsafe extern "system" fn query_interface(
+        this: *mut Self,
+        riid: *const GUID,
+        ppv: *mut *mut std::ffi::c_void,
+    ) -> HRESULT {
+        if ppv.is_null() {
+            return E_POINTER;
+        }
+
+        let iid = &*riid;
+        if *iid == IID_IUNKNOWN || *iid == IID_IDROPTARGET {
+            Self::add_ref(this);
+            *ppv = this as *mut std::ffi::c_void;
+            S_OK
+        } else {
+            *ppv = ptr::null_mut();
+            E_NOINTERFACE
+        }
+    }
+
+    unsafe extern "system" fn add_ref(this: *mut Self) -> u32 {
+        (*this).ref_count.fetch_add(1, Ordering::SeqCst) + 1
+    }
+
+    unsafe extern "system" fn release(this: *mut Self) -> u32 {
+        let count = (*this).ref_count.fetch_sub(1, Ordering::SeqCst) - 1;
+        if count == 0 {
+            drop(Box::from_raw(this));
+        }
+        count
+    }
+
+    unsafe extern "system" fn drag_enter(
+        this: *mut Self,
+        data_obj: *mut std::ffi::c_void,
+        key_state: u32,
+        pt: i64,
+        effect: *mut u32,
+    ) -> HRESULT {
+        let wrapper = &*this;
+
+        // Check if this is an internal drag (from our app)
+        let is_internal = tiddlydesktop_has_internal_drag() != 0;
+
+        if !is_internal {
+            // Extract file paths and store them
+            let paths = Self::extract_file_paths(data_obj);
+            if !paths.is_empty() {
+                eprintln!("[TiddlyDesktop] Windows Wrapper: DragEnter with {} file paths", paths.len());
+
+                // Store paths via FFI
+                let json_parts: Vec<String> = paths.iter().map(|p| {
+                    let s = p.to_string_lossy();
+                    let escaped = s.replace('\\', "\\\\").replace('"', "\\\"");
+                    format!("\"{}\"", escaped)
+                }).collect();
+                let json = format!("[{}]", json_parts.join(","));
+
+                if let Ok(mut guard) = EXTERNAL_DROP_PATHS.lock() {
+                    if let Ok(parsed) = serde_json::from_str::<Vec<String>>(&json) {
+                        *guard = Some(parsed);
+                        eprintln!("[TiddlyDesktop] Windows Wrapper: Stored {} paths", paths.len());
+                    }
+                }
+            }
+        } else {
+            eprintln!("[TiddlyDesktop] Windows Wrapper: DragEnter - internal drag, skipping path extraction");
+        }
+
+        // Forward to original
+        // Convert raw pointer to an IDataObject reference for the COM call
+        let pt_struct = POINTL { x: (pt & 0xFFFFFFFF) as i32, y: (pt >> 32) as i32 };
+        let data_object_ref = if data_obj.is_null() {
+            None
+        } else {
+            // Cast raw pointer to IDataObject - the caller retains ownership
+            Some(std::mem::transmute::<*mut std::ffi::c_void, IDataObject>(data_obj))
+        };
+        let result = wrapper.original.DragEnter(
+            data_object_ref.as_ref(),
+            MODIFIERKEYS_FLAGS(key_state),
+            pt_struct,
+            effect as *mut DROPEFFECT,
+        );
+        // Prevent dropping the IDataObject - we don't own it
+        if let Some(d) = data_object_ref {
+            std::mem::forget(d);
+        }
+        match result {
+            Ok(()) => S_OK,
+            Err(e) => e.code(),
+        }
+    }
+
+    unsafe extern "system" fn drag_over(
+        this: *mut Self,
+        key_state: u32,
+        pt: i64,
+        effect: *mut u32,
+    ) -> HRESULT {
+        let wrapper = &*this;
+
+        // Forward to original
+        let pt_struct = POINTL { x: (pt & 0xFFFFFFFF) as i32, y: (pt >> 32) as i32 };
+        match wrapper.original.DragOver(
+            MODIFIERKEYS_FLAGS(key_state),
+            pt_struct,
+            effect as *mut DROPEFFECT,
+        ) {
+            Ok(()) => S_OK,
+            Err(e) => e.code(),
+        }
+    }
+
+    unsafe extern "system" fn drag_leave(this: *mut Self) -> HRESULT {
+        let wrapper = &*this;
+
+        // Clear stored paths on leave
+        if let Ok(mut guard) = EXTERNAL_DROP_PATHS.lock() {
+            if guard.is_some() {
+                eprintln!("[TiddlyDesktop] Windows Wrapper: DragLeave - clearing stored paths");
+                *guard = None;
+            }
+        }
+
+        // Forward to original
+        match wrapper.original.DragLeave() {
+            Ok(()) => S_OK,
+            Err(e) => e.code(),
+        }
+    }
+
+    unsafe extern "system" fn drop(
+        this: *mut Self,
+        data_obj: *mut std::ffi::c_void,
+        key_state: u32,
+        pt: i64,
+        effect: *mut u32,
+    ) -> HRESULT {
+        let wrapper = &*this;
+
+        eprintln!("[TiddlyDesktop] Windows Wrapper: Drop - forwarding to original (HTML5 events will fire)");
+
+        // Forward to original - this will trigger HTML5 drop events
+        // Convert raw pointer to an IDataObject reference for the COM call
+        let pt_struct = POINTL { x: (pt & 0xFFFFFFFF) as i32, y: (pt >> 32) as i32 };
+        let data_object_ref = if data_obj.is_null() {
+            None
+        } else {
+            // Cast raw pointer to IDataObject - the caller retains ownership
+            Some(std::mem::transmute::<*mut std::ffi::c_void, IDataObject>(data_obj))
+        };
+        let result = wrapper.original.Drop(
+            data_object_ref.as_ref(),
+            MODIFIERKEYS_FLAGS(key_state),
+            pt_struct,
+            effect as *mut DROPEFFECT,
+        );
+        // Prevent dropping the IDataObject - we don't own it
+        if let Some(d) = data_object_ref {
+            std::mem::forget(d);
+        }
+        match result {
+            Ok(()) => S_OK,
+            Err(e) => e.code(),
+        }
+    }
 }

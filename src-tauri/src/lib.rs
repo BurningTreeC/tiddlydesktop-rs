@@ -5478,6 +5478,12 @@ pub fn run() {
     #[cfg(target_os = "windows")]
     check_webview2_version();
 
+    // Windows: Install RegisterDragDrop hook early, before any WebView2 initialization.
+    // This wraps WebView2's IDropTarget to capture file paths while preserving
+    // native HTML5 drag events.
+    #[cfg(target_os = "windows")]
+    drag_drop::windows::init_drop_target_hook();
+
     // Check if we're running in a special mode (wiki file or wiki folder)
     if let Some(mode) = parse_special_mode_args() {
         match mode {

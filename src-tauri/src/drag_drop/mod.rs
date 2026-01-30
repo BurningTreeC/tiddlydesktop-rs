@@ -46,7 +46,7 @@ mod encoding;
 pub(crate) mod sanitize;
 
 #[cfg(target_os = "windows")]
-mod windows;
+pub mod windows;
 
 #[cfg(target_os = "windows")]
 pub mod windows_job;

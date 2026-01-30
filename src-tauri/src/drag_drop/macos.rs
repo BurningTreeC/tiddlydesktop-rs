@@ -27,7 +27,7 @@ use objc2_app_kit::{NSPasteboard, NSView, NSWindow, NSEvent, NSPasteboardItem};
 use objc2_foundation::{NSArray, NSData, NSPoint, NSRect, NSSize, NSString};
 use tauri::{Emitter, WebviewWindow};
 
-use super::sanitize::{sanitize_html, sanitize_file_paths, is_dangerous_url};
+use super::sanitize::{sanitize_html, is_dangerous_url};
 
 /// Data captured from a drag operation
 #[derive(Clone, Debug, serde::Serialize)]
@@ -964,45 +964,6 @@ fn emit_drop_with_content(window_label: &str, x: f64, y: f64, content: DragConte
     }
 }
 
-/// Emit drop events with file paths
-fn emit_drop_with_files(window_label: &str, x: f64, y: f64, paths: Vec<String>) {
-    // Security: Sanitize file paths to prevent path traversal
-    let paths = sanitize_file_paths(paths);
-
-    if paths.is_empty() {
-        return;
-    }
-
-    if let Some(state) = DRAG_STATES.lock().unwrap().get(window_label) {
-        let state = state.lock().unwrap();
-
-        let _ = state.window.emit(
-            "td-drag-drop-start",
-            serde_json::json!({
-                "x": x,
-                "y": y,
-                "screenCoords": false
-            }),
-        );
-
-        let _ = state.window.emit(
-            "td-drag-drop-position",
-            serde_json::json!({
-                "x": x,
-                "y": y,
-                "screenCoords": false
-            }),
-        );
-
-        let _ = state.window.emit(
-            "td-file-drop",
-            serde_json::json!({
-                "paths": paths
-            }),
-        );
-    }
-}
-
 // ============================================================================
 // Outgoing drag support (TiddlyWiki → external apps)
 // ============================================================================
@@ -1620,25 +1581,3 @@ pub extern "C" fn tiddlydesktop_clear_drop_paths() {
     }
 }
 
-/// Get the stored external drop paths (called from Tauri command).
-/// Returns the paths and clears the storage.
-pub fn take_external_drop_paths() -> Option<Vec<String>> {
-    if let Ok(mut guard) = EXTERNAL_DROP_PATHS.lock() {
-        guard.take()
-    } else {
-        None
-    }
-}
-
-/// Store file paths for external drops (called from swizzled drop handler).
-/// JavaScript retrieves these via the `take_external_drop_paths` Tauri command
-/// after the native HTML5 drop event fires.
-pub fn store_external_drop_paths(paths: Vec<String>) {
-    eprintln!("[TiddlyDesktop] macOS: Storing {} external drop paths", paths.len());
-    for path in &paths {
-        eprintln!("[TiddlyDesktop] macOS:   - {}", path);
-    }
-    if let Ok(mut guard) = EXTERNAL_DROP_PATHS.lock() {
-        *guard = Some(paths);
-    }
-}

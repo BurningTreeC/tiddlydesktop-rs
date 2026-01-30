@@ -25,13 +25,11 @@ use windows::Win32::Foundation::{HWND, LPARAM, E_NOINTERFACE, E_POINTER, S_OK};
 use windows::Win32::System::Com::{DVASPECT_CONTENT, FORMATETC, IDataObject, TYMED_HGLOBAL};
 use windows::Win32::System::Memory::{GlobalLock, GlobalUnlock};
 use windows::Win32::System::Ole::{
-    OleInitialize, IDropTarget, CF_HDROP,
+    OleInitialize, CF_HDROP,
     DROPEFFECT, DROPEFFECT_COPY, DROPEFFECT_LINK, DROPEFFECT_MOVE, DROPEFFECT_NONE,
 };
-use windows::Win32::System::SystemServices::MODIFIERKEYS_FLAGS;
 use windows::Win32::UI::Shell::{DragQueryFileW, HDROP};
 use windows::Win32::UI::WindowsAndMessaging::{EnumChildWindows, GetClassNameW};
-use windows::Win32::Foundation::POINTL;
 
 use minhook::MinHook;
 
@@ -1280,19 +1278,28 @@ pub fn start_native_drag(window: &WebviewWindow, data: OutgoingDragData, _x: i32
 /// On Windows, we set up:
 /// 1. OLE initialization for DoDragDrop (outgoing drags)
 /// 2. DragStarting event handler to intercept drags starting in WebView2
-/// 3. WRY's patched IDropTarget handles incoming drops (file path extraction + DOM events)
+/// 3. Store the composition controller so our IDropTarget wrapper can forward to it
 ///
 /// This enables full native OLE drag-and-drop:
-/// - Inside → Inside: Native DOM events + DragStarting for cross-window data
+/// - Inside → Inside: Native DOM events via composition controller
 /// - Inside → Outside: DragStarting captures data, OLE DoDragDrop handles transfer
-/// - Outside → Inside: WRY IDropTarget extracts paths, forwards to WebView2
+/// - Outside → Inside: Our IDropTarget wrapper extracts paths AND forwards to composition controller
 pub fn setup_drag_handlers(window: &WebviewWindow) {
     let window_label = window.label().to_string();
     let window_label_clone = window_label.clone();
 
+    // Get the HWND for storing the composition controller (convert to usize to be Send)
+    let hwnd_key = match window.hwnd() {
+        Ok(h) => h.0 as usize,
+        Err(e) => {
+            eprintln!("[TiddlyDesktop] Windows: Failed to get HWND: {:?}", e);
+            return;
+        }
+    };
+
     eprintln!(
-        "[TiddlyDesktop] Windows: setup_drag_handlers called for window '{}'",
-        window_label
+        "[TiddlyDesktop] Windows: setup_drag_handlers called for window '{}' (hwnd: {:#x})",
+        window_label, hwnd_key
     );
 
     let _ = window.with_webview(move |webview| {
@@ -1304,8 +1311,27 @@ pub fn setup_drag_handlers(window: &WebviewWindow) {
                 Err(e) => eprintln!("[TiddlyDesktop] Windows: OleInitialize: {:?}", e),
             }
 
-            // Get the WebView2 controller and try to register DragStarting handler
+            // Get the WebView2 controller
             let controller = webview.controller();
+
+            // Try to get ICoreWebView2CompositionController3 for drag-drop forwarding
+            // This is what our IDropTarget wrapper will forward to
+            match controller.cast::<ICoreWebView2CompositionController3>() {
+                Ok(controller3) => {
+                    eprintln!("[TiddlyDesktop] Windows: Got ICoreWebView2CompositionController3 for drag forwarding");
+                    // Store it so our IDropTarget wrapper can find it
+                    store_composition_controller(hwnd_key, controller3);
+                }
+                Err(e) => {
+                    eprintln!(
+                        "[TiddlyDesktop] Windows: Failed to get ICoreWebView2CompositionController3: {:?}",
+                        e
+                    );
+                    eprintln!(
+                        "[TiddlyDesktop] Windows: Drag forwarding may not work (need WebView2 Runtime 111+)"
+                    );
+                }
+            }
 
             // Try to cast to ICoreWebView2CompositionController5 for DragStarting API
             match controller.cast::<ICoreWebView2CompositionController5>() {
@@ -1348,7 +1374,7 @@ pub fn setup_drag_handlers(window: &WebviewWindow) {
                 }
             }
 
-            eprintln!("[TiddlyDesktop] Windows: Using WRY patched IDropTarget for file path extraction");
+            eprintln!("[TiddlyDesktop] Windows: Drag-drop setup complete - wrapper will extract paths and forward to WebView2");
         }
     });
 }
@@ -1532,9 +1558,22 @@ pub fn get_pending_drag_data(target_window: &str) -> Option<PendingDragDataRespo
 }
 
 // ============================================================================
-// RegisterDragDrop Hook: Wraps WebView2's IDropTarget to capture file paths
-// while still allowing native HTML5 drop events to fire
+// RegisterDragDrop Hook: Capture file paths while preserving WebView2's
+// native HTML5 drop events via ICoreWebView2CompositionController3
 // ============================================================================
+//
+// Strategy (based on Microsoft WebView2 documentation):
+// 1. WebView2 does NOT register its own IDropTarget - the host app is supposed to do it
+// 2. WRY registers its IDropTarget on WebView2's child window
+// 3. We hook RegisterDragDrop to wrap WRY's IDropTarget
+// 4. Our wrapper:
+//    a) Extracts file paths from IDataObject → stores via FFI for JavaScript
+//    b) Forwards to ICoreWebView2CompositionController3.DragEnter/DragOver/DragLeave/Drop
+// 5. The composition controller fires native HTML5 drag events
+//
+// This gives us: file path extraction + native HTML5 events
+
+use webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2CompositionController3;
 
 // Type alias for the RegisterDragDrop function signature
 type FnRegisterDragDrop = unsafe extern "system" fn(HWND, *mut std::ffi::c_void) -> HRESULT;
@@ -1543,6 +1582,39 @@ static HOOK_INIT: Once = Once::new();
 
 /// Global storage for the original RegisterDragDrop function pointer (trampoline)
 static mut ORIGINAL_REGISTER_DRAG_DROP: Option<FnRegisterDragDrop> = None;
+
+/// Wrapper to make ICoreWebView2CompositionController3 Send+Sync
+/// Safety: COM objects are thread-safe on Windows when accessed through proper COM mechanisms
+struct SendSyncController(ICoreWebView2CompositionController3);
+unsafe impl Send for SendSyncController {}
+unsafe impl Sync for SendSyncController {}
+
+lazy_static::lazy_static! {
+    /// Composition controllers per HWND - used to forward drag events to WebView2
+    /// so that native HTML5 drag events fire
+    /// Key: HWND as usize, Value: wrapped ICoreWebView2CompositionController3
+    static ref COMPOSITION_CONTROLLERS: Mutex<std::collections::HashMap<usize, SendSyncController>> =
+        Mutex::new(std::collections::HashMap::new());
+
+    /// Track which HWNDs have our wrapper registered (to avoid double-wrapping)
+    static ref WRAPPED_HWNDS: Mutex<std::collections::HashSet<usize>> =
+        Mutex::new(std::collections::HashSet::new());
+}
+
+/// Store a composition controller for an HWND (called from setup_drag_handlers)
+pub fn store_composition_controller(hwnd_key: usize, controller: ICoreWebView2CompositionController3) {
+    if let Ok(mut guard) = COMPOSITION_CONTROLLERS.lock() {
+        eprintln!("[TiddlyDesktop] Windows: Storing composition controller for hwnd {:#x}", hwnd_key);
+        guard.insert(hwnd_key, SendSyncController(controller));
+    }
+}
+
+/// Get the composition controller for an HWND
+fn get_composition_controller(hwnd_key: usize) -> Option<ICoreWebView2CompositionController3> {
+    COMPOSITION_CONTROLLERS.lock()
+        .ok()
+        .and_then(|guard| guard.get(&hwnd_key).map(|w| w.0.clone()))
+}
 
 /// Initialize the RegisterDragDrop hook. Must be called before WebView2 initializes.
 pub fn init_drop_target_hook() {
@@ -1565,10 +1637,8 @@ pub fn init_drop_target_hook() {
 
                     match MinHook::create_hook(target_fn as *mut _, detour_fn as *mut _) {
                         Ok(trampoline) => {
-                            // Store the trampoline so we can call the original
                             ORIGINAL_REGISTER_DRAG_DROP = Some(std::mem::transmute(trampoline));
 
-                            // Enable the hook
                             match MinHook::enable_hook(target_fn as *mut _) {
                                 Ok(()) => {
                                     eprintln!("[TiddlyDesktop] Windows: RegisterDragDrop hook installed successfully");
@@ -1592,15 +1662,16 @@ pub fn init_drop_target_hook() {
     });
 }
 
-/// Hooked RegisterDragDrop - wraps the IDropTarget with our proxy
+/// Hooked RegisterDragDrop - wraps the IDropTarget with our proxy that forwards to composition controller
 unsafe extern "system" fn hooked_register_drag_drop(hwnd: HWND, drop_target: *mut std::ffi::c_void) -> HRESULT {
+    let hwnd_key = hwnd.0 as usize;
     eprintln!("[TiddlyDesktop] Windows: RegisterDragDrop hook called for hwnd {:?}", hwnd.0);
 
     // Get the original function
     let original_fn = match ORIGINAL_REGISTER_DRAG_DROP {
         Some(f) => f,
         None => {
-            eprintln!("[TiddlyDesktop] Windows: No original function stored, returning error");
+            eprintln!("[TiddlyDesktop] Windows: No original RegisterDragDrop function stored, returning error");
             return HRESULT::from_win32(0x80004005); // E_FAIL
         }
     };
@@ -1609,28 +1680,44 @@ unsafe extern "system" fn hooked_register_drag_drop(hwnd: HWND, drop_target: *mu
         return original_fn(hwnd, drop_target);
     }
 
-    // The drop_target pointer is an IDropTarget COM interface pointer.
-    // We need to:
-    // 1. Create an IDropTarget from the raw pointer (takes ownership of that ref)
-    // 2. Clone it to AddRef since we're going to pass a NEW IDropTarget (our wrapper) to the original function
-    //    but we still need to hold on to the original
-    let original_target: IDropTarget = std::mem::transmute(drop_target);
-    // Clone to AddRef on the original since we're keeping a reference to it in our wrapper
-    // The original caller still owns their reference which RegisterDragDrop will consume
-    let original_for_wrapper = original_target.clone();
-    // Forget the first one since we got it via transmute (it shares the same refcount slot as caller's pointer)
-    std::mem::forget(original_target);
+    // Check if we already wrapped this HWND (avoid double-wrapping)
+    let already_wrapped = WRAPPED_HWNDS.lock()
+        .map(|guard| guard.contains(&hwnd_key))
+        .unwrap_or(false);
 
-    // Create our wrapper
-    let wrapper = DropTargetWrapper::new(original_for_wrapper);
+    if already_wrapped {
+        eprintln!("[TiddlyDesktop] Windows: HWND {:?} already wrapped, passing through", hwnd.0);
+        return original_fn(hwnd, drop_target);
+    }
+
+    // Check if we have a composition controller for this HWND or any parent
+    // WRY registers on child HWNDs, but we store the controller on the main window
+    // We need to find the matching controller
+    let has_controller = COMPOSITION_CONTROLLERS.lock()
+        .map(|guard| !guard.is_empty())
+        .unwrap_or(false);
+
+    if !has_controller {
+        eprintln!("[TiddlyDesktop] Windows: No composition controller stored yet, passing through");
+        return original_fn(hwnd, drop_target);
+    }
+
+    eprintln!("[TiddlyDesktop] Windows: Wrapping IDropTarget for hwnd {:?}", hwnd.0);
+
+    // Create our wrapper - it will forward to the composition controller
+    // We don't need the original IDropTarget (WRY's) since we forward to WebView2 directly
+    let wrapper = DropTargetWrapper::new(hwnd);
     let wrapper_ptr = Box::into_raw(Box::new(wrapper));
 
-    // Register the wrapper instead
+    // Register the wrapper instead of WRY's IDropTarget
     let result = original_fn(hwnd, wrapper_ptr as *mut std::ffi::c_void);
 
     if result.is_ok() {
-        eprintln!("[TiddlyDesktop] Windows: Wrapped IDropTarget registered successfully");
-        // The wrapper is now owned by the system - it will be released via RevokeDragDrop
+        eprintln!("[TiddlyDesktop] Windows: Wrapped IDropTarget registered successfully for hwnd {:?}", hwnd.0);
+        // Track that this hwnd has our wrapper
+        if let Ok(mut guard) = WRAPPED_HWNDS.lock() {
+            guard.insert(hwnd_key);
+        }
     } else {
         eprintln!("[TiddlyDesktop] Windows: RegisterDragDrop failed: {:?}", result);
         // Clean up the wrapper if registration failed
@@ -1668,24 +1755,26 @@ static DROP_TARGET_WRAPPER_VTBL: IDropTargetVtbl = IDropTargetVtbl {
     Drop: DropTargetWrapper::drop,
 };
 
-/// Our IDropTarget wrapper that captures file paths and forwards to the original
+/// Our IDropTarget wrapper that captures file paths and forwards to
+/// ICoreWebView2CompositionController3 so native HTML5 drag events fire.
 #[repr(C)]
 struct DropTargetWrapper {
     vtbl: *const IDropTargetVtbl,
     ref_count: AtomicU32,
-    original: IDropTarget,
+    /// The HWND this wrapper is registered for (used to find the composition controller)
+    hwnd: HWND,
 }
 
-// Safety: IDropTarget COM objects are Send+Sync on Windows
+// Safety: COM objects need to be Send+Sync for cross-thread access
 unsafe impl Send for DropTargetWrapper {}
 unsafe impl Sync for DropTargetWrapper {}
 
 impl DropTargetWrapper {
-    fn new(original: IDropTarget) -> Self {
+    fn new(hwnd: HWND) -> Self {
         Self {
             vtbl: &DROP_TARGET_WRAPPER_VTBL,
             ref_count: AtomicU32::new(1),
-            original,
+            hwnd,
         }
     }
 
@@ -1732,8 +1821,6 @@ impl DropTargetWrapper {
                             paths.push(PathBuf::from(path_str));
                         }
                     }
-
-                    // Note: Don't call DragFinish here - the original IDropTarget will do that
                 }
             }
             Err(_) => {
@@ -1742,6 +1829,19 @@ impl DropTargetWrapper {
         }
 
         paths
+    }
+
+    /// Find the composition controller for this wrapper's HWND
+    /// We try the HWND itself and all stored controllers (since WRY registers on child HWNDs)
+    fn find_composition_controller(&self) -> Option<ICoreWebView2CompositionController3> {
+        // First try exact match
+        if let Some(controller) = get_composition_controller(self.hwnd.0 as usize) {
+            return Some(controller);
+        }
+        // If no exact match, return any controller we have (there's usually just one per window)
+        COMPOSITION_CONTROLLERS.lock()
+            .ok()
+            .and_then(|guard| guard.values().next().map(|w| w.0.clone()))
     }
 
     unsafe extern "system" fn query_interface(
@@ -1789,12 +1889,12 @@ impl DropTargetWrapper {
         let is_internal = tiddlydesktop_has_internal_drag() != 0;
 
         if !is_internal {
-            // Extract file paths and store them
+            // Extract file paths and store them for JavaScript to retrieve
             let paths = Self::extract_file_paths(data_obj);
             if !paths.is_empty() {
                 eprintln!("[TiddlyDesktop] Windows Wrapper: DragEnter with {} file paths", paths.len());
 
-                // Store paths via FFI
+                // Store paths for later retrieval by JavaScript
                 let json_parts: Vec<String> = paths.iter().map(|p| {
                     let s = p.to_string_lossy();
                     let escaped = s.replace('\\', "\\\\").replace('"', "\\\"");
@@ -1805,7 +1905,7 @@ impl DropTargetWrapper {
                 if let Ok(mut guard) = EXTERNAL_DROP_PATHS.lock() {
                     if let Ok(parsed) = serde_json::from_str::<Vec<String>>(&json) {
                         *guard = Some(parsed);
-                        eprintln!("[TiddlyDesktop] Windows Wrapper: Stored {} paths", paths.len());
+                        eprintln!("[TiddlyDesktop] Windows Wrapper: Stored {} paths for JS retrieval", paths.len());
                     }
                 }
             }
@@ -1813,28 +1913,48 @@ impl DropTargetWrapper {
             eprintln!("[TiddlyDesktop] Windows Wrapper: DragEnter - internal drag, skipping path extraction");
         }
 
-        // Forward to original
-        // Convert raw pointer to an IDataObject reference for the COM call
-        let pt_struct = POINTL { x: (pt & 0xFFFFFFFF) as i32, y: (pt >> 32) as i32 };
-        let data_object_ref = if data_obj.is_null() {
-            None
+        // Forward to WebView2's composition controller to fire HTML5 events
+        if let Some(controller) = wrapper.find_composition_controller() {
+            let pt_x = (pt & 0xFFFFFFFF) as i32;
+            let pt_y = (pt >> 32) as i32;
+            let point = windows::Win32::Foundation::POINT { x: pt_x, y: pt_y };
+
+            // Convert raw pointer to IDataObject
+            let data_object: Option<IDataObject> = if data_obj.is_null() {
+                None
+            } else {
+                Some(std::mem::transmute(data_obj))
+            };
+
+            let result = controller.DragEnter(
+                data_object.as_ref(),
+                key_state,
+                point,
+                effect as *mut u32,
+            );
+
+            // Don't drop the IDataObject - we don't own it
+            if let Some(d) = data_object {
+                std::mem::forget(d);
+            }
+
+            match result {
+                Ok(()) => {
+                    eprintln!("[TiddlyDesktop] Windows Wrapper: DragEnter forwarded to composition controller");
+                    S_OK
+                }
+                Err(e) => {
+                    eprintln!("[TiddlyDesktop] Windows Wrapper: DragEnter forward failed: {:?}", e);
+                    e.code()
+                }
+            }
         } else {
-            // Cast raw pointer to IDataObject - the caller retains ownership
-            Some(std::mem::transmute::<*mut std::ffi::c_void, IDataObject>(data_obj))
-        };
-        let result = wrapper.original.DragEnter(
-            data_object_ref.as_ref(),
-            MODIFIERKEYS_FLAGS(key_state),
-            pt_struct,
-            effect as *mut DROPEFFECT,
-        );
-        // Prevent dropping the IDataObject - we don't own it
-        if let Some(d) = data_object_ref {
-            std::mem::forget(d);
-        }
-        match result {
-            Ok(()) => S_OK,
-            Err(e) => e.code(),
+            eprintln!("[TiddlyDesktop] Windows Wrapper: No composition controller found for DragEnter");
+            // Return DROPEFFECT_COPY to allow the drop
+            if !effect.is_null() {
+                *effect = DROPEFFECT_COPY.0;
+            }
+            S_OK
         }
     }
 
@@ -1846,15 +1966,22 @@ impl DropTargetWrapper {
     ) -> HRESULT {
         let wrapper = &*this;
 
-        // Forward to original
-        let pt_struct = POINTL { x: (pt & 0xFFFFFFFF) as i32, y: (pt >> 32) as i32 };
-        match wrapper.original.DragOver(
-            MODIFIERKEYS_FLAGS(key_state),
-            pt_struct,
-            effect as *mut DROPEFFECT,
-        ) {
-            Ok(()) => S_OK,
-            Err(e) => e.code(),
+        // Forward to WebView2's composition controller
+        if let Some(controller) = wrapper.find_composition_controller() {
+            let pt_x = (pt & 0xFFFFFFFF) as i32;
+            let pt_y = (pt >> 32) as i32;
+            let point = windows::Win32::Foundation::POINT { x: pt_x, y: pt_y };
+
+            match controller.DragOver(key_state, point, effect as *mut u32) {
+                Ok(()) => S_OK,
+                Err(e) => e.code(),
+            }
+        } else {
+            // Return DROPEFFECT_COPY to allow the drop
+            if !effect.is_null() {
+                *effect = DROPEFFECT_COPY.0;
+            }
+            S_OK
         }
     }
 
@@ -1869,10 +1996,14 @@ impl DropTargetWrapper {
             }
         }
 
-        // Forward to original
-        match wrapper.original.DragLeave() {
-            Ok(()) => S_OK,
-            Err(e) => e.code(),
+        // Forward to WebView2's composition controller
+        if let Some(controller) = wrapper.find_composition_controller() {
+            match controller.DragLeave() {
+                Ok(()) => S_OK,
+                Err(e) => e.code(),
+            }
+        } else {
+            S_OK
         }
     }
 
@@ -1885,30 +2016,46 @@ impl DropTargetWrapper {
     ) -> HRESULT {
         let wrapper = &*this;
 
-        eprintln!("[TiddlyDesktop] Windows Wrapper: Drop - forwarding to original (HTML5 events will fire)");
+        eprintln!("[TiddlyDesktop] Windows Wrapper: Drop - forwarding to composition controller (HTML5 events will fire)");
 
-        // Forward to original - this will trigger HTML5 drop events
-        // Convert raw pointer to an IDataObject reference for the COM call
-        let pt_struct = POINTL { x: (pt & 0xFFFFFFFF) as i32, y: (pt >> 32) as i32 };
-        let data_object_ref = if data_obj.is_null() {
-            None
+        // Forward to WebView2's composition controller - this triggers HTML5 drop events!
+        if let Some(controller) = wrapper.find_composition_controller() {
+            let pt_x = (pt & 0xFFFFFFFF) as i32;
+            let pt_y = (pt >> 32) as i32;
+            let point = windows::Win32::Foundation::POINT { x: pt_x, y: pt_y };
+
+            // Convert raw pointer to IDataObject
+            let data_object: Option<IDataObject> = if data_obj.is_null() {
+                None
+            } else {
+                Some(std::mem::transmute(data_obj))
+            };
+
+            let result = controller.Drop(
+                data_object.as_ref(),
+                key_state,
+                point,
+                effect as *mut u32,
+            );
+
+            // Don't drop the IDataObject - we don't own it
+            if let Some(d) = data_object {
+                std::mem::forget(d);
+            }
+
+            match result {
+                Ok(()) => {
+                    eprintln!("[TiddlyDesktop] Windows Wrapper: Drop forwarded successfully - HTML5 events should fire");
+                    S_OK
+                }
+                Err(e) => {
+                    eprintln!("[TiddlyDesktop] Windows Wrapper: Drop forward failed: {:?}", e);
+                    e.code()
+                }
+            }
         } else {
-            // Cast raw pointer to IDataObject - the caller retains ownership
-            Some(std::mem::transmute::<*mut std::ffi::c_void, IDataObject>(data_obj))
-        };
-        let result = wrapper.original.Drop(
-            data_object_ref.as_ref(),
-            MODIFIERKEYS_FLAGS(key_state),
-            pt_struct,
-            effect as *mut DROPEFFECT,
-        );
-        // Prevent dropping the IDataObject - we don't own it
-        if let Some(d) = data_object_ref {
-            std::mem::forget(d);
-        }
-        match result {
-            Ok(()) => S_OK,
-            Err(e) => e.code(),
+            eprintln!("[TiddlyDesktop] Windows Wrapper: No composition controller found for Drop");
+            S_OK
         }
     }
 }

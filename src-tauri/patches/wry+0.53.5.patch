@@ -31,38 +31,6 @@
          }
        }
 
---- a/src/webview2/drag_drop.rs
-+++ b/src/webview2/drag_drop.rs
-@@ -43,22 +43,13 @@
- impl DragDropController {
-   #[inline]
-   pub(crate) fn new(hwnd: HWND, handler: Box<dyn Fn(DragDropEvent) -> bool>) -> Self {
--    let mut controller = DragDropController::default();
--
--    let handler = Rc::new(handler);
--
--    // Enumerate child windows to find the WebView2 "window" and override!
--    {
--      let mut callback = |hwnd| controller.inject_in_hwnd(hwnd, handler.clone());
--      let mut trait_obj: &mut dyn FnMut(HWND) -> bool = &mut callback;
--      let closure_pointer_pointer: *mut c_void = unsafe { std::mem::transmute(&mut trait_obj) };
--      let lparam = LPARAM(closure_pointer_pointer as _);
--      unsafe extern "system" fn enumerate_callback(hwnd: HWND, lparam: LPARAM) -> BOOL {
--        let closure = &mut *(lparam.0 as *mut c_void as *mut &mut dyn FnMut(HWND) -> bool);
--        closure(hwnd).into()
--      }
--      let _ = unsafe { EnumChildWindows(Some(hwnd), Some(enumerate_callback), lparam) };
--    }
-+    // PATCH: Do NOT register any IDropTarget here.
-+    // TiddlyDesktop hooks RegisterDragDrop to wrap WebView2's native IDropTarget.
-+    // This allows us to capture file paths while WebView2 handles drops natively,
-+    // firing HTML5 drag events. JavaScript retrieves paths from FFI storage.
-+    let _ = handler;
-+    let _ = hwnd;
-+    let controller = DragDropController::default();
-
-     controller
-   }
 --- a/src/webview2/mod.rs
 +++ b/src/webview2/mod.rs
 @@ -146,13 +146,10 @@

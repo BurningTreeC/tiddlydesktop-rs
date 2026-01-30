@@ -1583,37 +1583,42 @@ static HOOK_INIT: Once = Once::new();
 /// Global storage for the original RegisterDragDrop function pointer (trampoline)
 static mut ORIGINAL_REGISTER_DRAG_DROP: Option<FnRegisterDragDrop> = None;
 
-/// Wrapper to make ICoreWebView2CompositionController3 Send+Sync
-/// Safety: COM objects are thread-safe on Windows when accessed through proper COM mechanisms
-struct SendSyncController(ICoreWebView2CompositionController3);
-unsafe impl Send for SendSyncController {}
-unsafe impl Sync for SendSyncController {}
+/// Stored composition controller with its host window HWND
+/// Wrapped for Send+Sync safety (COM objects are thread-safe on Windows)
+struct ControllerWithHost {
+    controller: ICoreWebView2CompositionController3,
+    host_hwnd: usize,  // Main window HWND for coordinate conversion
+}
+
+// Safety: COM objects are thread-safe on Windows when accessed through proper COM mechanisms
+unsafe impl Send for ControllerWithHost {}
+unsafe impl Sync for ControllerWithHost {}
 
 lazy_static::lazy_static! {
-    /// Composition controllers per HWND - used to forward drag events to WebView2
+    /// Composition controller - used to forward drag events to WebView2
     /// so that native HTML5 drag events fire
-    /// Key: HWND as usize, Value: wrapped ICoreWebView2CompositionController3
-    static ref COMPOSITION_CONTROLLERS: Mutex<std::collections::HashMap<usize, SendSyncController>> =
-        Mutex::new(std::collections::HashMap::new());
+    /// We store just one controller (Tauri typically has one WebView per window)
+    static ref COMPOSITION_CONTROLLER: Mutex<Option<ControllerWithHost>> =
+        Mutex::new(None);
 
     /// Track which HWNDs have our wrapper registered (to avoid double-wrapping)
     static ref WRAPPED_HWNDS: Mutex<std::collections::HashSet<usize>> =
         Mutex::new(std::collections::HashSet::new());
 }
 
-/// Store a composition controller for an HWND (called from setup_drag_handlers)
-pub fn store_composition_controller(hwnd_key: usize, controller: ICoreWebView2CompositionController3) {
-    if let Ok(mut guard) = COMPOSITION_CONTROLLERS.lock() {
-        eprintln!("[TiddlyDesktop] Windows: Storing composition controller for hwnd {:#x}", hwnd_key);
-        guard.insert(hwnd_key, SendSyncController(controller));
+/// Store a composition controller with its host window HWND (called from setup_drag_handlers)
+pub fn store_composition_controller(host_hwnd: usize, controller: ICoreWebView2CompositionController3) {
+    if let Ok(mut guard) = COMPOSITION_CONTROLLER.lock() {
+        eprintln!("[TiddlyDesktop] Windows: Storing composition controller for host hwnd {:#x}", host_hwnd);
+        *guard = Some(ControllerWithHost { controller, host_hwnd });
     }
 }
 
-/// Get the composition controller for an HWND
-fn get_composition_controller(hwnd_key: usize) -> Option<ICoreWebView2CompositionController3> {
-    COMPOSITION_CONTROLLERS.lock()
+/// Get the composition controller and host HWND
+fn get_composition_controller_with_host() -> Option<(ICoreWebView2CompositionController3, HWND)> {
+    COMPOSITION_CONTROLLER.lock()
         .ok()
-        .and_then(|guard| guard.get(&hwnd_key).map(|w| w.0.clone()))
+        .and_then(|guard| guard.as_ref().map(|c| (c.controller.clone(), HWND(c.host_hwnd as *mut _))))
 }
 
 /// Initialize the RegisterDragDrop hook. Must be called before WebView2 initializes.
@@ -1690,11 +1695,10 @@ unsafe extern "system" fn hooked_register_drag_drop(hwnd: HWND, drop_target: *mu
         return original_fn(hwnd, drop_target);
     }
 
-    // Check if we have a composition controller for this HWND or any parent
-    // WRY registers on child HWNDs, but we store the controller on the main window
-    // We need to find the matching controller
-    let has_controller = COMPOSITION_CONTROLLERS.lock()
-        .map(|guard| !guard.is_empty())
+    // Check if we have a composition controller stored
+    // WRY registers on child HWNDs, but we store the controller with the main window
+    let has_controller = COMPOSITION_CONTROLLER.lock()
+        .map(|guard| guard.is_some())
         .unwrap_or(false);
 
     if !has_controller {
@@ -1831,17 +1835,10 @@ impl DropTargetWrapper {
         paths
     }
 
-    /// Find the composition controller for this wrapper's HWND
-    /// We try the HWND itself and all stored controllers (since WRY registers on child HWNDs)
-    fn find_composition_controller(&self) -> Option<ICoreWebView2CompositionController3> {
-        // First try exact match
-        if let Some(controller) = get_composition_controller(self.hwnd.0 as usize) {
-            return Some(controller);
-        }
-        // If no exact match, return any controller we have (there's usually just one per window)
-        COMPOSITION_CONTROLLERS.lock()
-            .ok()
-            .and_then(|guard| guard.values().next().map(|w| w.0.clone()))
+    /// Find the composition controller and its host HWND for coordinate conversion
+    /// Returns (controller, host_hwnd) - use host_hwnd for ScreenToClient
+    fn find_composition_controller_with_host(&self) -> Option<(ICoreWebView2CompositionController3, HWND)> {
+        get_composition_controller_with_host()
     }
 
     unsafe extern "system" fn query_interface(
@@ -1914,15 +1911,15 @@ impl DropTargetWrapper {
         }
 
         // Forward to WebView2's composition controller to fire HTML5 events
-        if let Some(controller) = wrapper.find_composition_controller() {
+        if let Some((controller, host_hwnd)) = wrapper.find_composition_controller_with_host() {
             // IDropTarget receives screen coordinates, but CompositionController expects client coordinates
             let pt_x = (pt & 0xFFFFFFFF) as i32;
             let pt_y = (pt >> 32) as i32;
             let mut point = windows::Win32::Foundation::POINT { x: pt_x, y: pt_y };
 
-            // Convert screen coords to client coords relative to the WebView's HWND
-            // Note: In Tauri, WebView fills the window, so WebView offset is typically (0,0)
-            let _ = windows::Win32::Graphics::Gdi::ScreenToClient(wrapper.hwnd, &mut point);
+            // Convert screen coords to HOST window's client coords
+            // In Tauri, WebView fills the window, so no additional offset needed
+            let _ = windows::Win32::Graphics::Gdi::ScreenToClient(host_hwnd, &mut point);
 
             // Convert raw pointer to IDataObject
             let data_object: Option<IDataObject> = if data_obj.is_null() {
@@ -1972,12 +1969,12 @@ impl DropTargetWrapper {
         let wrapper = &*this;
 
         // Forward to WebView2's composition controller
-        if let Some(controller) = wrapper.find_composition_controller() {
-            // Convert screen coords to client coords
+        if let Some((controller, host_hwnd)) = wrapper.find_composition_controller_with_host() {
+            // Convert screen coords to HOST window's client coords
             let pt_x = (pt & 0xFFFFFFFF) as i32;
             let pt_y = (pt >> 32) as i32;
             let mut point = windows::Win32::Foundation::POINT { x: pt_x, y: pt_y };
-            let _ = windows::Win32::Graphics::Gdi::ScreenToClient(wrapper.hwnd, &mut point);
+            let _ = windows::Win32::Graphics::Gdi::ScreenToClient(host_hwnd, &mut point);
 
             match controller.DragOver(key_state, point, effect as *mut u32) {
                 Ok(()) => S_OK,
@@ -2004,7 +2001,7 @@ impl DropTargetWrapper {
         }
 
         // Forward to WebView2's composition controller
-        if let Some(controller) = wrapper.find_composition_controller() {
+        if let Some((controller, _host_hwnd)) = wrapper.find_composition_controller_with_host() {
             match controller.DragLeave() {
                 Ok(()) => S_OK,
                 Err(e) => e.code(),
@@ -2026,12 +2023,12 @@ impl DropTargetWrapper {
         eprintln!("[TiddlyDesktop] Windows Wrapper: Drop - forwarding to composition controller (HTML5 events will fire)");
 
         // Forward to WebView2's composition controller - this triggers HTML5 drop events!
-        if let Some(controller) = wrapper.find_composition_controller() {
-            // Convert screen coords to client coords
+        if let Some((controller, host_hwnd)) = wrapper.find_composition_controller_with_host() {
+            // Convert screen coords to HOST window's client coords
             let pt_x = (pt & 0xFFFFFFFF) as i32;
             let pt_y = (pt >> 32) as i32;
             let mut point = windows::Win32::Foundation::POINT { x: pt_x, y: pt_y };
-            let _ = windows::Win32::Graphics::Gdi::ScreenToClient(wrapper.hwnd, &mut point);
+            let _ = windows::Win32::Graphics::Gdi::ScreenToClient(host_hwnd, &mut point);
 
             // Convert raw pointer to IDataObject
             let data_object: Option<IDataObject> = if data_obj.is_null() {

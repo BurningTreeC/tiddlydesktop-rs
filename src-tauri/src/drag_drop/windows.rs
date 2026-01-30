@@ -1314,29 +1314,14 @@ pub fn setup_drag_handlers(window: &WebviewWindow) {
             // Get the WebView2 controller
             let controller = webview.controller();
 
-            // Try to get ICoreWebView2CompositionController3 for drag-drop forwarding
-            // This is what our IDropTarget wrapper will forward to
-            match controller.cast::<ICoreWebView2CompositionController3>() {
-                Ok(controller3) => {
-                    eprintln!("[TiddlyDesktop] Windows: Got ICoreWebView2CompositionController3 for drag forwarding");
-                    // Store it so our IDropTarget wrapper can find it
-                    store_composition_controller(hwnd_key, controller3);
-                }
-                Err(e) => {
-                    eprintln!(
-                        "[TiddlyDesktop] Windows: Failed to get ICoreWebView2CompositionController3: {:?}",
-                        e
-                    );
-                    eprintln!(
-                        "[TiddlyDesktop] Windows: Drag forwarding may not work (need WebView2 Runtime 111+)"
-                    );
-                }
-            }
-
-            // Try to cast to ICoreWebView2CompositionController5 for DragStarting API
+            // Get ICoreWebView2CompositionController5 for both drag forwarding and DragStarting
+            // Controller5 inherits from Controller3, so it has DragEnter/DragOver/DragLeave/Drop
+            // as well as the newer DragStarting event
             match controller.cast::<ICoreWebView2CompositionController5>() {
                 Ok(controller5) => {
-                    eprintln!("[TiddlyDesktop] Windows: Got ICoreWebView2CompositionController5");
+                    eprintln!("[TiddlyDesktop] Windows: Got ICoreWebView2CompositionController5 for drag forwarding");
+                    // Store it so our IDropTarget wrapper can find it
+                    store_composition_controller(hwnd_key, controller5.clone());
 
                     // Create the DragStarting handler
                     let handler: ICoreWebView2DragStartingEventHandler =
@@ -1559,7 +1544,7 @@ pub fn get_pending_drag_data(target_window: &str) -> Option<PendingDragDataRespo
 
 // ============================================================================
 // RegisterDragDrop Hook: Capture file paths while preserving WebView2's
-// native HTML5 drop events via ICoreWebView2CompositionController3
+// native HTML5 drop events via ICoreWebView2CompositionController5
 // ============================================================================
 //
 // Strategy (based on Microsoft WebView2 documentation):
@@ -1568,12 +1553,13 @@ pub fn get_pending_drag_data(target_window: &str) -> Option<PendingDragDataRespo
 // 3. We hook RegisterDragDrop to wrap WRY's IDropTarget
 // 4. Our wrapper:
 //    a) Extracts file paths from IDataObject → stores via FFI for JavaScript
-//    b) Forwards to ICoreWebView2CompositionController3.DragEnter/DragOver/DragLeave/Drop
+//    b) Forwards to ICoreWebView2CompositionController5.DragEnter/DragOver/DragLeave/Drop
 // 5. The composition controller fires native HTML5 drag events
 //
 // This gives us: file path extraction + native HTML5 events
-
-use webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2CompositionController3;
+//
+// Note: Controller5 inherits from Controller3, so it has all the drag methods
+// plus the newer DragStarting event for outgoing drags.
 
 // Type alias for the RegisterDragDrop function signature
 type FnRegisterDragDrop = unsafe extern "system" fn(HWND, *mut std::ffi::c_void) -> HRESULT;
@@ -1586,7 +1572,7 @@ static mut ORIGINAL_REGISTER_DRAG_DROP: Option<FnRegisterDragDrop> = None;
 /// Stored composition controller with its host window HWND
 /// Wrapped for Send+Sync safety (COM objects are thread-safe on Windows)
 struct ControllerWithHost {
-    controller: ICoreWebView2CompositionController3,
+    controller: ICoreWebView2CompositionController5,
     host_hwnd: usize,  // Main window HWND for coordinate conversion
 }
 
@@ -1607,7 +1593,7 @@ lazy_static::lazy_static! {
 }
 
 /// Store a composition controller with its host window HWND (called from setup_drag_handlers)
-pub fn store_composition_controller(host_hwnd: usize, controller: ICoreWebView2CompositionController3) {
+pub fn store_composition_controller(host_hwnd: usize, controller: ICoreWebView2CompositionController5) {
     if let Ok(mut guard) = COMPOSITION_CONTROLLER.lock() {
         eprintln!("[TiddlyDesktop] Windows: Storing composition controller for host hwnd {:#x}", host_hwnd);
         *guard = Some(ControllerWithHost { controller, host_hwnd });
@@ -1615,7 +1601,7 @@ pub fn store_composition_controller(host_hwnd: usize, controller: ICoreWebView2C
 }
 
 /// Get the composition controller and host HWND
-fn get_composition_controller_with_host() -> Option<(ICoreWebView2CompositionController3, HWND)> {
+fn get_composition_controller_with_host() -> Option<(ICoreWebView2CompositionController5, HWND)> {
     COMPOSITION_CONTROLLER.lock()
         .ok()
         .and_then(|guard| guard.as_ref().map(|c| (c.controller.clone(), HWND(c.host_hwnd as *mut _))))
@@ -1695,17 +1681,9 @@ unsafe extern "system" fn hooked_register_drag_drop(hwnd: HWND, drop_target: *mu
         return original_fn(hwnd, drop_target);
     }
 
-    // Check if we have a composition controller stored
-    // WRY registers on child HWNDs, but we store the controller with the main window
-    let has_controller = COMPOSITION_CONTROLLER.lock()
-        .map(|guard| guard.is_some())
-        .unwrap_or(false);
-
-    if !has_controller {
-        eprintln!("[TiddlyDesktop] Windows: No composition controller stored yet, passing through");
-        return original_fn(hwnd, drop_target);
-    }
-
+    // Always wrap IDropTarget - we'll do lazy lookup of the composition controller
+    // when drag events happen. This handles the timing issue where RegisterDragDrop
+    // is called before setup_drag_handlers runs.
     eprintln!("[TiddlyDesktop] Windows: Wrapping IDropTarget for hwnd {:?}", hwnd.0);
 
     // Create our wrapper - it will forward to the composition controller
@@ -1760,7 +1738,7 @@ static DROP_TARGET_WRAPPER_VTBL: IDropTargetVtbl = IDropTargetVtbl {
 };
 
 /// Our IDropTarget wrapper that captures file paths and forwards to
-/// ICoreWebView2CompositionController3 so native HTML5 drag events fire.
+/// ICoreWebView2CompositionController5 so native HTML5 drag events fire.
 #[repr(C)]
 struct DropTargetWrapper {
     vtbl: *const IDropTargetVtbl,
@@ -1837,7 +1815,7 @@ impl DropTargetWrapper {
 
     /// Find the composition controller and its host HWND for coordinate conversion
     /// Returns (controller, host_hwnd) - use host_hwnd for ScreenToClient
-    fn find_composition_controller_with_host(&self) -> Option<(ICoreWebView2CompositionController3, HWND)> {
+    fn find_composition_controller_with_host(&self) -> Option<(ICoreWebView2CompositionController5, HWND)> {
         get_composition_controller_with_host()
     }
 

@@ -35,7 +35,26 @@ diff -ruN a/src/webkitgtk/drag_drop.rs b/src/webkitgtk/drag_drop.rs
 diff -ruN a/src/webview2/drag_drop.rs b/src/webview2/drag_drop.rs
 --- a/src/webview2/drag_drop.rs	2026-01-30 08:01:14.601646265 +0100
 +++ b/src/webview2/drag_drop.rs	2026-01-30 08:02:42.077018259 +0100
-@@ -179,6 +179,36 @@
+@@ -63,6 +63,18 @@
+     controller
+   }
+ 
++  // PATCH: Register IDropTarget only on the parent HWND, not child windows.
++  // This allows WebView2's native drag-drop to work for internal wiki drags,
++  // while still intercepting external file drops on the parent window.
++  #[inline]
++  pub(crate) fn new_parent_only(hwnd: HWND, handler: Box<dyn Fn(DragDropEvent) -> bool>) -> Self {
++    let mut controller = DragDropController::default();
++    let handler = Rc::new(handler);
++    // Only register on the parent HWND, not child windows
++    controller.inject_in_hwnd(hwnd, handler);
++    controller
++  }
++
+   #[inline]
+   fn inject_in_hwnd(&mut self, hwnd: HWND, handler: Rc<dyn Fn(DragDropEvent) -> bool>) -> bool {
+     let drag_drop_target: IDropTarget = DragDropTarget::new(hwnd, handler).into();
+@@ -179,6 +193,36 @@
        *self.enter_is_valid.get() = enter_is_valid;
      }
  
@@ -72,7 +91,7 @@ diff -ruN a/src/webview2/drag_drop.rs b/src/webview2/drag_drop.rs
      (self.listener)(DragDropEvent::Enter {
        paths,
        position: (pt.x as _, pt.y as _),
-@@ -219,6 +249,17 @@
+@@ -219,6 +263,17 @@
    fn DragLeave(&self) -> windows::core::Result<()> {
      if unsafe { *self.enter_is_valid.get() } {
        (self.listener)(DragDropEvent::Leave);
@@ -90,7 +109,7 @@ diff -ruN a/src/webview2/drag_drop.rs b/src/webview2/drag_drop.rs
      }
      Ok(())
    }
-@@ -236,6 +277,37 @@
+@@ -236,6 +291,37 @@
  
        let mut paths = Vec::new();
        let hdrop = unsafe { DragDropTarget::iterate_filenames(pDataObj, |path| paths.push(path)) };
@@ -131,12 +150,13 @@ diff -ruN a/src/webview2/drag_drop.rs b/src/webview2/drag_drop.rs
 diff -ruN a/src/webview2/mod.rs b/src/webview2/mod.rs
 --- a/src/webview2/mod.rs	2026-01-30 08:01:14.601741233 +0100
 +++ b/src/webview2/mod.rs	2026-01-30 08:02:56.169941299 +0100
-@@ -146,13 +146,10 @@
+@@ -146,13 +146,11 @@
        is_child,
      )?;
  
 +    // PATCH: Don't disable external drops - let WebView2 also handle them natively
 +    // WRY's IDropTarget extracts paths via FFI, WebView2 generates DOM events
++    // Use new_parent_only to register IDropTarget only on parent HWND, not child windows
      let drag_drop_controller = drop_handler.map(|handler| {
 -      // Disable file drops, so our handler can capture it
 -      unsafe {
@@ -144,8 +164,9 @@ diff -ruN a/src/webview2/mod.rs b/src/webview2/mod.rs
 -          .cast::<ICoreWebView2Controller4>()
 -          .and_then(|c| c.SetAllowExternalDrop(false));
 -      }
+-      DragDropController::new(hwnd, handler)
 +      // Don't call SetAllowExternalDrop(false) - let WebView2 also handle drops natively
-       DragDropController::new(hwnd, handler)
++      DragDropController::new_parent_only(hwnd, handler)
      });
  
 diff -ruN a/src/wkwebview/drag_drop.rs b/src/wkwebview/drag_drop.rs

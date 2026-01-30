@@ -37,6 +37,7 @@ use minhook::MinHook;
 use webview2_com::Microsoft::Web::WebView2::Win32::{
     ICoreWebView2CompositionController,
     ICoreWebView2CompositionController5,
+    ICoreWebView2Controller4,
     ICoreWebView2DragStartingEventArgs,
     ICoreWebView2DragStartingEventHandler,
     ICoreWebView2DragStartingEventHandler_Impl,
@@ -1313,6 +1314,24 @@ pub fn setup_drag_handlers(window: &WebviewWindow) {
 
             // Get the WebView2 controller
             let controller = webview.controller();
+
+            // Enable external drops - required for composition hosting mode
+            // Without this, WebView2 won't accept any drops (shows "not allowed" cursor)
+            match controller.cast::<ICoreWebView2Controller4>() {
+                Ok(controller4) => {
+                    match controller4.SetAllowExternalDrop(true) {
+                        Ok(()) => {
+                            eprintln!("[TiddlyDesktop] Windows: SetAllowExternalDrop(true) succeeded");
+                        }
+                        Err(e) => {
+                            eprintln!("[TiddlyDesktop] Windows: SetAllowExternalDrop failed: {:?}", e);
+                        }
+                    }
+                }
+                Err(e) => {
+                    eprintln!("[TiddlyDesktop] Windows: Failed to get ICoreWebView2Controller4: {:?}", e);
+                }
+            }
 
             // Get ICoreWebView2CompositionController5 for both drag forwarding and DragStarting
             // Controller5 inherits from Controller3, so it has DragEnter/DragOver/DragLeave/Drop

@@ -1009,18 +1009,12 @@ impl ICoreWebView2DragStartingEventHandler_Impl for DragStartingHandler_Impl {
             }
         }
 
-        // PATCH: Set Handled = true to suppress the OLE drag for internal drags.
-        // This allows WebView2 to handle the drag internally with HTML5 events.
-        // Without this, our IDropTarget intercepts the OLE drag and HTML5 events never fire.
-        if let Some(args_inner) = args.cloned() {
-            unsafe {
-                if let Err(e) = args_inner.SetHandled(true) {
-                    eprintln!("[TiddlyDesktop] Windows DragStarting: Failed to set Handled: {:?}", e);
-                } else {
-                    eprintln!("[TiddlyDesktop] Windows DragStarting: Set Handled = true to enable HTML5 events");
-                }
-            }
-        }
+        // Don't set Handled = true - let WebView2 continue with its default drag behavior.
+        // We've captured the data above for cross-window scenarios - target windows
+        // query OUTGOING_DRAG_STATE via get_pending_drag_data IPC.
+        //
+        // Since we no longer register IDropTarget (see WRY patch), WebView2's native
+        // drop handling remains active and HTML5 drag events fire normally.
 
         Ok(())
     }

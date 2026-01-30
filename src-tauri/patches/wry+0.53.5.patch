@@ -1,5 +1,5 @@
 --- a/src/webkitgtk/drag_drop.rs	2026-01-30 11:36:49.117300017 +0100
-+++ b/src/webkitgtk/drag_drop.rs	2026-01-30 12:15:40.237516474 +0100
++++ b/src/webkitgtk/drag_drop.rs	2026-01-30 15:12:02.602658785 +0100
 @@ -104,14 +104,28 @@
    {
      let controller = controller.clone();
@@ -33,8 +33,40 @@
  
 
 --- a/src/webview2/drag_drop.rs	2026-01-30 11:35:00.864868512 +0100
-+++ b/src/webview2/drag_drop.rs	2026-01-30 12:45:16.917167544 +0100
-@@ -166,33 +166,61 @@
++++ b/src/webview2/drag_drop.rs	2026-01-30 15:20:24.282807198 +0100
+@@ -43,21 +43,18 @@
+ impl DragDropController {
+   #[inline]
+   pub(crate) fn new(hwnd: HWND, handler: Box<dyn Fn(DragDropEvent) -> bool>) -> Self {
++    // PATCH: Register IDropTarget on parent window ONLY (not child windows).
++    // This captures file paths when files enter the window area.
++    // WebView2's native IDropTarget on child windows handles the actual drop,
++    // so HTML5 drag events fire normally.
++    // JavaScript retrieves file paths from FFI storage after handling native drop.
+     let mut controller = DragDropController::default();
+ 
+-    let handler = Rc::new(handler);
+-
+-    // Enumerate child windows to find the WebView2 "window" and override!
+-    {
+-      let mut callback = |hwnd| controller.inject_in_hwnd(hwnd, handler.clone());
+-      let mut trait_obj: &mut dyn FnMut(HWND) -> bool = &mut callback;
+-      let closure_pointer_pointer: *mut c_void = unsafe { std::mem::transmute(&mut trait_obj) };
+-      let lparam = LPARAM(closure_pointer_pointer as _);
+-      unsafe extern "system" fn enumerate_callback(hwnd: HWND, lparam: LPARAM) -> BOOL {
+-        let closure = &mut *(lparam.0 as *mut c_void as *mut &mut dyn FnMut(HWND) -> bool);
+-        closure(hwnd).into()
+-      }
+-      let _ = unsafe { EnumChildWindows(Some(hwnd), Some(enumerate_callback), lparam) };
++    // Register on parent window only - don't enumerate child windows
++    let drag_drop_target: IDropTarget = DragDropTarget::new(hwnd, Rc::new(handler)).into();
++    // Don't revoke existing - just try to register on parent
++    if unsafe { RegisterDragDrop(hwnd, &drag_drop_target) }.is_ok() {
++      controller.drop_targets.push(drag_drop_target);
+     }
+ 
+     controller
+@@ -166,33 +163,61 @@
      let mut pt = POINT { x: pt.x, y: pt.y };
      let _ = unsafe { ScreenToClient(self.hwnd, &mut pt) };
  
@@ -114,7 +146,7 @@
      }
  
      Ok(())
-@@ -201,25 +229,16 @@
+@@ -201,25 +226,16 @@
    fn DragOver(
      &self,
      _grfKeyState: MODIFIERKEYS_FLAGS,
@@ -143,7 +175,7 @@
      Ok(())
    }
  
-@@ -227,20 +246,14 @@
+@@ -227,20 +243,14 @@
      &self,
      pDataObj: windows_core::Ref<'_, IDataObject>,
      _grfKeyState: MODIFIERKEYS_FLAGS,
@@ -171,7 +203,7 @@
        }
 
 --- a/src/webview2/mod.rs	2026-01-30 11:35:49.513410969 +0100
-+++ b/src/webview2/mod.rs	2026-01-30 12:45:47.787981017 +0100
++++ b/src/webview2/mod.rs	2026-01-30 15:12:02.603232370 +0100
 @@ -146,13 +146,10 @@
        is_child,
      )?;
@@ -191,7 +223,7 @@
  
 
 --- a/src/wkwebview/drag_drop.rs	2026-01-30 11:36:49.118220061 +0100
-+++ b/src/wkwebview/drag_drop.rs	2026-01-30 12:15:40.238460402 +0100
++++ b/src/wkwebview/drag_drop.rs	2026-01-30 15:12:02.603671053 +0100
 @@ -86,13 +86,63 @@
    let frame: NSRect = this.frame();
    let position = (dl.x as i32, (frame.size.height - dl.y) as i32);

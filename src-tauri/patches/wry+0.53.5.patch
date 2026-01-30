@@ -1,6 +1,5 @@
-diff -ruN a/src/webkitgtk/drag_drop.rs b/src/webkitgtk/drag_drop.rs
---- a/src/webkitgtk/drag_drop.rs	2026-01-30 08:01:14.601399473 +0100
-+++ b/src/webkitgtk/drag_drop.rs	2026-01-30 08:03:11.533857417 +0100
+--- a/src/webkitgtk/drag_drop.rs	2026-01-30 11:36:49.117300017 +0100
++++ b/src/webkitgtk/drag_drop.rs	2026-01-30 11:36:58.935840997 +0100
 @@ -104,14 +104,28 @@
    {
      let controller = controller.clone();
@@ -32,15 +31,16 @@ diff -ruN a/src/webkitgtk/drag_drop.rs b/src/webkitgtk/drag_drop.rs
          }
        }
  
-diff -ruN a/src/webview2/drag_drop.rs b/src/webview2/drag_drop.rs
---- a/src/webview2/drag_drop.rs	2026-01-30 08:01:14.601646265 +0100
-+++ b/src/webview2/drag_drop.rs	2026-01-30 08:02:42.077018259 +0100
-@@ -172,14 +172,37 @@
+
+--- a/src/webview2/drag_drop.rs	2026-01-30 11:35:00.864868512 +0100
++++ b/src/webview2/drag_drop.rs	2026-01-30 11:35:32.972340741 +0100
+@@ -171,28 +171,42 @@
+ 
      let enter_is_valid = hdrop.is_some();
  
++    // PATCH: For non-file drags (internal HTML5 drags), set DROPEFFECT_COPY
++    // to show proper cursor feedback. WebView2 handles the actual drop.
      if !enter_is_valid {
-+      // PATCH: For non-file drags (internal HTML5 drags), set DROPEFFECT_COPY
-+      // to show proper cursor feedback. WebView2 handles the actual drop.
 +      unsafe {
 +        *pdwEffect = DROPEFFECT_COPY;
 +        *self.cursor_effect.get() = DROPEFFECT_COPY;
@@ -53,8 +53,19 @@ diff -ruN a/src/webview2/drag_drop.rs b/src/webview2/drag_drop.rs
        *self.enter_is_valid.get() = enter_is_valid;
      }
  
-+    // PATCH: Call FFI to store file paths for TiddlyDesktop BEFORE listener consumes paths
+-    (self.listener)(DragDropEvent::Enter {
+-      paths,
+-      position: (pt.x as _, pt.y as _),
+-    });
+-
+-    let cursor_effect = if enter_is_valid {
+-      DROPEFFECT_COPY
+-    } else {
+-      DROPEFFECT_NONE
+-    };
++    // PATCH: Call FFI to store file paths for TiddlyDesktop
 +    // This allows JavaScript to access paths when native DOM drop fires
++    // We do NOT call the listener - let WebView2 native handling fire DOM events
 +    unsafe {
 +      extern "C" {
 +        fn tiddlydesktop_store_drop_paths(paths_json: *const std::ffi::c_char);
@@ -69,16 +80,76 @@ diff -ruN a/src/webview2/drag_drop.rs b/src/webview2/drag_drop.rs
 +        tiddlydesktop_store_drop_paths(cstr.as_ptr());
 +      }
 +    }
-+
-     (self.listener)(DragDropEvent::Enter {
-       paths,
-       position: (pt.x as _, pt.y as _),
-     });
  
-diff -ruN a/src/webview2/mod.rs b/src/webview2/mod.rs
---- a/src/webview2/mod.rs	2026-01-30 08:01:14.601741233 +0100
-+++ b/src/webview2/mod.rs	2026-01-30 08:02:56.169941299 +0100
-@@ -146,13 +146,10 @@
++    // PATCH: Set DROPEFFECT_COPY for proper cursor, but don't call listener
+     unsafe {
+-      *pdwEffect = cursor_effect;
+-      *self.cursor_effect.get() = cursor_effect;
++      *pdwEffect = DROPEFFECT_COPY;
++      *self.cursor_effect.get() = DROPEFFECT_COPY;
+     }
+ 
+     Ok(())
+@@ -201,25 +215,17 @@
+   fn DragOver(
+     &self,
+     _grfKeyState: MODIFIERKEYS_FLAGS,
+-    pt: &POINTL,
++    _pt: &POINTL,
+     pdwEffect: *mut DROPEFFECT,
+   ) -> windows::core::Result<()> {
+-    if unsafe { *self.enter_is_valid.get() } {
+-      let mut pt = POINT { x: pt.x, y: pt.y };
+-      let _ = unsafe { ScreenToClient(self.hwnd, &mut pt) };
+-      (self.listener)(DragDropEvent::Over {
+-        position: (pt.x as _, pt.y as _),
+-      });
+-    }
+-
++    // PATCH: Don't call listener - let WebView2 handle natively
++    // We still need to return the cursor effect for proper feedback
+     unsafe { *pdwEffect = *self.cursor_effect.get() };
+     Ok(())
+   }
+ 
+   fn DragLeave(&self) -> windows::core::Result<()> {
+-    if unsafe { *self.enter_is_valid.get() } {
+-      (self.listener)(DragDropEvent::Leave);
+-    }
++    // PATCH: Don't call listener - let WebView2 handle natively
+     Ok(())
+   }
+ 
+@@ -227,20 +233,14 @@
+     &self,
+     pDataObj: windows_core::Ref<'_, IDataObject>,
+     _grfKeyState: MODIFIERKEYS_FLAGS,
+-    pt: &POINTL,
++    _pt: &POINTL,
+     _pdwEffect: *mut DROPEFFECT,
+   ) -> windows::core::Result<()> {
++    // PATCH: Don't call listener - WebView2 native handling fires DOM events
++    // JavaScript can retrieve file paths from our FFI storage
++    // We only need to clean up the HDROP handle
+     if unsafe { *self.enter_is_valid.get() } {
+-      let mut pt = POINT { x: pt.x, y: pt.y };
+-      let _ = unsafe { ScreenToClient(self.hwnd, &mut pt) };
+-
+-      let mut paths = Vec::new();
+-      let hdrop = unsafe { DragDropTarget::iterate_filenames(pDataObj, |path| paths.push(path)) };
+-      (self.listener)(DragDropEvent::Drop {
+-        paths,
+-        position: (pt.x as _, pt.y as _),
+-      });
+-
++      let hdrop = unsafe { DragDropTarget::iterate_filenames(pDataObj, |_| {}) };
+       if let Some(hdrop) = hdrop {
+         unsafe { DragFinish(hdrop) };
+       }
+
+--- a/src/webview2/mod.rs	2026-01-30 11:35:49.513410969 +0100
++++ b/src/webview2/mod.rs	2026-01-30 11:35:55.601206313 +0100
+@@ -146,13 +146,9 @@
        is_child,
      )?;
  
@@ -91,13 +162,12 @@ diff -ruN a/src/webview2/mod.rs b/src/webview2/mod.rs
 -          .cast::<ICoreWebView2Controller4>()
 -          .and_then(|c| c.SetAllowExternalDrop(false));
 -      }
-+      // Don't call SetAllowExternalDrop(false) - let WebView2 also handle drops natively
        DragDropController::new(hwnd, handler)
      });
  
-diff -ruN a/src/wkwebview/drag_drop.rs b/src/wkwebview/drag_drop.rs
---- a/src/wkwebview/drag_drop.rs	2026-01-30 08:01:14.602377555 +0100
-+++ b/src/wkwebview/drag_drop.rs	2026-01-30 08:01:44.645342815 +0100
+
+--- a/src/wkwebview/drag_drop.rs	2026-01-30 11:36:49.118220061 +0100
++++ b/src/wkwebview/drag_drop.rs	2026-01-30 11:37:17.871715070 +0100
 @@ -86,13 +86,63 @@
    let frame: NSRect = this.frame();
    let position = (dl.x as i32, (frame.size.height - dl.y) as i32);

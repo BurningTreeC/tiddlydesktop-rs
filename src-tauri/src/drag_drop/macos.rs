@@ -528,9 +528,12 @@ extern "C" fn swizzled_perform_drag_operation(this: *mut AnyObject, _sel: Sel, d
                 let file_paths = extract_file_paths(&pasteboard);
 
                 if !file_paths.is_empty() {
-                    eprintln!("[TiddlyDesktop] macOS: File drop with {} paths", file_paths.len());
-                    emit_drop_with_files(&label, x, y, file_paths);
-                    handled = true;
+                    // External file drop - WRY patch stores paths via FFI
+                    // Let native WKWebView handling fire HTML5 drop events
+                    // JavaScript retrieves paths from FFI after native drop event fires
+                    eprintln!("[TiddlyDesktop] macOS: External file drop detected, delegating to WRY patch");
+                    // DON'T set handled = true - let WRY patch and native handling fire
+                    // handled remains false, so we call original handler below
                 } else if let Some(mut content) = extract_pasteboard_content(&pasteboard) {
                     // For cross-wiki drags from our app, propagate the is_text_selection_drag flag
                     // This allows JS to filter text/html for text-selection drags (Issue 3)
@@ -1572,4 +1575,70 @@ pub fn get_pending_drag_data(target_window: &str) -> Option<PendingDragDataRespo
         source_window: state.source_window_label.clone(),
         is_text_selection_drag: state.data.is_text_selection_drag,
     })
+}
+
+// ============================================================================
+// FFI functions for external file drop path extraction (matching Windows API)
+// ============================================================================
+
+lazy_static::lazy_static! {
+    /// Global storage for file paths from external drops (populated by swizzled drop handler)
+    static ref EXTERNAL_DROP_PATHS: Mutex<Option<Vec<String>>> = Mutex::new(None);
+}
+
+/// FFI function called by WRY patch to store file paths when a drop occurs.
+/// The paths are stored as a JSON array string.
+/// This allows JavaScript to access the original file paths when the native DOM drop fires.
+#[no_mangle]
+pub extern "C" fn tiddlydesktop_store_drop_paths(paths_json: *const std::ffi::c_char) {
+    if paths_json.is_null() {
+        return;
+    }
+
+    unsafe {
+        let cstr = std::ffi::CStr::from_ptr(paths_json);
+        if let Ok(json_str) = cstr.to_str() {
+            if let Ok(paths) = serde_json::from_str::<Vec<String>>(json_str) {
+                eprintln!("[TiddlyDesktop] macOS FFI: Storing {} drop paths", paths.len());
+                for path in &paths {
+                    eprintln!("[TiddlyDesktop] macOS FFI:   - {}", path);
+                }
+                if let Ok(mut guard) = EXTERNAL_DROP_PATHS.lock() {
+                    *guard = Some(paths);
+                }
+            }
+        }
+    }
+}
+
+/// FFI function called to clear stored file paths (e.g., on drag leave).
+#[no_mangle]
+pub extern "C" fn tiddlydesktop_clear_drop_paths() {
+    eprintln!("[TiddlyDesktop] macOS FFI: Clearing drop paths");
+    if let Ok(mut guard) = EXTERNAL_DROP_PATHS.lock() {
+        *guard = None;
+    }
+}
+
+/// Get the stored external drop paths (called from Tauri command).
+/// Returns the paths and clears the storage.
+pub fn take_external_drop_paths() -> Option<Vec<String>> {
+    if let Ok(mut guard) = EXTERNAL_DROP_PATHS.lock() {
+        guard.take()
+    } else {
+        None
+    }
+}
+
+/// Store file paths for external drops (called from swizzled drop handler).
+/// JavaScript retrieves these via the `take_external_drop_paths` Tauri command
+/// after the native HTML5 drop event fires.
+pub fn store_external_drop_paths(paths: Vec<String>) {
+    eprintln!("[TiddlyDesktop] macOS: Storing {} external drop paths", paths.len());
+    for path in &paths {
+        eprintln!("[TiddlyDesktop] macOS:   - {}", path);
+    }
+    if let Ok(mut guard) = EXTERNAL_DROP_PATHS.lock() {
+        *guard = Some(paths);
+    }
 }

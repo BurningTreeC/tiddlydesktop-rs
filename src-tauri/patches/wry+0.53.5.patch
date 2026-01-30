@@ -224,10 +224,10 @@
 
 --- a/src/wkwebview/drag_drop.rs	2026-01-30 11:36:49.118220061 +0100
 +++ b/src/wkwebview/drag_drop.rs	2026-01-30 15:12:02.603671053 +0100
-@@ -86,13 +86,63 @@
+@@ -86,13 +86,85 @@
    let frame: NSRect = this.frame();
    let position = (dl.x as i32, (frame.size.height - dl.y) as i32);
- 
+
 -  let listener = &this.ivars().drag_drop_handler;
 -  if !listener(DragDropEvent::Drop { paths, position }) {
 -    // Reject the Wry drop (invoke the OS default behaviour)
@@ -242,12 +242,34 @@
 +    tiddlydesktop_has_internal_drag() != 0
 +  };
 +
-+  // Only emit Tauri event for EXTERNAL drops (not internal)
-+  // Internal drags are handled entirely by WKWebView native + pasteboard fixup
-+  if !is_internal_drag {
++  // PATCH: For external file drops, store paths via FFI for JavaScript to retrieve.
++  // This allows native HTML5 drop events to fire, and JS retrieves paths afterward.
++  // DON'T call the listener for file drops - that would cause duplicate processing.
++  if !is_internal_drag && !paths.is_empty() {
++    unsafe {
++      extern "C" {
++        fn tiddlydesktop_store_drop_paths(paths_json: *const std::ffi::c_char);
++      }
++      // Convert paths to JSON array string
++      let json_parts: Vec<String> = paths.iter().map(|p| {
++        let s = p.to_string_lossy();
++        let escaped = s.replace('\\', "\\\\").replace('"', "\\\"");
++        format!("\"{}\"", escaped)
++      }).collect();
++      let json = format!("[{}]", json_parts.join(","));
++      if let Ok(cstr) = std::ffi::CString::new(json) {
++        tiddlydesktop_store_drop_paths(cstr.as_ptr());
++      }
++    }
++    // Don't call listener - let native handling fire HTML5 events
++  }
++
++  // For external drops WITHOUT file paths (text, html, url), still call listener
++  // so our td-drag-content event system can handle them
++  if !is_internal_drag && paths.is_empty() {
 +    let listener = &this.ivars().drag_drop_handler;
 +    listener(DragDropEvent::Drop { paths, position });
-+  }
+   }
 +
 +  // PATCH: For internal drags, fix the pasteboard data before native handling.
 +  // This ensures:
@@ -286,7 +308,7 @@
 +        }
 +      }
 +    }
-   }
++  }
 +
 +  // PATCH: Always invoke native WKWebView handling
 +  // This allows text/file paths to be inserted into inputs natively

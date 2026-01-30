@@ -1915,9 +1915,14 @@ impl DropTargetWrapper {
 
         // Forward to WebView2's composition controller to fire HTML5 events
         if let Some(controller) = wrapper.find_composition_controller() {
+            // IDropTarget receives screen coordinates, but CompositionController expects client coordinates
             let pt_x = (pt & 0xFFFFFFFF) as i32;
             let pt_y = (pt >> 32) as i32;
-            let point = windows::Win32::Foundation::POINT { x: pt_x, y: pt_y };
+            let mut point = windows::Win32::Foundation::POINT { x: pt_x, y: pt_y };
+
+            // Convert screen coords to client coords relative to the WebView's HWND
+            // Note: In Tauri, WebView fills the window, so WebView offset is typically (0,0)
+            let _ = windows::Win32::Graphics::Gdi::ScreenToClient(wrapper.hwnd, &mut point);
 
             // Convert raw pointer to IDataObject
             let data_object: Option<IDataObject> = if data_obj.is_null() {
@@ -1968,9 +1973,11 @@ impl DropTargetWrapper {
 
         // Forward to WebView2's composition controller
         if let Some(controller) = wrapper.find_composition_controller() {
+            // Convert screen coords to client coords
             let pt_x = (pt & 0xFFFFFFFF) as i32;
             let pt_y = (pt >> 32) as i32;
-            let point = windows::Win32::Foundation::POINT { x: pt_x, y: pt_y };
+            let mut point = windows::Win32::Foundation::POINT { x: pt_x, y: pt_y };
+            let _ = windows::Win32::Graphics::Gdi::ScreenToClient(wrapper.hwnd, &mut point);
 
             match controller.DragOver(key_state, point, effect as *mut u32) {
                 Ok(()) => S_OK,
@@ -2020,9 +2027,11 @@ impl DropTargetWrapper {
 
         // Forward to WebView2's composition controller - this triggers HTML5 drop events!
         if let Some(controller) = wrapper.find_composition_controller() {
+            // Convert screen coords to client coords
             let pt_x = (pt & 0xFFFFFFFF) as i32;
             let pt_y = (pt >> 32) as i32;
-            let point = windows::Win32::Foundation::POINT { x: pt_x, y: pt_y };
+            let mut point = windows::Win32::Foundation::POINT { x: pt_x, y: pt_y };
+            let _ = windows::Win32::Graphics::Gdi::ScreenToClient(wrapper.hwnd, &mut point);
 
             // Convert raw pointer to IDataObject
             let data_object: Option<IDataObject> = if data_obj.is_null() {

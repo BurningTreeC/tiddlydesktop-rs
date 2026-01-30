@@ -307,8 +307,8 @@ pub fn validate_directory_path(path: &str) -> Result<PathBuf, String> {
 
 /// Sanitize a list of file paths
 /// Returns only the valid paths
-/// Used by Linux and macOS for incoming drag content sanitization
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+/// Used by Linux for incoming drag content sanitization
+#[cfg(target_os = "linux")]
 pub fn sanitize_file_paths(paths: Vec<String>) -> Vec<String> {
     paths
         .into_iter()

@@ -1,6 +1,6 @@
 diff -ruN a/src/webkitgtk/drag_drop.rs b/src/webkitgtk/drag_drop.rs
---- a/src/webkitgtk/drag_drop.rs	2026-01-30 07:48:17.848799717 +0100
-+++ b/src/webkitgtk/drag_drop.rs	2026-01-30 07:50:20.591905660 +0100
+--- a/src/webkitgtk/drag_drop.rs	2026-01-30 08:01:14.601399473 +0100
++++ b/src/webkitgtk/drag_drop.rs	2026-01-30 08:03:11.533857417 +0100
 @@ -104,14 +104,28 @@
    {
      let controller = controller.clone();
@@ -33,8 +33,8 @@ diff -ruN a/src/webkitgtk/drag_drop.rs b/src/webkitgtk/drag_drop.rs
        }
  
 diff -ruN a/src/webview2/drag_drop.rs b/src/webview2/drag_drop.rs
---- a/src/webview2/drag_drop.rs	2026-01-30 07:48:17.848984563 +0100
-+++ b/src/webview2/drag_drop.rs	2026-01-30 07:49:14.466243619 +0100
+--- a/src/webview2/drag_drop.rs	2026-01-30 08:01:14.601646265 +0100
++++ b/src/webview2/drag_drop.rs	2026-01-30 08:02:42.077018259 +0100
 @@ -179,6 +179,36 @@
        *self.enter_is_valid.get() = enter_is_valid;
      }
@@ -47,7 +47,7 @@ diff -ruN a/src/webview2/drag_drop.rs b/src/webview2/drag_drop.rs
 +      }
 +      if tiddlydesktop_has_internal_drag() != 0 {
 +        // Internal drag - let WebView2 handle natively, don't emit tauri events
-+        return Ok(DROPEFFECT_COPY);
++        return Ok(());
 +      }
 +    }
 +
@@ -129,8 +129,8 @@ diff -ruN a/src/webview2/drag_drop.rs b/src/webview2/drag_drop.rs
          paths,
          position: (pt.x as _, pt.y as _),
 diff -ruN a/src/webview2/mod.rs b/src/webview2/mod.rs
---- a/src/webview2/mod.rs	2026-01-30 07:48:17.849053933 +0100
-+++ b/src/webview2/mod.rs	2026-01-30 07:49:42.717098303 +0100
+--- a/src/webview2/mod.rs	2026-01-30 08:01:14.601741233 +0100
++++ b/src/webview2/mod.rs	2026-01-30 08:02:56.169941299 +0100
 @@ -146,13 +146,10 @@
        is_child,
      )?;
@@ -149,34 +149,44 @@ diff -ruN a/src/webview2/mod.rs b/src/webview2/mod.rs
      });
  
 diff -ruN a/src/wkwebview/drag_drop.rs b/src/wkwebview/drag_drop.rs
---- a/src/wkwebview/drag_drop.rs	2026-01-30 07:48:17.849617700 +0100
-+++ b/src/wkwebview/drag_drop.rs	2026-01-30 07:51:28.332566268 +0100
-@@ -86,13 +86,54 @@
+--- a/src/wkwebview/drag_drop.rs	2026-01-30 08:01:14.602377555 +0100
++++ b/src/wkwebview/drag_drop.rs	2026-01-30 08:01:44.645342815 +0100
+@@ -86,13 +86,63 @@
    let frame: NSRect = this.frame();
    let position = (dl.x as i32, (frame.size.height - dl.y) as i32);
  
-+  // PATCH: Emit the event so JS knows about the drop
-   let listener = &this.ivars().drag_drop_handler;
+-  let listener = &this.ivars().drag_drop_handler;
 -  if !listener(DragDropEvent::Drop { paths, position }) {
 -    // Reject the Wry drop (invoke the OS default behaviour)
 -    unsafe { objc2::msg_send![super(this), performDragOperation: drag_info] }
 -  } else {
 -    Bool::YES
-+  listener(DragDropEvent::Drop { paths, position });
++  // PATCH: Check for internal drags BEFORE emitting events
++  let is_internal_drag = unsafe {
++    extern "C" {
++      fn tiddlydesktop_has_internal_drag() -> i32;
++    }
++    tiddlydesktop_has_internal_drag() != 0
++  };
++
++  // Only emit Tauri event for EXTERNAL drops (not internal)
++  // Internal drags are handled entirely by WKWebView native + pasteboard fixup
++  if !is_internal_drag {
++    let listener = &this.ivars().drag_drop_handler;
++    listener(DragDropEvent::Drop { paths, position });
++  }
 +
 +  // PATCH: For internal drags, fix the pasteboard data before native handling.
 +  // This ensures:
 +  // 1. Inputs receive the correct text (tiddler title) instead of the resolved URL
 +  // 2. TiddlyWiki dropzones receive the full tiddler JSON (text/vnd.tiddler)
-+  unsafe {
-+    // FFI functions provided by TiddlyDesktop
-+    extern "C" {
-+      fn tiddlydesktop_has_internal_drag() -> i32;
-+      fn tiddlydesktop_get_internal_drag_text_plain() -> *const std::ffi::c_char;
-+      fn tiddlydesktop_get_internal_drag_tiddler_json() -> *const std::ffi::c_char;
-+    }
++  if is_internal_drag {
++    unsafe {
++      extern "C" {
++        fn tiddlydesktop_get_internal_drag_text_plain() -> *const std::ffi::c_char;
++        fn tiddlydesktop_get_internal_drag_tiddler_json() -> *const std::ffi::c_char;
++      }
 +
-+    if tiddlydesktop_has_internal_drag() != 0 {
 +      // Get the pasteboard
 +      let pasteboard: *mut objc2::runtime::AnyObject = objc2::msg_send![drag_info, draggingPasteboard];
 +      if !pasteboard.is_null() {

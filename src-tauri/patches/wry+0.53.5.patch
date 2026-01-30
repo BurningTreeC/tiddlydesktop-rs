@@ -1,8 +1,7 @@
-diff --git a/src/webkitgtk/drag_drop.rs b/src/webkitgtk/drag_drop.rs
-index 5133713..931ae82 100644
---- a/src/webkitgtk/drag_drop.rs
-+++ b/src/webkitgtk/drag_drop.rs
-@@ -104,14 +104,28 @@ pub(crate) fn connect_drag_event(webview: &WebView, handler: Box<dyn Fn(DragDrop
+diff -ruN a/src/webkitgtk/drag_drop.rs b/src/webkitgtk/drag_drop.rs
+--- a/src/webkitgtk/drag_drop.rs	2026-01-30 07:48:17.848799717 +0100
++++ b/src/webkitgtk/drag_drop.rs	2026-01-30 07:50:20.591905660 +0100
+@@ -104,14 +104,28 @@
    {
      let controller = controller.clone();
      webview.connect_drag_drop(move |_, ctx, x, y, time| {
@@ -33,14 +32,25 @@ index 5133713..931ae82 100644
          }
        }
  
-diff --git a/src/webview2/drag_drop.rs b/src/webview2/drag_drop.rs
-index 960a07f..95396f8 100644
---- a/src/webview2/drag_drop.rs
-+++ b/src/webview2/drag_drop.rs
-@@ -179,6 +179,24 @@ impl IDropTarget_Impl for DragDropTarget_Impl {
+diff -ruN a/src/webview2/drag_drop.rs b/src/webview2/drag_drop.rs
+--- a/src/webview2/drag_drop.rs	2026-01-30 07:48:17.848984563 +0100
++++ b/src/webview2/drag_drop.rs	2026-01-30 07:49:14.466243619 +0100
+@@ -179,6 +179,36 @@
        *self.enter_is_valid.get() = enter_is_valid;
      }
  
++    // PATCH: Check for internal drags from TiddlyDesktop and skip custom handling
++    // This lets WebView2's native drag-drop work for internal wiki drags
++    unsafe {
++      extern "C" {
++        fn tiddlydesktop_has_internal_drag() -> i32;
++      }
++      if tiddlydesktop_has_internal_drag() != 0 {
++        // Internal drag - let WebView2 handle natively, don't emit tauri events
++        return Ok(DROPEFFECT_COPY);
++      }
++    }
++
 +    // PATCH: Call FFI to store file paths for TiddlyDesktop BEFORE listener consumes paths
 +    // This allows JavaScript to access paths when native DOM drop fires
 +    unsafe {
@@ -62,25 +72,41 @@ index 960a07f..95396f8 100644
      (self.listener)(DragDropEvent::Enter {
        paths,
        position: (pt.x as _, pt.y as _),
-@@ -219,6 +237,14 @@ impl IDropTarget_Impl for DragDropTarget_Impl {
+@@ -219,6 +249,17 @@
    fn DragLeave(&self) -> windows::core::Result<()> {
      if unsafe { *self.enter_is_valid.get() } {
        (self.listener)(DragDropEvent::Leave);
 +
-+      // PATCH: Clear stored paths on drag leave
++      // PATCH: Clear stored paths on drag leave (only for external drags)
 +      unsafe {
 +        extern "C" {
++          fn tiddlydesktop_has_internal_drag() -> i32;
 +          fn tiddlydesktop_clear_drop_paths();
 +        }
-+        tiddlydesktop_clear_drop_paths();
++        if tiddlydesktop_has_internal_drag() == 0 {
++          tiddlydesktop_clear_drop_paths();
++        }
 +      }
      }
      Ok(())
    }
-@@ -236,6 +262,24 @@ impl IDropTarget_Impl for DragDropTarget_Impl {
+@@ -236,6 +277,37 @@
  
        let mut paths = Vec::new();
        let hdrop = unsafe { DragDropTarget::iterate_filenames(pDataObj, |path| paths.push(path)) };
++
++      // PATCH: Check for internal drags from TiddlyDesktop and skip custom handling
++      // This lets WebView2's native drag-drop work for internal wiki drags
++      unsafe {
++        extern "C" {
++          fn tiddlydesktop_has_internal_drag() -> i32;
++        }
++        if tiddlydesktop_has_internal_drag() != 0 {
++          // Internal drag - let WebView2 handle natively, don't emit tauri events
++          return Ok(());
++        }
++      }
++
 +      // PATCH: Call FFI to store file paths for TiddlyDesktop BEFORE listener consumes paths
 +      // This ensures paths are available when native DOM drop event fires
 +      unsafe {
@@ -102,11 +128,10 @@ index 960a07f..95396f8 100644
        (self.listener)(DragDropEvent::Drop {
          paths,
          position: (pt.x as _, pt.y as _),
-diff --git a/src/webview2/mod.rs b/src/webview2/mod.rs
-index a2f5d5b..2cf1007 100644
---- a/src/webview2/mod.rs
-+++ b/src/webview2/mod.rs
-@@ -146,13 +146,10 @@ impl InnerWebView {
+diff -ruN a/src/webview2/mod.rs b/src/webview2/mod.rs
+--- a/src/webview2/mod.rs	2026-01-30 07:48:17.849053933 +0100
++++ b/src/webview2/mod.rs	2026-01-30 07:49:42.717098303 +0100
+@@ -146,13 +146,10 @@
        is_child,
      )?;
  
@@ -123,11 +148,10 @@ index a2f5d5b..2cf1007 100644
        DragDropController::new(hwnd, handler)
      });
  
-diff --git a/src/wkwebview/drag_drop.rs b/src/wkwebview/drag_drop.rs
-index e28364e..b9043a9 100644
---- a/src/wkwebview/drag_drop.rs
-+++ b/src/wkwebview/drag_drop.rs
-@@ -86,13 +86,54 @@ pub(crate) fn perform_drag_operation(
+diff -ruN a/src/wkwebview/drag_drop.rs b/src/wkwebview/drag_drop.rs
+--- a/src/wkwebview/drag_drop.rs	2026-01-30 07:48:17.849617700 +0100
++++ b/src/wkwebview/drag_drop.rs	2026-01-30 07:51:28.332566268 +0100
+@@ -86,13 +86,54 @@
    let frame: NSRect = this.frame();
    let position = (dl.x as i32, (frame.size.height - dl.y) as i32);
  

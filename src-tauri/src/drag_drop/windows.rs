@@ -1877,6 +1877,9 @@ impl DropTargetWrapper {
         pt: i64,
         effect: *mut u32,
     ) -> HRESULT {
+        // FIRST LINE: Log immediately to confirm we're being called
+        eprintln!("[TiddlyDesktop] Windows Wrapper: drag_enter CALLED (this={:?}, effect={:?})", this, effect);
+
         let wrapper = &*this;
 
         // Check if this is an internal drag (from our app)

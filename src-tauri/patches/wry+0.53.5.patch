@@ -34,15 +34,14 @@ index 5133713..931ae82 100644
        }
  
 diff --git a/src/webview2/drag_drop.rs b/src/webview2/drag_drop.rs
-index 960a07f..82e8c36 100644
+index 960a07f..95396f8 100644
 --- a/src/webview2/drag_drop.rs
 +++ b/src/webview2/drag_drop.rs
-@@ -184,6 +184,26 @@ impl IDropTarget_Impl for DragDropTarget_Impl {
-       position: (pt.x as _, pt.y as _),
-     });
+@@ -179,6 +179,24 @@ impl IDropTarget_Impl for DragDropTarget_Impl {
+       *self.enter_is_valid.get() = enter_is_valid;
+     }
  
-+
-+    // PATCH: Call FFI to store file paths for TiddlyDesktop
++    // PATCH: Call FFI to store file paths for TiddlyDesktop BEFORE listener consumes paths
 +    // This allows JavaScript to access paths when native DOM drop fires
 +    unsafe {
 +      extern "C" {
@@ -51,7 +50,6 @@ index 960a07f..82e8c36 100644
 +      // Manually construct JSON array (avoids serde_json dependency)
 +      let json_parts: Vec<String> = paths.iter().map(|p| {
 +        let s = p.to_string_lossy();
-+        // Escape backslashes and quotes for JSON
 +        let escaped = s.replace('\\', "\\\\").replace('"', "\\\"");
 +        format!("\"{}\"", escaped)
 +      }).collect();
@@ -61,10 +59,10 @@ index 960a07f..82e8c36 100644
 +      }
 +    }
 +
-     let cursor_effect = if enter_is_valid {
-       DROPEFFECT_COPY
-     } else {
-@@ -219,6 +239,14 @@ impl IDropTarget_Impl for DragDropTarget_Impl {
+     (self.listener)(DragDropEvent::Enter {
+       paths,
+       position: (pt.x as _, pt.y as _),
+@@ -219,6 +237,14 @@ impl IDropTarget_Impl for DragDropTarget_Impl {
    fn DragLeave(&self) -> windows::core::Result<()> {
      if unsafe { *self.enter_is_valid.get() } {
        (self.listener)(DragDropEvent::Leave);
@@ -79,11 +77,11 @@ index 960a07f..82e8c36 100644
      }
      Ok(())
    }
-@@ -241,6 +269,26 @@ impl IDropTarget_Impl for DragDropTarget_Impl {
-         position: (pt.x as _, pt.y as _),
-       });
+@@ -236,6 +262,24 @@ impl IDropTarget_Impl for DragDropTarget_Impl {
  
-+      // PATCH: Call FFI to store file paths for TiddlyDesktop
+       let mut paths = Vec::new();
+       let hdrop = unsafe { DragDropTarget::iterate_filenames(pDataObj, |path| paths.push(path)) };
++      // PATCH: Call FFI to store file paths for TiddlyDesktop BEFORE listener consumes paths
 +      // This ensures paths are available when native DOM drop event fires
 +      unsafe {
 +        extern "C" {
@@ -92,7 +90,6 @@ index 960a07f..82e8c36 100644
 +        // Manually construct JSON array (avoids serde_json dependency)
 +        let json_parts: Vec<String> = paths.iter().map(|p| {
 +          let s = p.to_string_lossy();
-+          // Escape backslashes and quotes for JSON
 +          let escaped = s.replace('\\', "\\\\").replace('"', "\\\"");
 +          format!("\"{}\"", escaped)
 +        }).collect();
@@ -102,10 +99,9 @@ index 960a07f..82e8c36 100644
 +        }
 +      }
 +
-+
-       if let Some(hdrop) = hdrop {
-         unsafe { DragFinish(hdrop) };
-       }
+       (self.listener)(DragDropEvent::Drop {
+         paths,
+         position: (pt.x as _, pt.y as _),
 diff --git a/src/webview2/mod.rs b/src/webview2/mod.rs
 index a2f5d5b..2cf1007 100644
 --- a/src/webview2/mod.rs

@@ -94,9 +94,8 @@ image = { version = "0.25", default-features = false, features = ["png"] }
 [patch.crates-io]
 webview2-com = { git = "https://github.com/BurningTreeC/webview2-rs", branch = "main" }
 webview2-com-sys = { git = "https://github.com/BurningTreeC/webview2-rs", branch = "main" }
-# TiddlyDesktop: Use local WRY fork for composition hosting, pointer events, and drag-drop fixes
-# When ready to publish, change this to: wry = { git = "https://github.com/BurningTreeC/wry", branch = "main" }
-wry = { path = "../../forks/wry" }
+# TiddlyDesktop: Use WRY fork for composition hosting, pointer events, and drag-drop fixes
+wry = { git = "https://github.com/BurningTreeC/wry", branch = "main" }
 
 # macOS drag-drop handling via objc2 (versions must match Tauri's objc2 dependency)
 [target.'cfg(target_os = "macos")'.dependencies]

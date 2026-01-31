@@ -150,6 +150,7 @@ pub fn start_native_drag_impl(window: &WebviewWindow, data: NativeDragData, x: i
         text_x_moz_url: data.text_x_moz_url,
         url: data.url,
         is_text_selection_drag: data.is_text_selection_drag,
+        source_window: Some(window.label().to_string()),
     };
     windows::start_native_drag(window, outgoing_data, x, y, image_data, image_offset_x, image_offset_y)
 }
@@ -193,6 +194,7 @@ pub fn prepare_native_drag_impl(window: &WebviewWindow, data: NativeDragData) ->
         text_x_moz_url: data.text_x_moz_url,
         url: data.url,
         is_text_selection_drag: data.is_text_selection_drag,
+        source_window: Some(window.label().to_string()),
     };
     windows::prepare_native_drag(window, outgoing_data)
 }
@@ -319,7 +321,7 @@ pub fn get_pending_drag_data_impl(target_window: &str) -> Option<PendingDragData
         text_html: r.text_html,
         text_vnd_tiddler: r.text_vnd_tiddler,
         text_uri_list: r.text_uri_list,
-        source_window: r.source_window,
+        source_window: r.source_window.unwrap_or_default(),
         is_text_selection_drag: r.is_text_selection_drag,
     })
 }
@@ -336,15 +338,16 @@ pub fn get_pending_drag_data_impl(target_window: &str) -> Option<PendingDragData
     })
 }
 
-/// Get external drop file paths stored by WRY patch via FFI.
-/// This is only used on Windows where the WRY patch calls FFI functions
-/// to store file paths extracted from CF_HDROP.
+/// Get external drop file paths.
+/// On Windows, this retrieves file paths extracted by our IDropTarget vtable hook.
+/// The paths are captured in DragEnter and stored for retrieval during the drop.
 #[cfg(target_os = "windows")]
 pub fn get_external_drop_paths_impl() -> Option<Vec<String>> {
-    windows::take_external_drop_paths()
+    windows::take_pending_file_paths()
 }
 
 #[cfg(not(target_os = "windows"))]
 pub fn get_external_drop_paths_impl() -> Option<Vec<String>> {
     None
 }
+

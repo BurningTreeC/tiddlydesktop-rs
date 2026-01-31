@@ -536,6 +536,54 @@
         invoke("js_log", { message: "Setting up drag-drop listeners for: " + wikiPath + " window: " + windowLabel + " (window-specific)" });
 
         // ========================================
+        // Tauri WebviewWindow onDragDropEvent (alternative API)
+        // ========================================
+
+        // Try the higher-level onDragDropEvent API which may work differently
+        if (currentWindow.onDragDropEvent) {
+            currentWindow.onDragDropEvent(function(event) {
+                var payload = event.payload || event;
+                var type = payload.type;
+                var paths = payload.paths || [];
+
+                invoke("js_log", { message: "onDragDropEvent: type=" + type + ", paths=" + JSON.stringify(paths) });
+
+                if (type === 'hover' || type === 'enter' || type === 'over') {
+                    // Store paths during hover/drag-over
+                    if (paths.length > 0) {
+                        paths.forEach(function(filepath) {
+                            if (filepath && !filepath.startsWith("data:")) {
+                                var filename = filepath.split(/[/\\]/).pop();
+                                window.__pendingExternalFiles[filename] = filepath;
+                                invoke("js_log", { message: "onDragDropEvent: stored path for '" + filename + "'" });
+                            }
+                        });
+                    }
+                } else if (type === 'drop') {
+                    // Store paths on drop
+                    if (paths.length > 0) {
+                        invoke("js_log", { message: "onDragDropEvent DROP: " + paths.length + " files" });
+                        paths.forEach(function(filepath) {
+                            if (filepath && !filepath.startsWith("data:")) {
+                                var filename = filepath.split(/[/\\]/).pop();
+                                window.__pendingExternalFiles[filename] = filepath;
+                                invoke("js_log", { message: "onDragDropEvent: stored drop path for '" + filename + "'" });
+                            }
+                        });
+                    }
+                } else if (type === 'cancel' || type === 'leave') {
+                    invoke("js_log", { message: "onDragDropEvent: drag cancelled/left" });
+                }
+            }).then(function(unlisten) {
+                invoke("js_log", { message: "onDragDropEvent listener registered successfully" });
+            }).catch(function(err) {
+                invoke("js_log", { message: "onDragDropEvent registration failed: " + err });
+            });
+        } else {
+            invoke("js_log", { message: "onDragDropEvent API not available" });
+        }
+
+        // ========================================
         // Drag State Variables
         // ========================================
 
@@ -723,6 +771,22 @@
         // Tauri Drag Events
         // ========================================
 
+        // Windows: Listen for file paths pushed from Rust vtable hook
+        // This ensures paths are available immediately when native HTML5 drop fires
+        listen("td-external-file-paths", function(event) {
+            var paths = event.payload && event.payload.paths || [];
+            if (paths.length > 0) {
+                invoke("js_log", { message: "td-external-file-paths: received " + paths.length + " paths from Rust" });
+                paths.forEach(function(filepath) {
+                    if (filepath && !filepath.startsWith("data:")) {
+                        var filename = filepath.split(/[/\\]/).pop();
+                        window.__pendingExternalFiles[filename] = filepath;
+                        invoke("js_log", { message: "td-external-file-paths: set __pendingExternalFiles['" + filename + "']" });
+                    }
+                });
+            }
+        });
+
         listen("tauri://drag-enter", function(event) {
             var paths = event.payload.paths || [];
 
@@ -756,6 +820,13 @@
                         });
                     }
                 }).catch(function() {});
+            }
+
+            // WINDOWS: Just store paths - native HTML5 drag events fire automatically
+            // (SetAllowExternalDrop is enabled in setup_drag_handlers)
+            if (isWindows) {
+                invoke("js_log", { message: "tauri://drag-enter: Windows - paths stored, native HTML5 handles events" });
+                return;
             }
 
             // Now check if we should skip the rest of the handler
@@ -815,6 +886,11 @@
                 }).catch(function() {});
             }
 
+            // WINDOWS: Native HTML5 dragover events fire automatically
+            if (isWindows) {
+                return;
+            }
+
             if (nativeDragActive) return;
             if (!isDragging && !contentDragActive) return;
             if (typeof $tw !== "undefined" && $tw.dragInProgress) return;
@@ -837,6 +913,9 @@
         });
 
         listen("tauri://drag-leave", function(event) {
+            // WINDOWS: Native HTML5 handles drag-leave
+            if (isWindows) return;
+
             if (nativeDragActive) return;
             if (isDragging) {
                 cancelExternalDrag("drag left window");
@@ -1563,6 +1642,15 @@
                 }
             });
 
+            // WINDOWS: Native HTML5 drop events fire automatically
+            // Paths are already stored in __pendingExternalFiles from tauri://drag-enter
+            // The th-importing-file hook will look them up by filename
+            if (isWindows) {
+                invoke("js_log", { message: "tauri://drag-drop: Windows - paths stored, native HTML5 handles drop" });
+                return;
+            }
+
+            // Linux/macOS: Use synthetic events (native handling not reliable)
             var dropTarget = getTargetElement(event.payload.position);
             var pos = event.payload.position;
 

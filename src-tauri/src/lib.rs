@@ -5,6 +5,11 @@ use std::os::windows::process::CommandExt;
 /// Global AppHandle for IPC callbacks that need Tauri access
 static GLOBAL_APP_HANDLE: OnceLock<tauri::AppHandle> = OnceLock::new();
 
+/// Get the global AppHandle (for use by drag_drop module to emit events)
+pub fn get_global_app_handle() -> Option<tauri::AppHandle> {
+    GLOBAL_APP_HANDLE.get().cloned()
+}
+
 /// Global IPC server for sending messages to wiki processes
 static GLOBAL_IPC_SERVER: OnceLock<Arc<ipc::IpcServer>> = OnceLock::new();
 
@@ -4711,6 +4716,10 @@ struct WikiModeState {
 /// Run in wiki-only mode - a single wiki window in its own process
 /// This is called when the app is started with --wiki <path> [--tiddler <title>]
 fn run_wiki_mode(args: WikiModeArgs) {
+    // Windows: Initialize RegisterDragDrop hook to extract file paths from drops
+    #[cfg(target_os = "windows")]
+    drag_drop::windows::init_drop_target_hook();
+
     let wiki_path = args.wiki_path;
     let is_tiddler_window = args.tiddler_title.is_some();
     let tiddler_title = args.tiddler_title.clone();
@@ -5053,6 +5062,10 @@ fn run_wiki_mode(args: WikiModeArgs) {
 /// Run in wiki-folder mode - a Node.js TiddlyWiki server in its own process
 /// This is called when the app is started with --wiki-folder <path> --port <port>
 fn run_wiki_folder_mode(args: WikiFolderModeArgs) {
+    // Windows: Initialize RegisterDragDrop hook to extract file paths from drops
+    #[cfg(target_os = "windows")]
+    drag_drop::windows::init_drop_target_hook();
+
     let folder_path = args.folder_path;
     let port = args.port;
 
@@ -5325,6 +5338,16 @@ fn run_wiki_folder_mode(args: WikiFolderModeArgs) {
             clipboard::get_clipboard_content,
             clipboard::set_clipboard_content,
             show_find_in_page,
+            // Drag-drop commands
+            start_native_drag,
+            prepare_native_drag,
+            cleanup_native_drag,
+            get_pending_drag_data,
+            get_external_drop_paths,
+            update_drag_icon,
+            set_pending_drag_icon,
+            set_drag_dest_enabled,
+            ungrab_seat_for_focus,
         ])
         .build(tauri::generate_context!())
         .expect("error while building wiki-folder-mode application")
@@ -5478,9 +5501,7 @@ pub fn run() {
     #[cfg(target_os = "windows")]
     check_webview2_version();
 
-    // Windows: Install RegisterDragDrop hook early, before any WebView2 initialization.
-    // This wraps WebView2's IDropTarget to capture file paths while preserving
-    // native HTML5 drag events.
+    // Windows: Initialize RegisterDragDrop hook to extract file paths from drops
     #[cfg(target_os = "windows")]
     drag_drop::windows::init_drop_target_hook();
 

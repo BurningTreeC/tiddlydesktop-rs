@@ -285,22 +285,69 @@
             var dt = event.dataTransfer;
             if (!dt || !dt.items) return;
 
-            // If no files but has file:// URLs, this is likely an external file drop
-            // where WebKitGTK provides the file URL but not the actual file data.
-            // The actual file will come via tauri://drag-drop, so block this event entirely.
-            // But allow http://, https://, and other URLs to pass through for link drops.
+            // Helper to check if text looks like a file path
+            function looksLikeFilePath(text) {
+                if (!text) return false;
+                text = text.trim();
+                // Unix absolute path (but not URLs like //server)
+                if (text.indexOf('/') === 0 && text.indexOf('//') !== 0) return true;
+                // Windows path (C:\... or C:/...)
+                if (/^[A-Za-z]:[\\\/]/.test(text)) return true;
+                // file:// URL
+                if (text.indexOf('file://') === 0) return true;
+                return false;
+            }
+
+            // Case 1: Files present but text contains file path - filter to prevent double import
+            // On Windows, WebView2's native drop event includes both files AND file paths as text
+            if (dt.files.length > 0) {
+                var plainText = '';
+                var uriList = '';
+                try {
+                    plainText = dt.getData('text/plain') || '';
+                    uriList = dt.getData('text/uri-list') || '';
+                } catch (e) {}
+
+                // Check if the text types are just file paths
+                var textIsFilePath = looksLikeFilePath(plainText) || looksLikeFilePath(uriList);
+
+                if (textIsFilePath) {
+                    // Create a clean DataTransfer with only the files, no text types
+                    // This prevents TiddlyWiki from importing both file AND path-as-text
+                    event.preventDefault();
+                    event.stopImmediatePropagation();
+
+                    var newDt = new DataTransfer();
+                    for (var i = 0; i < dt.files.length; i++) {
+                        newDt.items.add(dt.files[i]);
+                    }
+
+                    var cleanEvent = new DragEvent('drop', {
+                        bubbles: true,
+                        cancelable: true,
+                        dataTransfer: newDt,
+                        clientX: event.clientX,
+                        clientY: event.clientY,
+                        screenX: event.screenX,
+                        screenY: event.screenY
+                    });
+                    cleanEvent.__tdFiltered = true;
+                    event.target.dispatchEvent(cleanEvent);
+                    return;
+                }
+            }
+
+            // Case 2: No files but has file:// URLs - block entirely
+            // This is likely an external file drop where WebKitGTK provides file URL but not data
+            // The actual file will come via tauri://drag-drop
             if (dt.files.length === 0) {
                 var hasFileUrl = false;
                 try {
                     var uriList = dt.getData('text/uri-list') || '';
                     var plainText = dt.getData('text/plain') || '';
-                    // Check if any URL is a file:// URL or absolute path (Unix or Windows)
                     var urls = (uriList + '\n' + plainText).split('\n');
                     for (var i = 0; i < urls.length; i++) {
-                        var url = urls[i].trim();
-                        var isUnixPath = url.indexOf('/') === 0 && url.indexOf('//') !== 0;
-                        var isWindowsPath = /^[A-Za-z]:[\\\/]/.test(url);
-                        if (url && (url.indexOf('file://') === 0 || isUnixPath || isWindowsPath)) {
+                        if (looksLikeFilePath(urls[i])) {
                             hasFileUrl = true;
                             break;
                         }
@@ -1418,6 +1465,23 @@
             var savedCrossWikiData = crossWikiDragData;
 
             log('tauri://drag-drop received, paths=' + paths.length + ', hasCrossWikiData=' + !!savedCrossWikiData);
+
+            // WINDOWS: Skip synthetic events for FILE drops - native HTML5 handles them.
+            // SetAllowExternalDrop(true) makes WebView2 fire native drop events.
+            // File paths are already stored in __pendingExternalFiles from drag_drop.js.
+            // But still handle cross-wiki drops (savedCrossWikiData) since those need synthetic events.
+            var isWindows = navigator.platform.indexOf('Win') !== -1 || navigator.userAgent.indexOf('Windows') !== -1;
+            if (isWindows && !savedCrossWikiData && paths.length > 0) {
+                // Check if these are actual file paths (not data: URLs or tiddler data)
+                var hasRealFilePaths = paths.some(function(path) {
+                    return path && !path.startsWith('data:') && (path.match(/^[A-Za-z]:[\\/]/) || path.startsWith('/'));
+                });
+                if (hasRealFilePaths) {
+                    log('tauri://drag-drop: Windows file drop - skipping synthetic events, native HTML5 handles it');
+                    cleanup();
+                    return;
+                }
+            }
 
             // For cross-wiki drops, we have the tiddler data pre-loaded
             // Dispatch a synthetic drop event with that data

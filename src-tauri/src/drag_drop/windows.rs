@@ -111,8 +111,9 @@ pub struct OutgoingDragData {
 /// In composition hosting mode:
 /// - WebView2 renders to a DirectComposition visual
 /// - No Chrome_WidgetWin_* child windows are created in our process
-/// - We register IDropTarget on the WRY container HWND
-/// - Forward drag events to WebView2 via ICoreWebView2CompositionController3
+/// - WRY already registers IDropTarget via CompositionDragDropTarget
+/// - WRY extracts file paths and calls drag_drop_handler → Tauri events
+/// - We only need to register DragStarting handler for outgoing drag detection
 pub fn setup_drag_handlers(window: &WebviewWindow) {
     let window_label = window.label().to_string();
     let app_handle = window.app_handle().clone();
@@ -128,12 +129,12 @@ pub fn setup_drag_handlers(window: &WebviewWindow) {
     let _ = window.with_webview(move |webview| {
         #[cfg(windows)]
         unsafe {
-            // Initialize OLE (required for DoDragDrop and RegisterDragDrop)
+            // Initialize OLE (required for DoDragDrop)
             let _ = OleInitialize(None);
 
             let controller = webview.controller();
 
-            // Get the WRY container HWND (this is where we'll register our IDropTarget)
+            // Get the WRY container HWND (for logging)
             let mut container_hwnd = HWND::default();
             let _ = controller.ParentWindow(&mut container_hwnd);
             eprintln!("[TiddlyDesktop] Windows: Container HWND = {:?}", container_hwnd);
@@ -146,7 +147,7 @@ pub fn setup_drag_handlers(window: &WebviewWindow) {
                 }
             }
 
-            // Get composition controller for drag forwarding
+            // Get composition controller for DragStarting handler
             // In composition hosting mode, the controller IS a composition controller
             let composition_controller3 = controller.cast::<ICoreWebView2CompositionController3>().ok();
 
@@ -154,6 +155,9 @@ pub fn setup_drag_handlers(window: &WebviewWindow) {
                 eprintln!("[TiddlyDesktop] Windows: Got ICoreWebView2CompositionController3 - composition mode active");
 
                 // Register DragStarting handler for cross-wiki drag detection
+                // NOTE: WRY already registers IDropTarget via CompositionDragDropTarget,
+                // so we do NOT call register_drop_target_composition here.
+                // File paths from external drops come through Tauri's onDragDropEvent.
                 if let Ok(controller5) = comp_ctrl.cast::<ICoreWebView2CompositionController5>() {
                     let handler: ICoreWebView2DragStartingEventHandler =
                         DragStartingHandler::new(window_label.clone()).into();
@@ -163,15 +167,8 @@ pub fn setup_drag_handlers(window: &WebviewWindow) {
                         Err(e) => eprintln!("[TiddlyDesktop] Windows: DragStarting registration failed: {:?}", e),
                     }
                 }
-
-                // Register our IDropTarget on the container HWND
-                register_drop_target_composition(container_hwnd, comp_ctrl, app_handle);
             } else {
-                eprintln!("[TiddlyDesktop] Windows: WARNING - Could not get composition controller, falling back to child window search");
-                // Fallback: try to find Chrome_WidgetWin_* windows (windowed mode)
-                if let Ok(comp_ctrl) = controller.cast::<ICoreWebView2CompositionController3>() {
-                    register_drop_target_windowed(container_hwnd, comp_ctrl, app_handle);
-                }
+                eprintln!("[TiddlyDesktop] Windows: WARNING - Could not get composition controller");
             }
 
             eprintln!("[TiddlyDesktop] Windows: Drag-drop setup complete for '{}'", window_label);
@@ -180,6 +177,8 @@ pub fn setup_drag_handlers(window: &WebviewWindow) {
 }
 
 /// Register IDropTarget on container HWND for composition hosting mode
+/// NOTE: Not currently used - WRY's CompositionDragDropTarget handles this now
+#[allow(dead_code)]
 unsafe fn register_drop_target_composition(
     container_hwnd: HWND,
     composition_controller: ICoreWebView2CompositionController3,
@@ -207,6 +206,8 @@ unsafe fn register_drop_target_composition(
 }
 
 /// Register IDropTarget for windowed mode (fallback - finds Chrome_WidgetWin_* windows)
+/// NOTE: Not currently used - WRY's CompositionDragDropTarget handles this now
+#[allow(dead_code)]
 unsafe fn register_drop_target_windowed(
     parent_hwnd: HWND,
     composition_controller: ICoreWebView2CompositionController3,
@@ -283,8 +284,10 @@ unsafe fn register_drop_target_windowed(
 
 // ============================================================================
 // ForwardingDropTarget - extracts file paths and forwards to WebView2
+// NOTE: Not currently used - WRY's CompositionDragDropTarget handles this now
 // ============================================================================
 
+#[allow(dead_code)]
 #[implement(IDropTarget)]
 struct ForwardingDropTarget {
     hwnd: HWND,

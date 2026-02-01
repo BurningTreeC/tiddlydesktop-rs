@@ -1300,7 +1300,14 @@
             var p = event.payload || {};
 
             // Skip if we're the drag source (internal drag)
+            // Check both internalDragActive (set on dragstart) and pendingDragElement (set on pointerdown)
+            // On Windows, tauri://drag-enter may fire BEFORE native DOM dragstart, so we need
+            // to check pendingDragElement as an early indicator of an internal drag
             if (internalDragActive) return;
+            if (pendingDragElement) {
+                log('tauri://drag-enter: skipping - pendingDragElement set (likely internal drag starting)');
+                return;
+            }
 
             var pos = p.position || { x: 0, y: 0 };
             var paths = p.paths || [];
@@ -1362,7 +1369,9 @@
             var p = event.payload || {};
 
             // Skip if we're the drag source (internal drag)
+            // Check both internalDragActive and pendingDragElement (same as drag-enter)
             if (internalDragActive) return;
+            if (pendingDragElement) return;
 
             var pos = p.position || { x: 0, y: 0 };
             var paths = p.paths || [];

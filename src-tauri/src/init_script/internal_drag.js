@@ -831,7 +831,8 @@
         internalDragActive = true;
 
         // Detect if this is a text-selection drag vs a draggable element drag
-        var draggableElement = findDraggable(event.target);
+        // Use cached pendingDragElement from pointerdown if available (faster)
+        var draggableElement = pendingDragElement || findDraggable(event.target);
         isTextSelectionDrag = !draggableElement;
         dragSource = draggableElement || event.target;
 
@@ -1067,6 +1068,10 @@
             if (isEditable(event.target)) {
                 return;
             }
+            // For internal drags (same-wiki), don't show copy cursor or interfere
+            if (internalDragActive && !isTextSelectionDrag) {
+                return;
+            }
             // For any external drag with content, prevent default to enable dropping
             if (!event.defaultPrevented) {
                 event.preventDefault();
@@ -1129,7 +1134,8 @@
             lastTarget = null;
         });
 
-        // td-drag-motion: Handle all external drags (cross-wiki and file manager)
+        // td-drag-motion: Handle cross-wiki drags ONLY (with tiddler data)
+        // For other external drags (text selections, files), drag_drop.js handles it
         // WebKitGTK doesn't fire native DOM events for cross-process drags,
         // so we dispatch synthetic events here.
         tauriListen("td-drag-motion", function(event) {
@@ -1143,26 +1149,31 @@
                 return;
             }
 
+            // Only handle cross-wiki drags here (when we have tiddler data)
+            // Other external drags are handled by drag_drop.js which sets up
+            // proper DataTransfer types for the dropzone
+            if (!crossWikiDragData) {
+                return;
+            }
+
             var x = p.x || 0;
             var y = p.y || 0;
 
             if (!externalDragActive) {
                 externalDragActive = true;
                 disableIframePointerEvents();
-                log('External drag entered window at (' + x + ', ' + y + ')');
+                log('Cross-wiki drag entered window at (' + x + ', ' + y + ')');
             }
 
-            // Create DataTransfer - populate with cross-wiki data if available
+            // Create DataTransfer with cross-wiki tiddler data
             var dataTransfer = new DataTransfer();
-            if (crossWikiDragData) {
-                try {
-                    dataTransfer.setData('text/vnd.tiddler', crossWikiDragData);
-                    var parsed = JSON.parse(crossWikiDragData);
-                    if (parsed.title) {
-                        dataTransfer.setData('text/plain', parsed.title);
-                    }
-                } catch (e) {}
-            }
+            try {
+                dataTransfer.setData('text/vnd.tiddler', crossWikiDragData);
+                var parsed = JSON.parse(crossWikiDragData);
+                if (parsed.title) {
+                    dataTransfer.setData('text/plain', parsed.title);
+                }
+            } catch (e) {}
 
             var target = getElementAt(x, y);
 

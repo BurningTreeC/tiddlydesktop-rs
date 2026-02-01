@@ -561,6 +561,7 @@
         var nativeDragTarget = null;
         var pendingGtkFileDrop = null;
         var nativeDropInProgress = false;
+        var nativeLeaveTimeout = null;  // Timer for delayed leave cleanup
         var contentDragActive = false;
         var contentDragTarget = null;
         var contentDragTypes = [];
@@ -899,6 +900,12 @@
             // Skip if internal drag is active (handled by internal_drag.js)
             if (TD.isInternalDragActive && TD.isInternalDragActive()) return;
 
+            // Cancel any pending leave timeout - we're still dragging
+            if (nativeLeaveTimeout) {
+                clearTimeout(nativeLeaveTimeout);
+                nativeLeaveTimeout = null;
+            }
+
             var pos;
             if (event.payload.screenCoords) {
                 pos = screenToClient(event.payload.x, event.payload.y);
@@ -995,7 +1002,13 @@
                 var isOurDrag = event.payload && event.payload.isOurDrag;
                 var delay = isOurDrag ? 0 : 100;
 
-                setTimeout(function() {
+                // Cancel any previous pending leave timeout
+                if (nativeLeaveTimeout) {
+                    clearTimeout(nativeLeaveTimeout);
+                }
+
+                nativeLeaveTimeout = setTimeout(function() {
+                    nativeLeaveTimeout = null;
                     if (nativeDropInProgress) return;
                     if (!nativeDragActive) return;
 

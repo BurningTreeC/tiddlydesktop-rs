@@ -397,11 +397,12 @@ pub fn setup_drag_handlers(window: &WebviewWindow) {
             Err(e) => eprintln!("[TiddlyDesktop] Linux: Native DnD init error: {}", e),
         }
 
-        // Reduce GTK drag threshold for more responsive drag start
-        // Default is 8 pixels, we reduce to 4 for snappier feel
+        // Reduce GTK drag threshold for more responsive content drag start
+        // Default is 8 pixels, we reduce to 2 for snappier WebKit content drags
+        // Note: Window dragging uses a separate hardcoded threshold in lib.rs
         if let Some(settings) = gtk::Settings::default() {
-            settings.set_property("gtk-dnd-drag-threshold", 4i32);
-            eprintln!("[TiddlyDesktop] Linux: Set GTK drag threshold to 4 pixels");
+            settings.set_property("gtk-dnd-drag-threshold", 2i32);
+            eprintln!("[TiddlyDesktop] Linux: Set GTK drag threshold to 2 pixels (content drags)");
         }
     });
 

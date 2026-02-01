@@ -119,7 +119,7 @@ fn x11_activate_window_impl(gtk_window: &gtk::ApplicationWindow, gdk_window: &gt
 /// Title starts empty - JavaScript will set the real title once TiddlyWiki loads
 #[cfg(target_os = "linux")]
 fn setup_header_bar(window: &tauri::WebviewWindow) {
-    use gtk::prelude::{BoxExt, ButtonExt, ContainerExt, EventBoxExt, GtkSettingsExt, GtkWindowExt, HeaderBarExt, LabelExt, OverlayExt, StyleContextExt, WidgetExt, WidgetExtManual};
+    use gtk::prelude::{BoxExt, ButtonExt, ContainerExt, EventBoxExt, GtkWindowExt, HeaderBarExt, LabelExt, OverlayExt, StyleContextExt, WidgetExt, WidgetExtManual};
     use gtk::glib;
 
     if let Ok(gtk_window) = window.gtk_window() {
@@ -204,10 +204,9 @@ fn setup_header_bar(window: &tauri::WebviewWindow) {
             | gdk::EventMask::POINTER_MOTION_MASK
         );
 
-        // Get drag threshold from GTK settings (typically 8 pixels)
-        let drag_threshold = gtk::Settings::default()
-            .and_then(|s| Some(s.gtk_dnd_drag_threshold()))
-            .unwrap_or(8);
+        // Use fixed 8-pixel threshold for window dragging (standard desktop feel)
+        // This is independent of gtk-dnd-drag-threshold which we reduce for content drags
+        let drag_threshold = 8;
 
         // Track drag state: (start_x, start_y, button, time)
         let drag_start: std::rc::Rc<std::cell::RefCell<Option<(f64, f64, u32, u32)>>> =

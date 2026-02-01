@@ -1705,8 +1705,128 @@ fn ungrab_seat_for_focus(window: tauri::Window) -> Result<(), String> {
     Ok(())
 }
 
-/// Run a shell command with optional confirmation dialog
-/// Security: Shows a confirmation dialog by default to prevent unauthorized execution
+/// Check if a command + args combination is potentially destructive
+/// Returns true if the command should ALWAYS require confirmation
+/// Covers dangerous commands on Linux, macOS, and Windows
+fn is_destructive_command(command: &str, args: &[String]) -> bool {
+    let cmd_basename = std::path::Path::new(command)
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or(command)
+        .to_lowercase();
+
+    let args_lower: Vec<String> = args.iter().map(|a| a.to_lowercase()).collect();
+    let args_joined = args_lower.join(" ");
+
+    // === UNIX (Linux/macOS): rm with recursive flag on dangerous paths ===
+    if cmd_basename == "rm" {
+        let has_recursive = args.iter().any(|a| {
+            let a = a.to_lowercase();
+            a == "-r" || a == "-rf" || a == "-fr" || a == "-r" ||
+            a.starts_with("-") && a.contains('r')
+        });
+        if has_recursive {
+            let dangerous = args.iter().any(|a| {
+                let a_clean = a.trim_matches(|c| c == '"' || c == '\'');
+                a_clean == "/" || a_clean == "/*" ||
+                a_clean == "~" || a_clean == "~/" || a_clean == "~/*" ||
+                a_clean == "$HOME" || a_clean == "$HOME/" ||
+                a_clean == ".." || a_clean == "../" ||
+                a_clean.starts_with("/") && a_clean.len() <= 5 && !a_clean.contains('.') // /usr, /var, /etc, /home, /root
+            });
+            if dangerous { return true; }
+        }
+    }
+
+    // === Windows: del/rd/rmdir with dangerous paths ===
+    if cmd_basename == "del" || cmd_basename == "del.exe" ||
+       cmd_basename == "rd" || cmd_basename == "rd.exe" ||
+       cmd_basename == "rmdir" || cmd_basename == "rmdir.exe" {
+        let has_recursive = args_joined.contains("/s") || args_joined.contains("/q");
+        let dangerous = args.iter().any(|a| {
+            let a_lower = a.to_lowercase();
+            a_lower == "c:\\" || a_lower == "c:/" || a_lower == "c:\\*" ||
+            a_lower.contains("%userprofile%") || a_lower.contains("%homepath%") ||
+            a_lower.contains("%systemroot%") || a_lower.contains("%windir%") ||
+            a_lower == "\\" || a_lower == "/" ||
+            (a_lower.len() == 3 && a_lower.ends_with(":\\")) // Any drive root
+        });
+        if has_recursive || dangerous { return true; }
+    }
+
+    // === Windows: format command ===
+    if cmd_basename == "format" || cmd_basename == "format.com" || cmd_basename == "format.exe" {
+        return true;
+    }
+
+    // === Unix: disk/filesystem commands ===
+    if cmd_basename == "dd" {
+        // dd writing to disk devices
+        if args.iter().any(|a| {
+            let a_lower = a.to_lowercase();
+            a_lower.starts_with("of=/dev/sd") || a_lower.starts_with("of=/dev/nvme") ||
+            a_lower.starts_with("of=/dev/hd") || a_lower.starts_with("of=/dev/disk")
+        }) {
+            return true;
+        }
+    }
+
+    if cmd_basename.starts_with("mkfs") || cmd_basename == "fdisk" ||
+       cmd_basename == "gdisk" || cmd_basename == "parted" || cmd_basename == "diskutil" {
+        return true;
+    }
+
+    // === System control commands (all platforms) ===
+    if ["shutdown", "shutdown.exe", "reboot", "poweroff", "halt", "init"].contains(&cmd_basename.as_str()) {
+        return true;
+    }
+
+    // === macOS specific ===
+    if cmd_basename == "diskutil" || cmd_basename == "hdiutil" {
+        // Block destructive diskutil operations
+        if args_joined.contains("erasedisk") || args_joined.contains("erasevolume") ||
+           args_joined.contains("partitiondisk") || args_joined.contains("secureErase") {
+            return true;
+        }
+    }
+    if cmd_basename == "srm" { // Secure remove - recursive by default
+        return true;
+    }
+
+    // === Permission changes that could break system ===
+    if cmd_basename == "chmod" || cmd_basename == "chown" || cmd_basename == "icacls" || cmd_basename == "cacls" {
+        // Block recursive permission changes on root paths
+        let has_recursive = args_joined.contains("-r") || args_joined.contains("/t") || args_joined.contains("/s");
+        let targets_root = args.iter().any(|a| {
+            let a_clean = a.trim_matches(|c| c == '"' || c == '\'').to_lowercase();
+            a_clean == "/" || a_clean == "c:\\" || a_clean == "~" ||
+            (a_clean.len() <= 4 && a_clean.starts_with('/'))
+        });
+        if has_recursive && targets_root { return true; }
+    }
+
+    // === Registry destruction (Windows) ===
+    if cmd_basename == "reg" || cmd_basename == "reg.exe" {
+        if args_joined.contains("delete") &&
+           (args_joined.contains("hklm") || args_joined.contains("hkey_local_machine") ||
+            args_joined.contains("hkcu") || args_joined.contains("hkey_current_user")) {
+            return true;
+        }
+    }
+
+    // === Fork bombs and resource exhaustion ===
+    if args_joined.contains(":(){ :|:& };:") || // bash fork bomb
+       args_joined.contains("%0|%0") { // Windows fork bomb
+        return true;
+    }
+
+    false
+}
+
+/// Run a command with optional confirmation dialog
+/// Security: Shows a confirmation dialog by default. Can be bypassed with confirm: false
+/// for trusted commands defined by the user in their wiki.
+/// Security: Destructive commands ALWAYS require confirmation regardless of confirm flag.
 #[tauri::command]
 async fn run_command(
     app: tauri::AppHandle,
@@ -1718,9 +1838,17 @@ async fn run_command(
 ) -> Result<Option<CommandResult>, String> {
     use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 
-    let should_confirm = confirm.unwrap_or(true); // Default to confirming
+    // Security: Reject empty commands
+    if command.trim().is_empty() {
+        return Err("Command cannot be empty".to_string());
+    }
+
     let should_wait = wait.unwrap_or(false);
     let args_vec = args.unwrap_or_default();
+
+    // Security: Force confirmation for destructive commands, regardless of confirm flag
+    let is_destructive = is_destructive_command(&command, &args_vec);
+    let should_confirm = confirm.unwrap_or(true) || is_destructive;
 
     // Build the command string for display
     let display_cmd = if args_vec.is_empty() {
@@ -3718,6 +3846,85 @@ fn parse_query_string(query: Option<&str>) -> std::collections::HashMap<String, 
     params
 }
 
+/// Handle tdasset:// protocol requests for serving static assets with path validation
+/// This provides a secure alternative to the built-in asset:// protocol by validating
+/// that requested files are within user-accessible directories.
+fn tdasset_protocol_handler(_app: &tauri::AppHandle, request: Request<Vec<u8>>) -> Response<Vec<u8>> {
+    let uri = request.uri();
+
+    // The path comes URL-encoded from convertFileSrc, decode it
+    let raw_path = uri.path();
+    let decoded_path = urlencoding::decode(raw_path)
+        .map(|s| s.into_owned())
+        .unwrap_or_else(|_| raw_path.to_string());
+
+    // Remove leading slash(es) but preserve the path structure
+    // For Unix: /home/user/file.jpg -> home/user/file.jpg (we'll add / back)
+    // For Windows: /C:/Users/file.jpg -> C:/Users/file.jpg
+    let path = decoded_path.trim_start_matches('/');
+
+    // Reconstruct the absolute path
+    let file_path = if path.len() >= 2 && path.chars().nth(1) == Some(':') {
+        // Windows path like C:/Users/...
+        PathBuf::from(path)
+    } else {
+        // Unix path - add leading /
+        PathBuf::from(format!("/{}", path))
+    };
+
+    // Security: Validate the path doesn't contain traversal sequences
+    let path_str = file_path.to_string_lossy();
+    if drag_drop::sanitize::validate_file_path(&path_str).is_none() {
+        eprintln!("[TiddlyDesktop] Security: Blocked path traversal in tdasset protocol: {}", path_str);
+        return Response::builder()
+            .status(403)
+            .header("Access-Control-Allow-Origin", "*")
+            .body("Access denied: path contains invalid sequences".as_bytes().to_vec())
+            .unwrap();
+    }
+
+    // Security: Validate the path is user-accessible
+    match dunce::canonicalize(&file_path) {
+        Ok(canonical) => {
+            if !drag_drop::sanitize::is_user_accessible_path(&canonical) {
+                eprintln!("[TiddlyDesktop] Security: Blocked access to system path via tdasset: {}", canonical.display());
+                return Response::builder()
+                    .status(403)
+                    .header("Access-Control-Allow-Origin", "*")
+                    .body("Access denied: path is outside user-accessible directories".as_bytes().to_vec())
+                    .unwrap();
+            }
+
+            // Serve the file
+            match std::fs::read(&canonical) {
+                Ok(content) => {
+                    let mime_type = utils::get_mime_type(&canonical);
+                    Response::builder()
+                        .status(200)
+                        .header("Content-Type", mime_type)
+                        .header("Access-Control-Allow-Origin", "*")
+                        .body(content)
+                        .unwrap()
+                }
+                Err(e) => {
+                    Response::builder()
+                        .status(404)
+                        .header("Access-Control-Allow-Origin", "*")
+                        .body(format!("File not found: {}", e).as_bytes().to_vec())
+                        .unwrap()
+                }
+            }
+        }
+        Err(e) => {
+            Response::builder()
+                .status(404)
+                .header("Access-Control-Allow-Origin", "*")
+                .body(format!("File not found: {}", e).as_bytes().to_vec())
+                .unwrap()
+        }
+    }
+}
+
 /// Handle wiki:// protocol requests
 fn wiki_protocol_handler(app: &tauri::AppHandle, request: Request<Vec<u8>>) -> Response<Vec<u8>> {
     let uri = request.uri();
@@ -4043,14 +4250,15 @@ fn wiki_protocol_handler(app: &tauri::AppHandle, request: Request<Vec<u8>>) -> R
     let save_url = format!("wikifile://localhost/save/{}", path);
 
     // Prepare single-tiddler mode params for injection
+    // Use serde_json for safe string escaping to prevent injection attacks
     let single_tiddler_js = single_tiddler.as_ref()
-        .map(|t| format!(r#"window.__SINGLE_TIDDLER__ = "{}";"#, t.replace('\\', "\\\\").replace('"', "\\\"")))
+        .map(|t| format!("window.__SINGLE_TIDDLER__ = {};", serde_json::to_string(t).unwrap_or_else(|_| "\"\"".to_string())))
         .unwrap_or_default();
     let single_template_js = single_template.as_ref()
-        .map(|t| format!(r#"window.__SINGLE_TEMPLATE__ = "{}";"#, t.replace('\\', "\\\\").replace('"', "\\\"")))
+        .map(|t| format!("window.__SINGLE_TEMPLATE__ = {};", serde_json::to_string(t).unwrap_or_else(|_| "\"\"".to_string())))
         .unwrap_or_default();
     let parent_window_js = parent_window.as_ref()
-        .map(|p| format!(r#"window.__PARENT_WINDOW__ = "{}";"#, p.replace('\\', "\\\\").replace('"', "\\\"")))
+        .map(|p| format!("window.__PARENT_WINDOW__ = {};", serde_json::to_string(p).unwrap_or_else(|_| "\"\"".to_string())))
         .unwrap_or_default();
     let single_variables_js = single_variables.as_ref()
         .map(|v| {
@@ -4088,13 +4296,19 @@ fn wiki_protocol_handler(app: &tauri::AppHandle, request: Request<Vec<u8>>) -> R
             let single_tiddler_preload = if let Some(ref tiddler) = single_tiddler {
                 let template = single_template.as_deref()
                     .unwrap_or("$:/core/templates/single.tiddler.window");
-                let escaped_tiddler = tiddler.replace('\\', "\\\\").replace('"', "\\\"").replace('\n', "\\n");
-                let escaped_template = template.replace('\\', "\\\\").replace('"', "\\\"");
+                // Use serde_json for safe JavaScript string escaping
+                let tiddler_json = serde_json::to_string(tiddler).unwrap_or_else(|_| "\"\"".to_string());
+                let template_json = serde_json::to_string(template).unwrap_or_else(|_| "\"\"".to_string());
+                // For wikitext attributes, we need to escape for HTML attribute context
+                // Using JSON-encoded strings in the wikitext (which handles quotes, newlines, etc.)
                 format!(r##"<script>
 // TiddlyDesktop: Configure single-tiddler layout BEFORE boot
 (function() {{
     window.$tw = window.$tw || {{}};
     $tw.preloadTiddlers = $tw.preloadTiddlers || [];
+
+    var tiddlerTitle = {tiddler_json};
+    var templateTitle = {template_json};
 
     // Set layout to use single-tiddler wrapper
     $tw.preloadTiddlers.push({{
@@ -4103,15 +4317,16 @@ fn wiki_protocol_handler(app: &tauri::AppHandle, request: Request<Vec<u8>>) -> R
     }});
 
     // Inject a custom wrapper template that sets currentTiddler
+    // Build the wikitext dynamically to avoid escaping issues
     $tw.preloadTiddlers.push({{
         title: "$:/TiddlyDesktop/SingleTiddlerLayout",
-        text: '<$set name="currentTiddler" value="{escaped_tiddler}"><$transclude tiddler="{escaped_template}" mode="block"/></$set>'
+        text: '<$set name="currentTiddler" value="' + tiddlerTitle.replace(/"/g, '&quot;') + '"><$transclude tiddler="' + templateTitle.replace(/"/g, '&quot;') + '" mode="block"/></$set>'
     }});
 
     // Store the tiddler title for reference
-    window.__SINGLE_TIDDLER_TITLE__ = "{escaped_tiddler}";
+    window.__SINGLE_TIDDLER_TITLE__ = tiddlerTitle;
 }})();
-</script>"##, escaped_tiddler=escaped_tiddler, escaped_template=escaped_template)
+</script>"##, tiddler_json=tiddler_json, template_json=template_json)
             } else {
                 String::new()
             };
@@ -5012,6 +5227,9 @@ fn run_wiki_mode(args: WikiModeArgs) {
         .register_uri_scheme_protocol("wikifile", |ctx, request| {
             wiki_protocol_handler(ctx.app_handle(), request)
         })
+        .register_uri_scheme_protocol("tdasset", |ctx, request| {
+            tdasset_protocol_handler(ctx.app_handle(), request)
+        })
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
@@ -5744,6 +5962,9 @@ pub fn run() {
         })
         .register_uri_scheme_protocol("wikifile", |ctx, request| {
             wiki_protocol_handler(ctx.app_handle(), request)
+        })
+        .register_uri_scheme_protocol("tdasset", |ctx, request| {
+            tdasset_protocol_handler(ctx.app_handle(), request)
         })
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())

@@ -46,20 +46,28 @@ pub fn get_wiki_init_script(wiki_path: &str, window_label: &str, is_main_wiki: b
 }
 
 /// Full JavaScript initialization script with optional language override
+/// Uses serde_json for safe string escaping to prevent injection attacks
 pub fn get_wiki_init_script_with_language(wiki_path: &str, window_label: &str, is_main_wiki: bool, language: Option<&str>) -> String {
+    // Use serde_json::to_string for proper JSON escaping - this handles all edge cases
+    // including backslashes, quotes, newlines, unicode, etc.
+    let wiki_path_json = serde_json::to_string(wiki_path).unwrap_or_else(|_| "\"\"".to_string());
+    let window_label_json = serde_json::to_string(window_label).unwrap_or_else(|_| "\"\"".to_string());
     let lang_line = match language {
-        Some(lang) => format!(r#"window.__TIDDLYDESKTOP_LANGUAGE__ = "{}";"#, lang.replace('"', "\\\"")),
+        Some(lang) => {
+            let lang_json = serde_json::to_string(lang).unwrap_or_else(|_| "\"\"".to_string());
+            format!("window.__TIDDLYDESKTOP_LANGUAGE__ = {};", lang_json)
+        }
         None => String::new(),
     };
     format!(
         r#"
-    window.__WIKI_PATH__ = "{}";
-    window.__WINDOW_LABEL__ = "{}";
+    window.__WIKI_PATH__ = {};
+    window.__WINDOW_LABEL__ = {};
     window.__IS_MAIN_WIKI__ = {};
     {}
     "#,
-        wiki_path.replace('\\', "\\\\").replace('"', "\\\""),
-        window_label.replace('\\', "\\\\").replace('"', "\\\""),
+        wiki_path_json,
+        window_label_json,
         is_main_wiki,
         lang_line
     ) + get_dialog_init_script()

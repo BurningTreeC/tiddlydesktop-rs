@@ -24,8 +24,9 @@ pub const IPC_PORT: u16 = 45678;
 /// Length of the authentication token in bytes
 const AUTH_TOKEN_LENGTH: usize = 32;
 
-/// Read timeout for IPC connections (30 seconds - allows large transfers)
-const IPC_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+/// Read timeout for IPC connections during initial handshake (prevents slow-loris)
+/// After registration, the timeout is removed to allow long-lived idle connections
+const IPC_HANDSHAKE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
 /// Maximum concurrent IPC connections (one per wiki window, plus some headroom)
 const MAX_IPC_CONNECTIONS: usize = 100;
@@ -226,8 +227,9 @@ impl IpcServer {
                         continue;
                     }
 
-                    // Security: Set read timeout to prevent slow-loris attacks
-                    if let Err(e) = stream.set_read_timeout(Some(IPC_READ_TIMEOUT)) {
+                    // Security: Set read timeout during handshake to prevent slow-loris attacks
+                    // After authentication, timeout is removed to allow long-lived idle connections
+                    if let Err(e) = stream.set_read_timeout(Some(IPC_HANDSHAKE_TIMEOUT)) {
                         eprintln!("[IPC] Warning: Failed to set read timeout: {}", e);
                     }
 
@@ -336,6 +338,12 @@ fn handle_client(
                                     wiki_path, pid, is_tiddler_window);
 
                                 client_authenticated = true;
+
+                                // Remove read timeout after successful auth to allow long-lived idle connections
+                                // This is safe because we've already authenticated the client
+                                if let Err(e) = stream.set_read_timeout(None) {
+                                    eprintln!("[IPC] Warning: Failed to clear read timeout: {}", e);
+                                }
                                 client_wiki_path = Some(wiki_path.clone());
                                 client_pid = Some(*pid);
 
@@ -510,6 +518,16 @@ fn handle_client(
                 }
             }
             Err(e) => {
+                // Check if this is a timeout error
+                if e.kind() == std::io::ErrorKind::WouldBlock || e.kind() == std::io::ErrorKind::TimedOut {
+                    // Timeout during handshake (before auth) - disconnect
+                    if !client_authenticated {
+                        eprintln!("[IPC] Handshake timeout from {}, disconnecting", peer_addr);
+                        break;
+                    }
+                    // After auth, timeouts shouldn't happen (timeout is cleared), but if they do, continue
+                    continue;
+                }
                 eprintln!("[IPC] Read error: {}", e);
                 break;
             }

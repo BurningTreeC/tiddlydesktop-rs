@@ -398,6 +398,13 @@
             event.stopPropagation();
         }, true);
 
+        // Block paste events on landing page to prevent import mechanism
+        document.addEventListener("paste", function(event) {
+            invoke("js_log", { message: "Landing page: paste blocked (preventing import)" });
+            event.preventDefault();
+            event.stopPropagation();
+        }, true);
+
         // Handle drag motion - show visual feedback
         listen("td-drag-motion", function(event) {
             if (!nativeDragActive) {

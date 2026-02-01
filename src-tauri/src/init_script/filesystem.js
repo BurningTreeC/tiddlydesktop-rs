@@ -156,19 +156,22 @@
             console.log('[TiddlyDesktop] copyToClipboard override installed');
 
             // Media interceptor for filesystem paths
+            // Uses tdasset:// protocol which has proper path validation on the Rust side
             function setupMediaInterceptor() {
-                if (!window.__TAURI__ || !window.__TAURI__.core || !window.__TAURI__.core.convertFileSrc) {
-                    setTimeout(setupMediaInterceptor, 100);
-                    return;
+                // Convert a filesystem path to a tdasset:// URL
+                // This uses our validated protocol instead of the permissive asset:// protocol
+                function convertToTdassetUrl(path) {
+                    // URL-encode the path for safe URL inclusion
+                    // The Rust handler will decode and validate it
+                    return 'tdasset://localhost/' + encodeURIComponent(path);
                 }
-
-                var convertFileSrc = window.__TAURI__.core.convertFileSrc;
 
                 function convertElementSrc(element) {
                     var src = element.getAttribute('src');
                     if (!src) return;
 
-                    if (src.startsWith('asset://') || src.startsWith('data:') ||
+                    // Skip if already using a protocol or data URL
+                    if (src.startsWith('tdasset://') || src.startsWith('asset://') || src.startsWith('data:') ||
                         src.startsWith('http://') || src.startsWith('https://') ||
                         src.startsWith('blob:') || src.startsWith('wikifile://')) {
                         return;
@@ -176,8 +179,9 @@
 
                     var resolvedPath = resolveFilesystemPath(src);
                     if (resolvedPath) {
-                        var assetUrl = convertFileSrc(resolvedPath);
-                        element.setAttribute('src', assetUrl);
+                        // Use tdasset:// for proper path validation in Rust
+                        var tdassetUrl = convertToTdassetUrl(resolvedPath);
+                        element.setAttribute('src', tdassetUrl);
                     }
                 }
 

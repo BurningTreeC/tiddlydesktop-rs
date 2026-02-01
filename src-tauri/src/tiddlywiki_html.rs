@@ -127,19 +127,17 @@ pub fn inject_tiddler_into_html(html: &str, tiddler_title: &str, tiddler_type: &
     // Modern TiddlyWiki (5.2+) uses JSON store in a script tag
     // Format: <script class="tiddlywiki-tiddler-store" type="application/json">[{...}]</script>
 
-    // Escape content for JSON string
-    let json_escaped_content = content
-        .replace('\\', "\\\\")
-        .replace('"', "\\\"")
-        .replace('\n', "\\n")
-        .replace('\r', "\\r")
-        .replace('\t', "\\t");
-
-    // Create the new tiddler JSON object
-    let new_tiddler = format!(
-        r#"{{"title":"{}","type":"{}","text":"{}"}}"#,
-        tiddler_title, tiddler_type, json_escaped_content
-    );
+    // Use serde_json for proper JSON escaping of all string values
+    // This handles all edge cases: quotes, backslashes, newlines, unicode, etc.
+    let tiddler_obj = serde_json::json!({
+        "title": tiddler_title,
+        "type": tiddler_type,
+        "text": content
+    });
+    let new_tiddler = serde_json::to_string(&tiddler_obj).unwrap_or_else(|_| {
+        // Fallback to empty object if serialization fails (should never happen)
+        "{}".to_string()
+    });
 
     // Find the tiddler store - look for the LAST one (TW can have multiple stores)
     // The store ends with ]</script>
@@ -156,10 +154,13 @@ pub fn inject_tiddler_into_html(html: &str, tiddler_title: &str, tiddler_type: &
     }
 
     // Fallback to div format for older TiddlyWiki
+    // HTML-encode all values for safe attribute/content insertion
+    let encoded_title = utils::html_encode(tiddler_title);
+    let encoded_type = utils::html_encode(tiddler_type);
     let encoded_content = utils::html_encode(content);
     let new_div = format!(
         r#"<div title="{}" type="{}">{}</div>"#,
-        tiddler_title, tiddler_type, encoded_content
+        encoded_title, encoded_type, encoded_content
     );
 
     let store_end_markers = [

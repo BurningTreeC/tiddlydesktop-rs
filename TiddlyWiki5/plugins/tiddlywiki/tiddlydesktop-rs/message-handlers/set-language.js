@@ -55,9 +55,9 @@ exports.startup = function() {
                 });
         };
 
-        // If dirty, save wiki first, then change language
-        if (isDirty) {
-            console.log("[TiddlyDesktop] Wiki has unsaved changes, saving before language change...");
+        // If dirty or setting to auto-detect (empty), save wiki first, then change language
+        if (isDirty || language === "") {
+            console.log("[TiddlyDesktop] Saving wiki before language change...");
             // Trigger wiki save
             $tw.rootWidget.dispatchEvent({type: "tm-save-wiki"});
             // Wait a moment for save to process, then save language and reload

@@ -6,8 +6,8 @@ tags: $:/tags/Stylesheet
 	display: flex;
 	align-items: center;
 	padding: 12px 16px;
-	background: #f0f0f0;
-	border-bottom: 1px solid #ddd;
+	background: <<colour page-background>>;
+	border-bottom: 1px solid <<colour tab-border>>;
 	box-shadow: 0 2px 4px rgba(0,0,0,0.1);
 }
 
@@ -25,17 +25,17 @@ tags: $:/tags/Stylesheet
 	align-items: center;
 	gap: 6px;
 	padding: 6px 12px;
-	background: #fff;
-	border: 1px solid #ccc;
+	background: <<colour tiddler-background>>;
+	border: 1px solid <<colour tiddler-border>>;
 	border-radius: 4px;
 	cursor: pointer;
 	font-size: 14px;
-	color: #333;
+	color: <<colour foreground>>;
 }
 
 .td-button:hover {
-	background: #e8e8e8;
-	border-color: #bbb;
+	background: <<colour tab-background>>;
+	border-color: <<colour tab-border>>;
 }
 
 .td-button-create-new {
@@ -59,10 +59,10 @@ tags: $:/tags/Stylesheet
 .td-drop-zone {
 	margin: 16px;
 	padding: 32px;
-	border: 2px dashed #ccc;
+	border: 2px dashed <<colour muted-foreground>>;
 	border-radius: 8px;
 	text-align: center;
-	color: #888;
+	color: <<colour muted-foreground>>;
 	transition: all 0.2s;
 }
 
@@ -76,16 +76,16 @@ tags: $:/tags/Stylesheet
 .td-drop-zone .td-drop-hint svg {
 	width: 24px;
 	height: 24px;
-	fill: #888;
+	fill: <<colour muted-foreground>>;
 }
 
 .td-drop-zone .td-drop-active {
-	color: #4a90d9;
+	color: <<colour primary>>;
 	font-weight: bold;
 }
 
 .td-drop-zone:has(.td-drop-active) {
-	border-color: #4a90d9;
+	border-color: <<colour primary>>;
 	background: rgba(74, 144, 217, 0.05);
 }
 
@@ -102,8 +102,8 @@ tags: $:/tags/Stylesheet
 	align-items: flex-start;
 	margin-bottom: 12px;
 	padding: 12px;
-	background: #fff;
-	border: 1px solid #e0e0e0;
+	background: <<colour tiddler-background>>;
+	border: 1px solid <<colour tiddler-border>>;
 	border-left: 4px solid transparent;
 	border-radius: 4px;
 	box-shadow: 1px 1px 4px rgba(0,0,0,0.1);
@@ -111,7 +111,7 @@ tags: $:/tags/Stylesheet
 }
 
 .td-wikilist-item:hover {
-	border-left-color: #4a90d9;
+	border-left-color: <<colour primary>>;
 	box-shadow: 2px 2px 8px rgba(0,0,0,0.15);
 }
 
@@ -154,7 +154,7 @@ tags: $:/tags/Stylesheet
 .td-wiki-title {
 	font-weight: 600;
 	font-size: 15px;
-	color: #333;
+	color: <<colour foreground>>;
 	margin-bottom: 4px;
 	display: flex;
 	align-items: center;
@@ -164,12 +164,12 @@ tags: $:/tags/Stylesheet
 .td-wiki-title svg {
 	width: 16px;
 	height: 16px;
-	fill: #666;
+	fill: <<colour muted-foreground>>;
 }
 
 .td-wiki-url {
 	font-size: 12px;
-	color: #888;
+	color: <<colour muted-foreground>>;
 	white-space: nowrap;
 	overflow: hidden;
 	text-overflow: ellipsis;
@@ -243,17 +243,17 @@ tags: $:/tags/Stylesheet
 	gap: 8px;
 	margin-top: 8px;
 	padding-top: 8px;
-	border-top: 1px solid #eee;
+	border-top: 1px solid <<colour tab-border>>;
 	font-size: 12px;
 }
 
 .td-backup-dir-label {
-	color: #666;
+	color: <<colour muted-foreground>>;
 	white-space: nowrap;
 }
 
 .td-backup-dir-path {
-	color: #444;
+	color: <<colour foreground>>;
 	flex: 1;
 	min-width: 0;
 	overflow: hidden;
@@ -262,7 +262,7 @@ tags: $:/tags/Stylesheet
 }
 
 .td-backup-dir-path.td-backup-dir-default {
-	color: #888;
+	color: <<colour muted-foreground>>;
 	font-style: italic;
 }
 
@@ -294,7 +294,7 @@ tags: $:/tags/Stylesheet
 .td-empty-message {
 	text-align: center;
 	padding: 48px 24px;
-	color: #888;
+	color: <<colour muted-foreground>>;
 }
 
 .td-empty-message p {
@@ -328,7 +328,7 @@ html, body {
 }
 
 body {
-	background: #f5f5f5;
+	background: <<colour page-background>>;
 	display: flex;
 	flex-direction: column;
 }
@@ -337,7 +337,7 @@ body {
 	flex: 1;
 	display: flex;
 	flex-direction: column;
-	overflow: hidden;
+	overflow: visible;
 	width: 100%;
 	max-width: none !important;
 	min-height: 0;
@@ -349,7 +349,7 @@ body {
 	flex: 1;
 	display: flex;
 	flex-direction: column;
-	overflow: hidden;
+	overflow: visible;
 	width: 100% !important;
 	max-width: none !important;
 	min-height: 0;
@@ -363,7 +363,7 @@ body {
 	flex: 1;
 	display: flex;
 	flex-direction: column;
-	overflow: hidden;
+	overflow: visible;
 	width: 100% !important;
 	max-width: none !important;
 	min-height: 0;
@@ -373,7 +373,7 @@ body {
 	flex: 1;
 	display: flex;
 	flex-direction: column;
-	overflow: auto;
+	overflow: visible;
 	min-height: 0;
 }
 
@@ -396,7 +396,7 @@ body {
 }
 
 .td-modal {
-	background: white;
+	background: <<colour modal-background>>;
 	border-radius: 8px;
 	box-shadow: 0 4px 24px rgba(0, 0, 0, 0.3);
 	max-width: 700px;
@@ -409,19 +409,19 @@ body {
 
 .td-modal-header {
 	padding: 16px 20px;
-	border-bottom: 1px solid #e0e0e0;
-	background: #f8f8f8;
+	border-bottom: 1px solid <<colour modal-border>>;
+	background: <<colour page-background>>;
 }
 
 .td-modal-header h2 {
 	margin: 0 0 4px 0;
 	font-size: 20px;
-	color: #333;
+	color: <<colour foreground>>;
 }
 
 .td-modal-subtitle {
 	font-size: 13px;
-	color: #666;
+	color: <<colour muted-foreground>>;
 }
 
 .td-modal-body {
@@ -432,8 +432,8 @@ body {
 
 .td-modal-footer {
 	padding: 12px 20px;
-	border-top: 1px solid #e0e0e0;
-	background: #f8f8f8;
+	border-top: 1px solid <<colour modal-border>>;
+	background: <<colour page-background>>;
 	display: flex;
 	justify-content: flex-end;
 	gap: 10px;
@@ -446,12 +446,12 @@ body {
 .td-section h3 {
 	margin: 0 0 12px 0;
 	font-size: 15px;
-	color: #333;
+	color: <<colour foreground>>;
 }
 
 .td-optional {
 	font-weight: normal;
-	color: #888;
+	color: <<colour muted-foreground>>;
 	font-size: 12px;
 }
 
@@ -464,8 +464,8 @@ body {
 
 .td-edition-btn {
 	padding: 12px;
-	background: #fff;
-	border: 2px solid #e0e0e0;
+	background: <<colour tiddler-background>>;
+	border: 2px solid <<colour tiddler-border>>;
 	border-radius: 6px;
 	cursor: pointer;
 	text-align: left;
@@ -473,26 +473,26 @@ body {
 }
 
 .td-edition-btn:hover {
-	border-color: #4a90d9;
-	background: #f8fafc;
+	border-color: <<colour primary>>;
+	background: <<colour tab-background>>;
 }
 
 .td-edition-btn.td-edition-selected {
-	border-color: #4a90d9;
-	background: #e8f4ff;
-	box-shadow: 0 0 0 1px #4a90d9;
+	border-color: <<colour primary>>;
+	background: <<colour selection-background>>;
+	box-shadow: 0 0 0 1px <<colour primary>>;
 }
 
 .td-edition-name {
 	font-weight: 600;
 	font-size: 14px;
-	color: #333;
+	color: <<colour foreground>>;
 	margin-bottom: 4px;
 }
 
 .td-edition-desc {
 	font-size: 12px;
-	color: #666;
+	color: <<colour muted-foreground>>;
 	line-height: 1.3;
 }
 
@@ -500,10 +500,10 @@ body {
 .td-plugin-categories {
 	max-height: 300px;
 	overflow-y: auto;
-	border: 1px solid #e0e0e0;
+	border: 1px solid <<colour tiddler-border>>;
 	border-radius: 6px;
 	padding: 12px;
-	background: #fafafa;
+	background: <<colour page-background>>;
 }
 
 .td-plugin-category {
@@ -517,7 +517,7 @@ body {
 .td-plugin-category h4 {
 	margin: 0 0 8px 0;
 	font-size: 13px;
-	color: #666;
+	color: <<colour muted-foreground>>;
 	text-transform: uppercase;
 	letter-spacing: 0.5px;
 }
@@ -533,8 +533,8 @@ body {
 	align-items: center;
 	gap: 8px;
 	padding: 8px 12px;
-	background: #fff;
-	border: 2px solid #e0e0e0;
+	background: <<colour tiddler-background>>;
+	border: 2px solid <<colour tiddler-border>>;
 	border-radius: 4px;
 	cursor: pointer;
 	text-align: left;
@@ -545,13 +545,13 @@ body {
 }
 
 .td-plugin-item:hover {
-	border-color: #4a90d9;
-	background: #f8fafc;
+	border-color: <<colour primary>>;
+	background: <<colour tab-background>>;
 }
 
 .td-plugin-item.td-plugin-selected {
-	border-color: #4a90d9;
-	background: #e8f4ff;
+	border-color: <<colour primary>>;
+	background: <<colour selection-background>>;
 }
 
 .td-check {
@@ -566,11 +566,11 @@ body {
 .td-check svg {
 	width: 16px;
 	height: 16px;
-	fill: #4a90d9;
+	fill: <<colour primary>>;
 }
 
 .td-check.td-unchecked {
-	border: 2px solid #ccc;
+	border: 2px solid <<colour tiddler-border>>;
 	border-radius: 3px;
 	width: 16px;
 	height: 16px;
@@ -603,11 +603,11 @@ body {
 
 .td-plugin-name {
 	font-weight: 500;
-	color: #333;
+	color: <<colour foreground>>;
 }
 
 .td-plugin-desc {
-	color: #888;
+	color: <<colour muted-foreground>>;
 	font-size: 12px;
 }
 
@@ -623,13 +623,13 @@ body {
 }
 
 .td-button-create {
-	background: #4a90d9;
-	border-color: #3a7fc8;
-	color: white;
+	background: <<colour primary>>;
+	border-color: <<colour primary>>;
+	color: <<colour tiddler-background>>;
 }
 
 .td-button-create:hover {
-	background: #3a7fc8;
+	filter: brightness(0.9);
 }
 
 /* Loading state */
@@ -641,8 +641,8 @@ body {
 .td-loading-spinner {
 	width: 40px;
 	height: 40px;
-	border: 3px solid #e0e0e0;
-	border-top-color: #4a90d9;
+	border: 3px solid <<colour tiddler-border>>;
+	border-top-color: <<colour primary>>;
 	border-radius: 50%;
 	margin: 0 auto 16px;
 	animation: td-spin 0.8s linear infinite;
@@ -653,7 +653,7 @@ body {
 }
 
 .td-loading-text {
-	color: #666;
+	color: <<colour muted-foreground>>;
 	font-size: 14px;
 }
 
@@ -694,8 +694,8 @@ body {
 	align-items: center;
 	gap: 6px;
 	padding: 8px 12px;
-	background: #f8f8f8;
-	border: 1px solid #e0e0e0;
+	background: <<colour page-background>>;
+	border: 1px solid <<colour tiddler-border>>;
 	border-radius: 6px;
 	cursor: pointer;
 	width: 100%;
@@ -704,26 +704,26 @@ body {
 }
 
 .td-group-toggle:hover {
-	background: #f0f0f0;
-	border-color: #ccc;
+	background: <<colour tab-background>>;
+	border-color: <<colour tab-border>>;
 }
 
 .td-group-toggle svg {
 	width: 16px;
 	height: 16px;
-	fill: #666;
+	fill: <<colour muted-foreground>>;
 	flex-shrink: 0;
 }
 
 .td-group-name {
 	font-weight: 600;
 	font-size: 14px;
-	color: #333;
+	color: <<colour foreground>>;
 }
 
 .td-group-count {
 	font-size: 12px;
-	color: #888;
+	color: <<colour muted-foreground>>;
 	margin-left: 4px;
 }
 
@@ -763,33 +763,35 @@ body {
 	border: none;
 	cursor: pointer;
 	font-size: 13px;
-	color: #333;
+	color: <<colour foreground>>;
 	transition: background 0.1s;
 }
 
 .td-group-option:hover {
-	background: #f0f0f0;
+	background: <<colour tab-background>>;
 }
 
 .td-group-new {
 	display: flex;
 	gap: 6px;
 	padding: 8px 12px;
-	border-top: 1px solid #e0e0e0;
+	border-top: 1px solid <<colour tiddler-border>>;
 	margin-top: 4px;
 }
 
 .td-group-input {
 	flex: 1;
 	padding: 6px 10px;
-	border: 1px solid #ccc;
+	border: 1px solid <<colour tiddler-border>>;
 	border-radius: 4px;
 	font-size: 13px;
+	background: <<colour tiddler-background>>;
+	color: <<colour foreground>>;
 }
 
 .td-group-input:focus {
 	outline: none;
-	border-color: #4a90d9;
+	border-color: <<colour primary>>;
 	box-shadow: 0 0 0 2px rgba(74, 144, 217, 0.2);
 }
 
@@ -813,14 +815,14 @@ body {
 	background: none;
 	border: none;
 	cursor: pointer;
-	color: #666;
+	color: <<colour muted-foreground>>;
 	border-radius: 4px;
 	transition: all 0.15s;
 }
 
 .td-modal-close:hover {
-	background: #e0e0e0;
-	color: #333;
+	background: <<colour tab-background>>;
+	color: <<colour foreground>>;
 }
 
 .td-modal-close svg {
@@ -840,8 +842,8 @@ body {
 	align-items: center;
 	gap: 8px;
 	padding: 10px 12px;
-	background: #f8f8f8;
-	border: 1px solid #e0e0e0;
+	background: <<colour page-background>>;
+	border: 1px solid <<colour tiddler-border>>;
 	border-radius: 6px;
 	margin-bottom: 8px;
 }
@@ -853,13 +855,13 @@ body {
 .td-group-manager-name {
 	font-weight: 500;
 	font-size: 14px;
-	color: #333;
+	color: <<colour foreground>>;
 	flex: 1;
 }
 
 .td-group-manager-count {
 	font-size: 12px;
-	color: #888;
+	color: <<colour muted-foreground>>;
 	margin-left: auto;
 	margin-right: 8px;
 }
@@ -876,7 +878,7 @@ body {
 
 .td-no-groups {
 	text-align: center;
-	color: #888;
+	color: <<colour muted-foreground>>;
 	padding: 24px;
 	font-style: italic;
 }

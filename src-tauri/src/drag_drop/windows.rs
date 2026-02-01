@@ -9,7 +9,7 @@
 
 #![cfg(target_os = "windows")]
 
-use std::sync::atomic::AtomicU32;
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Mutex;
 
 use tauri::{Emitter, Manager, WebviewWindow};
@@ -86,6 +86,49 @@ lazy_static::lazy_static! {
 /// With composition hosting, this just stores the app handle - no hooks needed
 pub fn init_drop_target_hook() {
     eprintln!("[TiddlyDesktop] Windows: init_drop_target_hook (composition mode - no hooks needed)");
+}
+
+// ============================================================================
+// Internal Drag State (for FFI with wry fork)
+// ============================================================================
+
+/// Flag indicating an internal drag is active (drag started inside WebView2)
+static INTERNAL_DRAG_ACTIVE: AtomicBool = AtomicBool::new(false);
+/// Flag indicating the internal drag is a text selection drag (not a tiddler/$draggable)
+static INTERNAL_DRAG_IS_TEXT_SELECTION: AtomicBool = AtomicBool::new(false);
+
+/// FFI function for wry fork to check if there's an active internal drag.
+/// Returns 1 if there's an active internal drag from this WebView2, 0 otherwise.
+/// The wry fork's CompositionDragDropTarget calls this to decide whether to
+/// trigger the listener (which activates the dropzone).
+#[no_mangle]
+pub extern "C" fn tiddlydesktop_has_internal_drag() -> i32 {
+    if INTERNAL_DRAG_ACTIVE.load(Ordering::SeqCst) { 1 } else { 0 }
+}
+
+/// FFI function for wry fork to check if the internal drag is a text selection drag.
+/// Returns 1 if it's a text selection drag (should activate dropzone), 0 otherwise.
+/// Text selection drags SHOULD activate the dropzone for pasting.
+/// Tiddler/$draggable drags should NOT activate the dropzone.
+#[no_mangle]
+pub extern "C" fn tiddlydesktop_is_text_selection_drag() -> i32 {
+    if INTERNAL_DRAG_IS_TEXT_SELECTION.load(Ordering::SeqCst) { 1 } else { 0 }
+}
+
+/// Called when an internal drag starts (from DragStarting event)
+fn set_internal_drag_active(is_text_selection: bool) {
+    eprintln!("[TiddlyDesktop] Windows: set_internal_drag_active(is_text_selection={})", is_text_selection);
+    INTERNAL_DRAG_ACTIVE.store(true, Ordering::SeqCst);
+    INTERNAL_DRAG_IS_TEXT_SELECTION.store(is_text_selection, Ordering::SeqCst);
+}
+
+/// FFI function for wry fork to call when the drag ends (Drop or DragLeave).
+/// This clears the internal drag state.
+#[no_mangle]
+pub extern "C" fn tiddlydesktop_clear_internal_drag() {
+    eprintln!("[TiddlyDesktop] Windows: tiddlydesktop_clear_internal_drag");
+    INTERNAL_DRAG_ACTIVE.store(false, Ordering::SeqCst);
+    INTERNAL_DRAG_IS_TEXT_SELECTION.store(false, Ordering::SeqCst);
 }
 
 // ============================================================================
@@ -572,9 +615,42 @@ impl ICoreWebView2DragStartingEventHandler_Impl for DragStartingHandler_Impl {
     fn Invoke(
         &self,
         _sender: Ref<'_, ICoreWebView2CompositionController>,
-        _args: Ref<'_, ICoreWebView2DragStartingEventArgs>,
+        args: Ref<'_, ICoreWebView2DragStartingEventArgs>,
     ) -> windows_core::Result<()> {
         eprintln!("[TiddlyDesktop] Windows: DragStarting event from '{}'", self.window_label);
+
+        // Check if the drag data contains text/vnd.tiddler (tiddler/$draggable drag)
+        // If it does NOT contain tiddler data, it's a text selection drag
+        let is_text_selection = if let Some(args) = args.as_ref() {
+            unsafe {
+                if let Ok(data_object) = args.Data() {
+                    // Try to get text/vnd.tiddler format
+                    let tiddler_format = FORMATETC {
+                        cfFormat: cf_tiddler(),
+                        ptd: std::ptr::null_mut(),
+                        dwAspect: DVASPECT_CONTENT.0 as u32,
+                        lindex: -1,
+                        tymed: TYMED_HGLOBAL.0 as u32,
+                    };
+
+                    // If QueryGetData succeeds for text/vnd.tiddler, it's a tiddler drag
+                    let has_tiddler_data = data_object.QueryGetData(&tiddler_format) == S_OK;
+                    eprintln!("[TiddlyDesktop] Windows: DragStarting - has_tiddler_data={}", has_tiddler_data);
+                    !has_tiddler_data // Text selection if NO tiddler data
+                } else {
+                    eprintln!("[TiddlyDesktop] Windows: DragStarting - could not get data object");
+                    true // Assume text selection if we can't check
+                }
+            }
+        } else {
+            eprintln!("[TiddlyDesktop] Windows: DragStarting - no args");
+            true // Assume text selection if no args
+        };
+
+        // Set the internal drag state
+        // This is read by the wry fork's CompositionDragDropTarget via FFI
+        set_internal_drag_active(is_text_selection);
+
         Ok(())
     }
 }

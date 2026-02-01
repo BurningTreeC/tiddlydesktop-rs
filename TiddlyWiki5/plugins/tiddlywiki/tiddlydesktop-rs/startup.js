@@ -735,38 +735,79 @@ exports.startup = function(callback) {
 	});
 
 	// Set up drag-drop listeners
-	listen("tauri://drag-drop", function(event) {
-		var paths = event.payload.paths;
-		if (paths && paths.length > 0) {
-			paths.forEach(function(path) {
-				// Check if it's an HTML file or potentially a folder
-				if (path.endsWith(".html") || path.endsWith(".htm")) {
-					invoke("open_wiki_window", { path: path }).then(function(entry) {
-						addToWikiList(entry);
-						refreshWikiList();
-					});
-				} else {
-					// Try to open as a folder - backend will verify if it's a valid wiki folder
-					invoke("check_is_wiki_folder", { path: path }).then(function(isFolder) {
-						if (isFolder) {
-							invoke("open_wiki_folder", { path: path }).then(function(entry) {
-								addToWikiList(entry);
-								refreshWikiList();
-							}).catch(function(err) {
-								console.error("Failed to open wiki folder:", err);
-							});
-						}
-					});
+	// Track recently processed drops to prevent duplicate opens if both events fire
+	var recentDrops = {};
+	var DROP_DEDUPE_MS = 500;
+
+	// Handle dropped files/folders by opening them as wikis
+	function handleDroppedPaths(paths) {
+		if (!paths || paths.length === 0) return;
+		var now = Date.now();
+		paths.forEach(function(path) {
+			// Deduplicate: skip if this path was processed recently
+			if (recentDrops[path] && (now - recentDrops[path]) < DROP_DEDUPE_MS) {
+				return;
+			}
+			recentDrops[path] = now;
+
+			// Check if it's an HTML file or potentially a folder
+			if (path.endsWith(".html") || path.endsWith(".htm")) {
+				invoke("open_wiki_window", { path: path }).then(function(entry) {
+					addToWikiList(entry);
+					refreshWikiList();
+				});
+			} else {
+				// Try to open as a folder - backend will verify if it's a valid wiki folder
+				invoke("check_is_wiki_folder", { path: path }).then(function(isFolder) {
+					if (isFolder) {
+						invoke("open_wiki_folder", { path: path }).then(function(entry) {
+							addToWikiList(entry);
+							refreshWikiList();
+						}).catch(function(err) {
+							console.error("Failed to open wiki folder:", err);
+						});
+					}
+				});
+			}
+		});
+		// Clean up old entries periodically
+		setTimeout(function() {
+			var cutoff = Date.now() - DROP_DEDUPE_MS * 2;
+			for (var p in recentDrops) {
+				if (recentDrops[p] < cutoff) {
+					delete recentDrops[p];
 				}
-			});
-		}
+			}
+		}, DROP_DEDUPE_MS * 2);
+	}
+
+	// Listen for tauri://drag-drop (Windows, and Tauri's built-in drag-drop)
+	listen("tauri://drag-drop", function(event) {
+		$tw.wiki.setText("$:/temp/tiddlydesktop-rs/drag-over", "text", null, "no");
+		handleDroppedPaths(event.payload && event.payload.paths);
 	});
 
+	// Listen for td-file-drop (Linux/macOS custom GTK/Cocoa drag-drop)
+	listen("td-file-drop", function(event) {
+		$tw.wiki.setText("$:/temp/tiddlydesktop-rs/drag-over", "text", null, "no");
+		handleDroppedPaths(event.payload && event.payload.paths);
+	});
+
+	// Visual feedback for drag-over state (Tauri built-in events - Windows)
 	listen("tauri://drag-enter", function() {
 		$tw.wiki.setText("$:/temp/tiddlydesktop-rs/drag-over", "text", null, "yes");
 	});
 
 	listen("tauri://drag-leave", function() {
+		$tw.wiki.setText("$:/temp/tiddlydesktop-rs/drag-over", "text", null, "no");
+	});
+
+	// Visual feedback for drag-over state (custom GTK/Cocoa events - Linux/macOS)
+	listen("td-drag-motion", function() {
+		$tw.wiki.setText("$:/temp/tiddlydesktop-rs/drag-over", "text", null, "yes");
+	});
+
+	listen("td-drag-leave", function() {
 		$tw.wiki.setText("$:/temp/tiddlydesktop-rs/drag-over", "text", null, "no");
 	});
 
@@ -818,75 +859,7 @@ exports.startup = function(callback) {
 	// Initial load of wiki list from tiddler
 	refreshWikiList();
 
-	// Check for updates (only on main wiki / landing page)
-	if (isMainWiki) {
-		checkForUpdates();
-	}
-
 	callback();
 };
-
-// Check for updates by comparing current version with latest GitHub release
-function checkForUpdates() {
-	var GITHUB_RELEASES_URL = "https://api.github.com/repos/BurningTreeC/tiddlydesktop-rs/releases/latest";
-	var RELEASES_PAGE_URL = "https://github.com/BurningTreeC/tiddlydesktop-rs/releases";
-
-	// Get current app version from Tauri
-	if (!window.__TAURI__ || !window.__TAURI__.app) {
-		console.log("[Update Check] Tauri app API not available");
-		return;
-	}
-
-	window.__TAURI__.app.getVersion().then(function(currentVersion) {
-		console.log("[Update Check] Current version:", currentVersion);
-
-		// Fetch latest release from GitHub
-		fetch(GITHUB_RELEASES_URL)
-			.then(function(response) {
-				if (!response.ok) {
-					throw new Error("GitHub API request failed: " + response.status);
-				}
-				return response.json();
-			})
-			.then(function(release) {
-				var latestVersion = release.tag_name;
-				// Remove 'v' prefix if present
-				if (latestVersion.startsWith("v")) {
-					latestVersion = latestVersion.substring(1);
-				}
-				console.log("[Update Check] Latest version:", latestVersion);
-
-				// Compare versions
-				if (isNewerVersion(latestVersion, currentVersion)) {
-					console.log("[Update Check] Update available!");
-					$tw.wiki.setText("$:/temp/tiddlydesktop-rs/update-available", "text", null, "yes");
-					$tw.wiki.setText("$:/temp/tiddlydesktop-rs/latest-version", "text", null, latestVersion);
-					$tw.wiki.setText("$:/temp/tiddlydesktop-rs/releases-url", "text", null, RELEASES_PAGE_URL);
-				} else {
-					console.log("[Update Check] App is up to date");
-					$tw.wiki.setText("$:/temp/tiddlydesktop-rs/update-available", "text", null, "no");
-				}
-			})
-			.catch(function(err) {
-				console.log("[Update Check] Failed to check for updates:", err);
-			});
-	}).catch(function(err) {
-		console.log("[Update Check] Failed to get app version:", err);
-	});
-}
-
-// Compare two version strings (e.g., "0.2.1" > "0.2.0")
-function isNewerVersion(latest, current) {
-	var latestParts = latest.split(".").map(Number);
-	var currentParts = current.split(".").map(Number);
-
-	for (var i = 0; i < Math.max(latestParts.length, currentParts.length); i++) {
-		var latestPart = latestParts[i] || 0;
-		var currentPart = currentParts[i] || 0;
-		if (latestPart > currentPart) return true;
-		if (latestPart < currentPart) return false;
-	}
-	return false;
-}
 
 })();

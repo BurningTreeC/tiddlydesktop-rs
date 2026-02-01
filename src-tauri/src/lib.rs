@@ -119,7 +119,7 @@ fn x11_activate_window_impl(gtk_window: &gtk::ApplicationWindow, gdk_window: &gt
 /// Title starts empty - JavaScript will set the real title once TiddlyWiki loads
 #[cfg(target_os = "linux")]
 fn setup_header_bar(window: &tauri::WebviewWindow) {
-    use gtk::prelude::{ButtonExt, ContainerExt, EventBoxExt, GtkSettingsExt, GtkWindowExt, HeaderBarExt, LabelExt, OverlayExt, StyleContextExt, WidgetExt, WidgetExtManual};
+    use gtk::prelude::{BoxExt, ButtonExt, ContainerExt, EventBoxExt, GtkSettingsExt, GtkWindowExt, HeaderBarExt, LabelExt, OverlayExt, StyleContextExt, WidgetExt, WidgetExtManual};
     use gtk::glib;
 
     if let Ok(gtk_window) = window.gtk_window() {
@@ -163,11 +163,26 @@ fn setup_header_bar(window: &tauri::WebviewWindow) {
         icon_image.set_no_show_all(true); // Don't show with show_all()
         overlay.add_overlay(&icon_image);
 
-        // Close button overlaid on the right
+        // Button box for window controls (minimize and close) overlaid on the right
+        let button_box = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+        button_box.set_halign(gtk::Align::End);
+        button_box.set_valign(gtk::Align::Center);
+        button_box.set_margin_end(4);
+
+        // Minimize button (first, so it appears above close)
+        let minimize_button = gtk::Button::from_icon_name(Some("window-minimize-symbolic"), gtk::IconSize::Menu);
+        minimize_button.style_context().add_class("titlebutton");
+        minimize_button.style_context().add_class("minimize");
+        let win_weak_minimize = glib::object::ObjectExt::downgrade(&gtk_window);
+        minimize_button.connect_clicked(move |_| {
+            if let Some(win) = win_weak_minimize.upgrade() {
+                win.iconify();
+            }
+        });
+        button_box.pack_start(&minimize_button, false, false, 0);
+
+        // Close button (second, so it appears below minimize)
         let close_button = gtk::Button::from_icon_name(Some("window-close-symbolic"), gtk::IconSize::Menu);
-        close_button.set_halign(gtk::Align::End);
-        close_button.set_valign(gtk::Align::Center);
-        close_button.set_margin_end(4);
         close_button.style_context().add_class("titlebutton");
         close_button.style_context().add_class("close");
         let win_weak_close = glib::object::ObjectExt::downgrade(&gtk_window);
@@ -176,7 +191,9 @@ fn setup_header_bar(window: &tauri::WebviewWindow) {
                 win.close();
             }
         });
-        overlay.add_overlay(&close_button);
+        button_box.pack_start(&close_button, false, false, 0);
+
+        overlay.add_overlay(&button_box);
 
         event_box.add(&overlay);
 

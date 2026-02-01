@@ -16,6 +16,33 @@
     var promptWrapper = null;
     var confirmationBypassed = false;
 
+    // Calculate relative luminance of a color (for contrast calculation)
+    function getLuminance(color) {
+        // Parse hex color
+        var hex = color.replace('#', '');
+        if (hex.length === 3) {
+            hex = hex[0] + hex[0] + hex[1] + hex[1] + hex[2] + hex[2];
+        }
+        var r = parseInt(hex.substr(0, 2), 16) / 255;
+        var g = parseInt(hex.substr(2, 2), 16) / 255;
+        var b = parseInt(hex.substr(4, 2), 16) / 255;
+        // Apply gamma correction
+        r = r <= 0.03928 ? r / 12.92 : Math.pow((r + 0.055) / 1.055, 2.4);
+        g = g <= 0.03928 ? g / 12.92 : Math.pow((g + 0.055) / 1.055, 2.4);
+        b = b <= 0.03928 ? b / 12.92 : Math.pow((b + 0.055) / 1.055, 2.4);
+        return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+    }
+
+    // Get contrasting text color (black or white) for a given background
+    function getContrastingColor(bgColor) {
+        try {
+            var luminance = getLuminance(bgColor);
+            return luminance > 0.179 ? '#000000' : '#ffffff';
+        } catch (e) {
+            return '#333333'; // Safe fallback
+        }
+    }
+
     // Get a color from TiddlyWiki's current palette (with recursive resolution)
     function getColour(name, fallback, depth) {
         depth = depth || 0;
@@ -81,7 +108,8 @@
         var primary = getColour('primary', '#5778d8');
         var mutedForeground = getColour('muted-foreground', '#999999');
         var buttonBackground = getColour('button-background', '#f0f0f0');
-        var buttonForeground = getColour('button-foreground', foreground);
+        // Always calculate contrasting color to ensure readability
+        var buttonForeground = getContrastingColor(buttonBackground);
         var buttonBorder = getColour('button-border', '#cccccc');
 
         var modal = document.createElement('div');
@@ -105,7 +133,8 @@
 
         var okBtn = document.createElement('button');
         okBtn.textContent = 'OK';
-        okBtn.style.cssText = 'padding:8px 20px;background:' + primary + ';color:' + modalBackground + ';border:1px solid ' + primary + ';border-radius:4px;cursor:pointer;font-size:14px;';
+        var okBtnTextColor = getContrastingColor(primary);
+        okBtn.style.cssText = 'padding:8px 20px;background:' + primary + ';color:' + okBtnTextColor + ';border:1px solid ' + primary + ';border-radius:4px;cursor:pointer;font-size:14px;';
         okBtn.onclick = function() {
             wrapper.style.display = 'none';
             wrapper.innerHTML = '';

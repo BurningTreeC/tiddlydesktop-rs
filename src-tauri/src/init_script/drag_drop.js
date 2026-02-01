@@ -420,54 +420,12 @@
             document.body.classList.remove("td-drag-over");
         });
 
-        // Handle file drops - open as wikis
+        // Handle td-file-drop for visual feedback only (Linux/macOS)
+        // Note: Actual wiki opening is handled by startup.js in the TiddlyWiki plugin
         listen("td-file-drop", function(event) {
-            invoke("js_log", { message: "Landing page: td-file-drop received, paths: " + JSON.stringify(event.payload && event.payload.paths) });
-
+            invoke("js_log", { message: "Landing page: td-file-drop received (visual feedback only)" });
             nativeDragActive = false;
             document.body.classList.remove("td-drag-over");
-
-            if (!event.payload || !event.payload.paths || event.payload.paths.length === 0) {
-                return;
-            }
-
-            var paths = event.payload.paths;
-
-            // Open each dropped file/folder as a wiki
-            paths.forEach(function(filepath) {
-                if (!filepath || filepath.startsWith("data:")) {
-                    return;
-                }
-
-                // Determine if it's a folder or file
-                invoke("is_directory", { path: filepath }).then(function(isDir) {
-                    if (isDir) {
-                        invoke("js_log", { message: "Landing page: opening folder wiki: " + filepath });
-                        invoke("open_wiki_folder", { path: filepath }).catch(function(err) {
-                            invoke("js_log", { message: "Landing page: failed to open folder wiki: " + err });
-                        });
-                    } else {
-                        // Check if it's a valid wiki file extension
-                        var ext = filepath.split('.').pop().toLowerCase();
-                        if (ext === 'html' || ext === 'htm') {
-                            invoke("js_log", { message: "Landing page: opening HTML wiki: " + filepath });
-                            invoke("open_wiki_window", { path: filepath }).catch(function(err) {
-                                invoke("js_log", { message: "Landing page: failed to open wiki: " + err });
-                            });
-                        } else {
-                            invoke("js_log", { message: "Landing page: ignoring non-wiki file: " + filepath });
-                        }
-                    }
-                }).catch(function(err) {
-                    // If is_directory fails, try as HTML file
-                    var ext = filepath.split('.').pop().toLowerCase();
-                    if (ext === 'html' || ext === 'htm') {
-                        invoke("open_wiki_window", { path: filepath }).catch(function(err2) {
-                            invoke("js_log", { message: "Landing page: failed to open wiki: " + err2 });
-                        });
-                    }
-                });
-            });
         });
 
         // Handle tauri://drag-enter for visual feedback
@@ -484,53 +442,12 @@
             document.body.classList.remove("td-drag-over");
         });
 
-        // Handle tauri://drag-drop for file drops (Windows emits this, not td-file-drop)
+        // Handle tauri://drag-drop for visual feedback only
+        // Note: Actual wiki opening is handled by startup.js in the TiddlyWiki plugin
         listen("tauri://drag-drop", function(event) {
-            invoke("js_log", { message: "Landing page: tauri://drag-drop received, paths: " + JSON.stringify(event.payload && event.payload.paths) });
-
+            invoke("js_log", { message: "Landing page: tauri://drag-drop received (visual feedback only)" });
             nativeDragActive = false;
             document.body.classList.remove("td-drag-over");
-
-            var paths = (event.payload && event.payload.paths) || [];
-            if (paths.length === 0) {
-                return;
-            }
-
-            // Open each dropped file/folder as a wiki
-            paths.forEach(function(filepath) {
-                if (!filepath || filepath.startsWith("data:")) {
-                    return;
-                }
-
-                // Determine if it's a folder or file
-                invoke("is_directory", { path: filepath }).then(function(isDir) {
-                    if (isDir) {
-                        invoke("js_log", { message: "Landing page: opening folder wiki: " + filepath });
-                        invoke("open_wiki_folder", { path: filepath }).catch(function(err) {
-                            invoke("js_log", { message: "Landing page: failed to open folder wiki: " + err });
-                        });
-                    } else {
-                        // Check if it's a valid wiki file extension
-                        var ext = filepath.split('.').pop().toLowerCase();
-                        if (ext === 'html' || ext === 'htm') {
-                            invoke("js_log", { message: "Landing page: opening HTML wiki: " + filepath });
-                            invoke("open_wiki_window", { path: filepath }).catch(function(err) {
-                                invoke("js_log", { message: "Landing page: failed to open wiki: " + err });
-                            });
-                        } else {
-                            invoke("js_log", { message: "Landing page: ignoring non-wiki file: " + filepath });
-                        }
-                    }
-                }).catch(function(err) {
-                    // If is_directory fails, try as HTML file
-                    var ext = filepath.split('.').pop().toLowerCase();
-                    if (ext === 'html' || ext === 'htm') {
-                        invoke("open_wiki_window", { path: filepath }).catch(function(err2) {
-                            invoke("js_log", { message: "Landing page: failed to open wiki: " + err2 });
-                        });
-                    }
-                });
-            });
         });
 
         invoke("js_log", { message: "Landing page drag-drop ready" });

@@ -820,6 +820,15 @@
         isTextSelectionDrag = !draggableElement;
         dragSource = draggableElement || event.target;
 
+        // Set TiddlyWiki drag state IMMEDIATELY to prevent dropzone from activating
+        // This must happen before any async operations so the dropzone's dragenter
+        // handler sees it when it runs
+        // BUT: Only for draggable elements, not text selections - text selections
+        // SHOULD activate the dropzone so users can drop text to create tiddlers
+        if (typeof $tw !== 'undefined' && !isTextSelectionDrag) {
+            $tw.dragInProgress = dragSource;
+        }
+
         // Get data captured from setData() calls (works on all platforms)
         // This is more reliable than getData() which returns empty on Chromium during dragstart
         dragData = TD._getPendingDragData ? TD._getPendingDragData() : {};
@@ -909,11 +918,6 @@
                     });
                 }
             });
-        }
-
-        // Set TiddlyWiki drag state
-        if (typeof $tw !== 'undefined') {
-            $tw.dragInProgress = dragSource;
         }
 
     }, true);

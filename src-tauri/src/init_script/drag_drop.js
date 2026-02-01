@@ -1023,7 +1023,10 @@
             invoke("js_log", { message: "td-drag-content received on window: " + windowLabel + ", types: " + JSON.stringify(event.payload && event.payload.types) });
 
             // Skip if internal drag is active (handled by internal_drag.js)
-            if (TD.isInternalDragActive && TD.isInternalDragActive()) return;
+            if (TD.isInternalDragActive && TD.isInternalDragActive()) {
+                invoke("js_log", { message: "td-drag-content: skipping - internal drag active" });
+                return;
+            }
             if (event.payload) {
                 // Sanitize all string data to fix encoding issues
                 var sanitizedData = {};
@@ -1040,18 +1043,24 @@
                     isTextSelectionDrag: event.payload.is_text_selection_drag || false,
                     isSameWindow: event.payload.isSameWindow || false
                 };
+                invoke("js_log", { message: "td-drag-content: data set, pendingContentDropPos=" + !!pendingContentDropPos });
                 if (pendingContentDropPos) {
+                    invoke("js_log", { message: "td-drag-content: calling processContentDrop" });
                     processContentDrop();
                 }
             }
         });
 
         listen("td-drag-drop-position", function(event) {
+            invoke("js_log", { message: "td-drag-drop-position received, payload: " + JSON.stringify(event.payload) });
             // Skip if internal drag is active (handled by internal_drag.js)
             // Note: On Windows/macOS, same-window drops are also handled here because
             // IDropTarget/NSDraggingDestination intercepts the drop before WebView can handle it.
             // The isInternalDragActive check covers the case where internal_drag.js is handling it.
-            if (TD.isInternalDragActive && TD.isInternalDragActive()) return;
+            if (TD.isInternalDragActive && TD.isInternalDragActive()) {
+                invoke("js_log", { message: "td-drag-drop-position: skipping - internal drag active" });
+                return;
+            }
             if (event.payload) {
                 var pos;
                 if (event.payload.screenCoords) {
@@ -1065,7 +1074,9 @@
                     pos = { x: event.payload.x, y: event.payload.y };
                 }
                 pendingContentDropPos = pos;
+                invoke("js_log", { message: "td-drag-drop-position: pos set to " + JSON.stringify(pos) + ", pendingContentDropData=" + !!pendingContentDropData });
                 if (pendingContentDropData) {
+                    invoke("js_log", { message: "td-drag-drop-position: calling processContentDrop" });
                     processContentDrop();
                 }
             }
@@ -1196,11 +1207,14 @@
         }
 
         function processContentDrop() {
+            invoke("js_log", { message: "processContentDrop called, hasData=" + !!pendingContentDropData + ", hasPos=" + !!pendingContentDropPos });
             if (!pendingContentDropData) return;
 
             var capturedData = pendingContentDropData;
             var pos = pendingContentDropPos;
+            invoke("js_log", { message: "processContentDrop: types=" + JSON.stringify(capturedData.types) + ", pos=" + JSON.stringify(pos) });
             var dropTarget = getTargetElement(pos);
+            invoke("js_log", { message: "processContentDrop: dropTarget=" + (dropTarget ? dropTarget.tagName + (dropTarget.className ? "." + dropTarget.className.split(" ")[0] : "") : "null") });
 
             // Issue 3: For text-selection drags, filter out text/html to prevent styled content import
             // This applies to cross-wiki text selection drags where we want plain text only
@@ -1502,6 +1516,20 @@
 
             var dt = event.dataTransfer;
             if (!dt) return;
+
+            // DEBUG: Log all available types and their data
+            invoke("js_log", { message: "Native drop - DataTransfer types: " + JSON.stringify(Array.from(dt.types)) });
+            for (var di = 0; di < dt.types.length; di++) {
+                var dtype = dt.types[di];
+                if (dtype !== "Files") {
+                    try {
+                        var ddata = dt.getData(dtype);
+                        invoke("js_log", { message: "Native drop - " + dtype + ": " + (ddata ? ddata.substring(0, 500) : "(empty)") });
+                    } catch(e) {
+                        invoke("js_log", { message: "Native drop - " + dtype + ": ERROR " + e.message });
+                    }
+                }
+            }
 
             var capturedData = { types: [], data: {}, files: [] };
 

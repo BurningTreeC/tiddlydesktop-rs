@@ -359,6 +359,7 @@ pub struct DragContentData {
 /// State for tracking drag operations
 struct DragState {
     window: WebviewWindow,
+    gtk_window: gtk::Widget,
     drag_active: bool,
     /// Set to true when drag-drop signal fires (user released mouse button)
     drop_requested: bool,
@@ -373,6 +374,9 @@ struct DragState {
     /// Set to true when preview data confirms this is an external drag (not cross-wiki)
     /// Once set, we stop handling and let WebKit handle natively
     confirmed_external_drag: bool,
+    /// Set to true when GtkWindow has handled browser custom data (Chrome/Firefox)
+    /// Prevents WebKit handler from also processing the drop
+    handled_by_gtk_window: bool,
 }
 
 /// Set up drag-drop handling for a webview window
@@ -463,6 +467,7 @@ fn setup_gtk_drag_handlers(gtk_window: &gtk::ApplicationWindow, window: WebviewW
 
     let state = Rc::new(RefCell::new(DragState {
         window: window.clone(),
+        gtk_window: gtk_window.upcast_ref::<gtk::Widget>().clone(),
         drag_active: false,
         drop_requested: false,
         drop_in_progress: false,
@@ -470,6 +475,7 @@ fn setup_gtk_drag_handlers(gtk_window: &gtk::ApplicationWindow, window: WebviewW
         detected_cross_wiki_drag: false,
         preview_data_requested: false,
         confirmed_external_drag: false,
+        handled_by_gtk_window: false,
     }));
 
     // Set up handlers on the GTK window itself to intercept before WebKitGTK
@@ -933,19 +939,117 @@ fn find_webkit_widget(container: &impl IsA<gtk::Widget>) -> Option<gtk::Widget> 
 }
 
 /// Set up drag handlers on the window widget
-fn setup_widget_drag_handlers(_widget: &gtk::Widget, _state: Rc<RefCell<DragState>>, label: &str) {
-    // NOTE: We do NOT set up any drop handling on the GtkWindow!
-    //
-    // WebKitWebView is already a fully configured drag destination and handles:
-    //   - Caret positioning during drags
-    //   - Text insertion into inputs/textareas/contenteditables
-    //   - Native DOM drop events for TiddlyWiki's dropzones
-    //
-    // Any drag handling on the parent GtkWindow interferes with WebKit's native
-    // drop handling. We only observe drags on the WebKitWebView for visual feedback
-    // (td-drag-motion, td-drag-leave events) but let WebKit handle all drops.
+fn setup_widget_drag_handlers(widget: &gtk::Widget, state: Rc<RefCell<DragState>>, label: &str) {
+    // Set up the GTK window to receive browser-specific custom data formats
+    // that WebKit doesn't understand (chromium/x-web-custom-data, application/x-moz-custom-clipdata)
+    // We use GTK_DEST_DEFAULT_NONE to avoid interfering with WebKit's drop handling
+    use gtk::DestDefaults;
+
+    let chrome_target = gtk::TargetEntry::new("chromium/x-web-custom-data", gtk::TargetFlags::OTHER_APP, 100);
+    let moz_target = gtk::TargetEntry::new("application/x-moz-custom-clipdata", gtk::TargetFlags::OTHER_APP, 101);
+
+    widget.drag_dest_set(DestDefaults::empty(), &[chrome_target, moz_target], gdk::DragAction::COPY);
+
+    let state_data = state.clone();
+    let label_clone = label.to_string();
+    widget.connect_drag_data_received(move |_widget, context, x, y, selection_data, info, time| {
+        let data_type = selection_data.data_type().name();
+        eprintln!("[TiddlyDesktop] Linux: GtkWindow drag-data-received: type={}, info={}", data_type, info);
+
+        let raw_data = selection_data.data();
+        if raw_data.is_empty() {
+            eprintln!("[TiddlyDesktop] Linux: GtkWindow received empty data for {}", data_type);
+            return;
+        }
+
+        // Parse the browser custom data
+        let mut tiddler_json: Option<String> = None;
+        let mut other_content: HashMap<String, String> = HashMap::new();
+
+        if data_type == "chromium/x-web-custom-data" && raw_data.len() >= 12 {
+            if let Some(chrome_data) = parse_chromium_custom_data(&raw_data) {
+                eprintln!("[TiddlyDesktop] Linux: GtkWindow parsed Chrome data, {} entries", chrome_data.len());
+                for (mime_type, content) in &chrome_data {
+                    eprintln!("[TiddlyDesktop] Linux: Chrome entry: {} ({} chars)", mime_type, content.len());
+                    if mime_type == "text/vnd.tiddler" {
+                        tiddler_json = Some(content.clone());
+                    } else if mime_type == "text/html" {
+                        other_content.insert(mime_type.clone(), sanitize_html(content));
+                    } else {
+                        other_content.insert(mime_type.clone(), content.clone());
+                    }
+                }
+            }
+        } else if data_type == "application/x-moz-custom-clipdata" && raw_data.len() >= 8 {
+            if let Some(moz_data) = parse_moz_custom_clipdata(&raw_data) {
+                eprintln!("[TiddlyDesktop] Linux: GtkWindow parsed Mozilla data, {} entries", moz_data.len());
+                for (mime_type, content) in &moz_data {
+                    eprintln!("[TiddlyDesktop] Linux: Mozilla entry: {} ({} chars)", mime_type, content.len());
+                    if mime_type == "text/vnd.tiddler" {
+                        tiddler_json = Some(content.clone());
+                    } else if mime_type == "text/html" {
+                        other_content.insert(mime_type.clone(), sanitize_html(content));
+                    } else {
+                        other_content.insert(mime_type.clone(), content.clone());
+                    }
+                }
+            }
+        }
+
+        // Store parsed data in state for the drop handler to use
+        if tiddler_json.is_some() || !other_content.is_empty() {
+            let mut s = state_data.borrow_mut();
+            s.detected_cross_wiki_drag = true; // Treat as cross-wiki since we have tiddler data
+            s.handled_by_gtk_window = true; // Prevent WebKit handler from also processing
+
+            // Build types and data
+            let mut types = Vec::new();
+            let mut data = HashMap::new();
+
+            if let Some(ref tiddler) = tiddler_json {
+                eprintln!("[TiddlyDesktop] Linux: GtkWindow has tiddler data ({} chars)", tiddler.len());
+                types.push("text/vnd.tiddler".to_string());
+                data.insert("text/vnd.tiddler".to_string(), tiddler.clone());
+                types.push("text/plain".to_string());
+                data.insert("text/plain".to_string(), tiddler.clone());
+            }
+            for (mime_type, content) in other_content {
+                if !data.contains_key(&mime_type) {
+                    types.push(mime_type.clone());
+                    data.insert(mime_type, content);
+                }
+            }
+
+            // Emit to JavaScript
+            let window_label = label_clone.clone();
+            let app_handle = s.window.app_handle().clone();
+
+            // Get position - use stored position or current pointer
+            let (final_x, final_y) = s.last_position.unwrap_or((x, y));
+
+            context.drag_finish(true, false, time);
+            drop(s);
+
+            eprintln!("[TiddlyDesktop] Linux: GtkWindow emitting td-drag-content with {} types", types.len());
+            glib::idle_add_once(move || {
+                if let Some(window) = app_handle.get_webview_window(&window_label) {
+                    let _ = window.emit("td-drag-drop-position", serde_json::json!({
+                        "x": final_x,
+                        "y": final_y,
+                        "screenCoords": false,
+                        "targetWindow": window_label
+                    }));
+
+                    let content_data = DragContentData { types, data, target_window: window_label.clone() };
+                    eprintln!("[TiddlyDesktop] Linux: GtkWindow emitting: {:?}", content_data);
+                    let _ = window.emit("td-drag-content", &content_data);
+                }
+            });
+        }
+    });
+
     eprintln!(
-        "[TiddlyDesktop] Linux: Skipping GtkWindow drag handlers for '{}' - letting WebKit handle all drops natively",
+        "[TiddlyDesktop] Linux: GtkWindow drag handlers set up for '{}' (browser custom formats)",
         label
     );
 }
@@ -1246,9 +1350,39 @@ fn setup_webkit_drag_handlers_full(widget: &gtk::Widget, state: Rc<RefCell<DragS
                 true
             }
         } else {
-            // External drop (file manager, etc.) - let native handling work
-            eprintln!("[TiddlyDesktop] Linux: External drop - letting native handling work");
-            false
+            // External drop - check for browser custom data formats
+            let targets = context.list_targets();
+            let target_names: Vec<String> = targets.iter().map(|t| t.name().to_string()).collect();
+            eprintln!("[TiddlyDesktop] Linux: External drop - available targets: {:?}", target_names);
+
+            // Check for Chrome or Firefox custom data formats that may contain text/vnd.tiddler
+            let chrome_atom = gdk::Atom::intern("chromium/x-web-custom-data");
+            let moz_atom = gdk::Atom::intern("application/x-moz-custom-clipdata");
+
+            let has_chrome_data = targets.iter().any(|t| *t == chrome_atom);
+            let has_moz_data = targets.iter().any(|t| *t == moz_atom);
+
+            if has_chrome_data || has_moz_data {
+                // Browser custom data available - request from GTK window (not WebKit widget)
+                // WebKit doesn't understand these formats, so we request from the window
+                // which we've set up as a drag destination for these types
+                let format_name = if has_chrome_data { "chromium/x-web-custom-data" } else { "application/x-moz-custom-clipdata" };
+                eprintln!("[TiddlyDesktop] Linux: External drop has {} - requesting from GTK window", format_name);
+                let gtk_window = {
+                    let mut s = state_drop_signal.borrow_mut();
+                    s.drop_requested = true;
+                    s.drop_in_progress = true;
+                    s.last_position = Some((x, y));
+                    s.gtk_window.clone()
+                };
+                let target_atom = if has_chrome_data { chrome_atom } else { moz_atom };
+                gtk_window.drag_get_data(context, &target_atom, time);
+                true
+            } else {
+                // Regular external drop (file manager, etc.) - let native handling work
+                eprintln!("[TiddlyDesktop] Linux: External drop - letting native handling work");
+                false
+            }
         }
     });
 
@@ -1404,31 +1538,35 @@ fn parse_chromium_custom_data(data: &[u8]) -> Option<HashMap<String, String>> {
         return None;
     }
 
+    // Debug: dump first 32 bytes
+    eprintln!(
+        "[TiddlyDesktop] Linux: Chrome data first 32 bytes: {:?}",
+        &data[..std::cmp::min(32, data.len())]
+    );
+
     let mut result = HashMap::new();
     let mut offset = 0;
 
-    // Skip payload size (4 bytes)
+    // Read payload size (4 bytes) - this is the Pickle header
+    let payload_size = u32::from_le_bytes([data[0], data[1], data[2], data[3]]) as usize;
+    eprintln!("[TiddlyDesktop] Linux: Chrome payload size: {}", payload_size);
     offset += 4;
 
-    // Read number of entries (8 bytes little-endian, but usually small)
-    if offset + 8 > data.len() {
+    // Read number of entries (appears to be 4 bytes, not 8)
+    if offset + 4 > data.len() {
         return None;
     }
-    let num_entries = u64::from_le_bytes([
+    let num_entries = u32::from_le_bytes([
         data[offset],
         data[offset + 1],
         data[offset + 2],
         data[offset + 3],
-        data[offset + 4],
-        data[offset + 5],
-        data[offset + 6],
-        data[offset + 7],
     ]) as usize;
-    offset += 8;
+    offset += 4;
 
     eprintln!(
-        "[TiddlyDesktop] Linux: Chrome clipdata: {} entries",
-        num_entries
+        "[TiddlyDesktop] Linux: Chrome clipdata: {} entries (offset now {})",
+        num_entries, offset
     );
 
     for i in 0..num_entries {
@@ -1522,6 +1660,15 @@ fn handle_drag_data_received(
     time: u32,
 ) {
     let mut s = state.borrow_mut();
+
+    // Skip if GtkWindow already handled this drop (browser custom data)
+    if s.handled_by_gtk_window {
+        eprintln!("[TiddlyDesktop] Linux: WebKit drag-data-received skipped - already handled by GtkWindow");
+        s.handled_by_gtk_window = false; // Reset for next drag
+        s.drop_requested = false;
+        s.drop_in_progress = false;
+        return;
+    }
 
     // Only process as a drop if drag-drop signal has fired (user released mouse)
     // Otherwise this is just a preview/validation request - but check for cross-wiki drag
@@ -1658,6 +1805,7 @@ fn handle_drag_data_received(
         s.detected_cross_wiki_drag = false; // Reset for next drag
         s.preview_data_requested = false;
         s.confirmed_external_drag = false;
+        s.handled_by_gtk_window = false;
         return;
     }
 
@@ -1723,6 +1871,7 @@ fn handle_drag_data_received(
         s.detected_cross_wiki_drag = false; // Reset for next drag
         s.preview_data_requested = false;
         s.confirmed_external_drag = false;
+        s.handled_by_gtk_window = false;
         return;
     }
 
@@ -1948,6 +2097,7 @@ fn handle_drag_data_received(
                 s.detected_cross_wiki_drag = false; // Reset for next drag
                 s.preview_data_requested = false;
                 s.confirmed_external_drag = false;
+                s.handled_by_gtk_window = false;
                 return;
             }
         }
@@ -2017,6 +2167,7 @@ fn handle_drag_data_received(
     s.detected_cross_wiki_drag = false; // Reset for next drag
     s.preview_data_requested = false;
     s.confirmed_external_drag = false;
+    s.handled_by_gtk_window = false;
 
     // Drop the state borrow before emitting to avoid potential deadlocks
     drop(s);

@@ -609,6 +609,16 @@
         pendingDragElement = draggable;
         log('pointerdown(' + pointerType + ') on draggable: ' + draggable.tagName);
 
+        // TiddlyDesktop Windows fix: Set $tw.dragInProgress early during pointerdown
+        // to prevent the dropzone from activating before dragstart fires.
+        // On Windows/WebView2, there can be timing issues where dragenter fires
+        // before our dragstart handler has a chance to set this flag.
+        // We'll confirm/update it in dragstart and clear it in pointerup if no drag started.
+        if (typeof $tw !== 'undefined') {
+            $tw.dragInProgress = draggable;
+            log('Set $tw.dragInProgress early (pointerdown)');
+        }
+
         // Generate PNG and send to Rust immediately so it's ready when drag-begin fires
         generateDragImagePng(draggable, function(result) {
             if (result && window.__TAURI__?.core?.invoke) {
@@ -637,6 +647,11 @@
     // === Pointer up handler - clear pending state ===
     document.addEventListener('pointerup', function(event) {
         if (pendingDragElement && !internalDragActive) {
+            // No drag started - clear the early $tw.dragInProgress we set in pointerdown
+            if (typeof $tw !== 'undefined' && $tw.dragInProgress === pendingDragElement) {
+                $tw.dragInProgress = null;
+                log('Cleared early $tw.dragInProgress (no drag started)');
+            }
             pendingDragElement = null;
         }
     }, true);

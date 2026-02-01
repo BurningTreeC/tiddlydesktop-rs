@@ -1538,21 +1538,13 @@ fn parse_chromium_custom_data(data: &[u8]) -> Option<HashMap<String, String>> {
         return None;
     }
 
-    // Debug: dump first 32 bytes
-    eprintln!(
-        "[TiddlyDesktop] Linux: Chrome data first 32 bytes: {:?}",
-        &data[..std::cmp::min(32, data.len())]
-    );
-
     let mut result = HashMap::new();
     let mut offset = 0;
 
-    // Read payload size (4 bytes) - this is the Pickle header
-    let payload_size = u32::from_le_bytes([data[0], data[1], data[2], data[3]]) as usize;
-    eprintln!("[TiddlyDesktop] Linux: Chrome payload size: {}", payload_size);
+    // Skip payload size (4 bytes) - this is the Pickle header
     offset += 4;
 
-    // Read number of entries (appears to be 4 bytes, not 8)
+    // Read number of entries (4 bytes little-endian)
     if offset + 4 > data.len() {
         return None;
     }
@@ -1565,8 +1557,8 @@ fn parse_chromium_custom_data(data: &[u8]) -> Option<HashMap<String, String>> {
     offset += 4;
 
     eprintln!(
-        "[TiddlyDesktop] Linux: Chrome clipdata: {} entries (offset now {})",
-        num_entries, offset
+        "[TiddlyDesktop] Linux: Chrome clipdata: {} entries",
+        num_entries
     );
 
     for i in 0..num_entries {

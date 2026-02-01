@@ -633,12 +633,14 @@ impl ICoreWebView2DragStartingEventHandler_Impl for DragStartingHandler_Impl {
     ) -> windows_core::Result<()> {
         eprintln!("[TiddlyDesktop] Windows: DragStarting event from '{}'", self.window_label);
 
-        // Check if the drag data contains text/vnd.tiddler (tiddler/$draggable drag)
-        // If it does NOT contain tiddler data, it's a text selection drag
+        // Determine the type of internal drag:
+        // 1. Tiddler/$draggable drag (has text/vnd.tiddler) - skip dropzone
+        // 2. Link drag (has URL data but no tiddler) - skip dropzone
+        // 3. Text selection drag (has neither) - activate dropzone for paste
         let is_text_selection = if let Some(args) = args.as_ref() {
             unsafe {
                 if let Ok(data_object) = args.Data() {
-                    // Try to get text/vnd.tiddler format
+                    // Check for text/vnd.tiddler format (tiddler/$draggable drag)
                     let tiddler_format = FORMATETC {
                         cfFormat: cf_tiddler(),
                         ptd: std::ptr::null_mut(),
@@ -646,11 +648,34 @@ impl ICoreWebView2DragStartingEventHandler_Impl for DragStartingHandler_Impl {
                         lindex: -1,
                         tymed: TYMED_HGLOBAL.0 as u32,
                     };
-
-                    // If QueryGetData succeeds for text/vnd.tiddler, it's a tiddler drag
                     let has_tiddler_data = data_object.QueryGetData(&tiddler_format) == S_OK;
-                    eprintln!("[TiddlyDesktop] Windows: DragStarting - has_tiddler_data={}", has_tiddler_data);
-                    !has_tiddler_data // Text selection if NO tiddler data
+
+                    // Check for URL format (link drag)
+                    let url_format = FORMATETC {
+                        cfFormat: cf_url_w(),
+                        ptd: std::ptr::null_mut(),
+                        dwAspect: DVASPECT_CONTENT.0 as u32,
+                        lindex: -1,
+                        tymed: TYMED_HGLOBAL.0 as u32,
+                    };
+                    let has_url_data = data_object.QueryGetData(&url_format) == S_OK;
+
+                    // Also check text/x-moz-url (Firefox-style URL format)
+                    let moz_url_format = FORMATETC {
+                        cfFormat: cf_moz_url(),
+                        ptd: std::ptr::null_mut(),
+                        dwAspect: DVASPECT_CONTENT.0 as u32,
+                        lindex: -1,
+                        tymed: TYMED_HGLOBAL.0 as u32,
+                    };
+                    let has_moz_url = data_object.QueryGetData(&moz_url_format) == S_OK;
+
+                    eprintln!("[TiddlyDesktop] Windows: DragStarting - has_tiddler_data={}, has_url_data={}, has_moz_url={}",
+                        has_tiddler_data, has_url_data, has_moz_url);
+
+                    // Only a text selection if it has NEITHER tiddler data NOR URL data
+                    // Tiddler drags and link drags should NOT activate the dropzone
+                    !has_tiddler_data && !has_url_data && !has_moz_url
                 } else {
                     eprintln!("[TiddlyDesktop] Windows: DragStarting - could not get data object");
                     true // Assume text selection if we can't check

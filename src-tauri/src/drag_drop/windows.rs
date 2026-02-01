@@ -9,7 +9,7 @@
 
 #![cfg(target_os = "windows")]
 
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicU8, AtomicU32, Ordering};
 use std::sync::Mutex;
 
 use tauri::{Emitter, Manager, WebviewWindow};
@@ -92,10 +92,16 @@ pub fn init_drop_target_hook() {
 // Internal Drag State (for FFI with wry fork)
 // ============================================================================
 
-/// Flag indicating an internal drag is active (drag started inside WebView2)
-static INTERNAL_DRAG_ACTIVE: AtomicBool = AtomicBool::new(false);
-/// Flag indicating the internal drag is a text selection drag (not a tiddler/$draggable)
-static INTERNAL_DRAG_IS_TEXT_SELECTION: AtomicBool = AtomicBool::new(false);
+/// Combined internal drag state to prevent race conditions when reading.
+/// Values: 0 = no drag, 1 = tiddler/$draggable drag, 2 = text selection drag
+/// Using a single atomic ensures consistent reads - either the drag is active
+/// with its type, or it's not active at all.
+static INTERNAL_DRAG_STATE: AtomicU8 = AtomicU8::new(0);
+
+/// State values for INTERNAL_DRAG_STATE
+const DRAG_STATE_NONE: u8 = 0;
+const DRAG_STATE_TIDDLER: u8 = 1;  // Tiddler/$draggable drag (should NOT activate dropzone)
+const DRAG_STATE_TEXT_SELECTION: u8 = 2;  // Text selection drag (SHOULD activate dropzone)
 
 /// FFI function for wry fork to check if there's an active internal drag.
 /// Returns 1 if there's an active internal drag from this WebView2, 0 otherwise.
@@ -103,7 +109,7 @@ static INTERNAL_DRAG_IS_TEXT_SELECTION: AtomicBool = AtomicBool::new(false);
 /// trigger the listener (which activates the dropzone).
 #[no_mangle]
 pub extern "C" fn tiddlydesktop_has_internal_drag() -> i32 {
-    if INTERNAL_DRAG_ACTIVE.load(Ordering::SeqCst) { 1 } else { 0 }
+    if INTERNAL_DRAG_STATE.load(Ordering::Acquire) != DRAG_STATE_NONE { 1 } else { 0 }
 }
 
 /// FFI function for wry fork to check if the internal drag is a text selection drag.
@@ -112,14 +118,14 @@ pub extern "C" fn tiddlydesktop_has_internal_drag() -> i32 {
 /// Tiddler/$draggable drags should NOT activate the dropzone.
 #[no_mangle]
 pub extern "C" fn tiddlydesktop_is_text_selection_drag() -> i32 {
-    if INTERNAL_DRAG_IS_TEXT_SELECTION.load(Ordering::SeqCst) { 1 } else { 0 }
+    if INTERNAL_DRAG_STATE.load(Ordering::Acquire) == DRAG_STATE_TEXT_SELECTION { 1 } else { 0 }
 }
 
 /// Called when an internal drag starts (from DragStarting event)
 fn set_internal_drag_active(is_text_selection: bool) {
-    eprintln!("[TiddlyDesktop] Windows: set_internal_drag_active(is_text_selection={})", is_text_selection);
-    INTERNAL_DRAG_ACTIVE.store(true, Ordering::SeqCst);
-    INTERNAL_DRAG_IS_TEXT_SELECTION.store(is_text_selection, Ordering::SeqCst);
+    let state = if is_text_selection { DRAG_STATE_TEXT_SELECTION } else { DRAG_STATE_TIDDLER };
+    eprintln!("[TiddlyDesktop] Windows: set_internal_drag_active(is_text_selection={}) -> state={}", is_text_selection, state);
+    INTERNAL_DRAG_STATE.store(state, Ordering::Release);
 }
 
 /// FFI function for wry fork to call when the drag ends (Drop or DragLeave).
@@ -127,8 +133,7 @@ fn set_internal_drag_active(is_text_selection: bool) {
 #[no_mangle]
 pub extern "C" fn tiddlydesktop_clear_internal_drag() {
     eprintln!("[TiddlyDesktop] Windows: tiddlydesktop_clear_internal_drag");
-    INTERNAL_DRAG_ACTIVE.store(false, Ordering::SeqCst);
-    INTERNAL_DRAG_IS_TEXT_SELECTION.store(false, Ordering::SeqCst);
+    INTERNAL_DRAG_STATE.store(DRAG_STATE_NONE, Ordering::Release);
 }
 
 // ============================================================================
@@ -164,8 +169,7 @@ pub fn setup_drag_handlers(window: &WebviewWindow) {
     eprintln!("[TiddlyDesktop] Windows: setup_drag_handlers for '{}' (composition mode)", window_label);
 
     // Store app handle globally
-    {
-        let mut handle = APP_HANDLE.lock().unwrap();
+    if let Ok(mut handle) = APP_HANDLE.lock() {
         *handle = Some(app_handle.clone());
     }
 
@@ -572,9 +576,19 @@ pub fn start_native_drag(
 /// Clean up after a drag operation
 pub fn cleanup_native_drag() -> Result<(), String> {
     eprintln!("[TiddlyDesktop] Windows: cleanup_native_drag");
+
+    // Clear outgoing drag state
     if let Ok(mut state) = OUTGOING_DRAG_STATE.lock() {
         *state = None;
     }
+
+    // Also clear internal drag state to handle cases where:
+    // 1. User pressed Escape to cancel
+    // 2. Drag ended outside our windows
+    // 3. Any other abnormal termination
+    // This is a safety net - normally wry calls tiddlydesktop_clear_internal_drag()
+    INTERNAL_DRAG_STATE.store(DRAG_STATE_NONE, Ordering::Release);
+
     Ok(())
 }
 

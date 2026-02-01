@@ -124,7 +124,9 @@ fn setup_drag_destination(window: &WebviewWindow, label: &str) {
 
                     // Store mapping from webview pointer to window label
                     let webview_ptr = &*webview as *const NSView as usize;
-                    WEBVIEW_TO_LABEL.lock().unwrap().insert(webview_ptr, label.to_string());
+                    if let Ok(mut map) = WEBVIEW_TO_LABEL.lock() {
+                        map.insert(webview_ptr, label.to_string());
+                    }
 
                     // Register for drag types
                     let drag_types = create_drag_types_array();
@@ -225,7 +227,7 @@ unsafe fn swizzle_method<F>(
 /// Get window label from webview pointer
 fn get_window_label(webview: *mut AnyObject) -> Option<String> {
     let ptr = webview as usize;
-    WEBVIEW_TO_LABEL.lock().unwrap().get(&ptr).cloned()
+    WEBVIEW_TO_LABEL.lock().ok()?.get(&ptr).cloned()
 }
 
 /// Get dragging location from NSDraggingInfo
@@ -322,27 +324,30 @@ extern "C" fn swizzled_dragging_entered(this: *mut AnyObject, _sel: Sel, draggin
                 is_our_drag, source_window_label, is_same_window
             );
 
-            if let Some(state) = DRAG_STATES.lock().unwrap().get(&label) {
-                let mut state = state.lock().unwrap();
-                state.drag_active = true;
-                state.last_position = Some((x, y));
+            if let Ok(states) = DRAG_STATES.lock() {
+                if let Some(state) = states.get(&label) {
+                    if let Ok(mut state) = state.lock() {
+                        state.drag_active = true;
+                        state.last_position = Some((x, y));
 
-                // Emit td-drag-motion with full context for cross-wiki support
-                // Include hasTiddlerData and isTextSelectionDrag for Issue 4b handling in JS
-                let _ = state.window.emit(
-                    "td-drag-motion",
-                    serde_json::json!({
-                        "x": x,
-                        "y": y,
-                        "screenCoords": false,
-                        "isOurDrag": is_our_drag,
-                        "isSameWindow": is_same_window,
-                        "sourceWindowLabel": source_window_label,
-                        "windowLabel": label,
-                        "hasTiddlerData": has_tiddler,
-                        "isTextSelectionDrag": is_text_sel
-                    }),
-                );
+                        // Emit td-drag-motion with full context for cross-wiki support
+                        // Include hasTiddlerData and isTextSelectionDrag for Issue 4b handling in JS
+                        let _ = state.window.emit(
+                            "td-drag-motion",
+                            serde_json::json!({
+                                "x": x,
+                                "y": y,
+                                "screenCoords": false,
+                                "isOurDrag": is_our_drag,
+                                "isSameWindow": is_same_window,
+                                "sourceWindowLabel": source_window_label,
+                                "windowLabel": label,
+                                "hasTiddlerData": has_tiddler,
+                                "isTextSelectionDrag": is_text_sel
+                            }),
+                        );
+                    }
+                }
             }
         }
 
@@ -368,26 +373,29 @@ extern "C" fn swizzled_dragging_updated(this: *mut AnyObject, _sel: Sel, draggin
             let has_tiddler = has_tiddler_data();
             let is_text_sel = is_text_selection_drag_flag();
 
-            if let Some(state) = DRAG_STATES.lock().unwrap().get(&label) {
-                let mut state = state.lock().unwrap();
-                state.last_position = Some((x, y));
+            if let Ok(states) = DRAG_STATES.lock() {
+                if let Some(state) = states.get(&label) {
+                    if let Ok(mut state) = state.lock() {
+                        state.last_position = Some((x, y));
 
-                // Emit td-drag-motion with full context for cross-wiki support
-                // Include hasTiddlerData and isTextSelectionDrag for Issue 4b handling in JS
-                let _ = state.window.emit(
-                    "td-drag-motion",
-                    serde_json::json!({
-                        "x": x,
-                        "y": y,
-                        "screenCoords": false,
-                        "isOurDrag": is_our_drag,
-                        "isSameWindow": is_same_window,
-                        "sourceWindowLabel": source_window_label,
-                        "windowLabel": label,
-                        "hasTiddlerData": has_tiddler,
-                        "isTextSelectionDrag": is_text_sel
-                    }),
-                );
+                        // Emit td-drag-motion with full context for cross-wiki support
+                        // Include hasTiddlerData and isTextSelectionDrag for Issue 4b handling in JS
+                        let _ = state.window.emit(
+                            "td-drag-motion",
+                            serde_json::json!({
+                                "x": x,
+                                "y": y,
+                                "screenCoords": false,
+                                "isOurDrag": is_our_drag,
+                                "isSameWindow": is_same_window,
+                                "sourceWindowLabel": source_window_label,
+                                "windowLabel": label,
+                                "hasTiddlerData": has_tiddler,
+                                "isTextSelectionDrag": is_text_sel
+                            }),
+                        );
+                    }
+                }
             }
         }
 
@@ -414,17 +422,20 @@ extern "C" fn swizzled_dragging_exited(this: *mut AnyObject, _sel: Sel, dragging
                 is_our_drag, source_window_label, is_same_window
             );
 
-            if let Some(state) = DRAG_STATES.lock().unwrap().get(&label) {
-                let mut state = state.lock().unwrap();
-                state.drag_active = false;
-                state.last_position = None;
+            if let Ok(states) = DRAG_STATES.lock() {
+                if let Some(state) = states.get(&label) {
+                    if let Ok(mut state) = state.lock() {
+                        state.drag_active = false;
+                        state.last_position = None;
 
-                let _ = state.window.emit("td-drag-leave", serde_json::json!({
-                    "isOurDrag": is_our_drag,
-                    "isSameWindow": is_same_window,
-                    "sourceWindowLabel": source_window_label,
-                    "windowLabel": label
-                }));
+                        let _ = state.window.emit("td-drag-leave", serde_json::json!({
+                            "isOurDrag": is_our_drag,
+                            "isSameWindow": is_same_window,
+                            "sourceWindowLabel": source_window_label,
+                            "windowLabel": label
+                        }));
+                    }
+                }
             }
         }
 
@@ -474,49 +485,52 @@ extern "C" fn swizzled_perform_drag_operation(this: *mut AnyObject, _sel: Sel, d
                 } else {
                     // Browser didn't handle it - emit td-drag-content for $droppable handlers etc.
                     eprintln!("[TiddlyDesktop] macOS: performDragOperation - browser didn't handle, emitting td-drag-content");
-                    if let Some(state) = DRAG_STATES.lock().unwrap().get(&label) {
-                        let state = state.lock().unwrap();
-                        let _ = state.window.emit(
-                            "td-drag-drop-position",
-                            serde_json::json!({
-                                "x": x,
-                                "y": y,
-                                "screenCoords": false,
-                                "isOurDrag": true,
-                                "isSameWindow": true,
-                                "sourceWindowLabel": source_window_label,
-                                "windowLabel": label
-                            }),
-                        );
+                    if let Ok(states) = DRAG_STATES.lock() {
+                        if let Some(state) = states.get(&label) {
+                            if let Ok(state) = state.lock() {
+                                let _ = state.window.emit(
+                                    "td-drag-drop-position",
+                                    serde_json::json!({
+                                        "x": x,
+                                        "y": y,
+                                        "screenCoords": false,
+                                        "isOurDrag": true,
+                                        "isSameWindow": true,
+                                        "sourceWindowLabel": source_window_label,
+                                        "windowLabel": label
+                                    }),
+                                );
 
-                        // Get the stored drag data and emit td-drag-content so JS can process the drop
-                        if let Ok(guard) = outgoing_drag_state().lock() {
-                            if let Some(outgoing) = guard.as_ref() {
-                                let mut types = Vec::new();
-                                let mut data = std::collections::HashMap::new();
+                                // Get the stored drag data and emit td-drag-content so JS can process the drop
+                                if let Ok(guard) = outgoing_drag_state().lock() {
+                                    if let Some(outgoing) = guard.as_ref() {
+                                        let mut types = Vec::new();
+                                        let mut data = std::collections::HashMap::new();
 
-                                // Include text/vnd.tiddler for $droppable handlers
-                                if let Some(ref tiddler) = outgoing.data.text_vnd_tiddler {
-                                    types.push("text/vnd.tiddler".to_string());
-                                    data.insert("text/vnd.tiddler".to_string(), tiddler.clone());
-                                }
-                                if let Some(ref text) = outgoing.data.text_plain {
-                                    types.push("text/plain".to_string());
-                                    data.insert("text/plain".to_string(), text.clone());
-                                }
+                                        // Include text/vnd.tiddler for $droppable handlers
+                                        if let Some(ref tiddler) = outgoing.data.text_vnd_tiddler {
+                                            types.push("text/vnd.tiddler".to_string());
+                                            data.insert("text/vnd.tiddler".to_string(), tiddler.clone());
+                                        }
+                                        if let Some(ref text) = outgoing.data.text_plain {
+                                            types.push("text/plain".to_string());
+                                            data.insert("text/plain".to_string(), text.clone());
+                                        }
 
-                                if !types.is_empty() {
-                                    eprintln!(
-                                        "[TiddlyDesktop] macOS: performDragOperation - emitting td-drag-content for same-window drag, types: {:?}",
-                                        types
-                                    );
-                                    let content_data = DragContentData {
-                                        types,
-                                        data,
-                                        is_text_selection_drag: if outgoing.data.is_text_selection_drag { Some(true) } else { None },
-                                        is_same_window: Some(true)
-                                    };
-                                    let _ = state.window.emit("td-drag-content", &content_data);
+                                        if !types.is_empty() {
+                                            eprintln!(
+                                                "[TiddlyDesktop] macOS: performDragOperation - emitting td-drag-content for same-window drag, types: {:?}",
+                                                types
+                                            );
+                                            let content_data = DragContentData {
+                                                types,
+                                                data,
+                                                is_text_selection_drag: if outgoing.data.is_text_selection_drag { Some(true) } else { None },
+                                                is_same_window: Some(true)
+                                            };
+                                            let _ = state.window.emit("td-drag-content", &content_data);
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -553,10 +567,13 @@ extern "C" fn swizzled_perform_drag_operation(this: *mut AnyObject, _sel: Sel, d
             }
 
             // Reset state
-            if let Some(state) = DRAG_STATES.lock().unwrap().get(&label) {
-                let mut state = state.lock().unwrap();
-                state.drag_active = false;
-                state.last_position = None;
+            if let Ok(states) = DRAG_STATES.lock() {
+                if let Some(state) = states.get(&label) {
+                    if let Ok(mut state) = state.lock() {
+                        state.drag_active = false;
+                        state.last_position = None;
+                    }
+                }
             }
         }
 
@@ -939,29 +956,29 @@ fn extract_file_paths(pasteboard: &NSPasteboard) -> Vec<String> {
 
 /// Emit drop events with content
 fn emit_drop_with_content(window_label: &str, x: f64, y: f64, content: DragContentData) {
-    if let Some(state) = DRAG_STATES.lock().unwrap().get(window_label) {
-        let state = state.lock().unwrap();
+    let Ok(states) = DRAG_STATES.lock() else { return };
+    let Some(state) = states.get(window_label) else { return };
+    let Ok(state) = state.lock() else { return };
 
-        let _ = state.window.emit(
-            "td-drag-drop-start",
-            serde_json::json!({
-                "x": x,
-                "y": y,
-                "screenCoords": false
-            }),
-        );
+    let _ = state.window.emit(
+        "td-drag-drop-start",
+        serde_json::json!({
+            "x": x,
+            "y": y,
+            "screenCoords": false
+        }),
+    );
 
-        let _ = state.window.emit(
-            "td-drag-drop-position",
-            serde_json::json!({
-                "x": x,
-                "y": y,
-                "screenCoords": false
-            }),
-        );
+    let _ = state.window.emit(
+        "td-drag-drop-position",
+        serde_json::json!({
+            "x": x,
+            "y": y,
+            "screenCoords": false
+        }),
+    );
 
-        let _ = state.window.emit("td-drag-content", &content);
-    }
+    let _ = state.window.emit("td-drag-content", &content);
 }
 
 // ============================================================================
@@ -1113,14 +1130,17 @@ extern "C" fn swizzled_dragging_session_ended(
                     );
 
                     // Emit drag end event
-                    if let Some(drag_state) = DRAG_STATES.lock().unwrap().get(&label) {
-                        let ds = drag_state.lock().unwrap();
-                        let _ = ds.window.emit(
-                            "td-drag-end",
-                            serde_json::json!({
-                                "data_was_requested": operation != NS_DRAG_OPERATION_NONE || data_was_requested
-                            }),
-                        );
+                    if let Ok(states) = DRAG_STATES.lock() {
+                        if let Some(drag_state) = states.get(&label) {
+                            if let Ok(ds) = drag_state.lock() {
+                                let _ = ds.window.emit(
+                                    "td-drag-end",
+                                    serde_json::json!({
+                                        "data_was_requested": operation != NS_DRAG_OPERATION_NONE || data_was_requested
+                                    }),
+                                );
+                            }
+                        }
                     }
 
                     // Clear outgoing drag state

@@ -995,7 +995,8 @@
 
     // Clean up after drop
     document.addEventListener("drop", function(event) {
-        if (event.__tiddlyDesktopSynthetic) return;
+        // Skip filtered events (from our own filtering) and synthetic events
+        if (event.__tdFiltered || event.__tiddlyDesktopSynthetic) return;
         if (internalDragActive) return;
         // Reset state after drop (with small delay to let getData() work)
         setTimeout(function() {
@@ -1015,6 +1016,8 @@
     // If something is dropped and nothing handles it, the browser might navigate away
     // This handler runs in bubble phase (after TiddlyWiki dropzone) and prevents that
     document.addEventListener("drop", function(event) {
+        // Skip filtered events (from our own filtering) and synthetic events
+        if (event.__tdFiltered || event.__tiddlyDesktopSynthetic) return;
         // Don't interfere with drops into editable elements - native handling needed
         if (isEditable(event.target)) {
             return;
@@ -1083,6 +1086,8 @@
 
     // Clear cross-wiki data after native drop completes
     document.addEventListener("drop", function(event) {
+        // Skip filtered events (from our own filtering) and synthetic events
+        if (event.__tdFiltered || event.__tiddlyDesktopSynthetic) return;
         if (crossWikiDragData) {
             log('Native drop with cross-wiki data');
             // Clear after a short delay to ensure getData() has been called

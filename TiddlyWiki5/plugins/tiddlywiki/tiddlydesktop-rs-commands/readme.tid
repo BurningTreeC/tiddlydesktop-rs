@@ -188,6 +188,24 @@ Output: {{$:/temp/date-output}}
 
 !! Security
 
+!!! Per-Wiki Permission
+
+This plugin requires explicit user approval before it can execute commands:
+
+# When you install this plugin in a wiki, it creates a config tiddler: [[$:/config/TiddlyDesktop/AllowRunCommand]]
+# On first load in TiddlyDesktop-RS, a native dialog asks you to approve command execution for this wiki
+# Your approval is stored persistently - you won't be asked again for this wiki
+# You can check permission status by viewing [[$:/config/TiddlyDesktop/AllowRunCommand]]
+
+This ensures that:
+
+* Wikis you download cannot execute commands without your explicit approval
+* Each wiki must be approved separately
+* You maintain control over which wikis can run commands
+
+!!! Per-Command Confirmation
+
 * ''Confirmation dialog'': By default, a native dialog asks the user to approve each command
 * Set `$confirm="no"` only for trusted commands you control
+* ''Destructive commands'' (like `rm -rf`, `format`, etc.) ''always'' require confirmation, even with `$confirm="no"`
 * Commands run with your user permissions

@@ -93,20 +93,19 @@ pub fn init_drop_target_hook() {
 // ============================================================================
 
 /// Combined internal drag state to prevent race conditions when reading.
-/// Values: 0 = no drag, 1 = tiddler/$draggable drag, 2 = text selection drag
+/// Values: 0 = no drag, 1 = tiddler/$draggable drag, 2 = link drag, 3 = text selection drag
 /// Using a single atomic ensures consistent reads - either the drag is active
 /// with its type, or it's not active at all.
 static INTERNAL_DRAG_STATE: AtomicU8 = AtomicU8::new(0);
 
 /// State values for INTERNAL_DRAG_STATE
 const DRAG_STATE_NONE: u8 = 0;
-const DRAG_STATE_TIDDLER: u8 = 1;  // Tiddler/$draggable drag (should NOT activate dropzone)
-const DRAG_STATE_TEXT_SELECTION: u8 = 2;  // Text selection drag (SHOULD activate dropzone)
+const DRAG_STATE_TIDDLER: u8 = 1;  // Tiddler/$draggable drag - skip listener AND forwarding
+const DRAG_STATE_LINK: u8 = 2;     // Link drag - skip listener, but DO forward (needs native handling)
+const DRAG_STATE_TEXT_SELECTION: u8 = 3;  // Text selection drag - DO listener, DO forward
 
 /// FFI function for wry fork to check if there's an active internal drag.
 /// Returns 1 if there's an active internal drag from this WebView2, 0 otherwise.
-/// The wry fork's CompositionDragDropTarget calls this to decide whether to
-/// trigger the listener (which activates the dropzone).
 #[no_mangle]
 pub extern "C" fn tiddlydesktop_has_internal_drag() -> i32 {
     if INTERNAL_DRAG_STATE.load(Ordering::Acquire) != DRAG_STATE_NONE { 1 } else { 0 }
@@ -115,16 +114,37 @@ pub extern "C" fn tiddlydesktop_has_internal_drag() -> i32 {
 /// FFI function for wry fork to check if the internal drag is a text selection drag.
 /// Returns 1 if it's a text selection drag (should activate dropzone), 0 otherwise.
 /// Text selection drags SHOULD activate the dropzone for pasting.
-/// Tiddler/$draggable drags should NOT activate the dropzone.
+/// Tiddler and link drags should NOT activate the dropzone.
 #[no_mangle]
 pub extern "C" fn tiddlydesktop_is_text_selection_drag() -> i32 {
     if INTERNAL_DRAG_STATE.load(Ordering::Acquire) == DRAG_STATE_TEXT_SELECTION { 1 } else { 0 }
 }
 
+/// FFI function for wry fork to check if the internal drag is a tiddler drag.
+/// Returns 1 if it's a tiddler/$draggable drag, 0 otherwise.
+/// Tiddler drags are fully handled by internal_drag.js and don't need composition
+/// controller forwarding. Link drags DO need forwarding for native handling.
+#[no_mangle]
+pub extern "C" fn tiddlydesktop_is_tiddler_drag() -> i32 {
+    if INTERNAL_DRAG_STATE.load(Ordering::Acquire) == DRAG_STATE_TIDDLER { 1 } else { 0 }
+}
+
+/// Drag type for internal drag state
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum InternalDragType {
+    Tiddler,      // $draggable with text/vnd.tiddler - handled by internal_drag.js
+    Link,         // Link drag with URL data - needs native forwarding
+    TextSelection, // Plain text selection - needs dropzone activation
+}
+
 /// Called when an internal drag starts (from DragStarting event)
-fn set_internal_drag_active(is_text_selection: bool) {
-    let state = if is_text_selection { DRAG_STATE_TEXT_SELECTION } else { DRAG_STATE_TIDDLER };
-    eprintln!("[TiddlyDesktop] Windows: set_internal_drag_active(is_text_selection={}) -> state={}", is_text_selection, state);
+fn set_internal_drag_active(drag_type: InternalDragType) {
+    let state = match drag_type {
+        InternalDragType::Tiddler => DRAG_STATE_TIDDLER,
+        InternalDragType::Link => DRAG_STATE_LINK,
+        InternalDragType::TextSelection => DRAG_STATE_TEXT_SELECTION,
+    };
+    eprintln!("[TiddlyDesktop] Windows: set_internal_drag_active({:?}) -> state={}", drag_type, state);
     INTERNAL_DRAG_STATE.store(state, Ordering::Release);
 }
 
@@ -634,10 +654,10 @@ impl ICoreWebView2DragStartingEventHandler_Impl for DragStartingHandler_Impl {
         eprintln!("[TiddlyDesktop] Windows: DragStarting event from '{}'", self.window_label);
 
         // Determine the type of internal drag:
-        // 1. Tiddler/$draggable drag (has text/vnd.tiddler) - skip dropzone
-        // 2. Link drag (has URL data but no tiddler) - skip dropzone
-        // 3. Text selection drag (has neither) - activate dropzone for paste
-        let is_text_selection = if let Some(args) = args.as_ref() {
+        // 1. Tiddler/$draggable drag (has text/vnd.tiddler) - skip dropzone AND skip forwarding
+        // 2. Link drag (has URL data but no tiddler) - skip dropzone, but DO forward
+        // 3. Text selection drag (has neither) - activate dropzone, DO forward
+        let drag_type = if let Some(args) = args.as_ref() {
             unsafe {
                 if let Ok(data_object) = args.Data() {
                     // Check for text/vnd.tiddler format (tiddler/$draggable drag)
@@ -673,22 +693,27 @@ impl ICoreWebView2DragStartingEventHandler_Impl for DragStartingHandler_Impl {
                     eprintln!("[TiddlyDesktop] Windows: DragStarting - has_tiddler_data={}, has_url_data={}, has_moz_url={}",
                         has_tiddler_data, has_url_data, has_moz_url);
 
-                    // Only a text selection if it has NEITHER tiddler data NOR URL data
-                    // Tiddler drags and link drags should NOT activate the dropzone
-                    !has_tiddler_data && !has_url_data && !has_moz_url
+                    // Determine drag type based on data formats
+                    if has_tiddler_data {
+                        InternalDragType::Tiddler
+                    } else if has_url_data || has_moz_url {
+                        InternalDragType::Link
+                    } else {
+                        InternalDragType::TextSelection
+                    }
                 } else {
                     eprintln!("[TiddlyDesktop] Windows: DragStarting - could not get data object");
-                    true // Assume text selection if we can't check
+                    InternalDragType::TextSelection // Assume text selection if we can't check
                 }
             }
         } else {
             eprintln!("[TiddlyDesktop] Windows: DragStarting - no args");
-            true // Assume text selection if no args
+            InternalDragType::TextSelection // Assume text selection if no args
         };
 
         // Set the internal drag state
         // This is read by the wry fork's CompositionDragDropTarget via FFI
-        set_internal_drag_active(is_text_selection);
+        set_internal_drag_active(drag_type);
 
         Ok(())
     }

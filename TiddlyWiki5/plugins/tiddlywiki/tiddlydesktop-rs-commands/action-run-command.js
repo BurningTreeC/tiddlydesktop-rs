@@ -62,6 +62,27 @@ RunCommandWidget.prototype.invokeAction = function(triggeringWidget, event) {
 		return true;
 	}
 
+	// Check if command execution permission has been granted
+	var permissionTiddler = this.wiki.getTiddler("$:/temp/TiddlyDesktop/CommandPermission");
+	var permissionStatus = permissionTiddler ? permissionTiddler.fields.status : null;
+	if(permissionStatus !== "granted") {
+		console.warn("action-run-command: Command execution not permitted. Status: " + permissionStatus);
+		// Store error in output tiddler if specified
+		if(this.actionOutputTiddler) {
+			var fields = {};
+			fields[this.actionOutputField] = "";
+			fields["success"] = "no";
+			fields["error"] = "Command execution not permitted for this wiki. Install the tiddlydesktop-rs-commands plugin and approve the permission request.";
+			this.wiki.addTiddler(new $tw.Tiddler(
+				this.wiki.getTiddler(this.actionOutputTiddler),
+				{title: this.actionOutputTiddler},
+				fields,
+				this.wiki.getModificationFields()
+			));
+		}
+		return true;
+	}
+
 	if(!this.actionCommand) {
 		console.warn("action-run-command: No command specified");
 		return true;

@@ -623,6 +623,8 @@ struct AppState {
     next_port: Mutex<u16>,
     /// Path to the main wiki file (tiddlydesktop.html)
     main_wiki_path: PathBuf,
+    /// Wikis that have been approved for run_command (by normalized path)
+    run_command_allowed_wikis: Mutex<std::collections::HashSet<String>>,
 }
 
 /// Get the bundled index.html path
@@ -1824,12 +1826,14 @@ fn is_destructive_command(command: &str, args: &[String]) -> bool {
 }
 
 /// Run a command with optional confirmation dialog
-/// Security: Shows a confirmation dialog by default. Can be bypassed with confirm: false
-/// for trusted commands defined by the user in their wiki.
+/// Security: Requires the wiki to have been explicitly approved for command execution.
+/// The wiki must have $:/config/TiddlyDesktop/AllowRunCommand and the user must have
+/// approved it via the request_run_command_permission dialog.
 /// Security: Destructive commands ALWAYS require confirmation regardless of confirm flag.
 #[tauri::command]
 async fn run_command(
     app: tauri::AppHandle,
+    window: tauri::WebviewWindow,
     command: String,
     args: Option<Vec<String>>,
     working_dir: Option<String>,
@@ -1837,6 +1841,25 @@ async fn run_command(
     confirm: Option<bool>,
 ) -> Result<Option<CommandResult>, String> {
     use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
+
+    // Security: Get the wiki path for this window and check if it's allowed
+    let wiki_path = {
+        let state = app.state::<AppState>();
+        let open_wikis = state.open_wikis.lock().unwrap();
+        open_wikis.get(window.label()).cloned()
+    };
+
+    let wiki_path = wiki_path.ok_or_else(|| "Cannot determine wiki path for this window".to_string())?;
+
+    // Security: Check if this wiki has been approved for run_command
+    {
+        let state = app.state::<AppState>();
+        let allowed = state.run_command_allowed_wikis.lock().unwrap();
+        if !allowed.contains(&wiki_path) {
+            return Err("This wiki has not been approved for command execution. \
+                       Install the tiddlydesktop-rs-commands plugin and approve the permission request.".to_string());
+        }
+    }
 
     // Security: Reject empty commands
     if command.trim().is_empty() {
@@ -1921,6 +1944,95 @@ async fn run_command(
 
         Ok(None)
     }
+}
+
+/// Request permission for a wiki to use run_command
+/// Shows a dialog to the user asking if they want to allow this wiki to execute commands.
+/// If approved, the wiki path is added to the allowed list and persisted.
+#[tauri::command]
+async fn request_run_command_permission(
+    app: tauri::AppHandle,
+    window: tauri::WebviewWindow,
+) -> Result<bool, String> {
+    use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
+
+    // Get the wiki path for this window
+    let wiki_path = {
+        let state = app.state::<AppState>();
+        let open_wikis = state.open_wikis.lock().unwrap();
+        open_wikis.get(window.label()).cloned()
+    };
+
+    let wiki_path = wiki_path.ok_or_else(|| "Cannot determine wiki path for this window".to_string())?;
+
+    // Check if already allowed
+    {
+        let state = app.state::<AppState>();
+        let allowed = state.run_command_allowed_wikis.lock().unwrap();
+        if allowed.contains(&wiki_path) {
+            return Ok(true); // Already approved
+        }
+    }
+
+    // Show confirmation dialog
+    let message = format!(
+        "The wiki at:\n\n{}\n\nwants to enable command execution.\n\n\
+         This allows the wiki to run system commands on your computer.\n\n\
+         Only approve this if you trust the wiki and understand the security implications.\n\n\
+         Do you want to allow command execution for this wiki?",
+        wiki_path
+    );
+
+    let confirmed = app.dialog()
+        .message(message)
+        .kind(MessageDialogKind::Warning)
+        .title("Enable Command Execution")
+        .buttons(MessageDialogButtons::OkCancel)
+        .blocking_show();
+
+    if confirmed {
+        // Add to allowed list (both in-memory and persisted)
+        {
+            let state = app.state::<AppState>();
+            let mut allowed = state.run_command_allowed_wikis.lock().unwrap();
+            allowed.insert(wiki_path.clone());
+        }
+
+        // Persist to disk
+        let allowed = {
+            let state = app.state::<AppState>();
+            let guard = state.run_command_allowed_wikis.lock().unwrap();
+            guard.clone()
+        };
+        if let Err(e) = wiki_storage::save_run_command_allowed(&app, &allowed) {
+            eprintln!("[TiddlyDesktop] Warning: Failed to persist run_command allowed list: {}", e);
+        }
+
+        Ok(true)
+    } else {
+        Ok(false)
+    }
+}
+
+/// Check if a wiki has permission to use run_command (without prompting)
+#[tauri::command]
+fn check_run_command_permission(
+    app: tauri::AppHandle,
+    window: tauri::WebviewWindow,
+) -> Result<bool, String> {
+    // Get the wiki path for this window
+    let wiki_path = {
+        let state = app.state::<AppState>();
+        let open_wikis = state.open_wikis.lock().unwrap();
+        open_wikis.get(window.label()).cloned()
+    };
+
+    let wiki_path = wiki_path.ok_or_else(|| "Cannot determine wiki path for this window".to_string())?;
+
+    // Check if allowed
+    let state = app.state::<AppState>();
+    let allowed = state.run_command_allowed_wikis.lock().unwrap();
+    Ok(allowed.contains(&wiki_path))
 }
 
 /// Check if a file is a valid TiddlyWiki HTML file
@@ -5046,6 +5158,9 @@ fn run_wiki_mode(args: WikiModeArgs) {
             });
 
             // Also need minimal AppState for commands that expect it
+            // Load run_command allowed wikis from disk
+            let run_command_allowed = wiki_storage::load_run_command_allowed(&app.handle());
+
             app.manage(AppState {
                 wiki_paths: Mutex::new({
                     let mut m = HashMap::new();
@@ -5061,6 +5176,7 @@ fn run_wiki_mode(args: WikiModeArgs) {
                 wiki_processes: Mutex::new(HashMap::new()), // Not used in wiki mode
                 next_port: Mutex::new(8080),
                 main_wiki_path: wiki_path_clone.clone(), // Use wiki path as "main" for this process
+                run_command_allowed_wikis: Mutex::new(run_command_allowed),
             });
 
             // Build the wiki URL using our protocol
@@ -5255,6 +5371,8 @@ fn run_wiki_mode(args: WikiModeArgs) {
             clipboard::get_clipboard_content,
             clipboard::set_clipboard_content,
             run_command,
+            request_run_command_permission,
+            check_run_command_permission,
             // Drag-drop commands
             start_native_drag,
             prepare_native_drag,
@@ -5493,12 +5611,16 @@ fn run_wiki_folder_mode(args: WikiFolderModeArgs) {
             }
 
             // Minimal app state for this process
+            // Load run_command allowed wikis from disk
+            let run_command_allowed = wiki_storage::load_run_command_allowed(&app.handle());
+
             app.manage(AppState {
                 wiki_paths: Mutex::new(HashMap::new()),
                 open_wikis: Mutex::new(HashMap::new()),
                 wiki_processes: Mutex::new(HashMap::new()),
                 next_port: Mutex::new(port + 1),
                 main_wiki_path: folder_path_for_state.clone(),
+                run_command_allowed_wikis: Mutex::new(run_command_allowed),
             });
 
             // Start IPC listener for focus requests
@@ -5849,12 +5971,16 @@ pub fn run() {
             println!("Main wiki path: {:?}", main_wiki_path);
 
             // Initialize app state
+            // Load run_command allowed wikis from disk
+            let run_command_allowed = wiki_storage::load_run_command_allowed(&app.handle());
+
             app.manage(AppState {
                 wiki_paths: Mutex::new(HashMap::new()),
                 open_wikis: Mutex::new(HashMap::new()),
                 wiki_processes: Mutex::new(HashMap::new()),
                 next_port: Mutex::new(8080),
                 main_wiki_path: main_wiki_path.clone(),
+                run_command_allowed_wikis: Mutex::new(run_command_allowed),
             });
 
             // Create a unique key for the main wiki path
@@ -6021,6 +6147,8 @@ pub fn run() {
             wiki_storage::set_palette,
             open_auth_window,
             run_command,
+            request_run_command_permission,
+            check_run_command_permission,
             show_find_in_page,
             toggle_fullscreen,
             print_page,

@@ -1,0 +1,8 @@
+title: $:/config/TiddlyDesktop/AllowRunCommand
+tags:
+
+This tiddler enables the `run_command` feature in TiddlyDesktop-RS.
+
+When this plugin is installed and the wiki is loaded in TiddlyDesktop-RS, it will request permission to execute commands. You must approve this request for the `<$action-run-command>` widget to work.
+
+<<tiddlydesktop-command-permission-status>>

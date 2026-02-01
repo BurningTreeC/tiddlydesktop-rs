@@ -55,6 +55,44 @@ pub fn save_app_settings(app: &tauri::AppHandle, settings: &AppSettings) -> Resu
         .map_err(|e| format!("Failed to write app settings: {}", e))
 }
 
+/// Get the path to the run_command allowed wikis JSON
+pub fn get_run_command_allowed_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    let data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    Ok(data_dir.join("run_command_allowed.json"))
+}
+
+/// Load the list of wikis allowed to use run_command
+pub fn load_run_command_allowed(app: &tauri::AppHandle) -> std::collections::HashSet<String> {
+    let path = match get_run_command_allowed_path(app) {
+        Ok(p) => p,
+        Err(_) => return std::collections::HashSet::new(),
+    };
+
+    if !path.exists() {
+        return std::collections::HashSet::new();
+    }
+
+    match std::fs::read_to_string(&path) {
+        Ok(content) => serde_json::from_str(&content).unwrap_or_default(),
+        Err(_) => std::collections::HashSet::new(),
+    }
+}
+
+/// Save the list of wikis allowed to use run_command
+pub fn save_run_command_allowed(app: &tauri::AppHandle, allowed: &std::collections::HashSet<String>) -> Result<(), String> {
+    let path = get_run_command_allowed_path(app)?;
+
+    // Ensure parent directory exists
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("Failed to create config directory: {}", e))?;
+    }
+
+    let content = serde_json::to_string_pretty(allowed)
+        .map_err(|e| format!("Failed to serialize run_command allowed list: {}", e))?;
+    std::fs::write(&path, content)
+        .map_err(|e| format!("Failed to write run_command allowed list: {}", e))
+}
+
 /// Detect system locale and return a language code
 pub fn detect_system_language() -> String {
     use sys_locale::get_locale;

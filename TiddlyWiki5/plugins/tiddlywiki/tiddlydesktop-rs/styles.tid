@@ -216,6 +216,17 @@ tags: $:/tags/Stylesheet
 	background: #f0d0d0;
 }
 
+.td-button-convert {
+	background: #f0f0f8;
+	border: 1px solid #b0b0c8;
+	color: #4a4a6a;
+}
+
+.td-button-convert:hover {
+	background: #e0e0f0;
+	border-color: #9090b0;
+}
+
 .td-button-backup.td-backup-on {
 	background: #f0f8e8;
 	border-color: #b0d0a0;

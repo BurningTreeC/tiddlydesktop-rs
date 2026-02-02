@@ -715,6 +715,22 @@ impl ICoreWebView2DragStartingEventHandler_Impl for DragStartingHandler_Impl {
         // This is read by the wry fork's CompositionDragDropTarget via FFI
         set_internal_drag_active(drag_type);
 
+        // CRITICAL: For non-text-selection drags, set $tw.dragInProgress via JavaScript
+        // BEFORE the HTML5 dragenter event reaches the dropzone. This prevents the
+        // dropzone from activating for internal drags (tiddler links, $draggables).
+        // Text selection drags SHOULD activate the dropzone so users can drop text.
+        if drag_type != InternalDragType::TextSelection {
+            if let Ok(handle) = APP_HANDLE.lock() {
+                if let Some(app) = handle.as_ref() {
+                    if let Some(window) = app.get_webview_window(&self.window_label) {
+                        // Set $tw.dragInProgress to true - dropzone.js checks this and ignores the drag
+                        let _ = window.eval("if(typeof $tw !== 'undefined') { $tw.dragInProgress = true; }");
+                        eprintln!("[TiddlyDesktop] Windows: Set $tw.dragInProgress = true via eval");
+                    }
+                }
+            }
+        }
+
         Ok(())
     }
 }

@@ -28,9 +28,12 @@ Tooltips/ResetBackupDir: Restablir directori de còpies de seguretat per defecte
 Tooltips/SetBackupDir: Establir directori de còpies de seguretat personalitzat
 Tooltips/RenameGroup: Reanomenar grup
 Tooltips/DeleteGroup: Eliminar grup (els wikis es mouran a Sense grup)
+Tooltips/SetBackupCount: Establir nombre màxim de còpies a conservar (0 = il·limitat)
 
 Labels/BackupFolder: Carpeta de còpies de seguretat:
+Labels/BackupCount: Límit de còpies:
 Labels/Default: (per defecte)
+Labels/Unlimited: il·limitat
 Labels/Local: (local)
 Labels/Ungrouped: Sense grup
 Labels/Wikis: wikis
@@ -41,6 +44,7 @@ Labels/Language: Idioma:
 Labels/AutoDetect: Detecció automàtica
 
 Placeholders/NewGroupName: Nom del nou grup...
+Placeholders/SearchWikis: Cercar wikis...
 
 DropZone/Active: Deixeu anar el fitxer o carpeta wiki aquí
 DropZone/Hint: Deixeu anar fitxers o carpetes TiddlyWiki aquí

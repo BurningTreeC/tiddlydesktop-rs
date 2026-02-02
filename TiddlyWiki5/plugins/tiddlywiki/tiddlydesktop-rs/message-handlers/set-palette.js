@@ -22,9 +22,14 @@ exports.startup = function() {
         return;
     }
 
-    // Note: Palette change handling (headerbar colors, find bar colors) is done in core.js
-    // for ALL windows including user wikis. This module only handles the main wiki's
-    // palette selector UI and loading the saved palette preference.
+    // Listen for palette changes and update headerbar colors
+    $tw.wiki.addEventListener("change", function(changes) {
+        if (changes["$:/palette"]) {
+            if (window.TiddlyDesktop && window.TiddlyDesktop.updateHeaderBarColors) {
+                window.TiddlyDesktop.updateHeaderBarColors();
+            }
+        }
+    });
 
     $tw.rootWidget.addEventListener("tm-tiddlydesktop-rs-set-palette", function(event) {
         var palette = (event.paramObject && event.paramObject.palette) || "";
@@ -49,12 +54,17 @@ exports.startup = function() {
             });
     });
 
-    // Load saved palette on startup (main wiki only)
+    // Load saved palette on startup
     window.__TAURI__.core.invoke("get_palette")
         .then(function(palette) {
             if (palette) {
                 console.log("[TiddlyDesktop] Loading saved palette:", palette);
                 $tw.wiki.setText("$:/palette", "text", null, palette);
+            } else {
+                // No saved palette - trigger initial headerbar update with current palette
+                if (window.TiddlyDesktop && window.TiddlyDesktop.updateHeaderBarColors) {
+                    window.TiddlyDesktop.updateHeaderBarColors();
+                }
             }
         })
         .catch(function(err) {

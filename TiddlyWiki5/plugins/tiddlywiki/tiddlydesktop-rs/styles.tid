@@ -89,6 +89,57 @@ tags: $:/tags/Stylesheet
 	background: rgba(74, 144, 217, 0.05);
 }
 
+/* Search bar */
+.td-search-bar {
+	display: flex;
+	align-items: center;
+	margin: 0 16px 8px 16px;
+	position: relative;
+}
+
+.td-search-input {
+	width: 100%;
+	padding: 10px 36px 10px 12px;
+	border: 1px solid <<colour muted-foreground>>;
+	border-radius: 6px;
+	font-size: 14px;
+	background: <<colour tiddler-background>>;
+	color: <<colour foreground>>;
+	transition: border-color 0.2s, box-shadow 0.2s;
+}
+
+.td-search-input:focus {
+	outline: none;
+	border-color: <<colour primary>>;
+	box-shadow: 0 0 0 3px rgba(74, 144, 217, 0.15);
+}
+
+.td-search-input::placeholder {
+	color: <<colour muted-foreground>>;
+}
+
+.td-search-clear {
+	position: absolute;
+	right: 8px;
+	top: 50%;
+	transform: translateY(-50%);
+	padding: 4px;
+	color: <<colour muted-foreground>>;
+	border-radius: 4px;
+	transition: all 0.15s;
+}
+
+.td-search-clear:hover {
+	background: <<colour tab-background>>;
+	color: <<colour foreground>>;
+}
+
+.td-search-clear svg {
+	width: 16px;
+	height: 16px;
+	fill: currentColor;
+}
+
 /* Wiki list */
 .td-wikilist {
 	padding: 16px;
@@ -299,6 +350,105 @@ tags: $:/tags/Stylesheet
 
 .td-button-backup-dir-clear:hover {
 	background: #f0ece4;
+}
+
+/* Backup count row */
+.td-wiki-backup-count {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	margin-top: 6px;
+	padding-top: 6px;
+	border-top: 1px solid <<colour tab-border>>;
+	font-size: 12px;
+}
+
+.td-backup-count-label {
+	color: <<colour muted-foreground>>;
+	white-space: nowrap;
+}
+
+.td-backup-count-value {
+	color: <<colour foreground>>;
+	font-weight: 500;
+}
+
+.td-backup-count-value.td-backup-count-default,
+.td-backup-count-value.td-backup-count-unlimited {
+	color: <<colour muted-foreground>>;
+	font-style: italic;
+	font-weight: normal;
+}
+
+.td-button-backup-count {
+	background: #f0f4f8;
+	border-color: #c0d0e0;
+	color: #4a6a8a;
+	padding: 2px 8px !important;
+	font-size: 11px !important;
+}
+
+.td-button-backup-count:hover {
+	background: #e0ecf4;
+}
+
+/* Backup count dropdown */
+.td-backup-count-dropdown {
+	min-width: 120px;
+}
+
+.td-backup-count-dropdown-content {
+	padding: 4px 0;
+}
+
+.td-backup-count-option {
+	display: block;
+	width: 100%;
+	padding: 6px 12px;
+	text-align: left;
+	background: none;
+	border: none;
+	cursor: pointer;
+	font-size: 13px;
+	color: <<colour foreground>>;
+	transition: background 0.1s;
+}
+
+.td-backup-count-option:hover {
+	background: <<colour tab-background>>;
+}
+
+.td-backup-count-custom {
+	display: flex;
+	gap: 6px;
+	padding: 8px 12px;
+	align-items: center;
+}
+
+.td-backup-count-input {
+	width: 60px;
+	padding: 4px 8px;
+	border: 1px solid <<colour tiddler-border>>;
+	border-radius: 4px;
+	font-size: 12px;
+	background: <<colour tiddler-background>>;
+	color: <<colour foreground>>;
+	text-align: center;
+}
+
+.td-backup-count-input:focus {
+	outline: none;
+	border-color: <<colour primary>>;
+	box-shadow: 0 0 0 2px rgba(74, 144, 217, 0.2);
+}
+
+.td-backup-count-custom .td-button {
+	padding: 2px 6px !important;
+}
+
+.td-backup-count-custom .td-button svg {
+	width: 14px;
+	height: 14px;
 }
 
 /* Empty message */

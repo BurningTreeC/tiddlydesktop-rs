@@ -28,9 +28,12 @@ Tooltips/ResetBackupDir: بازنشانی به پوشه پشتیبان پیش‌
 Tooltips/SetBackupDir: تنظیم پوشه پشتیبان سفارشی
 Tooltips/RenameGroup: تغییر نام گروه
 Tooltips/DeleteGroup: حذف گروه (ویکی‌ها به بدون گروه منتقل می‌شوند)
+Tooltips/SetBackupCount: تنظیم حداکثر تعداد پشتیبان‌ها (0 = نامحدود)
 
 Labels/BackupFolder: پوشه پشتیبان:
+Labels/BackupCount: محدودیت پشتیبان:
 Labels/Default: (پیش‌فرض)
+Labels/Unlimited: نامحدود
 Labels/Local: (محلی)
 Labels/Ungrouped: بدون گروه
 Labels/Wikis: ویکی
@@ -41,6 +44,7 @@ Labels/Language: زبان:
 Labels/AutoDetect: تشخیص خودکار
 
 Placeholders/NewGroupName: نام گروه جدید...
+Placeholders/SearchWikis: جستجوی ویکی...
 
 DropZone/Active: فایل یا پوشه ویکی را اینجا رها کنید
 DropZone/Hint: فایل‌ها یا پوشه‌های TiddlyWiki را اینجا رها کنید

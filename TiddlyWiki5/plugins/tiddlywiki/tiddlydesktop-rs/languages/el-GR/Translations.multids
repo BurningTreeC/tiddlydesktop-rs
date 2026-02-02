@@ -28,9 +28,12 @@ Tooltips/ResetBackupDir: Επαναφορά προεπιλεγμένου κατ�
 Tooltips/SetBackupDir: Ορισμός προσαρμοσμένου καταλόγου αντιγράφων ασφαλείας
 Tooltips/RenameGroup: Μετονομασία ομάδας
 Tooltips/DeleteGroup: Διαγραφή ομάδας (τα wiki θα μεταφερθούν στα Μη ομαδοποιημένα)
+Tooltips/SetBackupCount: Ορισμός μέγιστου αριθμού αντιγράφων (0 = απεριόριστο)
 
 Labels/BackupFolder: Φάκελος αντιγράφων ασφαλείας:
+Labels/BackupCount: Όριο αντιγράφων:
 Labels/Default: (προεπιλογή)
+Labels/Unlimited: απεριόριστο
 Labels/Local: (τοπικό)
 Labels/Ungrouped: Μη ομαδοποιημένα
 Labels/Wikis: wiki
@@ -41,6 +44,7 @@ Labels/Language: Γλώσσα:
 Labels/AutoDetect: Αυτόματη ανίχνευση
 
 Placeholders/NewGroupName: Νέο όνομα ομάδας...
+Placeholders/SearchWikis: Αναζήτηση wiki...
 
 DropZone/Active: Αποθέστε αρχείο ή φάκελο wiki εδώ
 DropZone/Hint: Αποθέστε αρχεία ή φακέλους TiddlyWiki εδώ

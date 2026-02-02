@@ -28,9 +28,12 @@ Tooltips/ResetBackupDir: אפס לתיקיית גיבוי ברירת מחדל
 Tooltips/SetBackupDir: הגדר תיקיית גיבוי מותאמת אישית
 Tooltips/RenameGroup: שנה שם קבוצה
 Tooltips/DeleteGroup: מחק קבוצה (הויקי יועברו ללא קבוצה)
+Tooltips/SetBackupCount: הגדר מספר גיבויים מרבי לשמירה (0 = ללא הגבלה)
 
 Labels/BackupFolder: תיקיית גיבוי:
+Labels/BackupCount: מגבלת גיבויים:
 Labels/Default: (ברירת מחדל)
+Labels/Unlimited: ללא הגבלה
 Labels/Local: (מקומי)
 Labels/Ungrouped: ללא קבוצה
 Labels/Wikis: ויקי
@@ -41,6 +44,7 @@ Labels/Language: שפה:
 Labels/AutoDetect: זיהוי אוטומטי
 
 Placeholders/NewGroupName: שם קבוצה חדשה...
+Placeholders/SearchWikis: חיפוש ויקי...
 
 DropZone/Active: שחרר קובץ או תיקיית ויקי כאן
 DropZone/Hint: שחרר קבצי או תיקיות TiddlyWiki כאן

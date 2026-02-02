@@ -28,9 +28,12 @@ Tooltips/ResetBackupDir: Obnoviť predvolený adresár záloh
 Tooltips/SetBackupDir: Nastaviť vlastný adresár záloh
 Tooltips/RenameGroup: Premenovať skupinu
 Tooltips/DeleteGroup: Odstrániť skupinu (wiki budú presunuté do Bez skupiny)
+Tooltips/SetBackupCount: Nastaviť maximálny počet záloh (0 = neobmedzene)
 
 Labels/BackupFolder: Priečinok záloh:
+Labels/BackupCount: Limit záloh:
 Labels/Default: (predvolený)
+Labels/Unlimited: neobmedzene
 Labels/Local: (miestny)
 Labels/Ungrouped: Bez skupiny
 Labels/Wikis: wiki
@@ -41,6 +44,7 @@ Labels/Language: Jazyk:
 Labels/AutoDetect: Automatická detekcia
 
 Placeholders/NewGroupName: Názov novej skupiny...
+Placeholders/SearchWikis: Hľadať wiki...
 
 DropZone/Active: Pretiahnite wiki súbor alebo priečinok sem
 DropZone/Hint: Pretiahnite TiddlyWiki súbory alebo priečinky sem

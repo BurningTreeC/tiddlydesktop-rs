@@ -28,9 +28,12 @@ Tooltips/ResetBackupDir: Ресетирај на стандардна папка
 Tooltips/SetBackupDir: Постави приспособена папка за резервни копии
 Tooltips/RenameGroup: Преименувај група
 Tooltips/DeleteGroup: Избриши група (викијата ќе се преместат во Без група)
+Tooltips/SetBackupCount: Постави максимален број резервни копии (0 = неограничено)
 
 Labels/BackupFolder: Папка за резервни копии:
+Labels/BackupCount: Лимит на копии:
 Labels/Default: (стандардно)
+Labels/Unlimited: неограничено
 Labels/Local: (локално)
 Labels/Ungrouped: Без група
 Labels/Wikis: викија
@@ -41,6 +44,7 @@ Labels/Language: Јазик:
 Labels/AutoDetect: Автоматско откривање
 
 Placeholders/NewGroupName: Име на нова група...
+Placeholders/SearchWikis: Пребарај викија...
 
 DropZone/Active: Пуштете вики датотека или папка тука
 DropZone/Hint: Пуштете TiddlyWiki датотеки или папки тука

@@ -28,9 +28,12 @@ Tooltips/ResetBackupDir: Återställ standardmapp för säkerhetskopior
 Tooltips/SetBackupDir: Ange anpassad säkerhetskopieringsmapp
 Tooltips/RenameGroup: Byt namn på grupp
 Tooltips/DeleteGroup: Ta bort grupp (wikis flyttas till Ogrupperade)
+Tooltips/SetBackupCount: Ange maximalt antal säkerhetskopior att behålla (0 = obegränsad)
 
 Labels/BackupFolder: Säkerhetskopieringsmapp:
+Labels/BackupCount: Säkerhetskopieringsgräns:
 Labels/Default: (standard)
+Labels/Unlimited: obegränsad
 Labels/Local: (lokal)
 Labels/Ungrouped: Ogrupperade
 Labels/Wikis: wikis
@@ -41,6 +44,7 @@ Labels/Language: Språk:
 Labels/AutoDetect: Automatisk identifiering
 
 Placeholders/NewGroupName: Nytt gruppnamn...
+Placeholders/SearchWikis: Sök wikis...
 
 DropZone/Active: Släpp wiki-fil eller -mapp här
 DropZone/Hint: Släpp TiddlyWiki-filer eller -mappar här

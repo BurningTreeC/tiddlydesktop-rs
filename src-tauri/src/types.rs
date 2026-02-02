@@ -22,6 +22,8 @@ pub struct WikiEntry {
     #[serde(default)]
     pub backup_dir: Option<String>, // custom backup directory (if None, uses .backups folder next to wiki)
     #[serde(default)]
+    pub backup_count: Option<u32>, // max backups to keep (None = default 20, 0 = unlimited)
+    #[serde(default)]
     pub group: Option<String>, // group name for organizing wikis (None = "Ungrouped")
 }
 

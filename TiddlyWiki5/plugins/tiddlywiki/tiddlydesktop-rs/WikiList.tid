@@ -1,7 +1,7 @@
 title: $:/plugins/tiddlywiki/tiddlydesktop-rs/WikiList
 
 \define render-wiki-item()
-<$let path={{!!path}} filename={{!!filename}} favicon={{!!favicon}} isFolder={{!!is_folder}} backupsEnabled={{!!backups_enabled}} backupDir={{!!backup_dir}} wikiGroup={{!!group}}>
+<$let path={{!!path}} filename={{!!filename}} favicon={{!!favicon}} isFolder={{!!is_folder}} backupsEnabled={{!!backups_enabled}} backupDir={{!!backup_dir}} backupCount={{!!backup_count}} wikiGroup={{!!group}}>
 <div class="td-wikilist-item">
 <div class="td-wikilist-thumbnail">
 <$button class="tc-btn-invisible">
@@ -122,6 +122,64 @@ title: $:/plugins/tiddlywiki/tiddlydesktop-rs/WikiList
 </$button>
 </$list>
 </div>
+<div class="td-wiki-backup-count">
+<span class="td-backup-count-label"><<td-lingo Labels/BackupCount>></span>
+<$let backupCountPopupState=<<qualify "$:/state/backup-count-popup">> backupCountTiddler=<<qualify "$:/temp/backup-count-input">>>
+<$list filter="[<backupCount>match[0]]" variable="ignore">
+<span class="td-backup-count-value td-backup-count-unlimited"><<td-lingo Labels/Unlimited>></span>
+</$list>
+<$list filter="[<backupCount>!is[blank]!match[0]]" variable="ignore">
+<span class="td-backup-count-value"><$text text=<<backupCount>>/></span>
+</$list>
+<$list filter="[<backupCount>is[blank]]" variable="ignore">
+<span class="td-backup-count-value td-backup-count-default">20 <<td-lingo Labels/Default>></span>
+</$list>
+<$button popup=<<backupCountPopupState>> class="tc-btn-invisible td-button td-button-backup-count" tooltip=<<td-lingo Tooltips/SetBackupCount>>>
+<<td-lingo Buttons/Change>>
+</$button>
+<$reveal state=<<backupCountPopupState>> type="popup" position="below" animate="yes" class="tc-drop-down td-backup-count-dropdown tc-popup-keep">
+<div class="td-backup-count-dropdown-content">
+<$button class="tc-btn-invisible td-backup-count-option">
+<$action-sendmessage $message="tm-tiddlydesktop-rs-set-backup-count" path=<<path>> count=""/>
+<$action-deletetiddler $tiddler=<<backupCountPopupState>>/>
+20 <<td-lingo Labels/Default>>
+</$button>
+<$button class="tc-btn-invisible td-backup-count-option">
+<$action-sendmessage $message="tm-tiddlydesktop-rs-set-backup-count" path=<<path>> count="5"/>
+<$action-deletetiddler $tiddler=<<backupCountPopupState>>/>
+5
+</$button>
+<$button class="tc-btn-invisible td-backup-count-option">
+<$action-sendmessage $message="tm-tiddlydesktop-rs-set-backup-count" path=<<path>> count="10"/>
+<$action-deletetiddler $tiddler=<<backupCountPopupState>>/>
+10
+</$button>
+<$button class="tc-btn-invisible td-backup-count-option">
+<$action-sendmessage $message="tm-tiddlydesktop-rs-set-backup-count" path=<<path>> count="50"/>
+<$action-deletetiddler $tiddler=<<backupCountPopupState>>/>
+50
+</$button>
+<$button class="tc-btn-invisible td-backup-count-option">
+<$action-sendmessage $message="tm-tiddlydesktop-rs-set-backup-count" path=<<path>> count="0"/>
+<$action-deletetiddler $tiddler=<<backupCountPopupState>>/>
+<<td-lingo Labels/Unlimited>>
+</$button>
+<hr/>
+<div class="td-backup-count-custom">
+<$keyboard key="enter" actions="""<$action-sendmessage $message="tm-tiddlydesktop-rs-set-backup-count" path=<<path>> count={{{ [<backupCountTiddler>get[text]] }}}/><$action-deletetiddler $tiddler=<<backupCountTiddler>>/><$action-deletetiddler $tiddler=<<backupCountPopupState>>/>""">
+<$edit-text tiddler=<<backupCountTiddler>> tag="input" placeholder="custom" class="td-backup-count-input" inputMode="numeric"/>
+</$keyboard>
+<$button class="tc-btn-invisible td-button">
+<$action-sendmessage $message="tm-tiddlydesktop-rs-set-backup-count" path=<<path>> count={{{ [<backupCountTiddler>get[text]] }}}/>
+<$action-deletetiddler $tiddler=<<backupCountTiddler>>/>
+<$action-deletetiddler $tiddler=<<backupCountPopupState>>/>
+{{$:/core/images/done-button}}
+</$button>
+</div>
+</div>
+</$reveal>
+</$let>
+</div>
 </$list>
 </div>
 </div>
@@ -134,7 +192,7 @@ title: $:/plugins/tiddlywiki/tiddlydesktop-rs/WikiList
 >
 <$list filter="[<isUngrouped>match[yes]]" variable="ignore">
 <!-- Ungrouped wikis -->
-<$let groupCount={{{ [prefix[$:/temp/tiddlydesktop-rs/wikis/]!has[group]count[]] }}}>
+<$let searchTerm={{{ [{$:/temp/tiddlydesktop-rs/search}lowercase[]] }}} groupCount={{{ [prefix[$:/temp/tiddlydesktop-rs/wikis/]!has[group]search:filename,path{$:/temp/tiddlydesktop-rs/search}count[]] }}}>
 <$list filter="[<groupCount>!match[0]]" variable="ignore">
 <div class="td-group-section">
 <div class="td-group-header">
@@ -152,7 +210,7 @@ title: $:/plugins/tiddlywiki/tiddlydesktop-rs/WikiList
 </div>
 <$reveal state=<<collapsedState>> type="nomatch" text="yes" animate="yes">
 <div class="td-group-wikis">
-<$list filter="[prefix[$:/temp/tiddlydesktop-rs/wikis/]!has[group]sort[title]]">
+<$list filter="[prefix[$:/temp/tiddlydesktop-rs/wikis/]!has[group]search:filename,path{$:/temp/tiddlydesktop-rs/search}sort[title]]">
 <<render-wiki-item>>
 </$list>
 </div>
@@ -163,7 +221,7 @@ title: $:/plugins/tiddlywiki/tiddlydesktop-rs/WikiList
 </$list>
 <$list filter="[<isUngrouped>!match[yes]]" variable="ignore">
 <!-- Named group wikis -->
-<$let groupCount={{{ [prefix[$:/temp/tiddlydesktop-rs/wikis/]group<groupName>count[]] }}}>
+<$let groupCount={{{ [prefix[$:/temp/tiddlydesktop-rs/wikis/]group<groupName>search:filename,path{$:/temp/tiddlydesktop-rs/search}count[]] }}}>
 <$list filter="[<groupCount>!match[0]]" variable="ignore">
 <div class="td-group-section">
 <div class="td-group-header">
@@ -181,7 +239,7 @@ title: $:/plugins/tiddlywiki/tiddlydesktop-rs/WikiList
 </div>
 <$reveal state=<<collapsedState>> type="nomatch" text="yes" animate="yes">
 <div class="td-group-wikis">
-<$list filter="[prefix[$:/temp/tiddlydesktop-rs/wikis/]group<groupName>sort[title]]">
+<$list filter="[prefix[$:/temp/tiddlydesktop-rs/wikis/]group<groupName>search:filename,path{$:/temp/tiddlydesktop-rs/search}sort[title]]">
 <<render-wiki-item>>
 </$list>
 </div>
@@ -302,6 +360,17 @@ title: $:/plugins/tiddlywiki/tiddlydesktop-rs/WikiList
 </$reveal>
 </div>
 </$list>
+
+<!-- Search bar -->
+<div class="td-search-bar">
+<$edit-text tiddler="$:/temp/tiddlydesktop-rs/search" tag="input" placeholder=<<td-lingo Placeholders/SearchWikis>> class="td-search-input"/>
+<$reveal state="$:/temp/tiddlydesktop-rs/search" type="nomatch" text="">
+<$button class="tc-btn-invisible td-search-clear" tooltip="Clear search">
+<$action-deletetiddler $tiddler="$:/temp/tiddlydesktop-rs/search"/>
+{{$:/core/images/close-button}}
+</$button>
+</$reveal>
+</div>
 
 <div class="td-wikilist">
 <$list filter="[prefix[$:/temp/tiddlydesktop-rs/wikis/]limit[1]]" emptyMessage={{$:/plugins/tiddlywiki/tiddlydesktop-rs/EmptyMessage}} variable="ignore">

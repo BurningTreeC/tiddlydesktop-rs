@@ -28,9 +28,12 @@ Tooltips/ResetBackupDir: Сбросить папку резервных копи
 Tooltips/SetBackupDir: Установить пользовательскую папку резервных копий
 Tooltips/RenameGroup: Переименовать группу
 Tooltips/DeleteGroup: Удалить группу (вики будут перемещены в Без группы)
+Tooltips/SetBackupCount: Установить максимальное количество резервных копий (0 = без ограничений)
 
 Labels/BackupFolder: Папка резервных копий:
+Labels/BackupCount: Лимит копий:
 Labels/Default: (по умолчанию)
+Labels/Unlimited: без ограничений
 Labels/Local: (локально)
 Labels/Ungrouped: Без группы
 Labels/Wikis: вики
@@ -41,6 +44,7 @@ Labels/Language: Язык:
 Labels/AutoDetect: Автоопределение
 
 Placeholders/NewGroupName: Имя новой группы...
+Placeholders/SearchWikis: Поиск вики...
 
 DropZone/Active: Перетащите файл или папку вики сюда
 DropZone/Hint: Перетащите файлы или папки TiddlyWiki сюда

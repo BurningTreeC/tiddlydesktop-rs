@@ -28,9 +28,12 @@ Tooltips/ResetBackupDir: Ripristina directory di backup predefinita
 Tooltips/SetBackupDir: Imposta directory di backup personalizzata
 Tooltips/RenameGroup: Rinomina gruppo
 Tooltips/DeleteGroup: Elimina gruppo (i wiki verranno spostati in Non raggruppati)
+Tooltips/SetBackupCount: Imposta numero massimo di backup da conservare (0 = illimitato)
 
 Labels/BackupFolder: Cartella di backup:
+Labels/BackupCount: Limite backup:
 Labels/Default: (predefinito)
+Labels/Unlimited: illimitato
 Labels/Local: (locale)
 Labels/Ungrouped: Non raggruppati
 Labels/Wikis: wiki
@@ -41,6 +44,7 @@ Labels/Language: Lingua:
 Labels/AutoDetect: Rilevamento automatico
 
 Placeholders/NewGroupName: Nome nuovo gruppo...
+Placeholders/SearchWikis: Cerca wiki...
 
 DropZone/Active: Rilascia file o cartella wiki qui
 DropZone/Hint: Rilascia file o cartelle TiddlyWiki qui

@@ -28,9 +28,12 @@ Tooltips/ResetBackupDir: إعادة تعيين دليل النسخ الاحتي�
 Tooltips/SetBackupDir: تعيين دليل نسخ احتياطي مخصص
 Tooltips/RenameGroup: إعادة تسمية المجموعة
 Tooltips/DeleteGroup: حذف المجموعة (سيتم نقل الويكي إلى غير مصنف)
+Tooltips/SetBackupCount: تعيين الحد الأقصى لعدد النسخ الاحتياطية (0 = غير محدود)
 
 Labels/BackupFolder: مجلد النسخ الاحتياطي:
+Labels/BackupCount: حد النسخ الاحتياطي:
 Labels/Default: (افتراضي)
+Labels/Unlimited: غير محدود
 Labels/Local: (محلي)
 Labels/Ungrouped: غير مصنف
 Labels/Wikis: ويكي
@@ -41,6 +44,7 @@ Labels/Language: اللغة:
 Labels/AutoDetect: كشف تلقائي
 
 Placeholders/NewGroupName: اسم المجموعة الجديدة...
+Placeholders/SearchWikis: البحث في الويكي...
 
 DropZone/Active: أفلت ملف أو مجلد ويكي هنا
 DropZone/Hint: أفلت ملفات أو مجلدات TiddlyWiki هنا

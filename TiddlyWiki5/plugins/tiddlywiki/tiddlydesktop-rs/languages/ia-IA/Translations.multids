@@ -28,9 +28,12 @@ Tooltips/ResetBackupDir: Reinitialisar directorio de copias de securitate predef
 Tooltips/SetBackupDir: Definir directorio de copias de securitate personalisate
 Tooltips/RenameGroup: Renominar gruppo
 Tooltips/DeleteGroup: Deler gruppo (wikis se movera a Sin gruppo)
+Tooltips/SetBackupCount: Definir numero maxime de copias a retener (0 = illimitate)
 
 Labels/BackupFolder: Dossier de copias de securitate:
+Labels/BackupCount: Limite de copias:
 Labels/Default: (predefinite)
+Labels/Unlimited: illimitate
 Labels/Local: (local)
 Labels/Ungrouped: Sin gruppo
 Labels/Wikis: wikis
@@ -41,6 +44,7 @@ Labels/Language: Lingua:
 Labels/AutoDetect: Detection automatic
 
 Placeholders/NewGroupName: Nomine de nove gruppo...
+Placeholders/SearchWikis: Cercar wikis...
 
 DropZone/Active: Depone file o dossier wiki hic
 DropZone/Hint: Depone files o dossieres TiddlyWiki hic

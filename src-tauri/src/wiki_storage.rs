@@ -258,6 +258,32 @@ pub fn set_wiki_backup_dir(app: tauri::AppHandle, path: String, backup_dir: Opti
     save_recent_files_to_disk(&app, &entries)
 }
 
+/// Set the maximum number of backups to keep for a wiki (None = default 20, 0 = unlimited)
+#[tauri::command]
+pub fn set_wiki_backup_count(app: tauri::AppHandle, path: String, count: Option<u32>) -> Result<(), String> {
+    let mut entries = load_recent_files_from_disk(&app);
+
+    for entry in entries.iter_mut() {
+        if utils::paths_equal(&entry.path, &path) {
+            entry.backup_count = count;
+            break;
+        }
+    }
+
+    save_recent_files_to_disk(&app, &entries)
+}
+
+/// Get the backup count setting for a wiki (returns None if using default)
+pub fn get_wiki_backup_count(app: &tauri::AppHandle, path: &str) -> Option<u32> {
+    let entries = load_recent_files_from_disk(app);
+    for entry in entries {
+        if utils::paths_equal(&entry.path, path) {
+            return entry.backup_count;
+        }
+    }
+    None
+}
+
 /// Get favicon for a wiki from storage
 pub fn get_wiki_favicon(app: &tauri::AppHandle, path: &str) -> Option<String> {
     let entries = load_recent_files_from_disk(app);

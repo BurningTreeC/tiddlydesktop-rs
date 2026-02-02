@@ -28,9 +28,12 @@ Tooltips/ResetBackupDir: Nulstil til standard backup-mappe
 Tooltips/SetBackupDir: Indstil brugerdefineret backup-mappe
 Tooltips/RenameGroup: Omdøb gruppe
 Tooltips/DeleteGroup: Slet gruppe (wikis flyttes til Ikke-grupperet)
+Tooltips/SetBackupCount: Indstil maksimalt antal backups at beholde (0 = ubegrænset)
 
 Labels/BackupFolder: Backup-mappe:
+Labels/BackupCount: Backup-grænse:
 Labels/Default: (standard)
+Labels/Unlimited: ubegrænset
 Labels/Local: (lokal)
 Labels/Ungrouped: Ikke-grupperet
 Labels/Wikis: wikis
@@ -41,6 +44,7 @@ Labels/Language: Sprog:
 Labels/AutoDetect: Automatisk registrering
 
 Placeholders/NewGroupName: Nyt gruppenavn...
+Placeholders/SearchWikis: Søg wikis...
 
 DropZone/Active: Slip wiki-fil eller -mappe her
 DropZone/Hint: Slip TiddlyWiki-filer eller -mapper her

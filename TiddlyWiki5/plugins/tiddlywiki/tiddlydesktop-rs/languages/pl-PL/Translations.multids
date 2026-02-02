@@ -28,9 +28,12 @@ Tooltips/ResetBackupDir: Przywróć domyślny katalog kopii zapasowych
 Tooltips/SetBackupDir: Ustaw własny katalog kopii zapasowych
 Tooltips/RenameGroup: Zmień nazwę grupy
 Tooltips/DeleteGroup: Usuń grupę (wiki zostaną przeniesione do Bez grupy)
+Tooltips/SetBackupCount: Ustaw maksymalną liczbę kopii zapasowych (0 = bez limitu)
 
 Labels/BackupFolder: Folder kopii zapasowych:
+Labels/BackupCount: Limit kopii:
 Labels/Default: (domyślny)
+Labels/Unlimited: bez limitu
 Labels/Local: (lokalny)
 Labels/Ungrouped: Bez grupy
 Labels/Wikis: wiki
@@ -41,6 +44,7 @@ Labels/Language: Język:
 Labels/AutoDetect: Automatyczne wykrywanie
 
 Placeholders/NewGroupName: Nazwa nowej grupy...
+Placeholders/SearchWikis: Szukaj wiki...
 
 DropZone/Active: Upuść plik lub folder wiki tutaj
 DropZone/Hint: Upuść pliki lub foldery TiddlyWiki tutaj

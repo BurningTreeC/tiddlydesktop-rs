@@ -28,9 +28,12 @@ Tooltips/ResetBackupDir: 重置为默认备份目录
 Tooltips/SetBackupDir: 设置自定义备份目录
 Tooltips/RenameGroup: 重命名分组
 Tooltips/DeleteGroup: 删除分组（维基将移至未分组）
+Tooltips/SetBackupCount: 设置保留的最大备份数量（0 = 无限制）
 
 Labels/BackupFolder: 备份文件夹：
+Labels/BackupCount: 备份限制：
 Labels/Default: （默认）
+Labels/Unlimited: 无限制
 Labels/Local: （本地）
 Labels/Ungrouped: 未分组
 Labels/Wikis: 个维基
@@ -41,6 +44,7 @@ Labels/Language: 语言：
 Labels/AutoDetect: 自动检测
 
 Placeholders/NewGroupName: 新分组名称...
+Placeholders/SearchWikis: 搜索维基...
 
 DropZone/Active: 将维基文件或文件夹拖放到此处
 DropZone/Hint: 将 TiddlyWiki 文件或文件夹拖放到此处

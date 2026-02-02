@@ -28,9 +28,12 @@ Tooltips/ResetBackupDir: デフォルトのバックアップディレクトリ�
 Tooltips/SetBackupDir: カスタムバックアップディレクトリを設定
 Tooltips/RenameGroup: グループ名を変更
 Tooltips/DeleteGroup: グループを削除（Wikiは未分類に移動）
+Tooltips/SetBackupCount: 保持するバックアップの最大数を設定（0 = 無制限）
 
 Labels/BackupFolder: バックアップフォルダ:
+Labels/BackupCount: バックアップ上限:
 Labels/Default: (デフォルト)
+Labels/Unlimited: 無制限
 Labels/Local: (ローカル)
 Labels/Ungrouped: 未分類
 Labels/Wikis: Wiki
@@ -41,6 +44,7 @@ Labels/Language: 言語:
 Labels/AutoDetect: 自動検出
 
 Placeholders/NewGroupName: 新しいグループ名...
+Placeholders/SearchWikis: Wikiを検索...
 
 DropZone/Active: Wikiファイルまたはフォルダをここにドロップ
 DropZone/Hint: TiddlyWikiファイルまたはフォルダをここにドロップ

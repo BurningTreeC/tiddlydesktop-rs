@@ -28,9 +28,12 @@ Tooltips/ResetBackupDir: Ponastavi privzeto mapo varnostnih kopij
 Tooltips/SetBackupDir: Nastavi prilagojeno mapo varnostnih kopij
 Tooltips/RenameGroup: Preimenuj skupino
 Tooltips/DeleteGroup: Izbriši skupino (wikiji bodo premaknjeni v Brez skupine)
+Tooltips/SetBackupCount: Nastavi največje število varnostnih kopij (0 = neomejeno)
 
 Labels/BackupFolder: Mapa varnostnih kopij:
+Labels/BackupCount: Omejitev kopij:
 Labels/Default: (privzeto)
+Labels/Unlimited: neomejeno
 Labels/Local: (lokalno)
 Labels/Ungrouped: Brez skupine
 Labels/Wikis: wikijev
@@ -41,6 +44,7 @@ Labels/Language: Jezik:
 Labels/AutoDetect: Samodejna zaznava
 
 Placeholders/NewGroupName: Ime nove skupine...
+Placeholders/SearchWikis: Išči wikije...
 
 DropZone/Active: Spustite wiki datoteko ali mapo sem
 DropZone/Hint: Spustite TiddlyWiki datoteke ali mape sem

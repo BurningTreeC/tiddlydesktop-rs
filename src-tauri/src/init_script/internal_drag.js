@@ -1694,4 +1694,49 @@
     TD.isExternalDragActive = function() { return externalDragActive; };
     TD.getDragData = function() { return dragData; };
 
+    // === Windows: Droppable hover tracking for cursor effect ===
+    // Track when cursor is over a $droppable widget to show correct cursor.
+    // Uses counter to handle nested droppables correctly.
+    (function() {
+        // Only needed on Windows
+        if (navigator.platform.indexOf('Win') === -1) return;
+
+        var droppableCount = 0;
+
+        function updateDroppableState(entering) {
+            var wasOverDroppable = droppableCount > 0;
+            droppableCount = Math.max(0, droppableCount + (entering ? 1 : -1));
+            var isOverDroppable = droppableCount > 0;
+
+            // Only call Tauri when state actually changes
+            if (wasOverDroppable !== isOverDroppable && window.__TAURI__?.core?.invoke) {
+                window.__TAURI__.core.invoke('set_over_droppable', { over: isOverDroppable });
+            }
+        }
+
+        // Listen on document to catch all droppables (including dynamically created ones)
+        document.addEventListener('dragenter', function(e) {
+            var droppable = e.target.closest('.tc-droppable');
+            if (droppable) {
+                updateDroppableState(true);
+            }
+        }, true);
+
+        document.addEventListener('dragleave', function(e) {
+            var droppable = e.target.closest('.tc-droppable');
+            if (droppable) {
+                updateDroppableState(false);
+            }
+        }, true);
+
+        // Reset counter when drag ends
+        document.addEventListener('drop', function() {
+            droppableCount = 0;
+        }, true);
+
+        document.addEventListener('dragend', function() {
+            droppableCount = 0;
+        }, true);
+    })();
+
 })(window.TD = window.TD || {});

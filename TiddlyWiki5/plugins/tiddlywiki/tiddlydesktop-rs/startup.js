@@ -201,6 +201,9 @@ exports.startup = function(callback) {
 			if (existingEntry.backup_dir) {
 				entry.backup_dir = existingEntry.backup_dir;
 			}
+			if (existingEntry.backup_count !== undefined) {
+				entry.backup_count = existingEntry.backup_count;
+			}
 			if (existingEntry.group) {
 				entry.group = existingEntry.group;
 			}
@@ -256,6 +259,7 @@ exports.startup = function(callback) {
 				is_folder: entry.is_folder ? "true" : "false",
 				backups_enabled: entry.backups_enabled ? "true" : "false",
 				backup_dir: entry.backup_dir || "",
+				backup_count: entry.backup_count !== undefined ? String(entry.backup_count) : "",
 				group: entry.group || "",
 				text: ""
 			});
@@ -642,6 +646,39 @@ exports.startup = function(callback) {
 				saveWikiList(entries);
 			}).catch(function(err) {
 				console.error("Failed to clear backup directory:", err);
+			});
+		}
+	});
+
+	// Message handler: set backup count for a wiki (max backups to keep)
+	$tw.rootWidget.addEventListener("tm-tiddlydesktop-rs-set-backup-count", function(event) {
+		var path = event.paramObject && event.paramObject.path;
+		var countStr = event.paramObject && event.paramObject.count;
+		if (path) {
+			// Parse count: empty string or null = default (20), "0" = unlimited, number = that count
+			var count = countStr === "" || countStr === null || countStr === undefined ? null : parseInt(countStr, 10);
+			if (count !== null && isNaN(count)) count = null;
+
+			// Update the Rust backend
+			invoke("set_wiki_backup_count", { path: path, count: count }).then(function() {
+				// Update the local wiki list entry
+				var entries = getWikiListEntries();
+				for (var i = 0; i < entries.length; i++) {
+					if (entries[i].path === path) {
+						if (count === null) {
+							delete entries[i].backup_count;
+						} else {
+							entries[i].backup_count = count;
+						}
+						// Directly update the temp tiddler field for immediate UI update
+						var tempTitle = "$:/temp/tiddlydesktop-rs/wikis/" + i;
+						$tw.wiki.setText(tempTitle, "backup_count", null, count !== null ? String(count) : "");
+						break;
+					}
+				}
+				saveWikiList(entries);
+			}).catch(function(err) {
+				console.error("Failed to set backup count:", err);
 			});
 		}
 	});

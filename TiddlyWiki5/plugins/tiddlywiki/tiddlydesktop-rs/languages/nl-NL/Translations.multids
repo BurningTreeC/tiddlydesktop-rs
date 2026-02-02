@@ -28,9 +28,12 @@ Tooltips/ResetBackupDir: Standaard back-upmap herstellen
 Tooltips/SetBackupDir: Aangepaste back-upmap instellen
 Tooltips/RenameGroup: Groep hernoemen
 Tooltips/DeleteGroup: Groep verwijderen (wiki's worden verplaatst naar Niet-gegroepeerd)
+Tooltips/SetBackupCount: Maximaal aantal te bewaren back-ups instellen (0 = onbeperkt)
 
 Labels/BackupFolder: Back-upmap:
+Labels/BackupCount: Back-uplimiet:
 Labels/Default: (standaard)
+Labels/Unlimited: onbeperkt
 Labels/Local: (lokaal)
 Labels/Ungrouped: Niet-gegroepeerd
 Labels/Wikis: wiki's
@@ -41,6 +44,7 @@ Labels/Language: Taal:
 Labels/AutoDetect: Automatisch detecteren
 
 Placeholders/NewGroupName: Nieuwe groepsnaam...
+Placeholders/SearchWikis: Zoek wiki's...
 
 DropZone/Active: Sleep wiki-bestand of -map hierheen
 DropZone/Hint: Sleep TiddlyWiki-bestanden of -mappen hierheen

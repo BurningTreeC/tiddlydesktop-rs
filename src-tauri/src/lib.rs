@@ -539,6 +539,28 @@ fn validate_window_position(
 /// Platform-specific drag-drop handling
 mod drag_drop;
 
+/// Force-link FFI functions for wry fork on Windows
+/// The wry fork declares these as `extern "C"` and expects them to be provided.
+/// Without this, the linker may not include them in the final binary.
+#[cfg(target_os = "windows")]
+mod _force_ffi_link {
+    #[used]
+    static _LINK_HAS_INTERNAL_DRAG: extern "C" fn() -> i32 =
+        super::drag_drop::windows::tiddlydesktop_has_internal_drag;
+    #[used]
+    static _LINK_IS_TEXT_SELECTION_DRAG: extern "C" fn() -> i32 =
+        super::drag_drop::windows::tiddlydesktop_is_text_selection_drag;
+    #[used]
+    static _LINK_IS_TIDDLER_DRAG: extern "C" fn() -> i32 =
+        super::drag_drop::windows::tiddlydesktop_is_tiddler_drag;
+    #[used]
+    static _LINK_CLEAR_INTERNAL_DRAG: extern "C" fn() =
+        super::drag_drop::windows::tiddlydesktop_clear_internal_drag;
+    #[used]
+    static _LINK_IS_OVER_DROPPABLE: extern "C" fn() -> i32 =
+        super::drag_drop::windows::tiddlydesktop_is_over_droppable;
+}
+
 /// Inter-process communication for multi-process wiki architecture
 mod ipc;
 
@@ -714,7 +736,8 @@ fn ensure_main_wiki_exists(app: &tauri::App) -> Result<PathBuf, String> {
 
 /// Create a backup of the wiki file before saving
 /// If custom_backup_dir is Some, backups go there; otherwise to .backups folder next to wiki
-async fn create_backup(path: &PathBuf, custom_backup_dir: Option<&str>) -> Result<(), String> {
+/// backup_count: None = default 20, Some(0) = unlimited, Some(n) = keep n backups
+async fn create_backup(path: &PathBuf, custom_backup_dir: Option<&str>, backup_count: Option<u32>) -> Result<(), String> {
     if !path.exists() {
         return Ok(()); // No backup needed for new files
     }
@@ -744,14 +767,21 @@ async fn create_backup(path: &PathBuf, custom_backup_dir: Option<&str>) -> Resul
         .await
         .map_err(|e| format!("Failed to create backup: {}", e))?;
 
-    // Clean up old backups (keep last 20)
-    cleanup_old_backups(&backup_dir, 20).await;
+    // Clean up old backups (default: keep last 20, 0 = unlimited)
+    let keep = backup_count.unwrap_or(20);
+    if keep > 0 {
+        cleanup_old_backups(&backup_dir, keep as usize).await;
+    }
 
     Ok(())
 }
 
 /// Remove old backups, keeping only the most recent ones
 async fn cleanup_old_backups(backup_dir: &PathBuf, keep: usize) {
+    if keep == 0 {
+        return; // 0 means unlimited, don't delete anything
+    }
+
     if let Ok(mut entries) = tokio::fs::read_dir(backup_dir).await {
         let mut backups: Vec<PathBuf> = Vec::new();
         while let Ok(Some(entry)) = entries.next_entry().await {
@@ -793,7 +823,8 @@ async fn save_wiki(app: tauri::AppHandle, path: String, content: String) -> Resu
     let state = app.state::<AppState>();
     if should_create_backup(&app, &state, &path) {
         let backup_dir = get_wiki_backup_dir(&app, &path);
-        create_backup(&validated_path, backup_dir.as_deref()).await?;
+        let backup_count = wiki_storage::get_wiki_backup_count(&app, &path);
+        create_backup(&validated_path, backup_dir.as_deref(), backup_count).await?;
     }
 
     // Write to a temp file first, then rename for atomic operation
@@ -1707,6 +1738,18 @@ fn ungrab_seat_for_focus(window: tauri::Window) -> Result<(), String> {
     Ok(())
 }
 
+/// Set whether cursor is over a droppable widget (Windows only)
+/// Called from JavaScript during dragenter/dragleave on $droppable elements.
+/// This controls the cursor effect for internal drags - shows "copy" over droppables,
+/// "no drop" elsewhere.
+#[tauri::command]
+fn set_over_droppable(over: bool) {
+    #[cfg(target_os = "windows")]
+    drag_drop::windows::set_over_droppable(over);
+    #[cfg(not(target_os = "windows"))]
+    let _ = over; // Suppress unused warning on non-Windows
+}
+
 /// Check if a command + args combination is potentially destructive
 /// Returns true if the command should ALWAYS require confirmation
 /// Covers dangerous commands on Linux, macOS, and Windows
@@ -2455,6 +2498,7 @@ async fn open_wiki_folder(app: tauri::AppHandle, path: String) -> Result<WikiEnt
                 is_folder: true,
                 backups_enabled: false,
                 backup_dir: None,
+                backup_count: None,
                 group: None,
             });
         }
@@ -2534,6 +2578,7 @@ async fn open_wiki_folder(app: tauri::AppHandle, path: String) -> Result<WikiEnt
         is_folder: true,
         backups_enabled: false, // Not applicable for folder wikis (they use autosave)
         backup_dir: None,
+        backup_count: None,
         group: None,
     };
 
@@ -3435,6 +3480,7 @@ async fn open_wiki_window(app: tauri::AppHandle, path: String) -> Result<WikiEnt
                 is_folder: false,
                 backups_enabled: true,
                 backup_dir: None,
+                backup_count: None,
                 group: None,
             });
         }
@@ -3525,6 +3571,7 @@ async fn open_wiki_window(app: tauri::AppHandle, path: String) -> Result<WikiEnt
         is_folder: false,
         backups_enabled: true,
         backup_dir: None,
+        backup_count: None,
         group: None,
     };
 
@@ -4270,6 +4317,23 @@ fn wiki_protocol_handler(app: &tauri::AppHandle, request: Request<Vec<u8>>) -> R
                 let backup_name = format!("{}.{}.html", filename, timestamp);
                 let backup_path = backup_dir.join(backup_name);
                 let _ = std::fs::copy(&wiki_path, &backup_path);
+
+                // Clean up old backups (synchronous version)
+                let backup_count = wiki_storage::get_wiki_backup_count(app, wiki_path_str.as_ref()).unwrap_or(20);
+                if backup_count > 0 {
+                    if let Ok(entries) = std::fs::read_dir(&backup_dir) {
+                        let mut backups: Vec<PathBuf> = entries
+                            .filter_map(|e| e.ok())
+                            .map(|e| e.path())
+                            .filter(|p| p.extension().map(|e| e == "html").unwrap_or(false))
+                            .collect();
+                        backups.sort();
+                        backups.reverse();
+                        for old_backup in backups.into_iter().skip(backup_count as usize) {
+                            let _ = std::fs::remove_file(old_backup);
+                        }
+                    }
+                }
             }
         }
 
@@ -5462,6 +5526,7 @@ fn run_wiki_mode(args: WikiModeArgs) {
             set_pending_drag_icon,
             set_drag_dest_enabled,
             ungrab_seat_for_focus,
+            set_over_droppable,
             // Tiddler window commands (same process, shares $tw.wiki)
             open_tiddler_window,
             close_window_by_label,
@@ -5783,6 +5848,7 @@ fn run_wiki_folder_mode(args: WikiFolderModeArgs) {
             set_pending_drag_icon,
             set_drag_dest_enabled,
             ungrab_seat_for_focus,
+            set_over_droppable,
         ])
         .build(tauri::generate_context!())
         .expect("error while building wiki-folder-mode application")
@@ -6205,6 +6271,7 @@ pub fn run() {
             wiki_storage::remove_recent_file,
             wiki_storage::set_wiki_backups,
             wiki_storage::set_wiki_backup_dir,
+            wiki_storage::set_wiki_backup_count,
             wiki_storage::update_wiki_favicon,
             wiki_storage::get_wiki_backup_dir_setting,
             wiki_storage::set_wiki_group,
@@ -6244,6 +6311,7 @@ pub fn run() {
             set_pending_drag_icon,
             set_drag_dest_enabled,
             ungrab_seat_for_focus,
+            set_over_droppable,
             check_for_updates
         ])
         .build(tauri::generate_context!())

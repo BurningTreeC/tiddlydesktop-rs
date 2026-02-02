@@ -154,6 +154,30 @@ fn set_internal_drag_active(drag_type: InternalDragType) {
 pub extern "C" fn tiddlydesktop_clear_internal_drag() {
     eprintln!("[TiddlyDesktop] Windows: tiddlydesktop_clear_internal_drag");
     INTERNAL_DRAG_STATE.store(DRAG_STATE_NONE, Ordering::Release);
+    // Also clear droppable state when drag ends
+    OVER_DROPPABLE.store(false, Ordering::Release);
+}
+
+// ============================================================================
+// Droppable State (for cursor effect control)
+// ============================================================================
+
+/// Tracks whether the cursor is currently over a $droppable widget.
+/// This is set by JavaScript via a Tauri command during dragenter/dragleave.
+/// Used by wry to determine the cursor effect for internal drags.
+static OVER_DROPPABLE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// FFI function for wry fork to check if cursor is over a droppable widget.
+/// Returns 1 if over a droppable, 0 otherwise.
+#[no_mangle]
+pub extern "C" fn tiddlydesktop_is_over_droppable() -> i32 {
+    if OVER_DROPPABLE.load(Ordering::Acquire) { 1 } else { 0 }
+}
+
+/// Set whether the cursor is over a droppable widget.
+/// Called from JavaScript via Tauri command.
+pub fn set_over_droppable(over: bool) {
+    OVER_DROPPABLE.store(over, Ordering::Release);
 }
 
 // ============================================================================

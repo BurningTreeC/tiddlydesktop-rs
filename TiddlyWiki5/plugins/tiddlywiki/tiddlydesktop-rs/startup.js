@@ -859,6 +859,23 @@ exports.startup = function(callback) {
 	// Initial load of wiki list from tiddler
 	refreshWikiList();
 
+	// Check for application updates
+	invoke("check_for_updates").then(function(result) {
+		if (result.update_available && result.latest_version) {
+			$tw.wiki.setText("$:/temp/tiddlydesktop-rs/update-available", "text", null, "yes");
+			$tw.wiki.setText("$:/temp/tiddlydesktop-rs/latest-version", "text", null, result.latest_version);
+			$tw.wiki.setText("$:/temp/tiddlydesktop-rs/releases-url", "text", null, result.releases_url);
+			console.log("Update available: v" + result.latest_version + " (current: v" + result.current_version + ")");
+		} else {
+			$tw.wiki.setText("$:/temp/tiddlydesktop-rs/update-available", "text", null, "no");
+			console.log("TiddlyDesktop-RS is up to date (v" + result.current_version + ")");
+		}
+	}).catch(function(err) {
+		console.warn("Failed to check for updates:", err);
+		// Don't show update button on error
+		$tw.wiki.setText("$:/temp/tiddlydesktop-rs/update-available", "text", null, "no");
+	});
+
 	callback();
 };
 

@@ -3854,6 +3854,85 @@ fn ipc_send_sync_state(
     Ok(())
 }
 
+/// Response for update check
+#[derive(serde::Serialize)]
+struct UpdateCheckResult {
+    update_available: bool,
+    latest_version: Option<String>,
+    releases_url: String,
+    current_version: String,
+}
+
+/// Check for application updates by querying GitHub releases
+#[tauri::command]
+async fn check_for_updates() -> Result<UpdateCheckResult, String> {
+    let current_version = env!("CARGO_PKG_VERSION");
+    let releases_url = "https://github.com/BurningTreeC/tiddlydesktop-rs/releases".to_string();
+
+    // Fetch latest release from GitHub API
+    let client = reqwest::Client::builder()
+        .user_agent("TiddlyDesktop-RS")
+        .build()
+        .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
+
+    let response = client
+        .get("https://api.github.com/repos/BurningTreeC/tiddlydesktop-rs/releases/latest")
+        .send()
+        .await
+        .map_err(|e| format!("Failed to fetch release info: {}", e))?;
+
+    if !response.status().is_success() {
+        return Err(format!("GitHub API returned status: {}", response.status()));
+    }
+
+    let release: serde_json::Value = response
+        .json()
+        .await
+        .map_err(|e| format!("Failed to parse release info: {}", e))?;
+
+    let latest_version = release["tag_name"]
+        .as_str()
+        .map(|s| s.trim_start_matches('v').to_string());
+
+    let update_available = if let Some(ref latest) = latest_version {
+        version_is_newer(latest, current_version)
+    } else {
+        false
+    };
+
+    Ok(UpdateCheckResult {
+        update_available,
+        latest_version,
+        releases_url,
+        current_version: current_version.to_string(),
+    })
+}
+
+/// Compare version strings (e.g., "0.3.20" > "0.3.19")
+fn version_is_newer(latest: &str, current: &str) -> bool {
+    let parse_version = |v: &str| -> Vec<u32> {
+        v.split('.')
+            .filter_map(|part| part.parse::<u32>().ok())
+            .collect()
+    };
+
+    let latest_parts = parse_version(latest);
+    let current_parts = parse_version(current);
+
+    for i in 0..latest_parts.len().max(current_parts.len()) {
+        let latest_part = latest_parts.get(i).copied().unwrap_or(0);
+        let current_part = current_parts.get(i).copied().unwrap_or(0);
+
+        if latest_part > current_part {
+            return true;
+        } else if latest_part < current_part {
+            return false;
+        }
+    }
+
+    false
+}
+
 /// IPC command: Update wiki favicon (sends to main process via IPC)
 #[tauri::command]
 fn ipc_update_favicon(
@@ -6164,7 +6243,8 @@ pub fn run() {
             update_drag_icon,
             set_pending_drag_icon,
             set_drag_dest_enabled,
-            ungrab_seat_for_focus
+            ungrab_seat_for_focus,
+            check_for_updates
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

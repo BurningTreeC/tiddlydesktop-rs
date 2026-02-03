@@ -1,0 +1,12 @@
+# Android linker configuration
+[target.aarch64-linux-android]
+linker = "/home/simon/Android/Sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android35-clang"
+
+[target.armv7-linux-androideabi]
+linker = "/home/simon/Android/Sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/linux-x86_64/bin/armv7a-linux-androideabi35-clang"
+
+[target.i686-linux-android]
+linker = "/home/simon/Android/Sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/linux-x86_64/bin/i686-linux-android35-clang"
+
+[target.x86_64-linux-android]
+linker = "/home/simon/Android/Sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/linux-x86_64/bin/x86_64-linux-android35-clang"

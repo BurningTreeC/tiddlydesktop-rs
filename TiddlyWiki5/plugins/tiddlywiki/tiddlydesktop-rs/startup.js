@@ -26,6 +26,9 @@ exports.startup = function(callback) {
 	var listen = window.__TAURI__.event.listen;
 	var openDialog = window.__TAURI__.dialog.open;
 
+	// Detect if running on Android
+	var isAndroid = /android/i.test(navigator.userAgent);
+
 	// Check if this is the main wiki
 	var isMainWiki = window.__IS_MAIN_WIKI__ === true;
 
@@ -47,12 +50,120 @@ exports.startup = function(callback) {
 	// Desktop app - always set mobile to no
 	$tw.wiki.setText("$:/temp/tiddlydesktop-rs/is-mobile", "text", null, "no");
 
+	// Set Android flag for UI to show/hide Android-specific elements
+	$tw.wiki.setText("$:/temp/tiddlydesktop-rs/is-android", "text", null, isAndroid ? "yes" : "no");
+
 	// Set main wiki flag
 	$tw.wiki.setText("$:/temp/tiddlydesktop-rs/is-main-wiki", "text", null, isMainWiki ? "yes" : "no");
 
 	// Add body class for main wiki (used by CSS to hide notifications)
 	if (isMainWiki) {
 		document.body.classList.add("td-main-wiki");
+	}
+
+	// Add body class for Android (used by CSS for Android-specific styling)
+	if (isAndroid) {
+		document.body.classList.add("td-is-android");
+	}
+
+	// ========================================
+	// Android System Bar Color Sync
+	// ========================================
+	if (isAndroid) {
+		// Function to get a color from TiddlyWiki's current palette (with recursive resolution)
+		function getColour(name, fallback, depth) {
+			depth = depth || 0;
+			if (depth > 10) return fallback; // Prevent infinite recursion
+
+			try {
+				// Get the current palette title
+				var paletteName = $tw.wiki.getTiddlerText("$:/palette");
+				if (paletteName) {
+					paletteName = paletteName.trim();
+					var paletteTiddler = $tw.wiki.getTiddler(paletteName);
+					if (paletteTiddler) {
+						// Colors are in the tiddler text (one per line: name: value)
+						var text = paletteTiddler.fields.text || "";
+						var lines = text.split("\n");
+						for (var i = 0; i < lines.length; i++) {
+							var line = lines[i].trim();
+							var colonIndex = line.indexOf(":");
+							if (colonIndex > 0) {
+								var colorName = line.substring(0, colonIndex).trim();
+								var colorValue = line.substring(colonIndex + 1).trim();
+								if (colorName === name && colorValue) {
+									// Handle references to other colors like <<colour background>>
+									var match = colorValue.match(/<<colour\s+([^>]+)>>/);
+									if (match) {
+										return getColour(match[1].trim(), fallback, depth + 1);
+									}
+									return colorValue;
+								}
+							}
+						}
+					}
+				}
+			} catch (e) {
+				console.error('[TiddlyDesktop-Android] getColour error:', e);
+			}
+			return fallback;
+		}
+
+		// Function to update system bar colors
+		function updateSystemBarColors() {
+			// Use page-background for status bar, tiddler-background for nav bar
+			var statusBarColor = getColour("page-background", "#ffffff");
+			var navBarColor = getColour("tiddler-background", statusBarColor);
+			// Get foreground color to determine if icons should be light or dark
+			var foregroundColor = getColour("foreground", "#333333");
+
+			invoke("android_set_system_bar_colors", {
+				statusBarColor: statusBarColor,
+				navBarColor: navBarColor,
+				foregroundColor: foregroundColor
+			}).catch(function(err) {
+				console.error("[TiddlyDesktop-Android] Failed to set system bar colors:", err);
+			});
+		}
+
+		// Wait for palette to be ready before updating colors
+		function waitForPaletteAndUpdate(retries) {
+			retries = retries || 0;
+			if (retries > 100) {
+				// Give up after 5 seconds, use defaults
+				updateSystemBarColors();
+				return;
+			}
+			var paletteName = ($tw.wiki.getTiddlerText("$:/palette") || "").trim();
+			if (paletteName) {
+				var paletteTiddler = $tw.wiki.getTiddler(paletteName);
+				// Check that palette exists AND has color content
+				if (paletteTiddler && paletteTiddler.fields.text && paletteTiddler.fields.text.indexOf(":") > 0) {
+					// Palette is ready with color definitions, update colors
+					updateSystemBarColors();
+					return;
+				}
+			}
+			// Palette not ready yet, try again
+			setTimeout(function() { waitForPaletteAndUpdate(retries + 1); }, 50);
+		}
+
+		// Start checking for palette on startup
+		waitForPaletteAndUpdate(0);
+
+		// Listen for palette changes
+		$tw.wiki.addEventListener("change", function(changes) {
+			// Check if the palette reference changed
+			if (changes["$:/palette"]) {
+				updateSystemBarColors();
+				return;
+			}
+			// Check if the current palette tiddler itself changed
+			var paletteName = ($tw.wiki.getTiddlerText("$:/palette") || "").trim();
+			if (paletteName && changes[paletteName]) {
+				updateSystemBarColors();
+			}
+		});
 	}
 
 	// Non-main wikis don't need the wiki list management - external attachments
@@ -201,11 +312,11 @@ exports.startup = function(callback) {
 			if (existingEntry.backup_dir) {
 				entry.backup_dir = existingEntry.backup_dir;
 			}
-			if (existingEntry.backup_count !== undefined) {
-				entry.backup_count = existingEntry.backup_count;
-			}
 			if (existingEntry.group) {
 				entry.group = existingEntry.group;
+			}
+			if (existingEntry.backup_count !== undefined) {
+				entry.backup_count = existingEntry.backup_count;
 			}
 		}
 		// Remove if already exists
@@ -274,28 +385,74 @@ exports.startup = function(callback) {
 
 	// Message handler: open wiki file dialog
 	$tw.rootWidget.addEventListener("tm-tiddlydesktop-rs-open-wiki", function(event) {
-		openDialog({
-			multiple: false,
-			filters: [{
-				name: "TiddlyWiki",
-				extensions: ["html", "htm"]
-			}]
-		}).then(function(file) {
-			if (file) {
-				invoke("open_wiki_window", { path: file }).then(function(entry) {
-					addToWikiList(entry);
-					refreshWikiList();
-				}).catch(function(err) {
-					console.error("open_wiki_window error:", err);
-				});
-			}
-		}).catch(function(err) {
-			console.error("openDialog error:", err);
-		});
+		if (isAndroid) {
+			// Android: Use SAF file picker
+			invoke("android_pick_wiki_file").then(function(uri) {
+				if (uri) {
+					invoke("open_wiki_window", { path: uri }).then(function(entry) {
+						addToWikiList(entry);
+						refreshWikiList();
+					}).catch(function(err) {
+						console.error("open_wiki_window error:", err);
+					});
+				}
+			}).catch(function(err) {
+				console.error("android_pick_wiki_file error:", err);
+			});
+		} else {
+			// Desktop: Use native file dialog
+			openDialog({
+				multiple: false,
+				filters: [{
+					name: "TiddlyWiki",
+					extensions: ["html", "htm"]
+				}]
+			}).then(function(file) {
+				if (file) {
+					invoke("open_wiki_window", { path: file }).then(function(entry) {
+						addToWikiList(entry);
+						refreshWikiList();
+					}).catch(function(err) {
+						console.error("open_wiki_window error:", err);
+					});
+				}
+			}).catch(function(err) {
+				console.error("openDialog error:", err);
+			});
+		}
 	});
 
 	// Message handler: open wiki folder dialog
 	$tw.rootWidget.addEventListener("tm-tiddlydesktop-rs-open-folder", function(event) {
+		if (isAndroid) {
+			// Android: Use SAF directory picker, then check folder status
+			invoke("android_pick_folder_for_wiki_creation").then(function(result) {
+				if (result) {
+					var uri = result[0];
+					var isWiki = result[1];
+					var isEmpty = result[2];
+					var folderName = result[3];
+
+					if (isWiki) {
+						// Already a wiki folder, open it directly
+						invoke("open_wiki_folder", { path: uri }).then(function(entry) {
+							addToWikiList(entry);
+							refreshWikiList();
+						}).catch(function(err) {
+							console.error("open_wiki_folder error:", err);
+							alert("Failed to open wiki folder: " + err);
+						});
+					} else {
+						// Not a wiki folder, show edition selection
+						showEditionSelector(uri, { name: folderName, is_empty: isEmpty });
+					}
+				}
+			}).catch(function(err) {
+				console.error("android_pick_folder_for_wiki_creation error:", err);
+				alert("Failed to pick folder: " + err);
+			});
+			return;
+		}
 		openDialog({
 			directory: true,
 			multiple: false
@@ -403,20 +560,32 @@ exports.startup = function(callback) {
 
 	// Message handler: create new wiki file (shows save dialog then edition selector)
 	$tw.rootWidget.addEventListener("tm-tiddlydesktop-rs-create-wiki", function(event) {
-		var saveDialog = window.__TAURI__.dialog.save;
-		saveDialog({
-			filters: [{
-				name: "TiddlyWiki",
-				extensions: ["html"]
-			}],
-			defaultPath: "wiki.html"
-		}).then(function(filePath) {
-			if (filePath) {
-				showFileCreator(filePath);
-			}
-		}).catch(function(err) {
-			console.error("Save dialog error:", err);
-		});
+		if (isAndroid) {
+			// Android: Use SAF save dialog
+			invoke("android_create_wiki_file", { suggestedName: "wiki.html" }).then(function(uri) {
+				if (uri) {
+					showFileCreator(uri);
+				}
+			}).catch(function(err) {
+				console.error("android_create_wiki_file error:", err);
+			});
+		} else {
+			// Desktop: Use native save dialog
+			var saveDialog = window.__TAURI__.dialog.save;
+			saveDialog({
+				filters: [{
+					name: "TiddlyWiki",
+					extensions: ["html"]
+				}],
+				defaultPath: "wiki.html"
+			}).then(function(filePath) {
+				if (filePath) {
+					showFileCreator(filePath);
+				}
+			}).catch(function(err) {
+				console.error("Save dialog error:", err);
+			});
+		}
 	});
 
 	// Message handler: create wiki file with selected edition and plugins
@@ -504,17 +673,27 @@ exports.startup = function(callback) {
 		$tw.wiki.setText("$:/temp/tiddlydesktop-rs/show-edition-selector", "text", null, "no");
 		$tw.wiki.setText("$:/temp/tiddlydesktop-rs/init-loading", "text", null, "yes");
 
-		invoke("init_wiki_folder", { path: folderPath, edition: editionId, plugins: selectedPlugins }).then(function() {
+		invoke("init_wiki_folder", { path: folderPath, edition: editionId, plugins: selectedPlugins }).then(function(entry) {
 			$tw.wiki.setText("$:/temp/tiddlydesktop-rs/init-loading", "text", null, "no");
 
-			// Now open the newly initialized folder
-			invoke("open_wiki_folder", { path: folderPath }).then(function(entry) {
-				addToWikiList(entry);
-				refreshWikiList();
-			}).catch(function(err) {
-				console.error("Failed to open initialized folder:", err);
-				alert("Wiki initialized but failed to open: " + err);
-			});
+			// On Android, init_wiki_folder also opens the wiki and returns the entry
+			// On desktop, we need to call open_wiki_folder separately
+			if (isAndroid) {
+				// Entry returned from init_wiki_folder on Android
+				if (entry) {
+					addToWikiList(entry);
+					refreshWikiList();
+				}
+			} else {
+				// Desktop: open the newly initialized folder
+				invoke("open_wiki_folder", { path: folderPath }).then(function(entry) {
+					addToWikiList(entry);
+					refreshWikiList();
+				}).catch(function(err) {
+					console.error("Failed to open initialized folder:", err);
+					alert("Wiki initialized but failed to open: " + err);
+				});
+			}
 		}).catch(function(err) {
 			console.error("init_wiki_folder error:", err);
 			$tw.wiki.setText("$:/temp/tiddlydesktop-rs/init-loading", "text", null, "no");
@@ -595,7 +774,36 @@ exports.startup = function(callback) {
 	$tw.rootWidget.addEventListener("tm-tiddlydesktop-rs-set-backup-dir", function(event) {
 		var path = event.paramObject && event.paramObject.path;
 		if (path) {
-			// Open folder picker dialog
+			if (isAndroid) {
+				// Android: Use SAF directory picker for backup directory
+				invoke("android_pick_backup_directory").then(function(folder) {
+					if (folder) {
+						// Update the Rust backend
+						invoke("set_wiki_backup_dir", { path: path, backupDir: folder }).then(function() {
+							// Update the local wiki list entry
+							var entries = getWikiListEntries();
+							for (var i = 0; i < entries.length; i++) {
+								if (entries[i].path === path) {
+									entries[i].backup_dir = folder;
+									// Directly update the temp tiddler field for immediate UI update
+									var tempTitle = "$:/temp/tiddlydesktop-rs/wikis/" + i;
+									$tw.wiki.setText(tempTitle, "backup_dir", null, folder);
+									break;
+								}
+							}
+							saveWikiList(entries);
+						}).catch(function(err) {
+							console.error("Failed to set backup directory:", err);
+							alert("Failed to set backup directory: " + err);
+						});
+					}
+				}).catch(function(err) {
+					console.error("android_pick_backup_directory error:", err);
+					alert("Failed to pick backup directory: " + err);
+				});
+				return;
+			}
+			// Desktop: Open folder picker dialog
 			openDialog({
 				directory: true,
 				multiple: false,

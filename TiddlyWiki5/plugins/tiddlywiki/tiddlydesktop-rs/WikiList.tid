@@ -251,10 +251,23 @@ title: $:/plugins/tiddlywiki/tiddlydesktop-rs/WikiList
 </$let>
 \end
 
+<!-- Android: Update banner at very top -->
+<$list filter="[{$:/temp/tiddlydesktop-rs/is-android}match[yes]]" variable="ignore">
+<$reveal state="$:/temp/tiddlydesktop-rs/update-available" type="match" text="yes">
+<div class="td-update-banner">
+<a href="https://play.google.com/store/apps/details?id=com.burningtreec.tiddlydesktop_rs" target="_blank" rel="noopener noreferrer" class="td-update-banner-link">
+{{$:/core/images/download-button}} <<td-lingo Labels/UpdateAvailable>> v{{$:/temp/tiddlydesktop-rs/latest-version}}
+</a>
+</div>
+</$reveal>
+</$list>
+
 <div class="td-toolbar">
+<$list filter="[{$:/temp/tiddlydesktop-rs/is-android}!match[yes]]" variable="ignore">
 <div class="td-toolbar-item">
 {{$:/plugins/tiddlywiki/tiddlydesktop-rs/images/logo}}
 </div>
+</$list>
 <div class="td-toolbar-item">
 <$button message="tm-tiddlydesktop-rs-open-wiki" class="td-button">
 {{$:/core/images/file}} <<td-lingo Buttons/OpenWikiFile>>
@@ -271,11 +284,14 @@ title: $:/plugins/tiddlywiki/tiddlydesktop-rs/WikiList
 </$button>
 </div>
 <div class="td-toolbar-item td-toolbar-right">
+<!-- Update button in toolbar - only on non-Android (Android shows banner at top) -->
+<$list filter="[{$:/temp/tiddlydesktop-rs/is-android}!match[yes]]" variable="ignore">
 <$reveal state="$:/temp/tiddlydesktop-rs/update-available" type="match" text="yes">
 <a href={{$:/temp/tiddlydesktop-rs/releases-url}} target="_blank" rel="noopener noreferrer" class="td-button td-button-update">
 {{$:/core/images/download-button}} <<td-lingo Labels/UpdateAvailable>> v{{$:/temp/tiddlydesktop-rs/latest-version}}
 </a>
 </$reveal>
+</$list>
 <!-- Language selector dropdown -->
 <$let langPopupState=<<qualify "$:/state/language-popup">> currentLang={{$:/temp/tiddlydesktop-rs/language}}>
 <$button popup=<<langPopupState>> class="tc-btn-invisible td-button td-button-language" tooltip=<<td-lingo Labels/Language>>>
@@ -346,7 +362,9 @@ title: $:/plugins/tiddlywiki/tiddlydesktop-rs/WikiList
 </div>
 </div>
 
+<!-- Drop zone - hidden on mobile and Android -->
 <$list filter="[{$:/temp/tiddlydesktop-rs/is-mobile}!match[yes]]" variable="ignore">
+<$list filter="[{$:/temp/tiddlydesktop-rs/is-android}!match[yes]]" variable="ignore">
 <div class="td-drop-zone">
 <$reveal state="$:/temp/tiddlydesktop-rs/drag-over" type="match" text="yes">
 <div class="td-drop-active">
@@ -359,6 +377,7 @@ title: $:/plugins/tiddlywiki/tiddlydesktop-rs/WikiList
 </div>
 </$reveal>
 </div>
+</$list>
 </$list>
 
 <!-- Search bar -->

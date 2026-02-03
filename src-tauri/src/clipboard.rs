@@ -28,6 +28,11 @@ pub fn get_clipboard_content() -> Result<ClipboardContentData, String> {
     {
         get_clipboard_content_macos()
     }
+    #[cfg(target_os = "android")]
+    {
+        // Android clipboard access not yet implemented
+        Err("Clipboard not implemented on Android".to_string())
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -347,6 +352,12 @@ pub fn set_clipboard_content(text: String) -> Result<bool, String> {
     #[cfg(target_os = "macos")]
     {
         set_clipboard_content_macos(&text)
+    }
+    #[cfg(target_os = "android")]
+    {
+        // Android clipboard access not yet implemented
+        let _ = text; // Silence unused warning
+        Err("Clipboard not implemented on Android".to_string())
     }
 }
 

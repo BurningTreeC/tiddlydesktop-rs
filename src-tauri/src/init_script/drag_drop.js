@@ -1867,11 +1867,27 @@
         // External Attachments Configuration
         // ========================================
 
-        var CONFIG_ENABLE = "$:/config/TiddlyDesktop/ExternalAttachments/Enable";
-        var CONFIG_ABS_DESC = "$:/config/TiddlyDesktop/ExternalAttachments/UseAbsoluteForDescendents";
-        var CONFIG_ABS_NONDESC = "$:/config/TiddlyDesktop/ExternalAttachments/UseAbsoluteForNonDescendents";
-        var CONFIG_SETTINGS_TAB = "$:/plugins/tiddlydesktop/external-attachments/settings";
+        // Use $:/temp/ prefix so tiddlers are never saved with wiki
+        var CONFIG_ENABLE = "$:/temp/tiddlydesktop/ExternalAttachments/Enable";
+        var CONFIG_ABS_DESC = "$:/temp/tiddlydesktop/ExternalAttachments/UseAbsoluteForDescendents";
+        var CONFIG_ABS_NONDESC = "$:/temp/tiddlydesktop/ExternalAttachments/UseAbsoluteForNonDescendents";
+        var CONFIG_SETTINGS_TAB = "$:/temp/tiddlydesktop/external-attachments/settings";
         var ALL_CONFIG_TIDDLERS = [CONFIG_ENABLE, CONFIG_ABS_DESC, CONFIG_ABS_NONDESC, CONFIG_SETTINGS_TAB];
+
+        // Helper to add tiddler as shadow (won't be saved with wiki)
+        function addShadowTiddler(fields) {
+            var tiddler = new $tw.Tiddler(fields);
+            // Add to shadow store so it's not saved with the wiki
+            $tw.wiki.shadowTiddlers = $tw.wiki.shadowTiddlers || {};
+            $tw.wiki.shadowTiddlers[fields.title] = {
+                tiddler: tiddler,
+                source: "tiddlydesktop"
+            };
+            // Also add to main wiki for immediate visibility
+            $tw.wiki.addTiddler(tiddler);
+            // Clear cache to ensure consistency
+            $tw.wiki.clearCache(fields.title);
+        }
 
         function installImportHook() {
             if (typeof $tw === 'undefined' || !$tw.hooks) {
@@ -2012,20 +2028,21 @@
 
             var originalNumChanges = $tw.saverHandler.numChanges || 0;
 
-            $tw.wiki.addTiddler(new $tw.Tiddler({
+            // Use shadow tiddlers so settings are never saved with the wiki
+            addShadowTiddler({
                 title: CONFIG_ENABLE,
                 text: config.enabled ? "yes" : "no"
-            }));
-            $tw.wiki.addTiddler(new $tw.Tiddler({
+            });
+            addShadowTiddler({
                 title: CONFIG_ABS_DESC,
                 text: config.use_absolute_for_descendents ? "yes" : "no"
-            }));
-            $tw.wiki.addTiddler(new $tw.Tiddler({
+            });
+            addShadowTiddler({
                 title: CONFIG_ABS_NONDESC,
                 text: config.use_absolute_for_non_descendents ? "yes" : "no"
-            }));
+            });
 
-            $tw.wiki.addTiddler(new $tw.Tiddler({
+            addShadowTiddler({
                 title: CONFIG_SETTINGS_TAB,
                 caption: "External Attachments",
                 tags: "$:/tags/ControlPanel/SettingsTab",
@@ -2034,7 +2051,7 @@
                       "<$checkbox tiddler=\"" + CONFIG_ENABLE + "\" field=\"text\" checked=\"yes\" unchecked=\"no\" default=\"yes\"> Enable external attachments</$checkbox>\n\n" +
                       "<$checkbox tiddler=\"" + CONFIG_ABS_DESC + "\" field=\"text\" checked=\"yes\" unchecked=\"no\" default=\"no\"> Use absolute paths for files inside wiki folder</$checkbox>\n\n" +
                       "<$checkbox tiddler=\"" + CONFIG_ABS_NONDESC + "\" field=\"text\" checked=\"yes\" unchecked=\"no\" default=\"no\"> Use absolute paths for files outside wiki folder</$checkbox>"
-            }));
+            });
 
             setTimeout(function() {
                 $tw.saverHandler.numChanges = originalNumChanges;

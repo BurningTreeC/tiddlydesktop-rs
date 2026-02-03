@@ -1,3 +1,6 @@
+// Allow dead code on Android - many functions are desktop-only
+#![cfg_attr(target_os = "android", allow(dead_code))]
+
 use std::{collections::HashMap, path::PathBuf, process::{Child, Command}, sync::{Arc, Mutex, OnceLock}};
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
@@ -12,6 +15,15 @@ pub fn get_global_app_handle() -> Option<tauri::AppHandle> {
 
 /// Global IPC server for sending messages to wiki processes
 static GLOBAL_IPC_SERVER: OnceLock<Arc<ipc::IpcServer>> = OnceLock::new();
+
+/// Embedded TiddlyWiki resources ZIP for Android extraction
+/// Generated at build time by build.rs
+#[cfg(target_os = "android")]
+static TIDDLYWIKI_ZIP: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/tiddlywiki.zip"));
+
+/// JNI crate for Android JNI_OnLoad
+#[cfg(target_os = "android")]
+use jni;
 
 /// Linux: Activate a window - uses X11 _NET_ACTIVE_WINDOW on X11, urgency hint on Wayland
 #[cfg(target_os = "linux")]
@@ -562,6 +574,8 @@ mod _force_ffi_link {
 }
 
 /// Inter-process communication for multi-process wiki architecture
+/// (Desktop only - not used on Android which doesn't support multi-process wikis)
+#[cfg_attr(target_os = "android", allow(dead_code))]
 mod ipc;
 
 /// JavaScript initialization scripts for wiki windows
@@ -581,16 +595,75 @@ mod utils;
 mod wiki_storage;
 
 /// TiddlyWiki HTML manipulation
+#[cfg_attr(target_os = "android", allow(dead_code))]
 mod tiddlywiki_html;
+
+/// Cross-platform file system abstraction (desktop: std::fs, Android: SAF)
+mod fs_abstraction;
+
+/// Android-specific implementations (SAF, permissions, etc.)
+#[cfg(target_os = "android")]
+mod android;
+
+/// Helper trait to conditionally add platform-specific plugins to the Tauri builder.
+/// On Android, this adds the Android FS plugin for SAF support.
+trait BuilderExt<R: tauri::Runtime> {
+    fn with_platform_plugins(self) -> Self;
+}
+
+impl<R: tauri::Runtime> BuilderExt<R> for tauri::Builder<R> {
+    #[cfg(target_os = "android")]
+    fn with_platform_plugins(self) -> Self {
+        self.plugin(tauri_plugin_android_fs::init())
+    }
+
+    #[cfg(not(target_os = "android"))]
+    fn with_platform_plugins(self) -> Self {
+        self // No additional plugins needed on desktop
+    }
+}
 
 use chrono::Local;
 use tauri::{
     image::Image,
     http::{Request, Response},
-    menu::{MenuBuilder, MenuItemBuilder},
-    tray::TrayIconBuilder,
     Emitter, Manager, WebviewUrl, WebviewWindowBuilder,
 };
+
+// Menu and tray are only available on desktop platforms
+#[cfg(not(target_os = "android"))]
+use tauri::{
+    menu::{MenuBuilder, MenuItemBuilder},
+    tray::TrayIconBuilder,
+};
+
+/// Helper trait to apply desktop-only window properties (title, size)
+/// On Android, these methods don't exist on WebviewWindowBuilder
+trait DesktopWindowExt<'a> {
+    fn with_title_if_desktop(self, title: &str) -> Self;
+    fn with_inner_size_if_desktop(self, width: f64, height: f64) -> Self;
+}
+
+#[cfg(not(target_os = "android"))]
+impl<'a> DesktopWindowExt<'a> for WebviewWindowBuilder<'a, tauri::Wry, tauri::AppHandle<tauri::Wry>> {
+    fn with_title_if_desktop(self, title: &str) -> Self {
+        self.title(title)
+    }
+    fn with_inner_size_if_desktop(self, width: f64, height: f64) -> Self {
+        self.inner_size(width, height)
+    }
+}
+
+#[cfg(target_os = "android")]
+impl<'a> DesktopWindowExt<'a> for WebviewWindowBuilder<'a, tauri::Wry, tauri::AppHandle<tauri::Wry>> {
+    fn with_title_if_desktop(self, _title: &str) -> Self {
+        self // Android windows are fullscreen, no title
+    }
+    fn with_inner_size_if_desktop(self, _width: f64, _height: f64) -> Self {
+        self // Android windows are fullscreen, no size
+    }
+}
+
 /// Determine storage mode for macOS/Linux
 /// Always uses the app data directory (portable mode only available on Windows)
 #[cfg(not(target_os = "windows"))]
@@ -647,9 +720,15 @@ struct AppState {
     main_wiki_path: PathBuf,
     /// Wikis that have been approved for run_command (by normalized path)
     run_command_allowed_wikis: Mutex<std::collections::HashSet<String>>,
+    /// Mapping of cached folder wiki paths to original folder paths (Android)
+    folder_wiki_paths: Mutex<HashMap<String, String>>,
+    /// Mapping of SAF URIs to local mirror paths (Android) for sync on close
+    saf_wiki_mappings: Mutex<HashMap<String, String>>,
 }
 
-/// Get the bundled index.html path
+/// Get the bundled index.html content
+/// On desktop, returns the path; on Android, extracts from assets
+#[cfg(not(target_os = "android"))]
 fn get_bundled_index_path(app: &tauri::App) -> Result<PathBuf, String> {
     // Use our helper that prefers exe-relative paths (avoids baked-in CI paths)
     let resource_path = get_resource_dir_path(app.handle())
@@ -681,8 +760,207 @@ fn get_bundled_index_path(app: &tauri::App) -> Result<PathBuf, String> {
     Err(format!("Could not find source index.html. Tried: {:?}", possible_sources))
 }
 
+/// Get the bundled index.html content on Android
+/// Returns the content as bytes since we can't use filesystem paths for APK assets
+#[cfg(target_os = "android")]
+fn get_bundled_index_content(app: &tauri::App) -> Result<Vec<u8>, String> {
+    use tauri::Manager;
+
+    // On Android, assets are bundled in the APK and accessed via asset resolver
+    let resolver = app.asset_resolver();
+
+    // Try to get index.html from the frontend dist
+    if let Some(asset) = resolver.get("index.html".into()) {
+        return Ok(asset.bytes.to_vec());
+    }
+
+    Err("Could not find bundled index.html in Android assets".to_string())
+}
+
+/// Get content of any bundled asset on Android
+/// The path should be relative to the bundle root (e.g., "resources/tiddlywiki/boot/boot.js")
+#[cfg(target_os = "android")]
+pub fn get_bundled_asset_content(app: &tauri::AppHandle, path: &str) -> Result<Vec<u8>, String> {
+    use tauri::Manager;
+
+    let resolver = app.asset_resolver();
+
+    if let Some(asset) = resolver.get(path.into()) {
+        return Ok(asset.bytes.to_vec());
+    }
+
+    Err(format!("Could not find bundled asset: {}", path))
+}
+
+/// Get content of any bundled asset as string on Android
+#[cfg(target_os = "android")]
+pub fn get_bundled_asset_string(app: &tauri::AppHandle, path: &str) -> Result<String, String> {
+    let bytes = get_bundled_asset_content(app, path)?;
+    String::from_utf8(bytes).map_err(|e| format!("Invalid UTF-8 in {}: {}", path, e))
+}
+
+/// Extract all tiddlywiki resources from ZIP to app data directory
+/// This is called once on first Android launch to make resources available via filesystem
+#[cfg(target_os = "android")]
+pub fn extract_tiddlywiki_resources(app: &tauri::App) -> Result<PathBuf, String> {
+    use std::io::Read;
+    use tauri::Manager;
+
+    let data_dir = app.path().app_data_dir()
+        .map_err(|e| format!("Failed to get app data dir: {}", e))?;
+
+    // The tiddlywiki resources will be extracted to <app_data>/tiddlywiki/
+    // The node binary will be extracted to <app_data>/node-bin/node
+    let tw_dir = data_dir.join("tiddlywiki");
+
+    // Check if already extracted by looking for a marker file
+    let marker_file = tw_dir.join(".extracted");
+    if marker_file.exists() {
+        eprintln!("[TiddlyDesktop] TiddlyWiki resources already extracted to {:?}", tw_dir);
+        return Ok(data_dir);
+    }
+
+    eprintln!("[TiddlyDesktop] Extracting TiddlyWiki resources to {:?}...", data_dir);
+
+    // Use the embedded ZIP (included at compile time via include_bytes!)
+    let cursor = std::io::Cursor::new(TIDDLYWIKI_ZIP);
+    let mut archive = zip::ZipArchive::new(cursor)
+        .map_err(|e| format!("Failed to open ZIP: {}", e))?;
+
+    let total_files = archive.len();
+    eprintln!("[TiddlyDesktop] ZIP contains {} files ({} bytes)", total_files, TIDDLYWIKI_ZIP.len());
+
+    let mut extracted_count = 0;
+    let mut failed_count = 0;
+
+    for i in 0..total_files {
+        let mut file = match archive.by_index(i) {
+            Ok(f) => f,
+            Err(_) => {
+                failed_count += 1;
+                continue;
+            }
+        };
+
+        // ZIP entries have paths like "tiddlywiki/..." and "node-bin/node"
+        // Extract directly to data_dir
+        let outpath = data_dir.join(file.name());
+
+        if file.is_dir() {
+            let _ = std::fs::create_dir_all(&outpath);
+        } else {
+            if let Some(parent) = outpath.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+
+            let mut contents = Vec::new();
+            if file.read_to_end(&mut contents).is_ok() {
+                if std::fs::write(&outpath, &contents).is_ok() {
+                    extracted_count += 1;
+
+                    // Set executable permission on the node binary
+                    // Match any path ending with node-bin/node or containing node binary
+                    #[cfg(unix)]
+                    {
+                        let file_name = file.name();
+                        if file_name.ends_with("node-bin/node") || file_name.ends_with("/node") && file_name.contains("node-bin") {
+                            use std::os::unix::fs::PermissionsExt;
+                            eprintln!("[TiddlyDesktop] Found node binary in ZIP: {}", file_name);
+                            match std::fs::metadata(&outpath) {
+                                Ok(metadata) => {
+                                    let mut perms = metadata.permissions();
+                                    perms.set_mode(0o755);
+                                    match std::fs::set_permissions(&outpath, perms) {
+                                        Ok(()) => eprintln!("[TiddlyDesktop] Set executable permission on node binary: {:?}", outpath),
+                                        Err(e) => eprintln!("[TiddlyDesktop] Failed to set permissions on node binary: {}", e),
+                                    }
+                                }
+                                Err(e) => eprintln!("[TiddlyDesktop] Failed to get node binary metadata: {}", e),
+                            }
+                        }
+                    }
+                } else {
+                    failed_count += 1;
+                }
+            } else {
+                failed_count += 1;
+            }
+        }
+
+        // Log progress every 1000 files
+        let current = extracted_count + failed_count;
+        if current % 1000 == 0 {
+            eprintln!("[TiddlyDesktop] Extraction progress: {}/{} files", current, total_files);
+        }
+    }
+
+    eprintln!("[TiddlyDesktop] Extracted {} files ({} failed)", extracted_count, failed_count);
+
+    // Write marker file with version to track app updates
+    // Format: "version:X.Y.Z" - allows needs_resource_extraction to detect version changes
+    let current_version = env!("CARGO_PKG_VERSION");
+    std::fs::write(&marker_file, format!("version:{}", current_version))
+        .map_err(|e| format!("Failed to write marker file: {}", e))?;
+
+    eprintln!("[TiddlyDesktop] Marker file written with version {}", current_version);
+
+    Ok(data_dir)
+}
+
+/// Get the path to extracted tiddlywiki resources on Android
+#[cfg(target_os = "android")]
+pub fn get_extracted_resources_dir(app: &tauri::AppHandle) -> Option<PathBuf> {
+    app.path().app_data_dir().ok()
+}
+
+/// Check if TiddlyWiki resources need to be extracted (first run or app update)
+/// Returns true if:
+/// - Marker file doesn't exist (first run)
+/// - Marker file exists but version doesn't match current app version (update)
+#[cfg(target_os = "android")]
+pub fn needs_resource_extraction(app: &tauri::App) -> bool {
+    use tauri::Manager;
+    let current_version = env!("CARGO_PKG_VERSION");
+
+    if let Ok(data_dir) = app.path().app_data_dir() {
+        let marker_file = data_dir.join("tiddlywiki").join(".extracted");
+        if !marker_file.exists() {
+            return true; // First run
+        }
+
+        // Check if version matches
+        if let Ok(marker_content) = std::fs::read_to_string(&marker_file) {
+            // Marker format: "version:X.Y.Z"
+            if let Some(version) = marker_content.strip_prefix("version:") {
+                let stored_version = version.trim();
+                if stored_version != current_version {
+                    eprintln!("[TiddlyDesktop] App updated from {} to {}, re-extracting resources", stored_version, current_version);
+                    // Delete old tiddlywiki folder to ensure clean extraction
+                    let tw_dir = data_dir.join("tiddlywiki");
+                    if let Err(e) = std::fs::remove_dir_all(&tw_dir) {
+                        eprintln!("[TiddlyDesktop] Warning: Failed to remove old tiddlywiki dir: {}", e);
+                    }
+                    // Also delete old node-bin folder
+                    let node_dir = data_dir.join("node-bin");
+                    if let Err(e) = std::fs::remove_dir_all(&node_dir) {
+                        eprintln!("[TiddlyDesktop] Warning: Failed to remove old node-bin dir: {}", e);
+                    }
+                    return true;
+                }
+                return false; // Version matches, no extraction needed
+            }
+        }
+
+        // Marker file exists but has old format - re-extract
+        true
+    } else {
+        true // If we can't determine, assume extraction is needed
+    }
+}
+
 /// Ensure main wiki file exists, extracting from resources if needed
 /// Also handles migration when bundled version is newer than existing
+#[cfg(not(target_os = "android"))]
 fn ensure_main_wiki_exists(app: &tauri::App) -> Result<PathBuf, String> {
     let wiki_dir = determine_storage_mode(app)?;
     std::fs::create_dir_all(&wiki_dir).map_err(|e| format!("Failed to create wiki dir: {}", e))?;
@@ -701,6 +979,59 @@ fn ensure_main_wiki_exists(app: &tauri::App) -> Result<PathBuf, String> {
             .map_err(|e| format!("Failed to read existing wiki: {}", e))?;
         let bundled_html = std::fs::read_to_string(&bundled_path)
             .map_err(|e| format!("Failed to read bundled wiki: {}", e))?;
+
+        let existing_version = tiddlywiki_html::extract_tiddler_from_html(&existing_html, "$:/TiddlyDesktop/AppVersion")
+            .and_then(|v| v.trim().parse::<u32>().ok())
+            .unwrap_or(0);
+        let bundled_version = tiddlywiki_html::extract_tiddler_from_html(&bundled_html, "$:/TiddlyDesktop/AppVersion")
+            .and_then(|v| v.trim().parse::<u32>().ok())
+            .unwrap_or(0);
+
+        if bundled_version > existing_version {
+            println!("Migrating to newer version...");
+
+            // Extract user data from existing wiki
+            let wiki_list = tiddlywiki_html::extract_tiddler_from_html(&existing_html, "$:/TiddlyDesktop/WikiList");
+
+            // Start with bundled HTML
+            let mut new_html = bundled_html;
+
+            // Inject user data into new HTML
+            if let Some(list) = wiki_list {
+                println!("Preserving wiki list during migration");
+                new_html = tiddlywiki_html::inject_tiddler_into_html(&new_html, "$:/TiddlyDesktop/WikiList", "application/json", &list);
+            }
+
+            // Write the migrated wiki
+            std::fs::write(&main_wiki_path, new_html)
+                .map_err(|e| format!("Failed to write migrated wiki: {}", e))?;
+            println!("Migration complete");
+        }
+    }
+
+    Ok(main_wiki_path)
+}
+
+/// Android version: Extract bundled index.html from APK assets to app data
+#[cfg(target_os = "android")]
+fn ensure_main_wiki_exists(app: &tauri::App) -> Result<PathBuf, String> {
+    let wiki_dir = determine_storage_mode(app)?;
+    std::fs::create_dir_all(&wiki_dir).map_err(|e| format!("Failed to create wiki dir: {}", e))?;
+
+    let main_wiki_path = wiki_dir.join("tiddlydesktop.html");
+    let bundled_content = get_bundled_index_content(app)?;
+    let bundled_html = String::from_utf8(bundled_content.clone())
+        .map_err(|e| format!("Invalid UTF-8 in bundled index.html: {}", e))?;
+
+    if !main_wiki_path.exists() {
+        // First run: write bundled content
+        std::fs::write(&main_wiki_path, &bundled_content)
+            .map_err(|e| format!("Failed to write wiki: {}", e))?;
+        println!("Created main wiki from bundled assets");
+    } else {
+        // Check if we need to migrate to a newer version
+        let existing_html = std::fs::read_to_string(&main_wiki_path)
+            .map_err(|e| format!("Failed to read existing wiki: {}", e))?;
 
         let existing_version = tiddlywiki_html::extract_tiddler_from_html(&existing_html, "$:/TiddlyDesktop/AppVersion")
             .and_then(|v| v.trim().parse::<u32>().ok())
@@ -805,7 +1136,13 @@ async fn cleanup_old_backups(backup_dir: &PathBuf, keep: usize) {
 /// Load wiki content from disk
 #[tauri::command]
 async fn load_wiki(_app: tauri::AppHandle, path: String) -> Result<String, String> {
-    // Security: Validate the path before reading
+    // Android: Handle content:// URIs via SAF
+    #[cfg(target_os = "android")]
+    if path.starts_with("content://") || path.starts_with("{") {
+        return android::saf::read_document_string(&path);
+    }
+
+    // Desktop: Validate and read from filesystem
     let validated_path = drag_drop::sanitize::validate_wiki_path(&path)?;
 
     tokio::fs::read_to_string(&validated_path)
@@ -816,7 +1153,41 @@ async fn load_wiki(_app: tauri::AppHandle, path: String) -> Result<String, Strin
 /// Save wiki content to disk with backup
 #[tauri::command]
 async fn save_wiki(app: tauri::AppHandle, path: String, content: String) -> Result<(), String> {
-    // Security: Validate the path before writing
+    // Android: Handle content:// URIs via SAF
+    #[cfg(target_os = "android")]
+    if path.starts_with("content://") || path.starts_with("{") {
+        // Check if backups are enabled for this wiki
+        if should_create_backup_android(&app, &path) {
+            let custom_backup_dir = get_wiki_backup_dir(&app, &path);
+
+            if let Ok(Some(backup_dir_uri)) = android::saf::get_backup_directory(&path, custom_backup_dir.as_deref()) {
+                // Get filename stem for backup naming
+                let filename_stem = android::saf::get_display_name(&path)
+                    .map(|name| {
+                        name.strip_suffix(".html")
+                            .or_else(|| name.strip_suffix(".htm"))
+                            .unwrap_or(&name)
+                            .to_string()
+                    })
+                    .unwrap_or_else(|_| "wiki".to_string());
+
+                // Create backup
+                if let Err(e) = android::saf::create_backup(&path, &backup_dir_uri, &filename_stem) {
+                    eprintln!("[TiddlyDesktop] Failed to create Android backup: {}", e);
+                } else {
+                    // Clean up old backups
+                    let backup_count = wiki_storage::get_wiki_backup_count(&app, &path).unwrap_or(20);
+                    let _ = android::saf::cleanup_old_backups(&backup_dir_uri, &filename_stem, backup_count as usize);
+                }
+            } else {
+                eprintln!("[TiddlyDesktop] Android backup skipped: no backup directory available");
+            }
+        }
+
+        return android::saf::write_document_string(&path, &content);
+    }
+
+    // Desktop: Validate and write to filesystem
     let validated_path = drag_drop::sanitize::validate_wiki_path_for_write(&path)?;
 
     // Check if backups are enabled for this wiki
@@ -877,9 +1248,15 @@ async fn set_window_title(app: tauri::AppHandle, label: String, title: String) -
             }
         }
 
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(not(any(target_os = "linux", target_os = "android")))]
         {
             window.set_title(&title).map_err(|e| e.to_string())?;
+        }
+
+        #[cfg(target_os = "android")]
+        {
+            // Android doesn't support setting window titles
+            let _ = (window, &title);
         }
     }
     Ok(())
@@ -1034,8 +1411,16 @@ fn set_window_icon_internal(
         }
     };
 
+    // set_icon is not available on Android
+    #[cfg(not(target_os = "android"))]
     window.set_icon(icon)
         .map_err(|e| format!("Failed to set icon: {}", e))?;
+
+    #[cfg(target_os = "android")]
+    {
+        let _ = icon; // Silence unused warning
+        let _ = window; // Window APIs are desktop-only
+    }
 
     // Linux: Also update the headerbar favicon icon
     #[cfg(target_os = "linux")]
@@ -1140,6 +1525,21 @@ fn should_create_backup(app: &tauri::AppHandle, state: &AppState, path: &str) ->
     true
 }
 
+/// Check if backups should be created for an Android SAF wiki
+/// Simplified version that doesn't try to canonicalize paths (which doesn't work for content:// URIs)
+#[cfg(target_os = "android")]
+fn should_create_backup_android(app: &tauri::AppHandle, path: &str) -> bool {
+    // Check if backups are enabled for this wiki in the recent files list
+    let entries = wiki_storage::load_recent_files_from_disk(app);
+    for entry in entries {
+        if utils::paths_equal(&entry.path, path) {
+            return entry.backups_enabled;
+        }
+    }
+    // Default to enabled for wikis not in the list
+    true
+}
+
 /// Get custom backup directory for a wiki path (if set)
 fn get_wiki_backup_dir(app: &tauri::AppHandle, path: &str) -> Option<String> {
     let entries = wiki_storage::load_recent_files_from_disk(app);
@@ -1186,14 +1586,26 @@ async fn show_confirm(app: tauri::AppHandle, message: String) -> Result<bool, St
 /// Close the current window (used after confirming unsaved changes)
 #[tauri::command]
 fn close_window(window: tauri::Window) {
+    #[cfg(not(target_os = "android"))]
     let _ = window.destroy();
+    #[cfg(target_os = "android")]
+    {
+        // Android doesn't have direct window control - just drop the reference
+        drop(window);
+    }
 }
 
 /// Close a window by its label (used by tm-close-window)
 #[tauri::command]
 fn close_window_by_label(app: tauri::AppHandle, label: String) -> Result<(), String> {
     if let Some(window) = app.get_webview_window(&label) {
+        #[cfg(not(target_os = "android"))]
         window.destroy().map_err(|e| e.to_string())?;
+        #[cfg(target_os = "android")]
+        {
+            // Android doesn't have direct window control - just drop the reference
+            drop(window);
+        }
         Ok(())
     } else {
         Err(format!("Window '{}' not found", label))
@@ -1203,17 +1615,35 @@ fn close_window_by_label(app: tauri::AppHandle, label: String) -> Result<(), Str
 /// Toggle fullscreen mode for the current window (used by tm-full-screen)
 #[tauri::command]
 fn toggle_fullscreen(window: tauri::WebviewWindow) -> Result<bool, String> {
-    let is_fullscreen = window.is_fullscreen().map_err(|e| e.to_string())?;
-    window
-        .set_fullscreen(!is_fullscreen)
-        .map_err(|e| e.to_string())?;
-    Ok(!is_fullscreen)
+    #[cfg(not(target_os = "android"))]
+    {
+        let is_fullscreen = window.is_fullscreen().map_err(|e| e.to_string())?;
+        window
+            .set_fullscreen(!is_fullscreen)
+            .map_err(|e| e.to_string())?;
+        Ok(!is_fullscreen)
+    }
+    #[cfg(target_os = "android")]
+    {
+        // Android is always fullscreen
+        let _ = window;
+        Ok(true)
+    }
 }
 
 /// Print the current page (used by tm-print)
 #[tauri::command]
 fn print_page(window: tauri::WebviewWindow) -> Result<(), String> {
-    window.print().map_err(|e| e.to_string())
+    #[cfg(not(target_os = "android"))]
+    {
+        window.print().map_err(|e| e.to_string())
+    }
+    #[cfg(target_os = "android")]
+    {
+        // Print not available on Android
+        let _ = window;
+        Err("Print not available on Android".to_string())
+    }
 }
 
 /// Show a save file dialog and write content to the selected file (used by tm-download-file)
@@ -1646,6 +2076,13 @@ fn show_find_in_page_impl(window: &tauri::WebviewWindow) -> Result<(), String> {
     Ok(())
 }
 
+#[cfg(target_os = "android")]
+fn show_find_in_page_impl(window: &tauri::WebviewWindow) -> Result<(), String> {
+    // Android WebView: Inject custom find bar
+    let _ = window.eval(FIND_BAR_JS);
+    Ok(())
+}
+
 /// Start a native OS drag operation with the provided data
 /// Called from JavaScript when the pointer leaves the window during an internal drag
 #[tauri::command]
@@ -1873,6 +2310,7 @@ fn is_destructive_command(command: &str, args: &[String]) -> bool {
 /// The wiki must have $:/config/TiddlyDesktop/AllowRunCommand and the user must have
 /// approved it via the request_run_command_permission dialog.
 /// Security: Destructive commands ALWAYS require confirmation regardless of confirm flag.
+#[cfg(not(target_os = "android"))]
 #[tauri::command]
 async fn run_command(
     app: tauri::AppHandle,
@@ -2057,6 +2495,21 @@ async fn request_run_command_permission(
     }
 }
 
+/// Android stub for run_command
+#[cfg(target_os = "android")]
+#[tauri::command]
+async fn run_command(
+    _app: tauri::AppHandle,
+    _window: tauri::WebviewWindow,
+    _command: String,
+    _args: Option<Vec<String>>,
+    _working_dir: Option<String>,
+    _wait: Option<bool>,
+    _confirm: Option<bool>,
+) -> Result<Option<CommandResult>, String> {
+    Err("Command execution is not available on Android".to_string())
+}
+
 /// Check if a wiki has permission to use run_command (without prompting)
 #[tauri::command]
 fn check_run_command_permission(
@@ -2081,33 +2534,40 @@ fn check_run_command_permission(
 /// Check if a file is a valid TiddlyWiki HTML file
 /// Returns Ok(()) if valid, Err with reason if not
 fn validate_tiddlywiki_file(path: &std::path::Path) -> Result<(), String> {
-    // Check file exists and is a file
-    if !path.exists() {
-        return Err(format!("File does not exist: {}", path.display()));
-    }
-    if !path.is_file() {
-        return Err(format!("Path is not a file: {}", path.display()));
-    }
+    let path_str = path.to_string_lossy();
 
-    // Check extension
-    let ext = path.extension()
-        .and_then(|e| e.to_str())
-        .map(|e| e.to_lowercase())
-        .unwrap_or_default();
-    if ext != "html" && ext != "htm" {
-        return Err(format!("File must have .html or .htm extension, got: .{}", ext));
+    // Check if this is an Android SAF URI
+    let is_saf_uri = path_str.starts_with("content://") || path_str.starts_with('{');
+
+    if !is_saf_uri {
+        // Desktop filesystem path - do standard validation
+        // Check file exists and is a file
+        if !path.exists() {
+            return Err(format!("File does not exist: {}", path.display()));
+        }
+        if !path.is_file() {
+            return Err(format!("Path is not a file: {}", path.display()));
+        }
+
+        // Check extension
+        let ext = path.extension()
+            .and_then(|e| e.to_str())
+            .map(|e| e.to_lowercase())
+            .unwrap_or_default();
+        if ext != "html" && ext != "htm" {
+            return Err(format!("File must have .html or .htm extension, got: .{}", ext));
+        }
     }
 
     // Read the first 100KB of the file to check for TiddlyWiki markers
     // TiddlyWiki headers and meta tags are always near the top
-    let mut file = std::fs::File::open(path)
-        .map_err(|e| format!("Failed to open file: {}", e))?;
-
-    let mut buffer = vec![0u8; 100_000]; // 100KB should be enough for headers
-    use std::io::Read;
-    let bytes_read = file.read(&mut buffer)
-        .map_err(|e| format!("Failed to read file: {}", e))?;
-    buffer.truncate(bytes_read);
+    // Use fs_abstraction for Android SAF support
+    let buffer = fs_abstraction::read_file(path)?;
+    let buffer = if buffer.len() > 100_000 {
+        buffer[..100_000].to_vec()
+    } else {
+        buffer
+    };
 
     let content = String::from_utf8_lossy(&buffer);
 
@@ -2146,35 +2606,46 @@ fn validate_tiddlywiki_file(path: &std::path::Path) -> Result<(), String> {
 
 /// Async version of validate_tiddlywiki_file
 async fn validate_tiddlywiki_file_async(path: &std::path::Path) -> Result<(), String> {
-    // Read the first 100KB of the file to check for TiddlyWiki markers
+    let path_str = path.to_string_lossy();
     let path_buf = path.to_path_buf();
 
-    // Check file exists and is a file
-    if !path_buf.exists() {
-        return Err(format!("File does not exist: {}", path_buf.display()));
-    }
-    if !path_buf.is_file() {
-        return Err(format!("Path is not a file: {}", path_buf.display()));
+    // Check if this is an Android SAF URI
+    let is_saf_uri = path_str.starts_with("content://") || path_str.starts_with('{');
+
+    if !is_saf_uri {
+        // Desktop filesystem path - do standard validation
+        // Check file exists and is a file
+        if !path_buf.exists() {
+            return Err(format!("File does not exist: {}", path_buf.display()));
+        }
+        if !path_buf.is_file() {
+            return Err(format!("Path is not a file: {}", path_buf.display()));
+        }
+
+        // Check extension
+        let ext = path_buf.extension()
+            .and_then(|e| e.to_str())
+            .map(|e| e.to_lowercase())
+            .unwrap_or_default();
+        if ext != "html" && ext != "htm" {
+            return Err(format!("File must have .html or .htm extension, got: .{}", ext));
+        }
     }
 
-    // Check extension
-    let ext = path_buf.extension()
-        .and_then(|e| e.to_str())
-        .map(|e| e.to_lowercase())
-        .unwrap_or_default();
-    if ext != "html" && ext != "htm" {
-        return Err(format!("File must have .html or .htm extension, got: .{}", ext));
-    }
-
-    // Read first 100KB
-    let mut file = tokio::fs::File::open(&path_buf).await
-        .map_err(|e| format!("Failed to open file: {}", e))?;
-
-    let mut buffer = vec![0u8; 100_000];
-    use tokio::io::AsyncReadExt;
-    let bytes_read = file.read(&mut buffer).await
+    // Read the first 100KB using fs_abstraction for Android SAF support
+    // Use blocking read in spawn_blocking since fs_abstraction is sync
+    let path_for_read = path_buf.clone();
+    let buffer = tokio::task::spawn_blocking(move || {
+        fs_abstraction::read_file(&path_for_read)
+    }).await
+        .map_err(|e| format!("Failed to spawn blocking task: {}", e))?
         .map_err(|e| format!("Failed to read file: {}", e))?;
-    buffer.truncate(bytes_read);
+
+    let buffer = if buffer.len() > 100_000 {
+        buffer[..100_000].to_vec()
+    } else {
+        buffer
+    };
 
     let content = String::from_utf8_lossy(&buffer);
 
@@ -2239,6 +2710,7 @@ fn allocate_port(state: &AppState) -> u16 {
 }
 
 /// Check if system Node.js is available and compatible (v18+)
+#[cfg(not(target_os = "android"))]
 fn find_system_node() -> Option<PathBuf> {
     #[cfg(target_os = "windows")]
     let node_name = "node.exe";
@@ -2273,6 +2745,7 @@ fn find_system_node() -> Option<PathBuf> {
 }
 
 /// Find Node.js executable without needing an AppHandle (for use before Tauri setup)
+#[cfg(not(target_os = "android"))]
 fn find_node_executable() -> Option<PathBuf> {
     // First, try system Node.js
     if let Some(system_node) = find_system_node() {
@@ -2304,6 +2777,7 @@ fn find_node_executable() -> Option<PathBuf> {
 }
 
 /// Get path to Node.js binary (prefer system, fall back to bundled)
+#[cfg(not(target_os = "android"))]
 fn get_node_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     // First, try to use system Node.js if available and compatible
     if let Some(system_node) = find_system_node() {
@@ -2460,6 +2934,7 @@ fn wait_for_server_ready(port: u16, process: &mut Child, timeout: std::time::Dur
 
 /// Open a wiki folder in a separate process with its own server
 /// Returns WikiEntry so frontend can update its wiki list
+#[cfg(not(target_os = "android"))]
 #[tauri::command]
 async fn open_wiki_folder(app: tauri::AppHandle, path: String) -> Result<WikiEntry, String> {
     // Security: Validate path is a user-accessible directory
@@ -2586,6 +3061,92 @@ async fn open_wiki_folder(app: tauri::AppHandle, path: String) -> Result<WikiEnt
     let _ = wiki_storage::add_to_recent_files(&app, entry.clone());
 
     // Return the wiki entry so frontend can update its list
+    Ok(entry)
+}
+
+/// Android implementation of open_wiki_folder
+/// WikiActivity starts its own HTTP server in the :wiki process, independent of Tauri.
+///
+/// For folder wikis, Node.js renders the initial HTML, which is saved to a temp file.
+/// WikiActivity loads this HTML and handles TiddlyWeb protocol for ongoing edits.
+///
+/// Each folder wiki opens in a separate WikiActivity (visible in recent apps)
+#[cfg(target_os = "android")]
+#[tauri::command]
+async fn open_wiki_folder(app: tauri::AppHandle, path: String) -> Result<WikiEntry, String> {
+    // Verify this is a valid wiki folder (has tiddlywiki.info)
+    let is_saf_uri = path.starts_with("content://") || path.starts_with('{');
+
+    if is_saf_uri {
+        // Check for tiddlywiki.info via SAF
+        if android::saf::find_in_directory(&path, "tiddlywiki.info")?.is_none() {
+            return Err("Not a valid wiki folder (missing tiddlywiki.info). Use edition selector to initialize.".to_string());
+        }
+    } else {
+        // Filesystem path - validate
+        let path_buf = PathBuf::from(&path);
+        if !path_buf.join("tiddlywiki.info").exists() {
+            return Err("Not a valid wiki folder (missing tiddlywiki.info). Use edition selector to initialize.".to_string());
+        }
+    }
+
+    // Get a display name for the wiki
+    let wiki_name = if is_saf_uri {
+        android::saf::get_display_name(&path).unwrap_or_else(|_| "Wiki Folder".to_string())
+    } else {
+        PathBuf::from(&path)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("Wiki Folder")
+            .to_string()
+    };
+
+    // Start Node.js TiddlyWiki server for this folder wiki
+    // For SAF URIs, this copies to local storage first since Node.js can't read SAF directly
+    eprintln!("[TiddlyDesktop] Starting Node.js TiddlyWiki server for folder wiki...");
+
+    let server_url = if is_saf_uri {
+        // SAF URI: copy to local and start server with auto-sync back to SAF
+        let (url, _local_path) = android::node_bridge::start_saf_wiki_server(&path)?;
+        // Changes are automatically synced back to SAF every 2 seconds
+        url
+    } else {
+        // Local filesystem path: start server directly
+        let port = android::node_bridge::find_available_port()?;
+        android::node_bridge::start_wiki_server(&path, port)?
+    };
+
+    eprintln!("[TiddlyDesktop] Node.js server started at: {}", server_url);
+
+    // Start foreground service to keep wiki processes alive
+    match android::wiki_activity::start_foreground_service() {
+        Ok(()) => eprintln!("[TiddlyDesktop] Foreground service started successfully"),
+        Err(e) => eprintln!("[TiddlyDesktop] Warning: Failed to start foreground service: {} (wiki will still open)", e),
+    }
+
+    // Launch WikiActivity with the Node.js server URL
+    android::wiki_activity::launch_wiki_activity(
+        &path,
+        &wiki_name,
+        true, // is_folder
+        Some(&server_url), // Node.js server URL for folder wiki
+    )?;
+
+    // Create wiki entry for the recent files list
+    let entry = WikiEntry {
+        path: path.clone(),
+        filename: wiki_name.clone(),
+        favicon: None,
+        backups_enabled: false, // Not applicable for folder wikis (autosave to tiddler files)
+        backup_dir: None,
+        backup_count: None,
+        group: None,
+        is_folder: true,
+    };
+
+    // Add to recent files
+    let _ = wiki_storage::add_to_recent_files(&app, entry.clone());
+
     Ok(entry)
 }
 
@@ -2804,6 +3365,7 @@ async fn get_available_plugins(app: tauri::AppHandle) -> Result<Vec<PluginInfo>,
 }
 
 /// Initialize a new wiki folder with the specified edition and plugins
+#[cfg(not(target_os = "android"))]
 #[tauri::command]
 async fn init_wiki_folder(app: tauri::AppHandle, path: String, edition: String, plugins: Vec<String>) -> Result<(), String> {
     // Security: Validate path is safe and within user directories
@@ -2936,7 +3498,163 @@ async fn init_wiki_folder(app: tauri::AppHandle, path: String, edition: String, 
     Ok(())
 }
 
+/// Initialize a wiki folder on Android
+/// Copies edition files via SAF to create a new wiki folder structure
+#[cfg(target_os = "android")]
+#[tauri::command]
+async fn init_wiki_folder(app: tauri::AppHandle, path: String, edition: String, _plugins: Vec<String>) -> Result<WikiEntry, String> {
+    use tauri::Manager;
+
+    eprintln!("[TiddlyDesktop] Initializing wiki folder on Android:");
+    eprintln!("  Path: {}", path);
+    eprintln!("  Edition: {}", edition);
+
+    // On Android, resources are extracted to app_data_dir/tiddlywiki/
+    let data_dir = app.path().app_data_dir()
+        .map_err(|e| format!("Failed to get app data dir: {}", e))?;
+    let editions_dir = data_dir.join("tiddlywiki/editions");
+    let edition_path = editions_dir.join(&edition);
+
+    eprintln!("  Editions dir: {:?}", editions_dir);
+    eprintln!("  Edition path: {:?}", edition_path);
+
+    if !edition_path.exists() {
+        return Err(format!("Edition '{}' not found", edition));
+    }
+
+    // Read tiddlywiki.info from the edition
+    let tiddlywiki_info_path = edition_path.join("tiddlywiki.info");
+    if !tiddlywiki_info_path.exists() {
+        return Err(format!("Edition '{}' is missing tiddlywiki.info", edition));
+    }
+
+    let tiddlywiki_info = tokio::fs::read_to_string(&tiddlywiki_info_path).await
+        .map_err(|e| format!("Failed to read tiddlywiki.info: {}", e))?;
+
+    // Parse and modify tiddlywiki.info to add required server plugins
+    let mut info: serde_json::Value = serde_json::from_str(&tiddlywiki_info)
+        .map_err(|e| format!("Failed to parse tiddlywiki.info: {}", e))?;
+
+    // Ensure plugins array exists and add required server plugins
+    if let Some(obj) = info.as_object_mut() {
+        let plugins = obj.entry("plugins").or_insert(serde_json::json!([]));
+        if let Some(plugins_array) = plugins.as_array_mut() {
+            // Add tiddlyweb and filesystem plugins if not already present
+            let required_plugins = ["tiddlywiki/tiddlyweb", "tiddlywiki/filesystem"];
+            for plugin in required_plugins {
+                let plugin_value = serde_json::Value::String(plugin.to_string());
+                if !plugins_array.contains(&plugin_value) {
+                    plugins_array.push(plugin_value);
+                }
+            }
+        }
+    }
+
+    let modified_info = serde_json::to_string_pretty(&info)
+        .map_err(|e| format!("Failed to serialize tiddlywiki.info: {}", e))?;
+
+    // Create tiddlywiki.info in the target folder
+    let tiddlywiki_info_uri = android::saf::create_file(&path, "tiddlywiki.info", Some("application/json"))?;
+    android::saf::write_document_string(&tiddlywiki_info_uri, &modified_info)?;
+    eprintln!("  Created tiddlywiki.info with server plugins");
+
+    // Create tiddlers directory
+    let tiddlers_uri = android::saf::find_or_create_subdirectory(&path, "tiddlers")?;
+    eprintln!("  Created tiddlers directory");
+
+    // Copy default tiddlers from the edition (if any exist)
+    let edition_tiddlers_path = edition_path.join("tiddlers");
+    if edition_tiddlers_path.exists() {
+        if let Ok(entries) = std::fs::read_dir(&edition_tiddlers_path) {
+            for entry in entries.flatten() {
+                let file_name = entry.file_name();
+                let file_name_str = file_name.to_string_lossy();
+
+                // Skip directories and hidden files
+                if entry.file_type().map(|t| t.is_dir()).unwrap_or(true) {
+                    continue;
+                }
+                if file_name_str.starts_with('.') {
+                    continue;
+                }
+
+                // Read file content
+                if let Ok(content) = tokio::fs::read_to_string(entry.path()).await {
+                    // Determine MIME type
+                    let mime_type = if file_name_str.ends_with(".tid") {
+                        "text/plain"
+                    } else if file_name_str.ends_with(".json") {
+                        "application/json"
+                    } else if file_name_str.ends_with(".meta") {
+                        "text/plain"
+                    } else {
+                        "application/octet-stream"
+                    };
+
+                    // Create file in tiddlers directory
+                    if let Ok(new_uri) = android::saf::create_file(&tiddlers_uri, &file_name_str, Some(mime_type)) {
+                        let _ = android::saf::write_document_string(&new_uri, &content);
+                        eprintln!("  Copied tiddler: {}", file_name_str);
+                    }
+                }
+            }
+        }
+    }
+
+    eprintln!("[TiddlyDesktop] Wiki folder initialized successfully");
+
+    // Give SAF time to sync the newly created files
+    // This is important on Android where SAF operations may be async
+    std::thread::sleep(std::time::Duration::from_millis(500));
+
+    // Now open the wiki directly
+    // This avoids a race condition where SAF might not have synced the file yet
+    eprintln!("[TiddlyDesktop] Opening newly created folder wiki...");
+
+    // Get display name
+    let wiki_name = android::saf::get_display_name(&path).unwrap_or_else(|_| "Wiki Folder".to_string());
+
+    // Start Node.js TiddlyWiki server for this folder wiki
+    // Since this is a newly initialized folder, we need to copy it to local for Node.js access
+    // Changes are automatically synced back to SAF every 2 seconds
+    eprintln!("[TiddlyDesktop] Starting Node.js TiddlyWiki server...");
+    let (server_url, _local_path) = android::node_bridge::start_saf_wiki_server(&path)
+        .map_err(|e| format!("Failed to start wiki server: {}. Make sure Node.js is available.", e))?;
+    eprintln!("[TiddlyDesktop] Node.js server started at: {}", server_url);
+
+    // Start foreground service to keep wiki processes alive
+    let _ = android::wiki_activity::start_foreground_service();
+
+    // Launch WikiActivity with the Node.js server URL
+    android::wiki_activity::launch_wiki_activity(
+        &path,
+        &wiki_name,
+        true, // is_folder
+        Some(&server_url), // Node.js server URL
+    )?;
+
+    // Create wiki entry for the recent files list
+    let entry = WikiEntry {
+        path: path.clone(),
+        filename: wiki_name.clone(),
+        favicon: None,
+        backups_enabled: false,
+        backup_dir: None,
+        backup_count: None,
+        group: None,
+        is_folder: true,
+    };
+
+    // Add to recent files
+    let _ = wiki_storage::add_to_recent_files(&app, entry.clone());
+
+    Ok(entry)
+}
+
+
+
 /// Create a single-file wiki with the specified edition and plugins
+#[cfg(not(target_os = "android"))]
 #[tauri::command]
 async fn create_wiki_file(app: tauri::AppHandle, path: String, edition: String, plugins: Vec<String>) -> Result<(), String> {
     // Security: Validate path for writing a wiki file
@@ -3075,7 +3793,57 @@ async fn create_wiki_file(app: tauri::AppHandle, path: String, edition: String, 
     Ok(())
 }
 
+/// Android implementation of create_wiki_file using Node.js via JNI
+#[cfg(target_os = "android")]
+#[tauri::command]
+async fn create_wiki_file(_app: tauri::AppHandle, path: String, edition: String, plugins: Vec<String>) -> Result<(), String> {
+    use std::path::Path;
+
+    eprintln!("[TiddlyDesktop] Android create_wiki_file:");
+    eprintln!("  path: {}", path);
+    eprintln!("  edition: {}", edition);
+    eprintln!("  plugins: {:?}", plugins);
+
+    // The path from Android is a content:// URI from SAF
+    // We need to:
+    // 1. Build the wiki to a temp file using Node.js
+    // 2. Copy the temp file to the SAF location
+
+    // Create a temporary file for the build output
+    let temp_dir = std::env::temp_dir();
+    let temp_file = temp_dir.join(format!("wiki-{}.html", std::process::id()));
+    let temp_path = temp_file.to_str().ok_or("Invalid temp path")?;
+
+    // Build the wiki using Node.js
+    android::node_bridge::build_wiki_file(&edition, temp_path, &plugins)?;
+
+    // Read the built wiki
+    let wiki_content = std::fs::read_to_string(&temp_file)
+        .map_err(|e| format!("Failed to read built wiki: {}", e))?;
+
+    eprintln!("[TiddlyDesktop] Read built wiki: {} bytes", wiki_content.len());
+    eprintln!("[TiddlyDesktop] Writing to SAF path: {}", path);
+
+    // Write to the SAF location
+    match android::saf::write_document_string(&path, &wiki_content) {
+        Ok(()) => {
+            eprintln!("[TiddlyDesktop] SAF write successful");
+        }
+        Err(e) => {
+            eprintln!("[TiddlyDesktop] SAF write FAILED: {}", e);
+            return Err(e);
+        }
+    }
+
+    // Clean up temp file
+    let _ = std::fs::remove_file(&temp_file);
+
+    eprintln!("[TiddlyDesktop] Wiki created successfully at: {}", path);
+    Ok(())
+}
+
 /// Convert a wiki between single-file and folder formats
+#[cfg(not(target_os = "android"))]
 #[tauri::command]
 async fn convert_wiki(app: tauri::AppHandle, source_path: String, dest_path: String, to_folder: bool) -> Result<(), String> {
     // Security: Validate source path
@@ -3212,6 +3980,73 @@ async fn convert_wiki(app: tauri::AppHandle, source_path: String, dest_path: Str
     Ok(())
 }
 
+/// Android implementation of convert_wiki using Node.js via SAF
+#[cfg(target_os = "android")]
+#[tauri::command]
+async fn convert_wiki(_app: tauri::AppHandle, source_path: String, dest_path: String, to_folder: bool) -> Result<(), String> {
+    eprintln!("[TiddlyDesktop] convert_wiki on Android:");
+    eprintln!("  Source: {}", source_path);
+    eprintln!("  Dest: {}", dest_path);
+    eprintln!("  To folder: {}", to_folder);
+
+    // Both paths should be SAF URIs on Android
+    let is_source_saf = source_path.starts_with("content://") || source_path.starts_with('{');
+    let is_dest_saf = dest_path.starts_with("content://") || dest_path.starts_with('{');
+
+    if !is_source_saf {
+        return Err("Source path must be a SAF URI on Android".to_string());
+    }
+    if !is_dest_saf {
+        return Err("Destination path must be a SAF URI on Android".to_string());
+    }
+
+    if to_folder {
+        // Convert single-file to folder
+        // First verify source is a file (not a folder)
+        if android::saf::is_directory(&source_path) {
+            return Err("Source is already a folder wiki".to_string());
+        }
+
+        // Verify destination folder exists
+        if !android::saf::is_directory(&dest_path) {
+            return Err("Destination folder does not exist. Please create it first using the folder picker.".to_string());
+        }
+
+        // Check if destination is empty or a wiki folder
+        let entries = android::saf::list_directory_entries(&dest_path)?;
+        if !entries.is_empty() {
+            // Check if it's already a wiki folder
+            let has_tiddlywiki_info = entries.iter().any(|e| e.name == "tiddlywiki.info");
+            if has_tiddlywiki_info {
+                return Err("Destination folder already contains a wiki. Please choose an empty folder.".to_string());
+            }
+            // Allow if folder has other files but warn
+            eprintln!("[TiddlyDesktop] Warning: Destination folder is not empty");
+        }
+
+        android::node_bridge::convert_file_to_folder(&source_path, &dest_path)?;
+
+        eprintln!("[TiddlyDesktop] Successfully converted to folder wiki");
+    } else {
+        // Convert folder to single-file
+        // First verify source is a folder wiki
+        if !android::saf::is_directory(&source_path) {
+            return Err("Source is not a folder".to_string());
+        }
+
+        // Check for tiddlywiki.info
+        if android::saf::find_in_directory(&source_path, "tiddlywiki.info")?.is_none() {
+            return Err("Source is not a valid wiki folder (missing tiddlywiki.info)".to_string());
+        }
+
+        android::node_bridge::convert_folder_to_file(&source_path, &dest_path)?;
+
+        eprintln!("[TiddlyDesktop] Successfully converted to single-file wiki");
+    }
+
+    Ok(())
+}
+
 #[tauri::command]
 fn check_folder_status(path: String) -> Result<FolderStatus, String> {
     let path_buf = PathBuf::from(&path);
@@ -3256,6 +4091,7 @@ fn check_folder_status(path: String) -> Result<FolderStatus, String> {
 }
 
 /// Reveal file in system file manager
+#[cfg(not(target_os = "android"))]
 #[tauri::command]
 async fn reveal_in_folder(path: String) -> Result<(), String> {
     // Security: Validate path doesn't contain traversal sequences
@@ -3302,6 +4138,212 @@ async fn reveal_in_folder(path: String) -> Result<(), String> {
             .map_err(|e| e.to_string())?;
     }
 
+    Ok(())
+}
+
+/// Android stub for reveal_in_folder
+#[cfg(target_os = "android")]
+#[tauri::command]
+async fn reveal_in_folder(_path: String) -> Result<(), String> {
+    Err("Reveal in folder is not available on Android".to_string())
+}
+
+// ============================================================================
+// Android-specific commands for SAF file picking
+// ============================================================================
+
+/// Pick a wiki HTML file using Android's SAF file picker.
+/// Returns the content:// URI of the selected file, or None if cancelled.
+#[cfg(target_os = "android")]
+#[tauri::command]
+async fn android_pick_wiki_file() -> Result<Option<String>, String> {
+    android::saf::pick_wiki_file().await
+}
+
+/// Pick a directory using Android's SAF directory picker.
+/// Returns the content:// URI of the selected directory, or None if cancelled.
+#[cfg(target_os = "android")]
+#[tauri::command]
+async fn android_pick_directory() -> Result<Option<String>, String> {
+    android::saf::pick_directory().await
+}
+
+/// Create a new wiki file using Android's SAF save dialog.
+/// Returns the content:// URI of the created file, or None if cancelled.
+#[cfg(target_os = "android")]
+#[tauri::command]
+async fn android_create_wiki_file(suggested_name: String) -> Result<Option<String>, String> {
+    android::saf::save_wiki_file(&suggested_name).await
+}
+
+/// Check if we have persistent permission for a content:// URI.
+#[cfg(target_os = "android")]
+#[tauri::command]
+fn android_has_permission(uri: String) -> bool {
+    android::saf::has_permission(&uri)
+}
+
+/// Release persistent permission for a content:// URI.
+/// Call this when removing a wiki from the list.
+#[cfg(target_os = "android")]
+#[tauri::command]
+fn android_release_permission(uri: String) {
+    android::saf::release_permission(&uri);
+}
+
+/// Pick a backup directory for Android wikis.
+/// Returns the content:// URI of the selected directory, or None if cancelled.
+#[cfg(target_os = "android")]
+#[tauri::command]
+async fn android_pick_backup_directory() -> Result<Option<String>, String> {
+    android::saf::pick_backup_directory().await
+}
+
+/// Pick a wiki folder (directory containing tiddlywiki.info) on Android.
+/// Returns the content:// URI of the selected directory, or None if cancelled.
+#[cfg(target_os = "android")]
+#[tauri::command]
+async fn android_pick_wiki_folder() -> Result<Option<String>, String> {
+    let dir_uri = android::saf::pick_directory().await?;
+
+    if let Some(ref uri) = dir_uri {
+        // Verify this is a valid wiki folder by checking for tiddlywiki.info
+        if let Ok(Some(_)) = android::saf::find_in_directory(uri, "tiddlywiki.info") {
+            return Ok(dir_uri);
+        } else {
+            return Err("Selected folder is not a valid TiddlyWiki folder (missing tiddlywiki.info)".to_string());
+        }
+    }
+
+    Ok(None)
+}
+
+/// Get directory entries with full URIs for folder wiki support on Android.
+#[cfg(target_os = "android")]
+#[tauri::command]
+fn android_list_directory(uri: String) -> Result<Vec<(String, String, bool)>, String> {
+    let entries = android::saf::list_directory_entries(&uri)?;
+    Ok(entries.into_iter().map(|e| (e.name, e.uri, e.is_dir)).collect())
+}
+
+/// Check the status of an Android SAF folder for wiki creation/opening.
+/// Returns (is_wiki, is_empty, folder_name)
+#[cfg(target_os = "android")]
+#[tauri::command]
+fn android_check_folder_status(uri: String) -> Result<(bool, bool, String), String> {
+    // Get folder name
+    let name = android::saf::get_display_name(&uri)
+        .unwrap_or_else(|_| "Unknown".to_string());
+
+    eprintln!("[TiddlyDesktop] android_check_folder_status: checking folder '{}'", name);
+    eprintln!("[TiddlyDesktop]   uri: {}", uri);
+
+    // List directory contents
+    let entries = android::saf::list_directory_entries(&uri)?;
+
+    eprintln!("[TiddlyDesktop]   found {} entries:", entries.len());
+    for entry in &entries {
+        eprintln!("[TiddlyDesktop]     - '{}' (is_dir: {})", entry.name, entry.is_dir);
+    }
+
+    // Check if it's a wiki folder (has tiddlywiki.info)
+    let is_wiki = entries.iter().any(|e| e.name == "tiddlywiki.info" && !e.is_dir);
+
+    eprintln!("[TiddlyDesktop]   is_wiki: {}", is_wiki);
+
+    // Check if it's empty
+    let is_empty = entries.is_empty();
+
+    Ok((is_wiki, is_empty, name))
+}
+
+/// Pick a folder for creating a new wiki (can be empty or non-wiki folder).
+/// Returns the content:// URI and folder status, or None if cancelled.
+#[cfg(target_os = "android")]
+#[tauri::command]
+async fn android_pick_folder_for_wiki_creation() -> Result<Option<(String, bool, bool, String)>, String> {
+    let dir_uri = android::saf::pick_directory().await?;
+
+    if let Some(ref uri) = dir_uri {
+        let (is_wiki, is_empty, name) = android_check_folder_status(uri.clone())?;
+        Ok(Some((uri.clone(), is_wiki, is_empty, name)))
+    } else {
+        Ok(None)
+    }
+}
+
+// Stub implementations for non-Android platforms to allow compilation
+#[cfg(not(target_os = "android"))]
+#[tauri::command]
+async fn android_pick_wiki_file() -> Result<Option<String>, String> {
+    Err("Android-only feature".to_string())
+}
+
+#[cfg(not(target_os = "android"))]
+#[tauri::command]
+async fn android_pick_directory() -> Result<Option<String>, String> {
+    Err("Android-only feature".to_string())
+}
+
+#[cfg(not(target_os = "android"))]
+#[tauri::command]
+async fn android_create_wiki_file(_suggested_name: String) -> Result<Option<String>, String> {
+    Err("Android-only feature".to_string())
+}
+
+#[cfg(not(target_os = "android"))]
+#[tauri::command]
+fn android_has_permission(_uri: String) -> bool {
+    false
+}
+
+#[cfg(not(target_os = "android"))]
+#[tauri::command]
+fn android_release_permission(_uri: String) {
+    // No-op on desktop
+}
+
+#[cfg(not(target_os = "android"))]
+#[tauri::command]
+async fn android_pick_backup_directory() -> Result<Option<String>, String> {
+    Err("Android-only feature".to_string())
+}
+
+#[cfg(not(target_os = "android"))]
+#[tauri::command]
+async fn android_pick_wiki_folder() -> Result<Option<String>, String> {
+    Err("Android-only feature".to_string())
+}
+
+#[cfg(not(target_os = "android"))]
+#[tauri::command]
+fn android_list_directory(_uri: String) -> Result<Vec<(String, String, bool)>, String> {
+    Err("Android-only feature".to_string())
+}
+
+#[cfg(not(target_os = "android"))]
+#[tauri::command]
+fn android_check_folder_status(_uri: String) -> Result<(bool, bool, String), String> {
+    Err("Android-only feature".to_string())
+}
+
+#[cfg(not(target_os = "android"))]
+#[tauri::command]
+async fn android_pick_folder_for_wiki_creation() -> Result<Option<(String, bool, bool, String)>, String> {
+    Err("Android-only feature".to_string())
+}
+
+/// Set the Android status bar and navigation bar colors to match the TiddlyWiki palette.
+#[cfg(target_os = "android")]
+#[tauri::command]
+fn android_set_system_bar_colors(status_bar_color: String, nav_bar_color: String, foreground_color: Option<String>) -> Result<(), String> {
+    android::wiki_activity::set_system_bar_colors(&status_bar_color, &nav_bar_color, foreground_color.as_deref())
+}
+
+#[cfg(not(target_os = "android"))]
+#[tauri::command]
+fn android_set_system_bar_colors(_status_bar_color: String, _nav_bar_color: String, _foreground_color: Option<String>) -> Result<(), String> {
+    // No-op on desktop
     Ok(())
 }
 
@@ -3417,6 +4459,7 @@ async fn open_auth_window(app: tauri::AppHandle, wiki_path: String, url: String,
         .as_millis());
 
     // Build the auth window with security settings
+    #[cfg(not(target_os = "android"))]
     let mut builder = WebviewWindowBuilder::new(
         &app,
         &label,
@@ -3426,6 +4469,17 @@ async fn open_auth_window(app: tauri::AppHandle, wiki_path: String, url: String,
     .inner_size(900.0, 700.0)
     .resizable(true)
     .center()
+    // Security: Disable devtools in auth windows to prevent credential inspection
+    .devtools(false);
+
+    #[cfg(target_os = "android")]
+    let _ = &name; // name is only used for window title on desktop
+    #[cfg(target_os = "android")]
+    let mut builder = WebviewWindowBuilder::new(
+        &app,
+        &label,
+        WebviewUrl::External(url.parse().map_err(|e| format!("Invalid URL: {}", e))?)
+    )
     // Security: Disable devtools in auth windows to prevent credential inspection
     .devtools(false);
 
@@ -3440,9 +4494,10 @@ async fn open_auth_window(app: tauri::AppHandle, wiki_path: String, url: String,
     Ok(())
 }
 
-/// Open a wiki file in a separate process
+/// Open a wiki file in a separate process (desktop only)
 /// Each wiki runs in its own process for true isolation (better drag-drop, crash isolation)
 /// Returns WikiEntry so frontend can update its wiki list
+#[cfg(not(target_os = "android"))]
 #[tauri::command]
 async fn open_wiki_window(app: tauri::AppHandle, path: String) -> Result<WikiEntry, String> {
     // Security: Validate path is a user-accessible wiki file
@@ -3582,6 +4637,74 @@ async fn open_wiki_window(app: tauri::AppHandle, path: String) -> Result<WikiEnt
     Ok(entry)
 }
 
+/// Open a wiki file in a new app instance (Android)
+/// On Android, each wiki opens in a separate WikiActivity (visible in recent apps)
+/// WikiActivity starts its own HTTP server in the :wiki process, independent of Tauri.
+#[cfg(target_os = "android")]
+#[tauri::command]
+async fn open_wiki_window(app: tauri::AppHandle, path: String) -> Result<WikiEntry, String> {
+    // Path is a content:// URI or JSON-serialized FileUri on Android
+    let is_saf_uri = path.starts_with("content://") || path.starts_with("{");
+
+    // Get display name for the filename
+    let filename = if is_saf_uri {
+        android::saf::get_display_name(&path).unwrap_or_else(|_| "Wiki".to_string())
+    } else {
+        PathBuf::from(&path)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("Wiki")
+            .to_string()
+    };
+
+    // Read wiki content to extract favicon (we don't need to keep the content)
+    let favicon = if is_saf_uri {
+        match android::saf::read_document_string(&path) {
+            Ok(content) => tiddlywiki_html::extract_favicon(&content),
+            Err(_) => None,
+        }
+    } else {
+        match std::fs::read_to_string(&path) {
+            Ok(content) => tiddlywiki_html::extract_favicon(&content),
+            Err(_) => None,
+        }
+    };
+
+    eprintln!("[TiddlyDesktop] Opening single-file wiki: {}", filename);
+    eprintln!("[TiddlyDesktop] WikiActivity will start its own HTTP server in :wiki process");
+
+    // Start foreground service to keep wiki processes alive
+    // Note: This may fail on Android 13+ if notification permission not granted, but we continue anyway
+    match android::wiki_activity::start_foreground_service() {
+        Ok(()) => eprintln!("[TiddlyDesktop] Foreground service started successfully"),
+        Err(e) => eprintln!("[TiddlyDesktop] Warning: Failed to start foreground service: {} (wiki will still open)", e),
+    }
+
+    // Launch WikiActivity - it will start its own server in the :wiki process
+    android::wiki_activity::launch_wiki_activity(
+        &path,
+        &filename,
+        false, // is_folder
+        None,  // No pre-rendered HTML for single-file wikis
+    )?;
+
+    let entry = WikiEntry {
+        path,
+        filename,
+        favicon,
+        is_folder: false,
+        backups_enabled: false, // Backups handled by Kotlin server
+        backup_dir: None,
+        backup_count: None,
+        group: None,
+    };
+
+    // Add to recent files
+    let _ = wiki_storage::add_to_recent_files(&app, entry.clone());
+
+    Ok(entry)
+}
+
 /// Open a tiddler from a wiki in a new window (single-tiddler view)
 /// The new window shares the same wiki and syncs changes via events
 #[tauri::command]
@@ -3650,9 +4773,13 @@ async fn open_tiddler_window(
     state.wiki_paths.lock().unwrap().insert(format!("{}_label", path_key), PathBuf::from(&label));
 
     let title = window_title.unwrap_or_else(|| tiddler_title.clone());
+    #[cfg(not(target_os = "android"))]
     let win_width = width.unwrap_or(700.0);
+    #[cfg(not(target_os = "android"))]
     let win_height = height.unwrap_or(600.0);
+    let _ = (&title, &width, &height); // Silence unused warnings on Android
 
+    #[cfg(not(target_os = "android"))]
     let icon = Image::from_bytes(include_bytes!("../icons/icon.png"))
         .map_err(|e| format!("Failed to load icon: {}", e))?;
 
@@ -3661,6 +4788,7 @@ async fn open_tiddler_window(
     let session_dir = get_wiki_session_dir(&app, &wiki_path);
 
     // Use full init script for tiddler windows too - they need __WIKI_PATH__ for external attachments
+    #[cfg(not(target_os = "android"))]
     let mut builder = WebviewWindowBuilder::new(&app, &label, WebviewUrl::External(wiki_url.parse().unwrap()))
         .title(&title)
         .inner_size(win_width, win_height)
@@ -3670,15 +4798,23 @@ async fn open_tiddler_window(
         .initialization_script(&init_script::get_wiki_init_script(&wiki_path, &label, false))
         .devtools(cfg!(debug_assertions)); // Only enable in debug builds
 
+    #[cfg(target_os = "android")]
+    let mut builder = WebviewWindowBuilder::new(&app, &label, WebviewUrl::External(wiki_url.parse().unwrap()))
+        .initialization_script(&init_script::get_wiki_init_script(&wiki_path, &label, false))
+        .devtools(cfg!(debug_assertions)); // Only enable in debug builds
+
     // Apply isolated session if available (shares with parent wiki)
     if let Some(dir) = session_dir {
         builder = builder.data_directory(dir);
     }
 
-    // Set window position if specified
+    // Set window position if specified (desktop only)
+    #[cfg(not(target_os = "android"))]
     if let (Some(x), Some(y)) = (left, top) {
         builder = builder.position(x, y);
     }
+    #[cfg(target_os = "android")]
+    let _ = (left, top); // Silence unused warnings
 
     // Tauri's drag/drop handler intercepts drops before WebKit/DOM gets them.
     // On macOS, we disable it and use custom handlers.
@@ -3818,6 +4954,7 @@ fn spawn_tiddler_process(wiki_path: &str, tiddler_title: &str, startup_tiddler: 
 
 /// IPC command: Notify other windows about a tiddler change
 /// Called from JavaScript when a tiddler is modified
+#[cfg(not(target_os = "android"))]
 #[tauri::command]
 fn ipc_notify_tiddler_changed(
     state: tauri::State<WikiModeState>,
@@ -3833,6 +4970,7 @@ fn ipc_notify_tiddler_changed(
 }
 
 /// IPC command: Notify other windows about a tiddler deletion
+#[cfg(not(target_os = "android"))]
 #[tauri::command]
 fn ipc_notify_tiddler_deleted(
     state: tauri::State<WikiModeState>,
@@ -3848,6 +4986,7 @@ fn ipc_notify_tiddler_deleted(
 
 /// IPC command: Request to open a tiddler in a new window process
 /// This sends a message to the main process which spawns the tiddler window
+#[cfg(not(target_os = "android"))]
 #[tauri::command]
 fn ipc_open_tiddler_window(
     state: tauri::State<WikiModeState>,
@@ -3865,18 +5004,21 @@ fn ipc_open_tiddler_window(
 }
 
 /// IPC command: Check if this is a tiddler window
+#[cfg(not(target_os = "android"))]
 #[tauri::command]
 fn ipc_is_tiddler_window(state: tauri::State<WikiModeState>) -> bool {
     state.is_tiddler_window
 }
 
 /// IPC command: Get the tiddler title if this is a tiddler window
+#[cfg(not(target_os = "android"))]
 #[tauri::command]
 fn ipc_get_tiddler_title(state: tauri::State<WikiModeState>) -> Option<String> {
     state.tiddler_title.clone()
 }
 
 /// IPC command: Request sync from source wiki (for tiddler windows)
+#[cfg(not(target_os = "android"))]
 #[tauri::command]
 fn ipc_request_sync(state: tauri::State<WikiModeState>) -> Result<(), String> {
     let mut client_guard = state.ipc_client.lock().unwrap();
@@ -3888,6 +5030,7 @@ fn ipc_request_sync(state: tauri::State<WikiModeState>) -> Result<(), String> {
 }
 
 /// IPC command: Send current wiki state (response to sync request from tiddler windows)
+#[cfg(not(target_os = "android"))]
 #[tauri::command]
 fn ipc_send_sync_state(
     state: tauri::State<WikiModeState>,
@@ -3981,6 +5124,7 @@ fn version_is_newer(latest: &str, current: &str) -> bool {
 }
 
 /// IPC command: Update wiki favicon (sends to main process via IPC)
+#[cfg(not(target_os = "android"))]
 #[tauri::command]
 fn ipc_update_favicon(
     state: tauri::State<WikiModeState>,
@@ -3996,6 +5140,8 @@ fn ipc_update_favicon(
 
 /// Get the resource directory, preferring paths relative to executable for tarball installs
 /// This avoids baked-in CI paths like /home/runner/...
+/// On Android, returns the app data directory where resources have been extracted.
+#[cfg(not(target_os = "android"))]
 fn get_resource_dir_path(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
     if let Ok(exe_path) = std::env::current_exe() {
         if let Some(exe_dir) = exe_path.parent() {
@@ -4020,6 +5166,14 @@ fn get_resource_dir_path(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
 
     // Fall back to Tauri's resource_dir (may have baked-in paths from CI)
     app.path().resource_dir().ok()
+}
+
+/// Android version: Returns the app data directory where resources have been extracted
+#[cfg(target_os = "android")]
+fn get_resource_dir_path(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
+    // On Android, resources are extracted to <app_data>/ directory
+    // The tiddlywiki resources are at <app_data>/tiddlywiki/
+    app.path().app_data_dir().ok()
 }
 
 /// Get the base data directory, respecting portable mode
@@ -4066,6 +5220,29 @@ fn get_wiki_session_dir(app: &tauri::AppHandle, wiki_path: &str) -> Option<std::
         Some(session_dir)
     } else {
         None
+    }
+}
+
+/// Clear session data for a wiki (cookies, localStorage, etc.)
+/// This is useful when users want to log out of authenticated services
+#[tauri::command]
+fn clear_wiki_session(app: tauri::AppHandle, wiki_path: String) -> Result<(), String> {
+    if let Some(session_dir) = get_wiki_session_dir(&app, &wiki_path) {
+        eprintln!("[TiddlyDesktop] Clearing session data for wiki: {}", wiki_path);
+        eprintln!("[TiddlyDesktop] Session directory: {:?}", session_dir);
+
+        // Remove the entire session directory
+        if session_dir.exists() {
+            std::fs::remove_dir_all(&session_dir)
+                .map_err(|e| format!("Failed to clear session data: {}", e))?;
+            eprintln!("[TiddlyDesktop] Session data cleared successfully");
+        } else {
+            eprintln!("[TiddlyDesktop] Session directory doesn't exist, nothing to clear");
+        }
+
+        Ok(())
+    } else {
+        Err("Failed to determine session directory".to_string())
     }
 }
 
@@ -4133,8 +5310,8 @@ fn tdasset_protocol_handler(_app: &tauri::AppHandle, request: Request<Vec<u8>>) 
                     .unwrap();
             }
 
-            // Serve the file
-            match std::fs::read(&canonical) {
+            // Serve the file (uses fs_abstraction for Android SAF support)
+            match fs_abstraction::read_asset_file(&canonical) {
                 Ok(content) => {
                     let mime_type = utils::get_mime_type(&canonical);
                     Response::builder()
@@ -4197,17 +5374,19 @@ fn wiki_protocol_handler(app: &tauri::AppHandle, request: Request<Vec<u8>>) -> R
     if path.starts_with("title-sync/") {
         let parts: Vec<&str> = path.strip_prefix("title-sync/").unwrap().splitn(2, '/').collect();
         if parts.len() == 2 {
-            let label = urlencoding::decode(parts[0]).unwrap_or_default().to_string();
-            let title = urlencoding::decode(parts[1]).unwrap_or_default().to_string();
-
-            // Update window title
-            let app_clone = app.clone();
-            let app_inner = app_clone.clone();
-            let _ = app_clone.run_on_main_thread(move || {
-                if let Some(window) = app_inner.get_webview_window(&label) {
-                    let _ = window.set_title(&title);
-                }
-            });
+            // Update window title (desktop only - Android has no window titles)
+            #[cfg(not(target_os = "android"))]
+            {
+                let label = urlencoding::decode(parts[0]).unwrap_or_default().to_string();
+                let title = urlencoding::decode(parts[1]).unwrap_or_default().to_string();
+                let app_clone = app.clone();
+                let app_inner = app_clone.clone();
+                let _ = app_clone.run_on_main_thread(move || {
+                    if let Some(window) = app_inner.get_webview_window(&label) {
+                        let _ = window.set_title(&title);
+                    }
+                });
+            }
         }
         return Response::builder()
             .status(200)
@@ -4220,31 +5399,8 @@ fn wiki_protocol_handler(app: &tauri::AppHandle, request: Request<Vec<u8>>) -> R
     // Body contains the wiki content
     if path.starts_with("save/") {
         let path_key = path.strip_prefix("save/").unwrap();
-        let wiki_path = match utils::base64_url_decode(path_key) {
-            Some(decoded) => {
-                // Security: Validate the wiki path before saving
-                match drag_drop::sanitize::validate_wiki_path_for_write(&decoded) {
-                    Ok(validated_path) => {
-                        // Also check user-accessible
-                        if !drag_drop::sanitize::is_user_accessible_path(&validated_path) {
-                            return Response::builder()
-                                .status(403)
-                                .header("Access-Control-Allow-Origin", "*")
-                                .body("Access denied: path is outside user-accessible directories".as_bytes().to_vec())
-                                .unwrap();
-                        }
-                        validated_path
-                    }
-                    Err(e) => {
-                        eprintln!("[TiddlyDesktop] Security: Invalid save path: {}", e);
-                        return Response::builder()
-                            .status(400)
-                            .header("Access-Control-Allow-Origin", "*")
-                            .body(format!("Invalid path: {}", e).as_bytes().to_vec())
-                            .unwrap();
-                    }
-                }
-            }
+        let decoded = match utils::base64_url_decode(path_key) {
+            Some(d) => d,
             None => {
                 return Response::builder()
                     .status(400)
@@ -4253,128 +5409,170 @@ fn wiki_protocol_handler(app: &tauri::AppHandle, request: Request<Vec<u8>>) -> R
             }
         };
 
+        // Check if this is an Android SAF URI (content:// or JSON-serialized FileUri)
+        let is_saf_uri = decoded.starts_with("content://") || decoded.starts_with('{');
+
+        let wiki_path = if is_saf_uri {
+            // Android SAF URI - bypass filesystem path validation
+            // SAF permissions are handled by Android's permission system
+            PathBuf::from(&decoded)
+        } else {
+            // Desktop filesystem path - validate for security
+            match drag_drop::sanitize::validate_wiki_path_for_write(&decoded) {
+                Ok(validated_path) => {
+                    // Also check user-accessible
+                    if !drag_drop::sanitize::is_user_accessible_path(&validated_path) {
+                        return Response::builder()
+                            .status(403)
+                            .header("Access-Control-Allow-Origin", "*")
+                            .body("Access denied: path is outside user-accessible directories".as_bytes().to_vec())
+                            .unwrap();
+                    }
+                    validated_path
+                }
+                Err(e) => {
+                    eprintln!("[TiddlyDesktop] Security: Invalid save path: {}", e);
+                    return Response::builder()
+                        .status(400)
+                        .header("Access-Control-Allow-Origin", "*")
+                        .body(format!("Invalid path: {}", e).as_bytes().to_vec())
+                        .unwrap();
+                }
+            }
+        };
+
         let content = String::from_utf8_lossy(request.body()).to_string();
 
         // Check if backups should be created for this wiki
-        let state = app.state::<AppState>();
         let wiki_path_str = wiki_path.to_string_lossy();
+        let state = app.state::<AppState>();
         let should_backup = should_create_backup(app, &state, wiki_path_str.as_ref());
 
-        // Create backup if appropriate (synchronous since protocol handlers can't be async)
-        if should_backup && wiki_path.exists() {
-            if let Some(parent) = wiki_path.parent() {
-                let filename = wiki_path.file_stem().and_then(|s| s.to_str()).unwrap_or("wiki");
+        if should_backup {
+            #[cfg(target_os = "android")]
+            if is_saf_uri {
+                // Android SAF backup support
+                // Get custom backup directory or try to auto-detect from tree access
+                let custom_backup_dir = get_wiki_backup_dir(app, wiki_path_str.as_ref());
 
-                // Get custom backup directory if set, otherwise use default
-                // Security: Validate custom backup directory is user-accessible
-                let backup_dir = match get_wiki_backup_dir(app, wiki_path_str.as_ref()) {
-                    Some(custom_dir) => {
-                        // Validate the custom directory path
-                        match drag_drop::sanitize::validate_file_path(&custom_dir) {
-                            Some(_) => {
-                                let dir_path = PathBuf::from(&custom_dir);
-                                // If directory exists, verify it's user-accessible
-                                if dir_path.exists() {
-                                    if let Ok(canonical) = dunce::canonicalize(&dir_path) {
-                                        if drag_drop::sanitize::is_user_accessible_path(&canonical) {
-                                            canonical
-                                        } else {
-                                            eprintln!("[TiddlyDesktop] Security: Custom backup dir not user-accessible, using default");
-                                            parent.join(format!("{}.backups", filename))
-                                        }
-                                    } else {
-                                        parent.join(format!("{}.backups", filename))
-                                    }
-                                } else {
-                                    // Directory doesn't exist yet, check parent is user-accessible
-                                    if let Some(dir_parent) = dir_path.parent() {
-                                        if let Ok(canonical_parent) = dunce::canonicalize(dir_parent) {
-                                            if drag_drop::sanitize::is_user_accessible_path(&canonical_parent) {
-                                                dir_path
+                if let Ok(Some(backup_dir_uri)) = android::saf::get_backup_directory(&decoded, custom_backup_dir.as_deref()) {
+                    // Get filename stem for backup naming
+                    let filename_stem = android::saf::get_display_name(&decoded)
+                        .map(|name| {
+                            name.strip_suffix(".html")
+                                .or_else(|| name.strip_suffix(".htm"))
+                                .unwrap_or(&name)
+                                .to_string()
+                        })
+                        .unwrap_or_else(|_| "wiki".to_string());
+
+                    // Create backup
+                    if let Err(e) = android::saf::create_backup(&decoded, &backup_dir_uri, &filename_stem) {
+                        eprintln!("[TiddlyDesktop] Failed to create Android backup: {}", e);
+                    } else {
+                        // Clean up old backups
+                        let backup_count = wiki_storage::get_wiki_backup_count(app, wiki_path_str.as_ref()).unwrap_or(20);
+                        let _ = android::saf::cleanup_old_backups(&backup_dir_uri, &filename_stem, backup_count as usize);
+                    }
+                } else {
+                    eprintln!("[TiddlyDesktop] Android backup skipped: no backup directory available. Set a custom backup directory in wiki settings.");
+                }
+            }
+
+            #[cfg(not(target_os = "android"))]
+            if !is_saf_uri {
+                // Desktop filesystem backup
+                if wiki_path.exists() {
+                    if let Some(parent) = wiki_path.parent() {
+                        let filename = wiki_path.file_stem().and_then(|s| s.to_str()).unwrap_or("wiki");
+
+                        // Get custom backup directory if set, otherwise use default
+                        // Security: Validate custom backup directory is user-accessible
+                        let backup_dir = match get_wiki_backup_dir(app, wiki_path_str.as_ref()) {
+                            Some(custom_dir) => {
+                                // Validate the custom directory path
+                                match drag_drop::sanitize::validate_file_path(&custom_dir) {
+                                    Some(_) => {
+                                        let dir_path = PathBuf::from(&custom_dir);
+                                        // If directory exists, verify it's user-accessible
+                                        if dir_path.exists() {
+                                            if let Ok(canonical) = dunce::canonicalize(&dir_path) {
+                                                if drag_drop::sanitize::is_user_accessible_path(&canonical) {
+                                                    canonical
+                                                } else {
+                                                    eprintln!("[TiddlyDesktop] Security: Custom backup dir not user-accessible, using default");
+                                                    parent.join(format!("{}.backups", filename))
+                                                }
                                             } else {
-                                                eprintln!("[TiddlyDesktop] Security: Custom backup dir parent not user-accessible, using default");
                                                 parent.join(format!("{}.backups", filename))
                                             }
                                         } else {
-                                            parent.join(format!("{}.backups", filename))
+                                            // Directory doesn't exist yet, check parent is user-accessible
+                                            if let Some(dir_parent) = dir_path.parent() {
+                                                if let Ok(canonical_parent) = dunce::canonicalize(dir_parent) {
+                                                    if drag_drop::sanitize::is_user_accessible_path(&canonical_parent) {
+                                                        dir_path
+                                                    } else {
+                                                        eprintln!("[TiddlyDesktop] Security: Custom backup dir parent not user-accessible, using default");
+                                                        parent.join(format!("{}.backups", filename))
+                                                    }
+                                                } else {
+                                                    parent.join(format!("{}.backups", filename))
+                                                }
+                                            } else {
+                                                parent.join(format!("{}.backups", filename))
+                                            }
                                         }
-                                    } else {
+                                    }
+                                    None => {
+                                        eprintln!("[TiddlyDesktop] Security: Invalid custom backup dir path, using default");
                                         parent.join(format!("{}.backups", filename))
                                     }
                                 }
                             }
-                            None => {
-                                eprintln!("[TiddlyDesktop] Security: Invalid custom backup dir path, using default");
-                                parent.join(format!("{}.backups", filename))
+                            None => parent.join(format!("{}.backups", filename)),
+                        };
+                        let _ = std::fs::create_dir_all(&backup_dir);
+
+                        let timestamp = Local::now().format("%Y%m%d-%H%M%S");
+                        let backup_name = format!("{}.{}.html", filename, timestamp);
+                        let backup_path = backup_dir.join(backup_name);
+                        let _ = std::fs::copy(&wiki_path, &backup_path);
+
+                        // Clean up old backups (synchronous version)
+                        let backup_count = wiki_storage::get_wiki_backup_count(app, wiki_path_str.as_ref()).unwrap_or(20);
+                        if backup_count > 0 {
+                            if let Ok(entries) = std::fs::read_dir(&backup_dir) {
+                                let mut backups: Vec<PathBuf> = entries
+                                    .filter_map(|e| e.ok())
+                                    .map(|e| e.path())
+                                    .filter(|p| p.extension().map(|e| e == "html").unwrap_or(false))
+                                    .collect();
+                                backups.sort();
+                                backups.reverse();
+                                for old_backup in backups.into_iter().skip(backup_count as usize) {
+                                    let _ = std::fs::remove_file(old_backup);
+                                }
                             }
-                        }
-                    }
-                    None => parent.join(format!("{}.backups", filename)),
-                };
-                let _ = std::fs::create_dir_all(&backup_dir);
-
-                let timestamp = Local::now().format("%Y%m%d-%H%M%S");
-                let backup_name = format!("{}.{}.html", filename, timestamp);
-                let backup_path = backup_dir.join(backup_name);
-                let _ = std::fs::copy(&wiki_path, &backup_path);
-
-                // Clean up old backups (synchronous version)
-                let backup_count = wiki_storage::get_wiki_backup_count(app, wiki_path_str.as_ref()).unwrap_or(20);
-                if backup_count > 0 {
-                    if let Ok(entries) = std::fs::read_dir(&backup_dir) {
-                        let mut backups: Vec<PathBuf> = entries
-                            .filter_map(|e| e.ok())
-                            .map(|e| e.path())
-                            .filter(|p| p.extension().map(|e| e == "html").unwrap_or(false))
-                            .collect();
-                        backups.sort();
-                        backups.reverse();
-                        for old_backup in backups.into_iter().skip(backup_count as usize) {
-                            let _ = std::fs::remove_file(old_backup);
                         }
                     }
                 }
             }
         }
 
-        // Write to temp file then rename for atomic operation
-        let temp_path = wiki_path.with_extension("tmp");
-        match std::fs::write(&temp_path, &content) {
+        // Write wiki file (uses fs_abstraction for atomic writes and Android SAF support)
+        match fs_abstraction::write_wiki_file(&wiki_path, &content) {
             Ok(_) => {
-                match std::fs::rename(&temp_path, &wiki_path) {
-                    Ok(_) => {
-                        return Response::builder()
-                            .status(200)
-                            .header("Access-Control-Allow-Origin", "*")
-                            .body(Vec::new())
-                            .unwrap();
-                    }
-                    Err(_rename_err) => {
-                        // On Windows, rename can fail if file is locked
-                        // Fall back to direct write after removing temp file
-                        let _ = std::fs::remove_file(&temp_path);
-                        match std::fs::write(&wiki_path, &content) {
-                            Ok(_) => {
-                                return Response::builder()
-                                    .status(200)
-                                    .header("Access-Control-Allow-Origin", "*")
-                                    .body(Vec::new())
-                                    .unwrap();
-                            }
-                            Err(e) => {
-                                return Response::builder()
-                                    .status(500)
-                                    .body(format!("Failed to save: {}", e).into_bytes())
-                                    .unwrap();
-                            }
-                        }
-                    }
-                }
+                return Response::builder()
+                    .status(200)
+                    .header("Access-Control-Allow-Origin", "*")
+                    .body(Vec::new())
+                    .unwrap();
             }
             Err(e) => {
                 return Response::builder()
                     .status(500)
-                    .body(format!("Failed to write: {}", e).into_bytes())
+                    .body(format!("Failed to save: {}", e).into_bytes())
                     .unwrap();
             }
         }
@@ -4474,8 +5672,8 @@ fn wiki_protocol_handler(app: &tauri::AppHandle, request: Request<Vec<u8>>) -> R
                             .unwrap();
                     };
 
-                    // Serve the file
-                    match std::fs::read(&resolved_path) {
+                    // Serve the file (uses fs_abstraction for Android SAF support)
+                    match fs_abstraction::read_file(&resolved_path) {
                         Ok(content) => {
                             let mime_type = utils::get_mime_type(&resolved_path);
                             return Response::builder()
@@ -4538,8 +5736,8 @@ fn wiki_protocol_handler(app: &tauri::AppHandle, request: Request<Vec<u8>>) -> R
             .unwrap();
     }
 
-    // Read file content
-    let read_result = std::fs::read_to_string(&file_path);
+    // Read file content (uses fs_abstraction for Android SAF support)
+    let read_result = fs_abstraction::read_wiki_file(&file_path);
 
     match read_result {
         Ok(content) => {
@@ -4990,6 +6188,7 @@ window.__SAVE_URL__ = "{save_url}";
 }
 
 /// Reveal the main window, or recreate it if it was closed
+#[cfg(not(target_os = "android"))]
 fn reveal_or_create_main_window(app_handle: &tauri::AppHandle) {
     // Try to get existing window first
     if let Some(window) = app_handle.get_webview_window("main") {
@@ -5072,6 +6271,8 @@ fn reveal_or_create_main_window(app_handle: &tauri::AppHandle) {
     }
 }
 
+// System tray is only available on desktop platforms
+#[cfg(not(target_os = "android"))]
 fn setup_system_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     let show_window = MenuItemBuilder::with_id("show_window", "Show TiddlyDesktop").build(app)?;
     let quit = MenuItemBuilder::with_id("quit", "Quit").build(app)?;
@@ -5117,6 +6318,7 @@ fn setup_system_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>>
 }
 
 /// Arguments for wiki file mode (single-file wiki in separate process)
+#[cfg(not(target_os = "android"))]
 struct WikiModeArgs {
     wiki_path: PathBuf,
     tiddler_title: Option<String>,
@@ -5124,17 +6326,20 @@ struct WikiModeArgs {
 }
 
 /// Arguments for wiki folder mode (Node.js server in separate process)
+#[cfg(not(target_os = "android"))]
 struct WikiFolderModeArgs {
     folder_path: PathBuf,
     port: u16,
 }
 
 /// Parse command-line arguments for special modes
+#[cfg(not(target_os = "android"))]
 enum SpecialModeArgs {
     WikiFile(WikiModeArgs),
     WikiFolder(WikiFolderModeArgs),
 }
 
+#[cfg(not(target_os = "android"))]
 fn parse_special_mode_args() -> Option<SpecialModeArgs> {
     let args: Vec<String> = std::env::args().collect();
 
@@ -5190,6 +6395,7 @@ fn parse_special_mode_args() -> Option<SpecialModeArgs> {
 }
 
 /// Simplified app state for wiki-only mode (single wiki process)
+#[cfg(not(target_os = "android"))]
 #[allow(dead_code)]
 struct WikiModeState {
     wiki_path: PathBuf,
@@ -5201,6 +6407,7 @@ struct WikiModeState {
 
 /// Run in wiki-only mode - a single wiki window in its own process
 /// This is called when the app is started with --wiki <path> [--tiddler <title>]
+#[cfg(not(target_os = "android"))]
 fn run_wiki_mode(args: WikiModeArgs) {
     // Windows: Initialize RegisterDragDrop hook to extract file paths from drops
     #[cfg(target_os = "windows")]
@@ -5286,6 +6493,7 @@ fn run_wiki_mode(args: WikiModeArgs) {
     let startup_tiddler_for_state = startup_tiddler.clone();
 
     tauri::Builder::default()
+        .with_platform_plugins()
         .plugin(drag_drop::init_plugin())
         .setup(move |app| {
             // Store state for this wiki process
@@ -5320,6 +6528,8 @@ fn run_wiki_mode(args: WikiModeArgs) {
                 next_port: Mutex::new(8080),
                 main_wiki_path: wiki_path_clone.clone(), // Use wiki path as "main" for this process
                 run_command_allowed_wikis: Mutex::new(run_command_allowed),
+                folder_wiki_paths: Mutex::new(HashMap::new()),
+                saf_wiki_mappings: Mutex::new(HashMap::new()),
             });
 
             // Build the wiki URL using our protocol
@@ -5557,6 +6767,7 @@ fn run_wiki_mode(args: WikiModeArgs) {
 
 /// Run in wiki-folder mode - a Node.js TiddlyWiki server in its own process
 /// This is called when the app is started with --wiki-folder <path> --port <port>
+#[cfg(not(target_os = "android"))]
 fn run_wiki_folder_mode(args: WikiFolderModeArgs) {
     // Windows: Initialize RegisterDragDrop hook to extract file paths from drops
     #[cfg(target_os = "windows")]
@@ -5693,6 +6904,7 @@ fn run_wiki_folder_mode(args: WikiFolderModeArgs) {
 
     // Build the Tauri app for this wiki folder
     tauri::Builder::default()
+        .with_platform_plugins()
         .plugin(drag_drop::init_plugin())
         .setup(move |app| {
             let icon = Image::from_bytes(include_bytes!("../icons/icon.png"))?;
@@ -5765,6 +6977,8 @@ fn run_wiki_folder_mode(args: WikiFolderModeArgs) {
                 next_port: Mutex::new(port + 1),
                 main_wiki_path: folder_path_for_state.clone(),
                 run_command_allowed_wikis: Mutex::new(run_command_allowed),
+                folder_wiki_paths: Mutex::new(HashMap::new()),
+                saf_wiki_mappings: Mutex::new(HashMap::new()),
             });
 
             // Start IPC listener for focus requests
@@ -5997,6 +7211,7 @@ fn read_registry_string(hkey: windows::Win32::System::Registry::HKEY, path: &str
     }
 }
 
+#[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // Windows: Check WebView2 version at startup
     #[cfg(target_os = "windows")]
@@ -6007,6 +7222,8 @@ pub fn run() {
     drag_drop::windows::init_drop_target_hook();
 
     // Check if we're running in a special mode (wiki file or wiki folder)
+    // Special modes are desktop-only (Android has a different app structure)
+    #[cfg(not(target_os = "android"))]
     if let Some(mode) = parse_special_mode_args() {
         match mode {
             SpecialModeArgs::WikiFile(args) => {
@@ -6021,43 +7238,47 @@ pub fn run() {
     }
 
     // Main process: Start the IPC server for wiki process coordination
-    let server = Arc::new(ipc::IpcServer::new());
-    let _ = GLOBAL_IPC_SERVER.set(server.clone());
+    // IPC server is desktop-only (Android uses single-process architecture)
+    #[cfg(not(target_os = "android"))]
+    {
+        let server = Arc::new(ipc::IpcServer::new());
+        let _ = GLOBAL_IPC_SERVER.set(server.clone());
 
-    std::thread::spawn(move || {
-        // Set up callback for opening wikis (from tiddler windows or other sources)
-        server.on_open_wiki(|path| {
-            eprintln!("[IPC] Open wiki request received: {}", path);
-            // Spawn a wiki process for this path
-            if let Err(e) = spawn_wiki_process_sync(&path) {
-                eprintln!("[IPC] Failed to open wiki: {}", e);
-            }
-        });
-
-        // Set up callback for opening tiddler windows
-        server.on_open_tiddler(|wiki_path, tiddler_title, startup_tiddler| {
-            eprintln!("[IPC] Open tiddler window request: wiki={}, tiddler={}", wiki_path, tiddler_title);
-            if let Err(e) = spawn_tiddler_process(&wiki_path, &tiddler_title, startup_tiddler.as_deref()) {
-                eprintln!("[IPC] Failed to spawn tiddler window: {}", e);
-            }
-        });
-
-        // Set up callback for updating wiki favicon
-        server.on_update_favicon(|wiki_path, favicon| {
-            eprintln!("[IPC] Update favicon request: wiki={}", wiki_path);
-            if let Some(app_handle) = GLOBAL_APP_HANDLE.get() {
-                if let Err(e) = wiki_storage::update_wiki_favicon(app_handle.clone(), wiki_path, favicon) {
-                    eprintln!("[IPC] Failed to update favicon: {}", e);
+        std::thread::spawn(move || {
+            // Set up callback for opening wikis (from tiddler windows or other sources)
+            server.on_open_wiki(|path| {
+                eprintln!("[IPC] Open wiki request received: {}", path);
+                // Spawn a wiki process for this path
+                if let Err(e) = spawn_wiki_process_sync(&path) {
+                    eprintln!("[IPC] Failed to open wiki: {}", e);
                 }
-            } else {
-                eprintln!("[IPC] AppHandle not available yet for favicon update");
+            });
+
+            // Set up callback for opening tiddler windows
+            server.on_open_tiddler(|wiki_path, tiddler_title, startup_tiddler| {
+                eprintln!("[IPC] Open tiddler window request: wiki={}, tiddler={}", wiki_path, tiddler_title);
+                if let Err(e) = spawn_tiddler_process(&wiki_path, &tiddler_title, startup_tiddler.as_deref()) {
+                    eprintln!("[IPC] Failed to spawn tiddler window: {}", e);
+                }
+            });
+
+            // Set up callback for updating wiki favicon
+            server.on_update_favicon(|wiki_path, favicon| {
+                eprintln!("[IPC] Update favicon request: wiki={}", wiki_path);
+                if let Some(app_handle) = GLOBAL_APP_HANDLE.get() {
+                    if let Err(e) = wiki_storage::update_wiki_favicon(app_handle.clone(), wiki_path, favicon) {
+                        eprintln!("[IPC] Failed to update favicon: {}", e);
+                    }
+                } else {
+                    eprintln!("[IPC] AppHandle not available yet for favicon update");
+                }
+            });
+
+            if let Err(e) = server.start() {
+                eprintln!("[TiddlyDesktop] IPC server error: {}", e);
             }
         });
-
-        if let Err(e) = server.start() {
-            eprintln!("[TiddlyDesktop] IPC server error: {}", e);
-        }
-    });
+    }
 
     // Normal mode: main browser with wiki list
 
@@ -6103,6 +7324,7 @@ pub fn run() {
     }
 
     tauri::Builder::default()
+        .with_platform_plugins()
         .plugin(drag_drop::init_plugin())
         .setup(|app| {
             // Store global AppHandle for IPC callbacks
@@ -6126,6 +7348,8 @@ pub fn run() {
                 next_port: Mutex::new(8080),
                 main_wiki_path: main_wiki_path.clone(),
                 run_command_allowed_wikis: Mutex::new(run_command_allowed),
+                folder_wiki_paths: Mutex::new(HashMap::new()),
+                saf_wiki_mappings: Mutex::new(HashMap::new()),
             });
 
             // Create a unique key for the main wiki path
@@ -6168,8 +7392,10 @@ pub fn run() {
 
             // Create the main window programmatically with initialization script
             // Use full init script with is_main_wiki=true so setupExternalAttachments knows to skip
+            #[cfg(not(target_os = "android"))]
             let icon = Image::from_bytes(include_bytes!("../icons/icon.png"))?;
             #[allow(unused_mut)]
+            #[cfg(not(target_os = "android"))]
             let mut builder = WebviewWindowBuilder::new(app, "main", WebviewUrl::External(wiki_url.parse().unwrap()))
                 .title("TiddlyDesktopRS")
                 .inner_size(win_width, win_height)
@@ -6178,7 +7404,36 @@ pub fn run() {
                 .initialization_script(&init_script::get_wiki_init_script_with_language(&main_wiki_path.to_string_lossy(), "main", true, Some(&language)))
                 .devtools(cfg!(debug_assertions)); // Only enable in debug builds
 
+            // Android: Extract resources synchronously if needed (first run)
+            // This takes ~1.5 seconds with ZIP extraction, so we do it before window creation
+            #[cfg(target_os = "android")]
+            if needs_resource_extraction(app) {
+                eprintln!("[TiddlyDesktop] First run detected, extracting resources...");
+                if let Err(e) = extract_tiddlywiki_resources(app) {
+                    eprintln!("[TiddlyDesktop] Resource extraction failed: {}", e);
+                }
+            }
+
+            // Android: Verify Node.js binary is ready (extracted via ZIP in extract_tiddlywiki_resources)
+            #[cfg(target_os = "android")]
+            if let Err(e) = android::node_bridge::ensure_node_binary(app) {
+                eprintln!("[TiddlyDesktop] Node.js binary check failed: {}", e);
+                // Non-fatal - wiki viewing still works, just not creation/serving
+            }
+
+            // Android: Clean up any stale wiki mirror directories from previous sessions
+            #[cfg(target_os = "android")]
+            android::node_bridge::cleanup_stale_wiki_mirrors();
+
+            // Android: Create window with wiki URL directly (resources are already extracted)
+            // Note: Individual wikis open in separate WikiActivity instances (not Tauri-based)
+            #[cfg(target_os = "android")]
+            let builder = WebviewWindowBuilder::new(app, "main", WebviewUrl::External(wiki_url.parse().unwrap()))
+                .initialization_script(&init_script::get_wiki_init_script_with_language(&main_wiki_path.to_string_lossy(), "main", true, Some(&language)));
+
             // Apply saved position if available, with monitor validation on Windows/macOS
+            // (Android windows are fullscreen - no position needed)
+            #[cfg(not(target_os = "android"))]
             if let Some(ref state) = saved_state {
                 let (x, y) = validate_window_position(app.handle(), state);
                 builder = builder.position(x, y);
@@ -6200,11 +7455,17 @@ pub fn run() {
             }
 
             // Restore maximized state (Windows/macOS only - Linux handled in linux_finalize_window_state)
-            #[cfg(not(target_os = "linux"))]
+            // (Android windows are always fullscreen)
+            #[cfg(not(any(target_os = "linux", target_os = "android")))]
             if saved_state.as_ref().map(|s| s.maximized).unwrap_or(false) {
                 let _ = main_window.maximize();
             }
 
+            // Android: window is already created with wiki URL (resources extracted synchronously above)
+            #[cfg(target_os = "android")]
+            let _ = &main_window;
+
+            #[cfg(not(target_os = "android"))]
             setup_system_tray(app)?;
 
             // Handle files passed as command-line arguments
@@ -6292,6 +7553,7 @@ pub fn run() {
             wiki_storage::get_palette,
             wiki_storage::set_palette,
             open_auth_window,
+            clear_wiki_session,
             run_command,
             request_run_command_permission,
             check_run_command_permission,
@@ -6312,7 +7574,19 @@ pub fn run() {
             set_drag_dest_enabled,
             ungrab_seat_for_focus,
             set_over_droppable,
-            check_for_updates
+            check_for_updates,
+            // Android SAF commands (stubs on desktop)
+            android_pick_wiki_file,
+            android_pick_directory,
+            android_create_wiki_file,
+            android_has_permission,
+            android_pick_backup_directory,
+            android_pick_wiki_folder,
+            android_list_directory,
+            android_release_permission,
+            android_check_folder_status,
+            android_pick_folder_for_wiki_creation,
+            android_set_system_bar_colors
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
@@ -6351,4 +7625,44 @@ pub fn run() {
                 _ => {}
             }
         });
+}
+
+/// JNI_OnLoad - Called when the native library is loaded by Android.
+/// Captures the JavaVM for later use by wiki_activity module.
+#[cfg(target_os = "android")]
+#[no_mangle]
+pub extern "system" fn JNI_OnLoad(
+    vm: jni::JavaVM,
+    _reserved: *mut std::ffi::c_void,
+) -> jni::sys::jint {
+    eprintln!("[TiddlyDesktop] JNI_OnLoad called, capturing JavaVM");
+    android::wiki_activity::set_java_vm(vm);
+    jni::sys::JNI_VERSION_1_6
+}
+
+/// JNI function called from WikiActivity.onDestroy() to clean up local wiki copies.
+/// Only relevant for folder wikis that use Node.js server with local copies.
+#[cfg(target_os = "android")]
+#[no_mangle]
+pub extern "system" fn Java_com_burningtreec_tiddlydesktop_1rs_WikiActivity_cleanupWikiLocalCopy(
+    mut env: jni::JNIEnv,
+    _class: jni::objects::JClass,
+    wiki_path: jni::objects::JString,
+    is_folder: jni::sys::jboolean,
+) {
+    // Only folder wikis have local copies to clean up
+    if is_folder == 0 {
+        return;
+    }
+
+    let wiki_path_str: String = match env.get_string(&wiki_path) {
+        Ok(s) => s.into(),
+        Err(e) => {
+            eprintln!("[TiddlyDesktop] JNI cleanupWikiLocalCopy: Failed to get wiki_path string: {}", e);
+            return;
+        }
+    };
+
+    eprintln!("[TiddlyDesktop] JNI cleanupWikiLocalCopy called for: {}", wiki_path_str);
+    android::node_bridge::cleanup_wiki_local_copy(&wiki_path_str);
 }

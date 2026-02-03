@@ -267,17 +267,6 @@ tags: $:/tags/Stylesheet
 	background: #f0d0d0;
 }
 
-.td-button-convert {
-	background: #f0f0f8;
-	border: 1px solid #b0b0c8;
-	color: #4a4a6a;
-}
-
-.td-button-convert:hover {
-	background: #e0e0f0;
-	border-color: #9090b0;
-}
-
 .td-button-backup.td-backup-on {
 	background: #f0f8e8;
 	border-color: #b0d0a0;
@@ -305,7 +294,7 @@ tags: $:/tags/Stylesheet
 	gap: 8px;
 	margin-top: 8px;
 	padding-top: 8px;
-	border-top: 1px solid <<colour tab-border>>;
+	border-top: 1px solid <<colour tiddler-border>>;
 	font-size: 12px;
 }
 
@@ -329,27 +318,27 @@ tags: $:/tags/Stylesheet
 }
 
 .td-button-backup-dir {
-	background: #f0f4f8;
-	border-color: #c0d0e0;
-	color: #4a6a8a;
+	background: <<colour tab-background>>;
+	border-color: <<colour tab-border>>;
+	color: <<colour foreground>>;
 	padding: 2px 8px !important;
 	font-size: 11px !important;
 }
 
 .td-button-backup-dir:hover {
-	background: #e0ecf4;
+	background: <<colour tab-background-selected>>;
 }
 
 .td-button-backup-dir-clear {
-	background: #f8f4f0;
-	border-color: #e0d0c0;
-	color: #8a6a4a;
+	background: <<colour tab-background>>;
+	border-color: <<colour tab-border>>;
+	color: <<colour muted-foreground>>;
 	padding: 2px 8px !important;
 	font-size: 11px !important;
 }
 
 .td-button-backup-dir-clear:hover {
-	background: #f0ece4;
+	background: <<colour tab-background-selected>>;
 }
 
 /* Backup count row */
@@ -359,7 +348,7 @@ tags: $:/tags/Stylesheet
 	gap: 8px;
 	margin-top: 6px;
 	padding-top: 6px;
-	border-top: 1px solid <<colour tab-border>>;
+	border-top: 1px solid <<colour tiddler-border>>;
 	font-size: 12px;
 }
 
@@ -373,28 +362,32 @@ tags: $:/tags/Stylesheet
 	font-weight: 500;
 }
 
-.td-backup-count-value.td-backup-count-default,
-.td-backup-count-value.td-backup-count-unlimited {
+.td-backup-count-value.td-backup-count-default {
 	color: <<colour muted-foreground>>;
 	font-style: italic;
 	font-weight: normal;
 }
 
+.td-backup-count-value.td-backup-count-unlimited {
+	color: #2d7a2d;
+	font-weight: 500;
+}
+
 .td-button-backup-count {
-	background: #f0f4f8;
-	border-color: #c0d0e0;
-	color: #4a6a8a;
+	background: <<colour tab-background>>;
+	border-color: <<colour tab-border>>;
+	color: <<colour foreground>>;
 	padding: 2px 8px !important;
 	font-size: 11px !important;
 }
 
 .td-button-backup-count:hover {
-	background: #e0ecf4;
+	background: <<colour tab-background-selected>>;
 }
 
 /* Backup count dropdown */
 .td-backup-count-dropdown {
-	min-width: 120px;
+	min-width: 140px;
 }
 
 .td-backup-count-dropdown-content {
@@ -404,7 +397,7 @@ tags: $:/tags/Stylesheet
 .td-backup-count-option {
 	display: block;
 	width: 100%;
-	padding: 6px 12px;
+	padding: 8px 12px;
 	text-align: left;
 	background: none;
 	border: none;
@@ -422,7 +415,8 @@ tags: $:/tags/Stylesheet
 	display: flex;
 	gap: 6px;
 	padding: 8px 12px;
-	align-items: center;
+	border-top: 1px solid <<colour tiddler-border>>;
+	margin-top: 4px;
 }
 
 .td-backup-count-input {
@@ -430,25 +424,25 @@ tags: $:/tags/Stylesheet
 	padding: 4px 8px;
 	border: 1px solid <<colour tiddler-border>>;
 	border-radius: 4px;
-	font-size: 12px;
-	background: <<colour tiddler-background>>;
-	color: <<colour foreground>>;
+	font-size: 13px;
 	text-align: center;
 }
 
 .td-backup-count-input:focus {
 	outline: none;
 	border-color: <<colour primary>>;
-	box-shadow: 0 0 0 2px rgba(74, 144, 217, 0.2);
 }
 
-.td-backup-count-custom .td-button {
-	padding: 2px 6px !important;
+/* Convert button (to folder / to file) */
+.td-button-convert {
+	background: <<colour tab-background>>;
+	border-color: <<colour primary>>;
+	color: <<colour primary>>;
 }
 
-.td-backup-count-custom .td-button svg {
-	width: 14px;
-	height: 14px;
+.td-button-convert:hover {
+	background: <<colour tab-background-selected>>;
+	border-color: <<colour primary>>;
 }
 
 /* Empty message */
@@ -460,6 +454,11 @@ tags: $:/tags/Stylesheet
 
 .td-empty-message p {
 	margin: 8px 0;
+}
+
+/* Allow dropdowns to overflow the story river */
+.tc-story-river {
+	overflow: visible !important;
 }
 
 /* Hide TiddlyWiki UI elements we don't need */
@@ -498,7 +497,7 @@ body {
 	flex: 1;
 	display: flex;
 	flex-direction: column;
-	overflow: visible;
+	overflow: hidden;
 	width: 100%;
 	max-width: none !important;
 	min-height: 0;
@@ -510,7 +509,7 @@ body {
 	flex: 1;
 	display: flex;
 	flex-direction: column;
-	overflow: visible;
+	overflow: visible !important;
 	width: 100% !important;
 	max-width: none !important;
 	min-height: 0;
@@ -524,7 +523,7 @@ body {
 	flex: 1;
 	display: flex;
 	flex-direction: column;
-	overflow: visible;
+	overflow: hidden;
 	width: 100% !important;
 	max-width: none !important;
 	min-height: 0;
@@ -534,7 +533,7 @@ body {
 	flex: 1;
 	display: flex;
 	flex-direction: column;
-	overflow: visible;
+	overflow: auto;
 	min-height: 0;
 }
 
@@ -557,7 +556,7 @@ body {
 }
 
 .td-modal {
-	background: <<colour modal-background>>;
+	background: <<colour tiddler-background>>;
 	border-radius: 8px;
 	box-shadow: 0 4px 24px rgba(0, 0, 0, 0.3);
 	max-width: 700px;
@@ -570,7 +569,7 @@ body {
 
 .td-modal-header {
 	padding: 16px 20px;
-	border-bottom: 1px solid <<colour modal-border>>;
+	border-bottom: 1px solid <<colour tiddler-border>>;
 	background: <<colour page-background>>;
 }
 
@@ -593,7 +592,7 @@ body {
 
 .td-modal-footer {
 	padding: 12px 20px;
-	border-top: 1px solid <<colour modal-border>>;
+	border-top: 1px solid <<colour tiddler-border>>;
 	background: <<colour page-background>>;
 	display: flex;
 	justify-content: flex-end;
@@ -635,12 +634,12 @@ body {
 
 .td-edition-btn:hover {
 	border-color: <<colour primary>>;
-	background: <<colour tab-background>>;
+	background: <<colour page-background>>;
 }
 
 .td-edition-btn.td-edition-selected {
 	border-color: <<colour primary>>;
-	background: <<colour selection-background>>;
+	background: <<colour notification-background>>;
 	box-shadow: 0 0 0 1px <<colour primary>>;
 }
 
@@ -707,12 +706,12 @@ body {
 
 .td-plugin-item:hover {
 	border-color: <<colour primary>>;
-	background: <<colour tab-background>>;
+	background: <<colour page-background>>;
 }
 
 .td-plugin-item.td-plugin-selected {
 	border-color: <<colour primary>>;
-	background: <<colour selection-background>>;
+	background: <<colour notification-background>>;
 }
 
 .td-check {
@@ -828,17 +827,65 @@ body {
 .td-toolbar-right {
 	margin-left: auto;
 	margin-right: 0;
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	flex-wrap: wrap;
+}
+
+/* Update available button */
+.td-button-update {
+	background: #fff3cd;
+	border-color: #ffc107;
+	color: #856404;
+	text-decoration: none;
+	font-weight: 500;
+}
+
+.td-button-update:hover {
+	background: #ffe69c;
+	border-color: #e0a800;
+	color: #664d03;
+}
+
+/* Update banner (Android - shown at very top) */
+.td-update-banner {
+	background: #fff3cd;
+	border-bottom: 1px solid #ffc107;
+	padding: 8px 12px;
+	text-align: center;
+}
+
+.td-update-banner-link {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	gap: 6px;
+	color: #856404;
+	text-decoration: none;
+	font-weight: 500;
+	font-size: 14px;
+}
+
+.td-update-banner-link:hover {
+	color: #664d03;
+}
+
+.td-update-banner-link svg {
+	width: 18px;
+	height: 18px;
+	fill: currentColor;
 }
 
 .td-button-manage-groups {
-	background: #f0f0f8;
-	border-color: #c0c0d0;
-	color: #5a5a7a;
+	background: <<colour tab-background>>;
+	border-color: <<colour tab-border>>;
+	color: <<colour foreground>>;
 }
 
 .td-button-manage-groups:hover {
-	background: #e0e0f0;
-	border-color: #a0a0c0;
+	background: <<colour tab-background-selected>>;
+	border-color: <<colour tab-border>>;
 }
 
 /* Group sections */
@@ -855,7 +902,7 @@ body {
 	align-items: center;
 	gap: 6px;
 	padding: 8px 12px;
-	background: <<colour page-background>>;
+	background: <<colour tiddler-background>>;
 	border: 1px solid <<colour tiddler-border>>;
 	border-radius: 6px;
 	cursor: pointer;
@@ -895,14 +942,14 @@ body {
 
 /* Group button in wiki toolbar */
 .td-button-group {
-	background: #f8f4f0;
-	border-color: #d8d0c8;
-	color: #6a5a4a;
+	background: <<colour tab-background>>;
+	border-color: <<colour tab-border>>;
+	color: <<colour foreground>>;
 }
 
 .td-button-group:hover {
-	background: #f0ece4;
-	border-color: #c8c0b8;
+	background: <<colour tab-background-selected>>;
+	border-color: <<colour tab-border>>;
 }
 
 /* Group dropdown */
@@ -946,8 +993,6 @@ body {
 	border: 1px solid <<colour tiddler-border>>;
 	border-radius: 4px;
 	font-size: 13px;
-	background: <<colour tiddler-background>>;
-	color: <<colour foreground>>;
 }
 
 .td-group-input:focus {
@@ -1044,21 +1089,66 @@ body {
 	font-style: italic;
 }
 
-/* Small window responsive styles */
-@media screen and (max-width: 600px) {
+/* ============================================
+   RESPONSIVE STYLES FOR SMALL SCREENS
+   ============================================ */
+
+/* Tablet breakpoint (768px and below) */
+@media screen and (max-width: 768px) {
+	/* Toolbar - stack everything vertically */
 	.td-toolbar {
-		flex-wrap: wrap;
-		gap: 8px;
+		flex-direction: column;
+		align-items: stretch;
+		padding: 6px 10px;
+		gap: 4px;
 	}
 
+	/* Update button appears first */
 	.td-toolbar-right {
+		order: -1;
 		width: 100%;
 		margin-left: 0;
-		margin-top: 8px;
+		flex-direction: column;
+		gap: 4px;
+	}
+
+	.td-toolbar-right .td-button,
+	.td-toolbar-right a.td-button {
+		width: 100%;
+		justify-content: center;
+	}
+
+	/* Logo centered on its own row */
+	.td-toolbar-item:first-child {
+		order: 0;
+		display: flex;
+		justify-content: center;
+	}
+
+	/* All toolbar items full width */
+	.td-toolbar-item {
+		margin-right: 0;
+		order: 1;
+		width: 100%;
+	}
+
+	.td-toolbar-item .td-button {
+		width: 100%;
+		justify-content: center;
+	}
+
+	.td-button {
+		padding: 8px 12px;
+		font-size: 13px;
+	}
+
+	.td-logo {
+		height: 26px;
 	}
 
 	.td-edition-grid {
-		grid-template-columns: 1fr;
+		grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+		gap: 6px;
 	}
 
 	.td-modal {
@@ -1066,20 +1156,489 @@ body {
 		max-height: 90vh;
 	}
 
+	.td-modal-header {
+		padding: 12px 14px;
+	}
+
+	.td-modal-body {
+		padding: 12px 14px;
+	}
+
+	.td-modal-footer {
+		padding: 10px 14px;
+	}
+
+	.td-plugin-categories {
+		max-height: 220px;
+	}
+
+	.td-wikilist {
+		padding: 8px;
+	}
+
+	.td-wikilist-item {
+		padding: 8px;
+		margin-bottom: 8px;
+	}
+
+	.td-wikilist-thumbnail .td-file-icon,
+	.td-wikilist-thumbnail .td-favicon {
+		width: 36px;
+		height: 36px;
+	}
+
+	.td-wiki-title {
+		font-size: 14px;
+	}
+
 	.td-wiki-url {
-		word-break: break-all;
-		white-space: normal;
+		font-size: 11px;
+	}
+}
+
+/* Mobile breakpoint (480px and below) */
+@media screen and (max-width: 480px) {
+	.td-toolbar {
+		padding: 4px 6px;
+		gap: 4px;
+	}
+
+	.td-toolbar-item .td-button {
+		padding: 6px 8px;
+		font-size: 11px;
+	}
+
+	.td-logo {
+		height: 22px;
+	}
+
+	/* Compact buttons */
+	.td-button {
+		padding: 5px 8px;
+		font-size: 11px;
+		gap: 3px;
+	}
+
+	.td-button svg {
+		width: 14px;
+		height: 14px;
+	}
+
+	/* Drop zone - smaller */
+	.td-drop-zone {
+		margin: 6px;
+		padding: 12px 10px;
+	}
+
+	.td-drop-zone .td-drop-hint {
+		font-size: 12px;
+	}
+
+	.td-drop-zone .td-drop-hint svg {
+		width: 18px;
+		height: 18px;
+	}
+
+	/* Wiki list - compact */
+	.td-wikilist {
+		padding: 6px;
+	}
+
+	.td-wikilist-item {
+		padding: 8px;
+		margin-bottom: 6px;
+		gap: 8px;
+	}
+
+	.td-wikilist-thumbnail {
+		margin-right: 8px;
+	}
+
+	.td-wikilist-thumbnail .td-file-icon,
+	.td-wikilist-thumbnail .td-favicon {
+		width: 32px;
+		height: 32px;
+	}
+
+	.td-wiki-title {
+		font-size: 13px;
+		margin-bottom: 2px;
+	}
+
+	.td-wiki-title svg {
+		width: 12px;
+		height: 12px;
+	}
+
+	.td-wiki-url {
+		font-size: 10px;
+		margin-bottom: 6px;
 	}
 
 	.td-wiki-toolbar {
 		flex-wrap: wrap;
+		gap: 4px;
 	}
 
+	.td-wiki-toolbar .td-button {
+		padding: 6px 8px;
+		font-size: 11px;
+		flex: 1 1 auto;
+		min-width: 60px;
+		justify-content: center;
+	}
+
+	/* Backup rows - compact */
+	.td-wiki-backup-dir,
+	.td-wiki-backup-count {
+		margin-top: 6px;
+		padding-top: 6px;
+		font-size: 10px;
+		gap: 4px;
+	}
+
+	.td-button-backup-dir,
+	.td-button-backup-dir-clear,
+	.td-button-backup-count {
+		padding: 4px 6px !important;
+		font-size: 10px !important;
+	}
+
+	/* Modal - slide up sheet */
+	.td-modal-overlay {
+		padding: 0;
+		align-items: flex-end;
+	}
+
+	.td-modal {
+		width: 100%;
+		max-width: 100%;
+		max-height: 90vh;
+		border-radius: 12px 12px 0 0;
+		margin: 0;
+	}
+
+	.td-modal-header {
+		padding: 12px;
+		border-radius: 12px 12px 0 0;
+	}
+
+	.td-modal-header h2 {
+		font-size: 16px;
+		margin: 0;
+	}
+
+	.td-modal-subtitle {
+		font-size: 11px;
+	}
+
+	.td-modal-body {
+		padding: 12px;
+	}
+
+	.td-modal-footer {
+		padding: 10px 12px;
+		gap: 6px;
+	}
+
+	.td-modal-footer .td-button {
+		flex: 1;
+		justify-content: center;
+		padding: 10px 8px;
+	}
+
+	/* Edition selector - compact */
+	.td-edition-grid {
+		grid-template-columns: 1fr 1fr;
+		gap: 6px;
+	}
+
+	.td-edition-btn {
+		padding: 10px;
+	}
+
+	.td-edition-name {
+		font-size: 12px;
+	}
+
+	.td-edition-desc {
+		font-size: 10px;
+		line-height: 1.2;
+	}
+
+	/* Plugin selector */
+	.td-plugin-categories {
+		max-height: 180px;
+		padding: 8px;
+	}
+
+	.td-plugin-item {
+		padding: 8px;
+	}
+
+	.td-plugin-name {
+		font-size: 12px;
+	}
+
+	.td-plugin-desc {
+		font-size: 10px;
+	}
+
+	/* Groups - compact */
 	.td-group-toggle {
-		padding: 6px 10px;
+		padding: 8px 10px;
 	}
 
 	.td-group-name {
 		font-size: 13px;
 	}
+
+	.td-group-count {
+		font-size: 11px;
+	}
+
+	.td-group-wikis {
+		padding-left: 0;
+	}
+
+	/* Group dropdown */
+	.td-group-dropdown {
+		min-width: 160px;
+	}
+
+	.td-group-option {
+		padding: 10px 12px;
+		font-size: 12px;
+	}
+
+	.td-group-new {
+		padding: 8px 10px;
+	}
+
+	.td-group-input {
+		padding: 8px;
+		font-size: 12px;
+	}
+
+	/* Group manager */
+	.td-group-manager-item {
+		padding: 10px;
+	}
+
+	.td-group-manager-name {
+		font-size: 13px;
+	}
+
+	/* Empty message */
+	.td-empty-message {
+		padding: 24px 12px;
+		font-size: 13px;
+	}
+
+	/* Section headers */
+	.td-section {
+		margin-bottom: 12px;
+	}
+
+	.td-section h3 {
+		font-size: 13px;
+		margin-bottom: 8px;
+	}
+
+	/* Search bar */
+	.td-search-bar {
+		margin: 0 8px 6px 8px;
+	}
+
+	.td-search-input {
+		padding: 8px 30px 8px 10px;
+		font-size: 13px;
+	}
+}
+
+/* Very small screens (360px and below) */
+@media screen and (max-width: 360px) {
+	.td-toolbar {
+		padding: 4px 6px;
+		gap: 4px;
+	}
+
+	.td-toolbar-item .td-button {
+		padding: 6px 4px;
+		font-size: 11px;
+	}
+
+	/* Hide some button text, keep icons */
+	.td-toolbar-item .td-button svg + span {
+		display: none;
+	}
+
+	.td-logo {
+		height: 20px;
+	}
+
+	.td-wikilist-item {
+		padding: 6px;
+	}
+
+	.td-wiki-toolbar .td-button {
+		font-size: 10px;
+		padding: 5px 6px;
+	}
+
+	.td-edition-grid {
+		grid-template-columns: 1fr;
+	}
+}
+
+/* Landscape phone orientation */
+@media screen and (max-height: 500px) and (orientation: landscape) {
+	.td-modal {
+		max-height: 100vh;
+		border-radius: 0;
+	}
+
+	.td-modal-overlay {
+		align-items: stretch;
+	}
+
+	.td-modal-body {
+		max-height: calc(100vh - 140px);
+	}
+
+	.td-plugin-categories {
+		max-height: 150px;
+	}
+
+	.td-edition-grid {
+		grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+	}
+}
+
+/* Touch device improvements */
+@media (hover: none) and (pointer: coarse) {
+	/* Reasonable touch targets - not too large */
+	.td-button {
+		min-height: 36px;
+	}
+
+	.td-wiki-toolbar .td-button {
+		min-height: 32px;
+	}
+
+	.td-edition-btn {
+		min-height: 44px;
+	}
+
+	.td-plugin-item {
+		min-height: 36px;
+	}
+
+	.td-group-toggle {
+		min-height: 36px;
+	}
+
+	.td-group-option {
+		min-height: 36px;
+	}
+
+	/* Remove hover effects that don't work well on touch */
+	.td-wikilist-item:hover {
+		border-left-color: transparent;
+		box-shadow: 1px 1px 4px rgba(0,0,0,0.1);
+	}
+
+	.td-wikilist-item:active {
+		border-left-color: <<colour primary>>;
+		background: <<colour page-background>>;
+	}
+
+	.td-button:hover {
+		background: <<colour tiddler-background>>;
+		border-color: <<colour tiddler-border>>;
+	}
+
+	.td-button:active {
+		background: <<colour tab-background-selected>>;
+	}
+
+	.td-edition-btn:hover {
+		border-color: <<colour tiddler-border>>;
+		background: <<colour tiddler-background>>;
+	}
+
+	.td-edition-btn:active {
+		border-color: <<colour primary>>;
+		background: <<colour notification-background>>;
+	}
+
+	/* Better scrolling on touch */
+	.td-wikilist,
+	.td-modal-body,
+	.td-plugin-categories {
+		-webkit-overflow-scrolling: touch;
+	}
+}
+
+/* High contrast / accessibility improvements */
+@media (prefers-contrast: high) {
+	.td-button {
+		border-width: 2px;
+	}
+
+	.td-wikilist-item {
+		border-width: 2px;
+	}
+
+	.td-edition-btn {
+		border-width: 2px;
+	}
+
+	.td-wiki-url {
+		color: <<colour muted-foreground>>;
+	}
+}
+
+/* Reduced motion preference */
+@media (prefers-reduced-motion: reduce) {
+	.td-wikilist-item,
+	.td-button,
+	.td-edition-btn,
+	.td-drop-zone,
+	.td-group-toggle {
+		transition: none;
+	}
+
+	.td-loading-spinner {
+		animation: none;
+		border-color: <<colour primary>>;
+	}
+}
+
+/* Note: Dark mode is handled through TiddlyWiki's palette system.
+   Select a dark palette to get proper dark mode support. */
+
+/* Android-specific overrides - must be at the end to take precedence */
+body.td-is-android .tc-story-river {
+	overflow: visible !important;
+}
+
+body.td-is-android .tc-tiddler-frame {
+	overflow: visible !important;
+}
+
+/* Allow scrolling on the landing page for Android so popups near the bottom are accessible */
+body.td-is-android.td-main-wiki {
+	overflow: auto !important;
+	height: auto !important;
+	min-height: 100%;
+}
+
+body.td-is-android.td-main-wiki .tc-page-container {
+	overflow: visible !important;
+	min-height: 100vh;
+}
+
+body.td-is-android.td-main-wiki .tc-tiddler-body {
+	overflow: visible !important;
 }

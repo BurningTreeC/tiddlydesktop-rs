@@ -17,6 +17,8 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
 tauri-build = { version = "2.5.3", features = [] }
+zip = { version = "2.2", default-features = false, features = ["deflate"] }
+walkdir = "2.5"
 
 [dependencies]
 tauri = { version = "2.9.5", features = ["protocol-asset", "tray-icon", "image-png"] }
@@ -41,6 +43,7 @@ sys-locale = "0.3"
 dunce = "1.0"
 rand = "0.9.2"
 dirs = "6.0.0"
+md5 = "0.7"
 
 # For setting PR_SET_PDEATHSIG on Linux (kill child when parent dies)
 [target.'cfg(target_os = "linux")'.dependencies]
@@ -107,4 +110,14 @@ objc2-foundation = { version = "0.3", features = ["NSArray", "NSString", "NSDict
 objc2-app-kit = { version = "0.3", features = ["NSView", "NSWindow", "NSPasteboard", "NSDragging", "NSDraggingItem", "NSDraggingSession", "NSImage", "NSResponder", "NSEvent", "NSBitmapImageRep", "NSGraphicsContext"] }
 block2 = "0.6"
 lazy_static = "1.5"
+
+# Android Storage Access Framework (SAF) support
+[target.'cfg(target_os = "android")'.dependencies]
+tauri-plugin-android-fs = "25"
+# Embedded HTTP server for folder wiki support (TiddlyWiki sync protocol)
+tiny_http = "0.12"
+# ZIP extraction for bundled TiddlyWiki resources
+zip = { version = "2.2", default-features = false, features = ["deflate"] }
+# JNI for launching WikiActivity in separate app instances
+jni = "0.21"
 

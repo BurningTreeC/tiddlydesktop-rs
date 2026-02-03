@@ -29,6 +29,7 @@
     ],
     "resources": {
       "resources/tiddlywiki/**/*": "resources/tiddlywiki/",
+      "resources/node-bin/**/*": "resources/node-bin/",
       "../src/index.html": "index.html"
     },
     "linux": {

@@ -573,6 +573,102 @@ jobs:
             tiddlydesktop-rs/src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg
             tiddlydesktop-rs/src-tauri/target/universal-apple-darwin/release/bundle/macos/*.zip
 
+  # Android build for CI validation only - APK is not included in GitHub releases
+  # (Android app is distributed via Google Play Store)
+  build-android:
+    needs: increment-version
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout tiddlydesktop-rs
+        uses: actions/checkout@v4
+        with:
+          path: tiddlydesktop-rs
+          ref: ${{ needs.increment-version.outputs.new_tag }}
+
+      - name: Checkout TiddlyWiki5
+        uses: actions/checkout@v4
+        with:
+          repository: TiddlyWiki/TiddlyWiki5
+          ref: v5.3.8
+          path: TiddlyWiki5
+
+      - name: Copy plugin to TiddlyWiki5
+        run: |
+          cp -r tiddlydesktop-rs/TiddlyWiki5/plugins/tiddlywiki/tiddlydesktop-rs TiddlyWiki5/plugins/tiddlywiki/
+          cp -r tiddlydesktop-rs/TiddlyWiki5/plugins/tiddlywiki/tiddlydesktop-rs-commands TiddlyWiki5/plugins/tiddlywiki/
+          cp -r tiddlydesktop-rs/TiddlyWiki5/editions/tiddlydesktop-rs TiddlyWiki5/editions/
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android NDK
+        run: |
+          sdkmanager --install "ndk;27.0.12077973"
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/27.0.12077973" >> $GITHUB_ENV
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android,i686-linux-android
+
+      - name: Install system dependencies (for bindgen)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libclang-dev
+
+      - name: Install npm dependencies
+        working-directory: tiddlydesktop-rs
+        run: npm install
+
+      - name: Build TiddlyWiki
+        working-directory: TiddlyWiki5
+        run: |
+          node tiddlywiki.js editions/tiddlydesktop-rs --output ../tiddlydesktop-rs/src --render '$:/core/save/all' 'index.html' 'text/plain'
+
+      - name: Bundle TiddlyWiki
+        working-directory: tiddlydesktop-rs
+        run: |
+          mkdir -p src-tauri/resources
+          cp -r ../TiddlyWiki5 src-tauri/resources/tiddlywiki
+          rm -rf src-tauri/resources/tiddlywiki/.git
+          rm -rf src-tauri/resources/tiddlywiki/editions/tiddlywiki-surveys
+          cp src/index.html src-tauri/resources/index.html
+
+      - name: Build Tauri Android (arm64-v8a)
+        working-directory: tiddlydesktop-rs
+        run: |
+          NDK=$ANDROID_NDK_HOME
+          export NDK_HOME=$NDK
+          export CC_aarch64_linux_android=$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang
+          export CXX_aarch64_linux_android=$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang++
+          export AR_aarch64_linux_android=$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar
+          export BINDGEN_EXTRA_CLANG_ARGS_aarch64_linux_android="--sysroot=$NDK/toolchains/llvm/prebuilt/linux-x86_64/sysroot -I$NDK/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/include -I$NDK/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/include/aarch64-linux-android"
+          npm run tauri android build -- --target aarch64
+
+      - name: Find and rename APK
+        working-directory: tiddlydesktop-rs
+        run: |
+          mkdir -p android-artifacts
+          find src-tauri/gen/android -name "*.apk" -exec cp {} android-artifacts/ \;
+          ls -la android-artifacts/
+
+      - name: Upload Android artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-artifacts
+          path: tiddlydesktop-rs/android-artifacts/*.apk
+
   create-release:
     needs: [increment-version, build-linux, build-windows, build-windows-no-nodejs, build-macos, build-macos-no-nodejs]
     runs-on: ubuntu-latest

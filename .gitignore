@@ -69,5 +69,8 @@ coverage/
 src-tauri/binaries/
 src-tauri/resources/
 
+# Local JDK for Android builds
+.jdk/
+
 # Tauri generated files
 src-tauri/gen/

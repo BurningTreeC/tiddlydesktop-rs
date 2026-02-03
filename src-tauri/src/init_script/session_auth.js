@@ -23,9 +23,25 @@
             return;
         }
 
-        var CONFIG_SETTINGS_TAB = "$:/plugins/tiddlydesktop/session-auth/settings";
+        // Use $:/temp/ prefix so tiddlers are never saved with wiki
+        var CONFIG_SETTINGS_TAB = "$:/temp/tiddlydesktop/session-auth/settings";
         var CONFIG_AUTH_URLS = "$:/temp/tiddlydesktop-rs/session-auth/urls";
         var invoke = window.__TAURI__.core.invoke;
+
+        // Helper to add tiddler as shadow (won't be saved with wiki)
+        function addShadowTiddler(fields) {
+            var tiddler = new $tw.Tiddler(fields);
+            // Add to shadow store so it's not saved with the wiki
+            $tw.wiki.shadowTiddlers = $tw.wiki.shadowTiddlers || {};
+            $tw.wiki.shadowTiddlers[fields.title] = {
+                tiddler: tiddler,
+                source: "tiddlydesktop"
+            };
+            // Also add to main wiki for immediate visibility
+            $tw.wiki.addTiddler(tiddler);
+            // Clear cache to ensure consistency
+            $tw.wiki.clearCache(fields.title);
+        }
 
         function saveConfigToTauri() {
             var authUrls = [];
@@ -97,14 +113,19 @@
                 "<$edit-text tiddler=\"$:/temp/tiddlydesktop-rs/session-auth/new-name\" tag=\"input\" placeholder=\"Name (e.g. SharePoint)\" default=\"\" class=\"tc-edit-texteditor\" style=\"width:100%;margin-bottom:4px;\"/>\n\n" +
                 "<$edit-text tiddler=\"$:/temp/tiddlydesktop-rs/session-auth/new-url\" tag=\"input\" placeholder=\"URL (e.g. https://company.sharepoint.com)\" default=\"\" class=\"tc-edit-texteditor\" style=\"width:100%;margin-bottom:8px;\"/>\n" +
                 "</$keyboard>\n\n" +
-                "<$button message=\"tm-tiddlydesktop-add-auth-url\" class=\"tc-btn-big-green\">Add URL</$button>\n";
+                "<$button message=\"tm-tiddlydesktop-add-auth-url\" class=\"tc-btn-big-green\">Add URL</$button>\n\n" +
+                "<h2>Session Data</h2>\n\n" +
+                "<p>This wiki has its own isolated session storage (cookies, localStorage). You can clear it if you want to log out of all services.</p>\n\n" +
+                "<$button message=\"tm-tiddlydesktop-clear-session\" class=\"tc-btn-big-green\" style=\"background:#c42b2b;\">Clear Session Data</$button>\n" +
+                "<p><small>Note: This will clear all cookies and localStorage for this wiki. You will need to log in again to any authenticated services.</small></p>\n";
 
-            $tw.wiki.addTiddler(new $tw.Tiddler({
+            // Use shadow tiddler so it's never saved with the wiki
+            addShadowTiddler({
                 title: CONFIG_SETTINGS_TAB,
                 caption: "Session Auth",
                 tags: "$:/tags/ControlPanel/SettingsTab",
                 text: tabText
-            }));
+            });
 
             setTimeout(function() {
                 if ($tw.saverHandler) {
@@ -192,6 +213,20 @@
                         });
                     }
                 }
+            }
+        });
+
+        // Message handler: clear session data
+        $tw.rootWidget.addEventListener("tm-tiddlydesktop-clear-session", function(event) {
+            if (confirm("Are you sure you want to clear all session data for this wiki?\n\nThis will log you out of all authenticated services.")) {
+                invoke("clear_wiki_session", { wikiPath: wikiPath })
+                    .then(function() {
+                        alert("Session data cleared successfully.\n\nPlease reload the wiki for changes to take effect.");
+                    })
+                    .catch(function(err) {
+                        console.error("[TiddlyDesktop] Failed to clear session:", err);
+                        alert("Failed to clear session data: " + err);
+                    });
             }
         });
 

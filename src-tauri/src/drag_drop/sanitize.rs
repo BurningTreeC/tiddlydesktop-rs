@@ -322,7 +322,8 @@ pub fn sanitize_file_paths(paths: Vec<String>) -> Vec<String> {
 /// 2. Shared temporary directories (/tmp)
 /// 3. Mounted volumes (for external drives)
 pub fn is_user_accessible_path(path: &std::path::Path) -> bool {
-    // Get the current user's home directory
+    // Get the current user's home directory (not needed on Android)
+    #[cfg(not(target_os = "android"))]
     let home_dir = match dirs::home_dir() {
         Some(dir) => dir,
         None => {
@@ -331,6 +332,7 @@ pub fn is_user_accessible_path(path: &std::path::Path) -> bool {
         }
     };
 
+    #[cfg(not(target_os = "android"))]
     let path_str = path.to_string_lossy();
 
     #[cfg(target_os = "windows")]
@@ -412,7 +414,33 @@ pub fn is_user_accessible_path(path: &std::path::Path) -> bool {
         false
     }
 
-    #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
+    #[cfg(target_os = "android")]
+    {
+        // On Android, SAF handles permissions via content:// URIs
+        // For filesystem paths, allow the app's private data directory
+        // and any paths the user explicitly granted via SAF
+        let path_str = path.to_string_lossy();
+
+        // Allow app's data directory
+        if path_str.starts_with("/data/data/") || path_str.starts_with("/data/user/") {
+            return true;
+        }
+
+        // Allow external storage locations
+        if path_str.starts_with("/storage/emulated/") || path_str.starts_with("/sdcard/") {
+            return true;
+        }
+
+        // Allow content:// URIs (these are validated by Android's permission system)
+        // Also allow JSON-serialized FileUri (starts with "{")
+        if path_str.starts_with("content://") || path_str.starts_with('{') {
+            return true;
+        }
+
+        false
+    }
+
+    #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux", target_os = "android")))]
     {
         // For unknown platforms, only allow home directory
         path.starts_with(&home_dir)

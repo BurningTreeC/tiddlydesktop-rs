@@ -2,6 +2,9 @@
 //!
 //! This module provides drag-drop support that extracts content from external applications
 //! and emits `td-*` events to JavaScript.
+
+// Allow dead code on Android - drag-drop uses platform-specific implementations
+#![cfg_attr(target_os = "android", allow(dead_code))]
 //!
 //! ## Shared utilities
 //! - `encoding` - Text encoding detection and conversion (UTF-8, UTF-16 LE/BE)
@@ -40,9 +43,8 @@
 #[cfg(target_os = "linux")]
 mod encoding;
 
-// Sanitization utilities - needed on all platforms with drag-drop
+// Sanitization utilities - needed on all platforms for path validation in Tauri commands
 // Made pub(crate) so lib.rs can use validate_wiki_path for Tauri commands
-#[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
 pub(crate) mod sanitize;
 
 #[cfg(target_os = "windows")]
@@ -77,6 +79,10 @@ fn setup_drag_handlers(window: &WebviewWindow) {
 
     #[cfg(target_os = "macos")]
     macos::setup_drag_handlers(window);
+
+    // Android doesn't have custom drag handlers
+    #[cfg(target_os = "android")]
+    let _ = window;
 }
 
 /// Create the drag-drop plugin that sets up handlers when webviews are ready.
@@ -349,5 +355,46 @@ pub fn get_external_drop_paths_impl() -> Option<Vec<String>> {
 #[cfg(not(target_os = "windows"))]
 pub fn get_external_drop_paths_impl() -> Option<Vec<String>> {
     None
+}
+
+// Android stubs - drag-drop is not supported on Android
+#[cfg(target_os = "android")]
+pub fn start_native_drag_impl(_window: &WebviewWindow, _data: NativeDragData, _x: i32, _y: i32, _image_data: Option<Vec<u8>>, _image_offset_x: Option<i32>, _image_offset_y: Option<i32>) -> Result<(), String> {
+    Err("Native drag not supported on Android".to_string())
+}
+
+#[cfg(target_os = "android")]
+pub fn prepare_native_drag_impl(_window: &WebviewWindow, _data: NativeDragData) -> Result<(), String> {
+    Ok(()) // No-op on Android
+}
+
+#[cfg(target_os = "android")]
+pub fn cleanup_native_drag_impl() -> Result<(), String> {
+    Ok(()) // No-op on Android
+}
+
+#[cfg(target_os = "android")]
+pub fn update_drag_icon_impl(_image_data: Vec<u8>, _offset_x: i32, _offset_y: i32) -> Result<(), String> {
+    Ok(()) // No-op on Android
+}
+
+#[cfg(target_os = "android")]
+pub fn set_pending_drag_icon_impl(_image_data: Vec<u8>, _offset_x: i32, _offset_y: i32) -> Result<(), String> {
+    Ok(()) // No-op on Android
+}
+
+#[cfg(target_os = "android")]
+pub fn set_drag_dest_enabled_impl(_label: &str, _enabled: bool) {
+    // No-op on Android
+}
+
+#[cfg(target_os = "android")]
+pub fn ungrab_seat_for_focus_impl(_label: &str) {
+    // No-op on Android
+}
+
+#[cfg(target_os = "android")]
+pub fn get_pending_drag_data_impl(_target_window: &str) -> Option<PendingDragDataResponse> {
+    None // No drag data on Android
 }
 

@@ -24,7 +24,16 @@ exports.startup = function() {
 
     // Listen for palette changes and update headerbar colors
     $tw.wiki.addEventListener("change", function(changes) {
+        // Check if the palette reference changed
         if (changes["$:/palette"]) {
+            if (window.TiddlyDesktop && window.TiddlyDesktop.updateHeaderBarColors) {
+                window.TiddlyDesktop.updateHeaderBarColors();
+            }
+            return;
+        }
+        // Check if the referenced palette tiddler itself changed
+        var paletteName = ($tw.wiki.getTiddlerText("$:/palette") || "").trim();
+        if (paletteName && changes[paletteName]) {
             if (window.TiddlyDesktop && window.TiddlyDesktop.updateHeaderBarColors) {
                 window.TiddlyDesktop.updateHeaderBarColors();
             }

@@ -17,6 +17,7 @@ Buttons/CreateWikiFile: Wikiファイルを作成
 Buttons/CreateWikiFolder: Wikiフォルダを作成
 Buttons/ToFile: ファイルへ
 Buttons/ToFolder: フォルダへ
+Buttons/Reauthorize: Re-authorize
 
 Tooltips/BackupsEnabled: バックアップ有効 - クリックで無効化
 Tooltips/ConvertWiki: Wiki形式を変換
@@ -42,6 +43,7 @@ Labels/SaveTo: 保存先:
 Labels/InFolder: フォルダ内:
 Labels/Language: 言語:
 Labels/AutoDetect: 自動検出
+Labels/CheckingPermission: checking...
 
 Placeholders/NewGroupName: 新しいグループ名...
 Placeholders/SearchWikis: Wikiを検索...

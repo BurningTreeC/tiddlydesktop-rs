@@ -17,6 +17,7 @@ Buttons/CreateWikiFile: 위키 파일 만들기
 Buttons/CreateWikiFolder: 위키 폴더 만들기
 Buttons/ToFile: 파일로
 Buttons/ToFolder: 폴더로
+Buttons/Reauthorize: Re-authorize
 
 Tooltips/BackupsEnabled: 백업 활성화됨 - 클릭하여 비활성화
 Tooltips/ConvertWiki: 위키 형식 변환
@@ -42,6 +43,7 @@ Labels/SaveTo: 저장 위치:
 Labels/InFolder: 폴더:
 Labels/Language: 언어:
 Labels/AutoDetect: 자동 감지
+Labels/CheckingPermission: checking...
 
 Placeholders/NewGroupName: 새 그룹 이름...
 Placeholders/SearchWikis: 위키 검색...

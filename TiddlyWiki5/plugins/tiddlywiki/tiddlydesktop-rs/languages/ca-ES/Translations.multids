@@ -17,6 +17,7 @@ Buttons/CreateWikiFile: Crear fitxer wiki
 Buttons/CreateWikiFolder: Crear carpeta wiki
 Buttons/ToFile: a fitxer
 Buttons/ToFolder: a carpeta
+Buttons/Reauthorize: Re-authorize
 
 Tooltips/BackupsEnabled: Còpies de seguretat activades - feu clic per desactivar
 Tooltips/ConvertWiki: Convertir format de wiki
@@ -42,6 +43,7 @@ Labels/SaveTo: desar a:
 Labels/InFolder: a la carpeta:
 Labels/Language: Idioma:
 Labels/AutoDetect: Detecció automàtica
+Labels/CheckingPermission: checking...
 
 Placeholders/NewGroupName: Nom del nou grup...
 Placeholders/SearchWikis: Cercar wikis...

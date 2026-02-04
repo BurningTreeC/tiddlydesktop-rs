@@ -17,6 +17,7 @@ Buttons/CreateWikiFile: Opret wiki-fil
 Buttons/CreateWikiFolder: Opret wiki-mappe
 Buttons/ToFile: til fil
 Buttons/ToFolder: til mappe
+Buttons/Reauthorize: Re-authorize
 
 Tooltips/BackupsEnabled: Backups aktiveret - klik for at deaktivere
 Tooltips/ConvertWiki: Konverter wiki-format
@@ -42,6 +43,7 @@ Labels/SaveTo: gem til:
 Labels/InFolder: i mappe:
 Labels/Language: Sprog:
 Labels/AutoDetect: Automatisk registrering
+Labels/CheckingPermission: checking...
 
 Placeholders/NewGroupName: Nyt gruppenavn...
 Placeholders/SearchWikis: Søg wikis...

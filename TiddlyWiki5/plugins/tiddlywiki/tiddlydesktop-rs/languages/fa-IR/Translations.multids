@@ -17,6 +17,7 @@ Buttons/CreateWikiFile: ایجاد فایل ویکی
 Buttons/CreateWikiFolder: ایجاد پوشه ویکی
 Buttons/ToFile: به فایل
 Buttons/ToFolder: به پوشه
+Buttons/Reauthorize: Re-authorize
 
 Tooltips/BackupsEnabled: پشتیبان‌گیری فعال است - برای غیرفعال کردن کلیک کنید
 Tooltips/ConvertWiki: تبدیل فرمت ویکی
@@ -42,6 +43,7 @@ Labels/SaveTo: ذخیره در:
 Labels/InFolder: در پوشه:
 Labels/Language: زبان:
 Labels/AutoDetect: تشخیص خودکار
+Labels/CheckingPermission: checking...
 
 Placeholders/NewGroupName: نام گروه جدید...
 Placeholders/SearchWikis: جستجوی ویکی...

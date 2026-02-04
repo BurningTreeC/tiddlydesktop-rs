@@ -17,6 +17,7 @@ Buttons/CreateWikiFile: 创建维基文件
 Buttons/CreateWikiFolder: 创建维基文件夹
 Buttons/ToFile: 转为文件
 Buttons/ToFolder: 转为文件夹
+Buttons/Reauthorize: Re-authorize
 
 Tooltips/BackupsEnabled: 备份已启用 - 点击禁用
 Tooltips/ConvertWiki: 转换维基格式
@@ -42,6 +43,7 @@ Labels/SaveTo: 保存到：
 Labels/InFolder: 在文件夹：
 Labels/Language: 语言：
 Labels/AutoDetect: 自动检测
+Labels/CheckingPermission: checking...
 
 Placeholders/NewGroupName: 新分组名称...
 Placeholders/SearchWikis: 搜索维基...

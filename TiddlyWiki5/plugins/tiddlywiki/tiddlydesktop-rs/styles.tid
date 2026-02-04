@@ -166,6 +166,32 @@ tags: $:/tags/Stylesheet
 	box-shadow: 2px 2px 8px rgba(0,0,0,0.15);
 }
 
+/* Re-authorization needed state */
+.td-wikilist-item.td-needs-reauth {
+	border-left-color: #c42b2b;
+	opacity: 0.8;
+}
+
+.td-wikilist-item.td-needs-reauth:hover {
+	border-left-color: #c42b2b;
+}
+
+.td-button-reauth {
+	background: #fef0f0 !important;
+	border-color: #c42b2b !important;
+	color: #c42b2b !important;
+}
+
+.td-button-reauth:hover {
+	background: #fee0e0 !important;
+}
+
+.td-checking-permission {
+	color: <<colour muted-foreground>>;
+	font-size: 12px;
+	font-style: italic;
+}
+
 .td-wikilist-thumbnail {
 	flex-shrink: 0;
 	margin-right: 12px;
@@ -1627,7 +1653,14 @@ body.td-is-android .tc-tiddler-frame {
 	overflow: visible !important;
 }
 
-/* Allow scrolling on the landing page for Android so popups near the bottom are accessible */
+/* Landing page (main wiki) on Android - let body scroll naturally */
+/* Use dedicated class since :has() isn't supported in Android WebView */
+html.td-android-main-wiki {
+	overflow: auto !important;
+	height: auto !important;
+	min-height: 100%;
+}
+
 body.td-is-android.td-main-wiki {
 	overflow: auto !important;
 	height: auto !important;
@@ -1636,9 +1669,33 @@ body.td-is-android.td-main-wiki {
 
 body.td-is-android.td-main-wiki .tc-page-container {
 	overflow: visible !important;
-	min-height: 100vh;
+	height: auto !important;
+	min-height: auto;
+	display: block;
+}
+
+body.td-is-android.td-main-wiki .tc-story-river {
+	overflow: visible !important;
+	height: auto !important;
+	min-height: auto;
+	display: block;
+}
+
+body.td-is-android.td-main-wiki .tc-tiddler-frame {
+	overflow: visible !important;
+	height: auto !important;
+	min-height: auto;
+	display: block;
 }
 
 body.td-is-android.td-main-wiki .tc-tiddler-body {
 	overflow: visible !important;
+	height: auto !important;
+	min-height: auto;
+	display: block;
+}
+
+body.td-is-android.td-main-wiki .td-wikilist {
+	overflow: visible !important;
+	height: auto !important;
 }

@@ -17,6 +17,7 @@ Buttons/CreateWikiFile: Создать файл вики
 Buttons/CreateWikiFolder: Создать папку вики
 Buttons/ToFile: в файл
 Buttons/ToFolder: в папку
+Buttons/Reauthorize: Re-authorize
 
 Tooltips/BackupsEnabled: Резервные копии включены - нажмите для отключения
 Tooltips/ConvertWiki: Конвертировать формат вики
@@ -42,6 +43,7 @@ Labels/SaveTo: сохранить в:
 Labels/InFolder: в папке:
 Labels/Language: Язык:
 Labels/AutoDetect: Автоопределение
+Labels/CheckingPermission: checking...
 
 Placeholders/NewGroupName: Имя новой группы...
 Placeholders/SearchWikis: Поиск вики...

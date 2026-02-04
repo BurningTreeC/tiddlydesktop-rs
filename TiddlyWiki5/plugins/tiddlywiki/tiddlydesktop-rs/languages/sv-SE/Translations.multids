@@ -17,6 +17,7 @@ Buttons/CreateWikiFile: Skapa wiki-fil
 Buttons/CreateWikiFolder: Skapa wiki-mapp
 Buttons/ToFile: till fil
 Buttons/ToFolder: till mapp
+Buttons/Reauthorize: Re-authorize
 
 Tooltips/BackupsEnabled: Säkerhetskopior aktiverade - klicka för att inaktivera
 Tooltips/ConvertWiki: Konvertera wiki-format
@@ -42,6 +43,7 @@ Labels/SaveTo: spara till:
 Labels/InFolder: i mapp:
 Labels/Language: Språk:
 Labels/AutoDetect: Automatisk identifiering
+Labels/CheckingPermission: checking...
 
 Placeholders/NewGroupName: Nytt gruppnamn...
 Placeholders/SearchWikis: Sök wikis...

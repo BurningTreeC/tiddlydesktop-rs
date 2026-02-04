@@ -1,8 +1,8 @@
 title: $:/plugins/tiddlywiki/tiddlydesktop-rs/WikiList
 
 \define render-wiki-item()
-<$let path={{!!path}} filename={{!!filename}} favicon={{!!favicon}} isFolder={{!!is_folder}} backupsEnabled={{!!backups_enabled}} backupDir={{!!backup_dir}} backupCount={{!!backup_count}} wikiGroup={{!!group}}>
-<div class="td-wikilist-item">
+<$let path={{!!path}} filename={{!!filename}} favicon={{!!favicon}} isFolder={{!!is_folder}} backupsEnabled={{!!backups_enabled}} backupDir={{!!backup_dir}} backupCount={{!!backup_count}} wikiGroup={{!!group}} needsReauth={{!!needs_reauth}}>
+<div class={{{ [<needsReauth>match[yes]then[td-wikilist-item td-needs-reauth]else[td-wikilist-item]] }}}>
 <div class="td-wikilist-thumbnail">
 <$button class="tc-btn-invisible">
 <$action-sendmessage $message="tm-tiddlydesktop-rs-open-path" path=<<path>> isFolder=<<isFolder>>/>
@@ -36,6 +36,19 @@ title: $:/plugins/tiddlywiki/tiddlydesktop-rs/WikiList
 </div>
 <div class="td-wiki-url"><$text text=<<path>>/></div>
 <div class="td-wiki-toolbar">
+<!-- Show re-authorize button when permission expired (Android) -->
+<$list filter="[<needsReauth>match[yes]]" variable="ignore">
+<$button class="tc-btn-invisible td-button td-button-reauth">
+<$action-sendmessage $message="tm-tiddlydesktop-rs-reauthorize" path=<<path>> isFolder=<<isFolder>>/>
+{{$:/core/images/unlocked-padlock}} <<td-lingo Buttons/Reauthorize>>
+</$button>
+</$list>
+<!-- Show checking indicator while permissions are being verified -->
+<$list filter="[<needsReauth>match[checking]]" variable="ignore">
+<span class="td-checking-permission"><<td-lingo Labels/CheckingPermission>></span>
+</$list>
+<!-- Normal buttons when permission is OK -->
+<$list filter="[<needsReauth>match[no]]" variable="ignore">
 <$button class="tc-btn-invisible td-button td-button-open">
 <$action-sendmessage $message="tm-tiddlydesktop-rs-open-path" path=<<path>> isFolder=<<isFolder>>/>
 <<td-lingo Buttons/Open>>
@@ -43,6 +56,8 @@ title: $:/plugins/tiddlywiki/tiddlydesktop-rs/WikiList
 <$list filter="[{$:/temp/tiddlydesktop-rs/is-mobile}!match[yes]]" variable="ignore">
 <$button message="tm-tiddlydesktop-rs-reveal" param=<<path>> class="tc-btn-invisible td-button td-button-reveal"><<td-lingo Buttons/Reveal>></$button>
 </$list>
+</$list>
+<!-- Remove button always shown -->
 <$button message="tm-tiddlydesktop-rs-remove" param=<<path>> class="tc-btn-invisible td-button td-button-remove"><<td-lingo Buttons/Remove>></$button>
 <$button class="tc-btn-invisible td-button td-button-convert" tooltip=<<td-lingo Tooltips/ConvertWiki>>>
 <$action-sendmessage $message="tm-tiddlydesktop-rs-convert-wiki" path=<<path>> isFolder=<<isFolder>>/>
@@ -66,7 +81,8 @@ title: $:/plugins/tiddlywiki/tiddlydesktop-rs/WikiList
 </$let>
 </$list>
 <!-- Group selector dropdown -->
-<$let newGroupTiddler=<<qualify "$:/temp/new-group-name">> groupPopupState=<<qualify "$:/state/group-popup">>>
+<!-- Use path-based tiddler names (encoded) to ensure uniqueness per wiki, stable across list reordering -->
+<$let newGroupTiddler={{{ [<path>encodeuri[]addprefix[$:/temp/new-group-name/]] }}} groupPopupState={{{ [<path>encodeuri[]addprefix[$:/state/group-popup/]] }}}>
 <$button popup=<<groupPopupState>> class="tc-btn-invisible td-button td-button-group" tooltip=<<td-lingo Tooltips/AssignToGroup>>>
 {{$:/core/images/tag-button}} <$list filter="[<wikiGroup>!is[blank]]" variable="ignore"><$text text=<<wikiGroup>>/></$list><$list filter="[<wikiGroup>is[blank]]" variable="ignore"><<td-lingo Buttons/Group>></$list>
 </$button>
@@ -124,7 +140,8 @@ title: $:/plugins/tiddlywiki/tiddlydesktop-rs/WikiList
 </div>
 <div class="td-wiki-backup-count">
 <span class="td-backup-count-label"><<td-lingo Labels/BackupCount>></span>
-<$let backupCountPopupState=<<qualify "$:/state/backup-count-popup">> backupCountTiddler=<<qualify "$:/temp/backup-count-input">>>
+<!-- Use path-based tiddler names (encoded) to ensure uniqueness per wiki, stable across list reordering -->
+<$let backupCountPopupState={{{ [<path>encodeuri[]addprefix[$:/state/backup-count-popup/]] }}} backupCountTiddler={{{ [<path>encodeuri[]addprefix[$:/temp/backup-count-input/]] }}}>
 <$list filter="[<backupCount>match[0]]" variable="ignore">
 <span class="td-backup-count-value td-backup-count-unlimited"><<td-lingo Labels/Unlimited>></span>
 </$list>

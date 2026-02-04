@@ -1,0 +1,1152 @@
+package com.burningtreec.tiddlydesktop_rs
+
+import android.content.Context
+import android.net.Uri
+import android.util.Base64
+import android.util.Log
+import androidx.documentfile.provider.DocumentFile
+import java.io.*
+import java.io.File
+import java.net.ServerSocket
+import java.net.Socket
+import java.net.URLDecoder
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicBoolean
+
+/**
+ * A minimal HTTP server that runs in the WikiActivity's process.
+ * Handles serving wiki content and saving changes via SAF.
+ *
+ * This server is independent of Tauri and runs in the :wiki process,
+ * so it continues working even when the landing page is closed.
+ *
+ * For single-file wikis: Serves the wiki HTML and handles PUT to save.
+ * For folder wikis: Serves pre-rendered HTML and handles TiddlyWeb protocol.
+ */
+class WikiHttpServer(
+    private val context: Context,
+    private val wikiUri: Uri,
+    private val treeUri: Uri?,  // Tree URI for folder wikis or backups
+    private val isFolder: Boolean = false,
+    private val folderHtmlPath: String? = null  // Path to pre-rendered HTML for folder wikis
+) {
+    companion object {
+        private const val TAG = "WikiHttpServer"
+        private var nextPort = 39000
+        private val portLock = Any()
+
+        /**
+         * Find an available port starting from the base port.
+         */
+        private fun findAvailablePort(): Int {
+            synchronized(portLock) {
+                for (attempt in 0 until 100) {
+                    val port = nextPort++
+                    if (nextPort > 39999) nextPort = 39000
+                    try {
+                        ServerSocket(port).use { return port }
+                    } catch (e: Exception) {
+                        // Port in use, try next
+                    }
+                }
+                throw IOException("No available port found")
+            }
+        }
+    }
+
+    private var serverSocket: ServerSocket? = null
+    private var executor: ExecutorService? = null
+    private val running = AtomicBoolean(false)
+    var port: Int = 0
+        private set
+
+    /**
+     * Start the HTTP server on an available port.
+     * Returns the URL to access the wiki.
+     */
+    fun start(): String {
+        if (running.get()) {
+            return "http://127.0.0.1:$port"
+        }
+
+        port = findAvailablePort()
+        // Bind to localhost ONLY - do not expose on external interfaces
+        serverSocket = ServerSocket(port, 50, java.net.InetAddress.getByName("127.0.0.1")).apply {
+            // Set a timeout so accept() doesn't block forever
+            // This allows us to periodically check if we should still be running
+            soTimeout = 5000  // 5 second timeout
+        }
+        executor = Executors.newCachedThreadPool()
+        running.set(true)
+
+        Log.d(TAG, "Starting server on port $port for ${wikiUri}")
+
+        Thread {
+            Log.d(TAG, "Server thread started for port $port")
+            while (running.get()) {
+                try {
+                    val sock = serverSocket
+                    if (sock == null || sock.isClosed) {
+                        Log.w(TAG, "ServerSocket is null or closed, server thread exiting")
+                        break
+                    }
+                    val socket = sock.accept()
+                    executor?.submit { handleConnection(socket) }
+                } catch (e: java.net.SocketTimeoutException) {
+                    // Timeout is fine, just continue to check if we should still be running
+                    continue
+                } catch (e: java.net.SocketException) {
+                    if (running.get()) {
+                        Log.e(TAG, "SocketException in accept: ${e.message}")
+                        // Socket might have been closed, try to recover
+                        if (serverSocket?.isClosed == true) {
+                            Log.e(TAG, "ServerSocket was closed unexpectedly")
+                            break
+                        }
+                    }
+                } catch (e: Exception) {
+                    if (running.get()) {
+                        Log.e(TAG, "Error accepting connection: ${e.message}", e)
+                    }
+                }
+            }
+            Log.d(TAG, "Server thread exiting for port $port, running=${running.get()}")
+        }.apply {
+            name = "WikiHttpServer-$port"
+            isDaemon = false  // Keep thread alive
+        }.start()
+
+        return "http://127.0.0.1:$port"
+    }
+
+    /**
+     * Stop the HTTP server.
+     */
+    fun stop() {
+        Log.d(TAG, "Stopping server on port $port")
+        running.set(false)
+        try {
+            serverSocket?.close()
+        } catch (e: Exception) {
+            Log.e(TAG, "Error closing server socket: ${e.message}")
+        }
+        executor?.shutdownNow()
+        serverSocket = null
+        executor = null
+    }
+
+    /**
+     * Check if the server is running and the socket is valid.
+     * The server might think it's running but the socket could be closed
+     * (e.g., when the phone goes to sleep and Android kills sockets).
+     */
+    fun isRunning(): Boolean {
+        return running.get() && serverSocket != null && !serverSocket!!.isClosed
+    }
+
+    /**
+     * Restart the server and return the new URL.
+     * Use this when the server socket has died but needs to be revived.
+     */
+    fun restart(): String {
+        Log.d(TAG, "Restarting server...")
+        stop()
+        return start()
+    }
+
+    /**
+     * Handle an incoming HTTP connection.
+     */
+    private fun handleConnection(socket: Socket) {
+        try {
+            socket.use { s ->
+                val rawInput = s.getInputStream()
+                val output = BufferedOutputStream(s.getOutputStream())
+
+                // Read headers manually to avoid BufferedReader consuming body data
+                val headerBytes = ByteArrayOutputStream()
+                var prev = 0
+                var curr = 0
+                var headersComplete = false
+
+                // Read until we see \r\n\r\n (end of headers)
+                while (!headersComplete) {
+                    curr = rawInput.read()
+                    if (curr == -1) break
+                    headerBytes.write(curr)
+
+                    // Check for \r\n\r\n
+                    if (curr == '\n'.code && prev == '\r'.code) {
+                        val bytes = headerBytes.toByteArray()
+                        if (bytes.size >= 4 &&
+                            bytes[bytes.size - 4] == '\r'.code.toByte() &&
+                            bytes[bytes.size - 3] == '\n'.code.toByte() &&
+                            bytes[bytes.size - 2] == '\r'.code.toByte() &&
+                            bytes[bytes.size - 1] == '\n'.code.toByte()) {
+                            headersComplete = true
+                        }
+                    }
+                    prev = curr
+                }
+
+                val headerString = headerBytes.toString(Charsets.UTF_8.name())
+                val headerLines = headerString.split("\r\n")
+
+                if (headerLines.isEmpty()) {
+                    sendError(output, 400, "Bad Request")
+                    return
+                }
+
+                // Parse request line
+                val requestLine = headerLines[0]
+                Log.d(TAG, "Request: $requestLine")
+
+                val parts = requestLine.split(" ")
+                if (parts.size < 2) {
+                    sendError(output, 400, "Bad Request")
+                    return
+                }
+
+                val method = parts[0]
+                val path = parts[1]
+
+                // Parse headers
+                val headers = mutableMapOf<String, String>()
+                for (i in 1 until headerLines.size) {
+                    val line = headerLines[i]
+                    if (line.isEmpty()) continue
+                    val colonIndex = line.indexOf(':')
+                    if (colonIndex > 0) {
+                        val key = line.substring(0, colonIndex).trim().lowercase()
+                        val value = line.substring(colonIndex + 1).trim()
+                        headers[key] = value
+                    }
+                }
+
+                when {
+                    method == "GET" && path == "/" -> handleGetWiki(output)
+                    method == "HEAD" && path == "/" -> handleHead(output)
+                    method == "PUT" && path == "/" -> handlePutWiki(rawInput, output, headers)
+                    method == "GET" && path.startsWith("/_file/") -> handleGetFile(output, path, headers)
+                    method == "GET" && path.startsWith("/_relative/") -> handleGetRelative(output, path, headers)
+                    method == "POST" && path == "/_save-attachment" -> handleSaveAttachment(rawInput, output, headers)
+                    method == "OPTIONS" -> handleOptions(output)
+                    // TiddlyWeb protocol for folder wikis
+                    method == "GET" && path == "/status" -> handleStatus(output)
+                    method == "GET" && path == "/recipes/default/tiddlers.json" -> handleGetAllTiddlers(output)
+                    method == "GET" && path.startsWith("/recipes/default/tiddlers/") -> handleGetTiddler(output, path)
+                    method == "PUT" && path.startsWith("/recipes/default/tiddlers/") -> handlePutTiddler(rawInput, output, headers, path)
+                    method == "DELETE" && path.startsWith("/recipes/default/tiddlers/") -> handleDeleteTiddler(output, path)
+                    method == "GET" && path.startsWith("/bags/default/tiddlers/") -> handleGetTiddler(output, path.replace("/bags/", "/recipes/"))
+                    else -> sendError(output, 404, "Not Found")
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error handling connection: ${e.message}", e)
+        }
+    }
+
+    /**
+     * Handle GET / - serve the wiki HTML content.
+     * For single-file wikis: reads from wikiUri
+     * For folder wikis: reads from folderHtmlPath (pre-rendered by Node.js)
+     */
+    private fun handleGetWiki(output: OutputStream) {
+        try {
+            val content = if (isFolder && folderHtmlPath != null) {
+                // Folder wiki: serve pre-rendered HTML from temp file
+                val file = File(folderHtmlPath)
+                if (file.exists()) {
+                    file.readText(Charsets.UTF_8)
+                } else {
+                    throw IOException("Pre-rendered HTML not found: $folderHtmlPath")
+                }
+            } else {
+                // Single-file wiki: read from SAF URI
+                context.contentResolver.openInputStream(wikiUri)?.use {
+                    it.bufferedReader().readText()
+                } ?: throw IOException("Failed to read wiki")
+            }
+
+            val bytes = content.toByteArray(Charsets.UTF_8)
+            sendResponse(output, 200, "OK", "text/html; charset=utf-8", bytes)
+        } catch (e: Exception) {
+            Log.e(TAG, "Error serving wiki: ${e.message}", e)
+            sendError(output, 500, "Internal Server Error: ${e.message}")
+        }
+    }
+
+    /**
+     * Handle PUT / - save the wiki content.
+     */
+    private fun handlePutWiki(input: InputStream, output: OutputStream, headers: Map<String, String>) {
+        try {
+            val contentLength = headers["content-length"]?.toIntOrNull() ?: 0
+            if (contentLength == 0) {
+                sendError(output, 400, "Content-Length required")
+                return
+            }
+
+            Log.d(TAG, "Reading wiki body: $contentLength bytes expected")
+
+            // Read the body as raw bytes
+            val buffer = ByteArray(contentLength)
+            var totalRead = 0
+            while (totalRead < contentLength) {
+                val read = input.read(buffer, totalRead, contentLength - totalRead)
+                if (read == -1) break
+                totalRead += read
+            }
+
+            Log.d(TAG, "Read $totalRead bytes")
+
+            // Convert to string (wiki is UTF-8 encoded HTML)
+            val content = String(buffer, 0, totalRead, Charsets.UTF_8)
+
+            Log.d(TAG, "Saving wiki: ${content.length} characters")
+
+            // Write to the wiki file via SAF
+            context.contentResolver.openOutputStream(wikiUri, "wt")?.use { os ->
+                os.write(content.toByteArray(Charsets.UTF_8))
+            } ?: throw IOException("Failed to open wiki for writing")
+
+            sendResponse(output, 200, "OK", "text/plain", "Saved".toByteArray())
+            Log.d(TAG, "Wiki saved successfully")
+        } catch (e: Exception) {
+            Log.e(TAG, "Error saving wiki: ${e.message}", e)
+            sendError(output, 500, "Internal Server Error: ${e.message}")
+        }
+    }
+
+    /**
+     * Handle GET /_file/{base64_path} - serve external attachment by absolute path.
+     * Supports streaming and HTTP Range requests for large files (videos).
+     */
+    private fun handleGetFile(output: OutputStream, path: String, headers: Map<String, String> = emptyMap()) {
+        try {
+            val encoded = path.removePrefix("/_file/")
+            // Decode base64url (- -> +, _ -> /)
+            val base64 = encoded.replace('-', '+').replace('_', '/')
+            // Add padding if needed
+            val padded = when (base64.length % 4) {
+                2 -> "$base64=="
+                3 -> "$base64="
+                else -> base64
+            }
+            val decodedPath = String(Base64.decode(padded, Base64.DEFAULT))
+
+            Log.d(TAG, "Serving file: $decodedPath")
+
+            val uri = when {
+                decodedPath.startsWith("content://") -> Uri.parse(decodedPath)
+                decodedPath.startsWith("file://") -> Uri.parse(decodedPath)
+                else -> Uri.fromFile(File(decodedPath))
+            }
+
+            val contentType = guessMimeType(decodedPath)
+
+            // Get file size
+            val fileSize = getFileSize(uri)
+            if (fileSize < 0) {
+                throw IOException("Cannot determine file size")
+            }
+
+            // Parse Range header if present
+            val rangeHeader = headers["range"]
+            if (rangeHeader != null && rangeHeader.startsWith("bytes=")) {
+                // Handle range request for video seeking
+                handleRangeRequest(output, uri, contentType, fileSize, rangeHeader)
+            } else {
+                // Stream the entire file
+                streamFile(output, uri, contentType, fileSize)
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error serving file: ${e.message}", e)
+            sendError(output, 404, "Not Found: ${e.message}")
+        }
+    }
+
+    /**
+     * Get the size of a file from its URI.
+     */
+    private fun getFileSize(uri: Uri): Long {
+        return try {
+            context.contentResolver.openAssetFileDescriptor(uri, "r")?.use { afd ->
+                afd.length
+            } ?: -1L
+        } catch (e: Exception) {
+            Log.e(TAG, "Error getting file size: ${e.message}")
+            -1L
+        }
+    }
+
+    /**
+     * Stream a file to the output in chunks.
+     */
+    private fun streamFile(output: OutputStream, uri: Uri, contentType: String, fileSize: Long) {
+        val headers = listOf(
+            "HTTP/1.1 200 OK",
+            "Content-Type: $contentType",
+            "Content-Length: $fileSize",
+            "Accept-Ranges: bytes",
+            "Access-Control-Allow-Origin: *",
+            "Connection: close",
+            "",
+            ""
+        ).joinToString("\r\n")
+        output.write(headers.toByteArray())
+
+        // Stream in 64KB chunks
+        val buffer = ByteArray(65536)
+        context.contentResolver.openInputStream(uri)?.use { input ->
+            var bytesRead: Int
+            while (input.read(buffer).also { bytesRead = it } != -1) {
+                output.write(buffer, 0, bytesRead)
+            }
+        }
+        output.flush()
+    }
+
+    /**
+     * Handle HTTP Range request for partial content (video seeking).
+     */
+    private fun handleRangeRequest(output: OutputStream, uri: Uri, contentType: String, fileSize: Long, rangeHeader: String) {
+        // Parse "bytes=start-end" or "bytes=start-"
+        val rangeSpec = rangeHeader.removePrefix("bytes=")
+        val rangeParts = rangeSpec.split("-")
+
+        val start = rangeParts[0].toLongOrNull() ?: 0L
+        val end = if (rangeParts.size > 1 && rangeParts[1].isNotEmpty()) {
+            rangeParts[1].toLongOrNull() ?: (fileSize - 1)
+        } else {
+            fileSize - 1
+        }
+
+        // Validate range
+        if (start >= fileSize || start > end) {
+            val errorHeaders = listOf(
+                "HTTP/1.1 416 Range Not Satisfiable",
+                "Content-Range: bytes */$fileSize",
+                "Access-Control-Allow-Origin: *",
+                "Connection: close",
+                "",
+                ""
+            ).joinToString("\r\n")
+            output.write(errorHeaders.toByteArray())
+            output.flush()
+            return
+        }
+
+        val contentLength = end - start + 1
+        Log.d(TAG, "Range request: bytes $start-$end/$fileSize (sending $contentLength bytes)")
+
+        val headers = listOf(
+            "HTTP/1.1 206 Partial Content",
+            "Content-Type: $contentType",
+            "Content-Length: $contentLength",
+            "Content-Range: bytes $start-$end/$fileSize",
+            "Accept-Ranges: bytes",
+            "Access-Control-Allow-Origin: *",
+            "Connection: close",
+            "",
+            ""
+        ).joinToString("\r\n")
+        output.write(headers.toByteArray())
+
+        // Stream the requested range in chunks
+        val buffer = ByteArray(65536)
+        context.contentResolver.openInputStream(uri)?.use { input ->
+            // Skip to start position
+            var skipped = 0L
+            while (skipped < start) {
+                val toSkip = minOf(buffer.size.toLong(), start - skipped)
+                val actuallySkipped = input.skip(toSkip)
+                if (actuallySkipped <= 0) break
+                skipped += actuallySkipped
+            }
+
+            // Read and send the requested range
+            var remaining = contentLength
+            while (remaining > 0) {
+                val toRead = minOf(buffer.size.toLong(), remaining).toInt()
+                val bytesRead = input.read(buffer, 0, toRead)
+                if (bytesRead == -1) break
+                output.write(buffer, 0, bytesRead)
+                remaining -= bytesRead
+            }
+        }
+        output.flush()
+    }
+
+    /**
+     * Handle GET /_relative/{path} - serve file relative to wiki location.
+     * Supports streaming and HTTP Range requests for large files (videos).
+     */
+    private fun handleGetRelative(output: OutputStream, path: String, headers: Map<String, String> = emptyMap()) {
+        try {
+            val relativePath = URLDecoder.decode(path.removePrefix("/_relative/"), "UTF-8")
+            Log.d(TAG, "Serving relative file: $relativePath")
+
+            // For SAF URIs, we need to use DocumentFile to navigate
+            val parentDoc = if (treeUri != null) {
+                DocumentFile.fromTreeUri(context, treeUri)
+            } else {
+                // Try to get parent from single document URI
+                DocumentFile.fromSingleUri(context, wikiUri)?.parentFile
+            }
+
+            if (parentDoc == null) {
+                sendError(output, 404, "Cannot access parent directory")
+                return
+            }
+
+            // Navigate the path
+            val pathParts = relativePath.split("/")
+            var currentDoc: DocumentFile? = parentDoc
+            for (part in pathParts) {
+                if (part.isEmpty() || part == ".") continue
+                if (part == "..") {
+                    currentDoc = currentDoc?.parentFile
+                } else {
+                    currentDoc = currentDoc?.findFile(part)
+                }
+                if (currentDoc == null) break
+            }
+
+            if (currentDoc == null || !currentDoc.exists()) {
+                sendError(output, 404, "File not found: $relativePath")
+                return
+            }
+
+            val contentType = currentDoc.type ?: guessMimeType(relativePath)
+            val uri = currentDoc.uri
+
+            // Get file size
+            val fileSize = getFileSize(uri)
+            if (fileSize < 0) {
+                throw IOException("Cannot determine file size")
+            }
+
+            // Parse Range header if present
+            val rangeHeader = headers["range"]
+            if (rangeHeader != null && rangeHeader.startsWith("bytes=")) {
+                // Handle range request for video seeking
+                handleRangeRequest(output, uri, contentType, fileSize, rangeHeader)
+            } else {
+                // Stream the entire file
+                streamFile(output, uri, contentType, fileSize)
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error serving relative file: ${e.message}", e)
+            sendError(output, 404, "Not Found: ${e.message}")
+        }
+    }
+
+    /**
+     * Handle POST /_save-attachment - save an imported file externally.
+     * Returns JSON with the path to the saved file.
+     */
+    private fun handleSaveAttachment(input: InputStream, output: OutputStream, headers: Map<String, String>) {
+        try {
+            val contentLength = headers["content-length"]?.toIntOrNull() ?: 0
+            val filename = headers["x-filename"] ?: "attachment_${System.currentTimeMillis()}"
+            val mimeType = headers["content-type"] ?: "application/octet-stream"
+
+            Log.d(TAG, "Saving attachment: $filename ($contentLength bytes, $mimeType)")
+
+            if (contentLength == 0) {
+                sendError(output, 400, "Content-Length required")
+                return
+            }
+
+            // Read the file data
+            val buffer = ByteArray(contentLength)
+            var totalRead = 0
+            while (totalRead < contentLength) {
+                val read = input.read(buffer, totalRead, contentLength - totalRead)
+                if (read == -1) break
+                totalRead += read
+            }
+
+            Log.d(TAG, "Read $totalRead bytes for attachment")
+
+            // Find or create the attachments directory
+            val attachmentsDir = getOrCreateAttachmentsDir()
+            if (attachmentsDir == null) {
+                sendError(output, 500, "Cannot create attachments directory. Please grant folder access.")
+                return
+            }
+
+            // Create a unique filename to avoid collisions
+            val safeName = filename.replace("/", "_").replace("\\", "_")
+            var targetFile = attachmentsDir.findFile(safeName)
+            var finalName = safeName
+
+            if (targetFile != null) {
+                // File exists, create unique name
+                val baseName = safeName.substringBeforeLast(".")
+                val ext = safeName.substringAfterLast(".", "")
+                var counter = 1
+                do {
+                    finalName = if (ext.isNotEmpty()) "${baseName}_$counter.$ext" else "${baseName}_$counter"
+                    targetFile = attachmentsDir.findFile(finalName)
+                    counter++
+                } while (targetFile != null && counter < 1000)
+            }
+
+            // Create the file
+            targetFile = attachmentsDir.createFile(mimeType, finalName)
+            if (targetFile == null) {
+                sendError(output, 500, "Failed to create attachment file")
+                return
+            }
+
+            // Write the data
+            context.contentResolver.openOutputStream(targetFile.uri)?.use { os ->
+                os.write(buffer, 0, totalRead)
+            } ?: throw IOException("Failed to write attachment")
+
+            Log.d(TAG, "Attachment saved: ${targetFile.uri}")
+
+            // Return the relative path for _canonical_uri
+            val relativePath = "attachments/$finalName"
+            val response = """{"success":true,"path":"$relativePath","uri":"${escapeJson(targetFile.uri.toString())}"}"""
+            sendResponse(output, 200, "OK", "application/json", response.toByteArray())
+
+        } catch (e: Exception) {
+            Log.e(TAG, "Error saving attachment: ${e.message}", e)
+            sendError(output, 500, "Failed to save attachment: ${e.message}")
+        }
+    }
+
+    /**
+     * Get or create the attachments directory next to the wiki.
+     */
+    private fun getOrCreateAttachmentsDir(): DocumentFile? {
+        // Need tree access to create directories
+        if (treeUri == null) {
+            Log.w(TAG, "No tree URI available - cannot create attachments directory")
+            return null
+        }
+
+        val parentDoc = DocumentFile.fromTreeUri(context, treeUri)
+        if (parentDoc == null) {
+            Log.e(TAG, "Cannot access tree URI")
+            return null
+        }
+
+        // Look for existing attachments directory
+        var attachmentsDir = parentDoc.findFile("attachments")
+        if (attachmentsDir != null && attachmentsDir.isDirectory) {
+            return attachmentsDir
+        }
+
+        // Create the directory
+        attachmentsDir = parentDoc.createDirectory("attachments")
+        if (attachmentsDir == null) {
+            Log.e(TAG, "Failed to create attachments directory")
+            return null
+        }
+
+        Log.d(TAG, "Created attachments directory: ${attachmentsDir.uri}")
+        return attachmentsDir
+    }
+
+    /**
+     * Handle HEAD / - simple health check response.
+     */
+    private fun handleHead(output: OutputStream) {
+        val headers = listOf(
+            "HTTP/1.1 200 OK",
+            "Content-Type: text/html; charset=utf-8",
+            "Content-Length: 0",
+            "Access-Control-Allow-Origin: *",
+            "Connection: close",
+            "",
+            ""
+        ).joinToString("\r\n")
+        output.write(headers.toByteArray())
+        output.flush()
+    }
+
+    /**
+     * Handle OPTIONS requests for CORS.
+     */
+    private fun handleOptions(output: OutputStream) {
+        val headers = listOf(
+            "HTTP/1.1 204 No Content",
+            "Access-Control-Allow-Origin: *",
+            "Access-Control-Allow-Methods: GET, PUT, POST, DELETE, OPTIONS",
+            "Access-Control-Allow-Headers: Content-Type, X-Filename",
+            "Content-Length: 0",
+            "",
+            ""
+        ).joinToString("\r\n")
+        output.write(headers.toByteArray())
+        output.flush()
+    }
+
+    /**
+     * Send an HTTP response.
+     */
+    private fun sendResponse(output: OutputStream, code: Int, status: String, contentType: String, body: ByteArray) {
+        val headers = listOf(
+            "HTTP/1.1 $code $status",
+            "Content-Type: $contentType",
+            "Content-Length: ${body.size}",
+            "Access-Control-Allow-Origin: *",
+            "Connection: close",
+            "",
+            ""
+        ).joinToString("\r\n")
+        output.write(headers.toByteArray())
+        output.write(body)
+        output.flush()
+    }
+
+    /**
+     * Send an HTTP error response.
+     */
+    private fun sendError(output: OutputStream, code: Int, message: String) {
+        val body = message.toByteArray()
+        val headers = listOf(
+            "HTTP/1.1 $code $message",
+            "Content-Type: text/plain",
+            "Content-Length: ${body.size}",
+            "Access-Control-Allow-Origin: *",
+            "Connection: close",
+            "",
+            ""
+        ).joinToString("\r\n")
+        output.write(headers.toByteArray())
+        output.write(body)
+        output.flush()
+    }
+
+    // ============ TiddlyWeb Protocol Handlers (for folder wikis) ============
+
+    /**
+     * Handle GET /status - TiddlyWeb status endpoint.
+     */
+    private fun handleStatus(output: OutputStream) {
+        val status = """{"username":"TiddlyDesktop","space":{"recipe":"default"},"tiddlywiki_version":"5.3.0"}"""
+        sendResponse(output, 200, "OK", "application/json", status.toByteArray())
+    }
+
+    /**
+     * Handle GET /recipes/default/tiddlers.json - list all tiddlers (skinny).
+     */
+    private fun handleGetAllTiddlers(output: OutputStream) {
+        if (!isFolder) {
+            sendError(output, 404, "Not a folder wiki")
+            return
+        }
+
+        try {
+            val tiddlers = mutableListOf<Map<String, Any?>>()
+            val wikiDoc = DocumentFile.fromTreeUri(context, wikiUri) ?: DocumentFile.fromSingleUri(context, wikiUri)
+
+            if (wikiDoc == null) {
+                sendError(output, 500, "Cannot access wiki folder")
+                return
+            }
+
+            // Find the tiddlers directory
+            val tiddlersDir = wikiDoc.findFile("tiddlers")
+            if (tiddlersDir != null && tiddlersDir.isDirectory) {
+                for (file in tiddlersDir.listFiles()) {
+                    if (file.isFile) {
+                        val name = file.name ?: continue
+                        if (name.endsWith(".tid") || name.endsWith(".meta")) {
+                            val tiddler = parseTidFile(file)
+                            if (tiddler != null) {
+                                // Return skinny tiddler (no text)
+                                val skinny = tiddler.toMutableMap()
+                                skinny.remove("text")
+                                tiddlers.add(skinny)
+                            }
+                        }
+                    }
+                }
+            }
+
+            val json = tiddlersToJson(tiddlers)
+            sendResponse(output, 200, "OK", "application/json", json.toByteArray())
+        } catch (e: Exception) {
+            Log.e(TAG, "Error listing tiddlers: ${e.message}", e)
+            sendError(output, 500, "Internal Server Error: ${e.message}")
+        }
+    }
+
+    /**
+     * Handle GET /recipes/default/tiddlers/{title} - get a single tiddler.
+     */
+    private fun handleGetTiddler(output: OutputStream, path: String) {
+        if (!isFolder) {
+            sendError(output, 404, "Not a folder wiki")
+            return
+        }
+
+        try {
+            val title = URLDecoder.decode(path.substringAfter("/recipes/default/tiddlers/"), "UTF-8")
+            Log.d(TAG, "Getting tiddler: $title")
+
+            val tidFile = findTiddlerFile(title)
+            if (tidFile == null) {
+                sendError(output, 404, "Tiddler not found: $title")
+                return
+            }
+
+            val tiddler = parseTidFile(tidFile)
+            if (tiddler == null) {
+                sendError(output, 500, "Failed to parse tiddler")
+                return
+            }
+
+            val json = tiddlerToJson(tiddler)
+            sendResponse(output, 200, "OK", "application/json", json.toByteArray())
+        } catch (e: Exception) {
+            Log.e(TAG, "Error getting tiddler: ${e.message}", e)
+            sendError(output, 500, "Internal Server Error: ${e.message}")
+        }
+    }
+
+    /**
+     * Handle PUT /recipes/default/tiddlers/{title} - create or update a tiddler.
+     */
+    private fun handlePutTiddler(input: InputStream, output: OutputStream, headers: Map<String, String>, path: String) {
+        if (!isFolder) {
+            sendError(output, 404, "Not a folder wiki")
+            return
+        }
+
+        try {
+            val title = URLDecoder.decode(path.substringAfter("/recipes/default/tiddlers/"), "UTF-8")
+            Log.d(TAG, "Putting tiddler: $title")
+
+            val contentLength = headers["content-length"]?.toIntOrNull() ?: 0
+            val buffer = ByteArray(contentLength)
+            var totalRead = 0
+            while (totalRead < contentLength) {
+                val read = input.read(buffer, totalRead, contentLength - totalRead)
+                if (read == -1) break
+                totalRead += read
+            }
+            val jsonStr = String(buffer, 0, totalRead, Charsets.UTF_8)
+
+            // Parse JSON to get tiddler fields
+            val tiddler = jsonToTiddler(jsonStr)
+            if (tiddler == null) {
+                sendError(output, 400, "Invalid tiddler JSON")
+                return
+            }
+
+            // Write to .tid file
+            saveTiddler(title, tiddler)
+
+            // Return the saved tiddler with revision
+            val savedTiddler = tiddler.toMutableMap()
+            savedTiddler["revision"] = System.currentTimeMillis().toString()
+            val responseJson = tiddlerToJson(savedTiddler)
+
+            sendResponse(output, 204, "No Content", "application/json", ByteArray(0))
+        } catch (e: Exception) {
+            Log.e(TAG, "Error putting tiddler: ${e.message}", e)
+            sendError(output, 500, "Internal Server Error: ${e.message}")
+        }
+    }
+
+    /**
+     * Handle DELETE /recipes/default/tiddlers/{title} - delete a tiddler.
+     */
+    private fun handleDeleteTiddler(output: OutputStream, path: String) {
+        if (!isFolder) {
+            sendError(output, 404, "Not a folder wiki")
+            return
+        }
+
+        try {
+            val title = URLDecoder.decode(path.substringAfter("/recipes/default/tiddlers/"), "UTF-8")
+            Log.d(TAG, "Deleting tiddler: $title")
+
+            val tidFile = findTiddlerFile(title)
+            if (tidFile == null) {
+                sendError(output, 404, "Tiddler not found: $title")
+                return
+            }
+
+            if (!tidFile.delete()) {
+                sendError(output, 500, "Failed to delete tiddler file")
+                return
+            }
+
+            sendResponse(output, 204, "No Content", "text/plain", ByteArray(0))
+        } catch (e: Exception) {
+            Log.e(TAG, "Error deleting tiddler: ${e.message}", e)
+            sendError(output, 500, "Internal Server Error: ${e.message}")
+        }
+    }
+
+    // ============ Tiddler File Handling ============
+
+    /**
+     * Find a tiddler file by title.
+     */
+    private fun findTiddlerFile(title: String): DocumentFile? {
+        val wikiDoc = DocumentFile.fromTreeUri(context, wikiUri) ?: return null
+        val tiddlersDir = wikiDoc.findFile("tiddlers") ?: return null
+
+        // Sanitize title for filename
+        val safeTitle = title.replace("/", "_").replace("\\", "_").replace(":", "_")
+
+        // Try .tid extension first
+        var file = tiddlersDir.findFile("$safeTitle.tid")
+        if (file != null) return file
+
+        // Try with $ encoded as _
+        val encodedTitle = safeTitle.replace("$", "_")
+        file = tiddlersDir.findFile("$encodedTitle.tid")
+        if (file != null) return file
+
+        // Search all files for matching title
+        for (f in tiddlersDir.listFiles()) {
+            if (f.isFile && f.name?.endsWith(".tid") == true) {
+                val parsed = parseTidFile(f)
+                if (parsed?.get("title") == title) {
+                    return f
+                }
+            }
+        }
+
+        return null
+    }
+
+    /**
+     * Parse a .tid file into a map of fields.
+     */
+    private fun parseTidFile(file: DocumentFile): Map<String, Any?>? {
+        return try {
+            val content = context.contentResolver.openInputStream(file.uri)?.use {
+                it.bufferedReader().readText()
+            } ?: return null
+
+            val fields = mutableMapOf<String, Any?>()
+            val lines = content.lines()
+            var inBody = false
+            val bodyLines = mutableListOf<String>()
+
+            for (line in lines) {
+                if (inBody) {
+                    bodyLines.add(line)
+                } else if (line.isEmpty()) {
+                    inBody = true
+                } else {
+                    val colonIndex = line.indexOf(':')
+                    if (colonIndex > 0) {
+                        val key = line.substring(0, colonIndex).trim()
+                        val value = line.substring(colonIndex + 1).trim()
+                        fields[key] = value
+                    }
+                }
+            }
+
+            fields["text"] = bodyLines.joinToString("\n")
+
+            // Add revision based on file modification time
+            fields["revision"] = file.lastModified().toString()
+
+            fields
+        } catch (e: Exception) {
+            Log.e(TAG, "Error parsing .tid file: ${e.message}")
+            null
+        }
+    }
+
+    /**
+     * Save a tiddler to a .tid file.
+     */
+    private fun saveTiddler(title: String, fields: Map<String, Any?>) {
+        val wikiDoc = DocumentFile.fromTreeUri(context, wikiUri) ?: throw IOException("Cannot access wiki folder")
+        var tiddlersDir = wikiDoc.findFile("tiddlers")
+        if (tiddlersDir == null) {
+            tiddlersDir = wikiDoc.createDirectory("tiddlers") ?: throw IOException("Cannot create tiddlers directory")
+        }
+
+        // Sanitize title for filename
+        val safeTitle = title.replace("/", "_").replace("\\", "_").replace(":", "_").replace("$", "_")
+        val filename = "$safeTitle.tid"
+
+        // Check if file exists
+        var file = tiddlersDir.findFile(filename)
+        if (file == null) {
+            file = tiddlersDir.createFile("text/plain", filename) ?: throw IOException("Cannot create tiddler file")
+        }
+
+        // Build .tid content
+        val sb = StringBuilder()
+
+        // Write fields (except text)
+        for ((key, value) in fields) {
+            if (key != "text" && key != "revision" && value != null) {
+                sb.append("$key: $value\n")
+            }
+        }
+
+        // Empty line separates fields from body
+        sb.append("\n")
+
+        // Write text body
+        val text = fields["text"]?.toString() ?: ""
+        sb.append(text)
+
+        // Write to file
+        context.contentResolver.openOutputStream(file.uri, "wt")?.use { os ->
+            os.write(sb.toString().toByteArray(Charsets.UTF_8))
+        } ?: throw IOException("Cannot write to tiddler file")
+    }
+
+    // ============ JSON Helpers ============
+
+    /**
+     * Convert a list of tiddlers to JSON array.
+     */
+    private fun tiddlersToJson(tiddlers: List<Map<String, Any?>>): String {
+        val sb = StringBuilder("[")
+        tiddlers.forEachIndexed { index, tiddler ->
+            if (index > 0) sb.append(",")
+            sb.append(tiddlerToJson(tiddler))
+        }
+        sb.append("]")
+        return sb.toString()
+    }
+
+    /**
+     * Convert a single tiddler to JSON.
+     */
+    private fun tiddlerToJson(tiddler: Map<String, Any?>): String {
+        val sb = StringBuilder("{")
+        var first = true
+        for ((key, value) in tiddler) {
+            if (value != null) {
+                if (!first) sb.append(",")
+                first = false
+                sb.append("\"${escapeJson(key)}\":\"${escapeJson(value.toString())}\"")
+            }
+        }
+        sb.append("}")
+        return sb.toString()
+    }
+
+    /**
+     * Parse JSON to a tiddler map.
+     */
+    private fun jsonToTiddler(json: String): Map<String, Any?>? {
+        return try {
+            val result = mutableMapOf<String, Any?>()
+            // Simple JSON parsing (for basic tiddler objects)
+            val trimmed = json.trim()
+            if (!trimmed.startsWith("{") || !trimmed.endsWith("}")) return null
+
+            val content = trimmed.substring(1, trimmed.length - 1)
+
+            // Split by commas, but not inside quotes
+            var inQuote = false
+            var escaped = false
+            var current = StringBuilder()
+            val pairs = mutableListOf<String>()
+
+            for (c in content) {
+                when {
+                    escaped -> {
+                        current.append(c)
+                        escaped = false
+                    }
+                    c == '\\' -> {
+                        current.append(c)
+                        escaped = true
+                    }
+                    c == '"' -> {
+                        current.append(c)
+                        inQuote = !inQuote
+                    }
+                    c == ',' && !inQuote -> {
+                        pairs.add(current.toString())
+                        current = StringBuilder()
+                    }
+                    else -> current.append(c)
+                }
+            }
+            if (current.isNotEmpty()) pairs.add(current.toString())
+
+            for (pair in pairs) {
+                val colonIndex = pair.indexOf(':')
+                if (colonIndex > 0) {
+                    val key = pair.substring(0, colonIndex).trim().removeSurrounding("\"")
+                    val value = pair.substring(colonIndex + 1).trim().removeSurrounding("\"")
+                    result[key] = unescapeJson(value)
+                }
+            }
+
+            result
+        } catch (e: Exception) {
+            Log.e(TAG, "Error parsing JSON: ${e.message}")
+            null
+        }
+    }
+
+    /**
+     * Escape a string for JSON.
+     */
+    private fun escapeJson(s: String): String {
+        return s.replace("\\", "\\\\")
+            .replace("\"", "\\\"")
+            .replace("\n", "\\n")
+            .replace("\r", "\\r")
+            .replace("\t", "\\t")
+    }
+
+    /**
+     * Unescape a JSON string.
+     */
+    private fun unescapeJson(s: String): String {
+        return s.replace("\\n", "\n")
+            .replace("\\r", "\r")
+            .replace("\\t", "\t")
+            .replace("\\\"", "\"")
+            .replace("\\\\", "\\")
+    }
+
+    /**
+     * Guess MIME type from file extension.
+     */
+    private fun guessMimeType(path: String): String {
+        val ext = path.substringAfterLast('.', "").lowercase()
+        return when (ext) {
+            "html", "htm" -> "text/html"
+            "css" -> "text/css"
+            "js" -> "application/javascript"
+            "json" -> "application/json"
+            "png" -> "image/png"
+            "jpg", "jpeg" -> "image/jpeg"
+            "gif" -> "image/gif"
+            "svg" -> "image/svg+xml"
+            "webp" -> "image/webp"
+            "ico" -> "image/x-icon"
+            "woff" -> "font/woff"
+            "woff2" -> "font/woff2"
+            "ttf" -> "font/ttf"
+            "otf" -> "font/otf"
+            "pdf" -> "application/pdf"
+            "mp3" -> "audio/mpeg"
+            "mp4" -> "video/mp4"
+            "webm" -> "video/webm"
+            "ogg" -> "audio/ogg"
+            "wav" -> "audio/wav"
+            "txt" -> "text/plain"
+            "xml" -> "application/xml"
+            "zip" -> "application/zip"
+            else -> "application/octet-stream"
+        }
+    }
+}

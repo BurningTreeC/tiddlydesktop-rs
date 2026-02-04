@@ -153,13 +153,36 @@ pub fn is_directory(uri: &str) -> bool {
     let api = app.android_fs();
     let file_uri = match parse_uri(uri) {
         Ok(uri) => uri,
-        Err(_) => return false,
+        Err(e) => {
+            eprintln!("[SAF] is_directory: failed to parse URI '{}': {}", uri, e);
+            return false;
+        }
     };
 
-    // Check MIME type - directories have vnd.android.document/directory
+    // Method 1: Check MIME type - directories have vnd.android.document/directory
     match api.get_mime_type(&file_uri) {
-        Ok(mime) => mime == "vnd.android.document/directory",
-        Err(_) => false,
+        Ok(mime) => {
+            eprintln!("[SAF] is_directory: MIME type is '{}'", mime);
+            if mime == "vnd.android.document/directory" {
+                return true;
+            }
+        }
+        Err(e) => {
+            eprintln!("[SAF] is_directory: get_mime_type failed: {:?}", e);
+        }
+    }
+
+    // Method 2: Try to list directory contents - if it works, it's a directory
+    // This handles tree URIs from folder picker that may not have a MIME type
+    match api.read_dir(&file_uri) {
+        Ok(_) => {
+            eprintln!("[SAF] is_directory: read_dir succeeded, treating as directory");
+            true
+        }
+        Err(e) => {
+            eprintln!("[SAF] is_directory: read_dir failed: {:?}", e);
+            false
+        }
     }
 }
 
@@ -378,6 +401,7 @@ pub fn release_permission(_uri: &str) {
 }
 
 /// Open a directory picker and return the selected directory as JSON-serialized FileUri.
+/// Note: For backup directories that need write access, use pick_directory_with_write() instead.
 pub async fn pick_directory() -> Result<Option<String>, String> {
     let app = get_app()?;
     let api = app.android_fs_async();
@@ -393,48 +417,217 @@ pub async fn pick_directory() -> Result<Option<String>, String> {
     }
 }
 
-/// Open a file picker for HTML files and return the selected file as JSON-serialized FileUri.
-pub async fn pick_wiki_file() -> Result<Option<String>, String> {
+/// Open a directory picker for directories that need write access (like backup directories).
+/// After picking, verifies write access by creating and deleting a test file.
+/// Returns the selected directory as JSON-serialized FileUri, or an error if write access is not available.
+pub async fn pick_directory_with_write() -> Result<Option<String>, String> {
     let app = get_app()?;
     let api = app.android_fs_async();
 
-    // Show file picker for HTML files
-    let files = api.file_picker().pick_files(
-        None,                           // Initial location
-        &["text/html", "text/plain"],   // MIME types for wiki files
-        false,                          // local_only
-    ).await.map_err(|e| format!("File picker failed: {:?}", e))?;
+    match api.file_picker().pick_dir(None, false).await {
+        Ok(Some(uri)) => {
+            // Persist permission for future access
+            let _ = api.file_picker().persist_uri_permission(&uri).await;
 
-    if files.is_empty() {
-        Ok(None)
-    } else {
-        let uri = &files[0];
-        // Persist permission for future access
-        let _ = api.file_picker().persist_uri_permission(uri).await;
-        Ok(Some(uri_to_string(uri)))
+            let uri_str = uri_to_string(&uri);
+
+            // Test write access by creating and deleting a test file
+            let test_filename = format!(".tiddlydesktop_write_test_{}", std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis())
+                .unwrap_or(0));
+
+            match create_file(&uri_str, &test_filename, None) {
+                Ok(test_file_uri) => {
+                    // Write access works - delete the test file
+                    let _ = delete_document(&test_file_uri);
+                    eprintln!("[SAF] Write access verified for backup directory");
+                    Ok(Some(uri_str))
+                }
+                Err(e) => {
+                    eprintln!("[SAF] Write access test failed: {}", e);
+                    Err("The selected folder does not have write permission. Please try selecting the folder again, or choose a different location.".to_string())
+                }
+            }
+        }
+        Ok(None) => Ok(None),
+        Err(e) => Err(format!("Directory picker failed: {:?}", e)),
     }
 }
 
+/// Open a file picker for HTML files, then request folder access for attachments.
+/// Two-step process:
+/// 1. File picker - user selects the exact wiki file they want
+/// 2. Folder picker - grants tree access to the folder (for creating attachments)
+/// Returns JSON with uri and documentTopTreeUri set.
+pub async fn pick_wiki_file() -> Result<Option<String>, String> {
+    pick_wiki_file_with_folder_access().await
+}
+
+/// Open a file picker for HTML files, then request folder access for attachments.
+/// Two-step process:
+/// 1. File picker - user selects the exact wiki file they want
+/// 2. Folder picker - grants tree access to the folder (for creating attachments)
+/// Returns JSON with uri and documentTopTreeUri set.
+pub async fn pick_wiki_file_with_folder_access() -> Result<Option<String>, String> {
+    let app = get_app()?;
+    let api = app.android_fs_async();
+
+    // Step 1: Let user pick the specific wiki file
+    let file_uri_opt = api.file_picker().pick_file(
+        None,            // Initial location
+        &["text/html"],  // Filter for HTML files
+        false,           // Not local-only
+    ).await.map_err(|e| format!("File picker failed: {:?}", e))?;
+
+    let file_uri = match file_uri_opt {
+        Some(uri) => uri,
+        None => return Ok(None),
+    };
+
+    // Persist read permission for the file
+    let _ = api.file_picker().persist_uri_permission(&file_uri).await;
+
+    // Get the file URI as JSON
+    let file_uri_str = uri_to_string(&file_uri);
+    eprintln!("[SAF] pick_wiki_file: selected file URI: {}", file_uri_str);
+
+    // Step 2: Request folder access for attachments
+    // Show a message explaining why we need folder access
+    eprintln!("[SAF] pick_wiki_file: requesting folder access for attachments...");
+
+    let tree_uri_opt = api.file_picker().pick_dir(
+        None,   // Initial location (ideally would be same folder as selected file)
+        false,  // Persist permission (we do it manually below)
+    ).await.map_err(|e| format!("Folder picker failed: {:?}", e))?;
+
+    // Build the result JSON
+    let mut json: serde_json::Value = serde_json::from_str(&file_uri_str)
+        .unwrap_or_else(|_| serde_json::json!({"uri": file_uri_str}));
+
+    // If user granted folder access, add tree URI
+    if let Some(tree_uri) = tree_uri_opt {
+        // Persist write permission for the tree
+        let _ = api.file_picker().persist_uri_permission(&tree_uri).await;
+
+        let tree_uri_str = uri_to_string(&tree_uri);
+        let tree_json: serde_json::Value = serde_json::from_str(&tree_uri_str)
+            .map_err(|e| format!("Failed to parse tree URI JSON: {}", e))?;
+
+        if let Some(tree_uri_value) = tree_json.get("uri") {
+            json["documentTopTreeUri"] = tree_uri_value.clone();
+            eprintln!("[SAF] pick_wiki_file: folder access granted: {}", tree_uri_value);
+        }
+    } else {
+        eprintln!("[SAF] pick_wiki_file: folder access denied/skipped - attachments won't work");
+        // Still allow opening the wiki, just without attachment support
+        json["documentTopTreeUri"] = serde_json::Value::Null;
+    }
+
+    Ok(Some(json.to_string()))
+}
+
 /// Open a save dialog to create a new wiki file.
-/// Returns the JSON-serialized FileUri of the new file.
+/// Two-step process:
+/// 1. Save dialog (ACTION_CREATE_DOCUMENT) - user picks location AND filename
+/// 2. Folder picker - grants tree access for attachments
+/// Returns the JSON-serialized FileUri of the new file with documentTopTreeUri set.
 pub async fn save_wiki_file(suggested_name: &str) -> Result<Option<String>, String> {
     let app = get_app()?;
     let api = app.android_fs_async();
 
-    match api.file_picker().save_file(
-        None,                    // Initial location
-        suggested_name,          // Suggested file name
-        Some("text/html"),       // MIME type
-        false,                   // local_only
-    ).await {
-        Ok(Some(uri)) => {
-            // Persist permission for future access
-            let _ = api.file_picker().persist_uri_permission(&uri).await;
-            Ok(Some(uri_to_string(&uri)))
+    // Step 1: Show save dialog - user picks location and can edit filename
+    let file_uri_opt = api.file_picker().save_file(
+        None,           // Initial location
+        suggested_name, // Suggested filename (user can edit)
+        Some("text/html"),
+        false,          // Not local-only
+    ).await.map_err(|e| format!("Save dialog failed: {:?}", e))?;
+
+    let file_uri = match file_uri_opt {
+        Some(uri) => uri,
+        None => return Ok(None),
+    };
+
+    // Persist permission for the file
+    let _ = api.file_picker().persist_uri_permission(&file_uri).await;
+
+    // Get the file URI as JSON
+    let file_uri_str = uri_to_string(&file_uri);
+    eprintln!("[SAF] save_wiki_file: created file URI: {}", file_uri_str);
+
+    // Step 2: Request folder access for attachments
+    eprintln!("[SAF] save_wiki_file: requesting folder access for attachments...");
+
+    let tree_uri_opt = api.file_picker().pick_dir(
+        None,   // Initial location (ideally same folder as the file)
+        false,  // Persist permission (we do it manually below)
+    ).await.map_err(|e| format!("Folder picker failed: {:?}", e))?;
+
+    // Build the result JSON
+    let mut json: serde_json::Value = serde_json::from_str(&file_uri_str)
+        .unwrap_or_else(|_| serde_json::json!({"uri": file_uri_str}));
+
+    // If user granted folder access, add tree URI
+    if let Some(tree_uri) = tree_uri_opt {
+        // Persist write permission for the tree
+        let _ = api.file_picker().persist_uri_permission(&tree_uri).await;
+
+        let tree_uri_str = uri_to_string(&tree_uri);
+        let tree_json: serde_json::Value = serde_json::from_str(&tree_uri_str)
+            .map_err(|e| format!("Failed to parse tree URI JSON: {}", e))?;
+
+        if let Some(tree_uri_value) = tree_json.get("uri") {
+            json["documentTopTreeUri"] = tree_uri_value.clone();
+            eprintln!("[SAF] save_wiki_file: folder access granted: {}", tree_uri_value);
         }
-        Ok(None) => Ok(None),
-        Err(e) => Err(format!("Save dialog failed: {:?}", e)),
+    } else {
+        eprintln!("[SAF] save_wiki_file: folder access denied/skipped - attachments won't work");
+        json["documentTopTreeUri"] = serde_json::Value::Null;
     }
+
+    Ok(Some(json.to_string()))
+}
+
+/// Open the folder containing a wiki in the system file manager.
+/// The path should be a JSON string with uri and optionally documentTopTreeUri.
+pub fn reveal_in_file_manager(path_json: &str) -> Result<(), String> {
+    use tauri_plugin_opener::OpenerExt;
+
+    eprintln!("[SAF] reveal_in_file_manager: path_json={}", path_json);
+
+    // Parse the path JSON to get the folder URI
+    let folder_uri = if path_json.trim().starts_with('{') {
+        let json: serde_json::Value = serde_json::from_str(path_json)
+            .map_err(|e| format!("Failed to parse path JSON: {}", e))?;
+
+        // Prefer documentTopTreeUri (folder access) if available
+        if let Some(tree_uri) = json.get("documentTopTreeUri").and_then(|v| v.as_str()) {
+            if !tree_uri.is_empty() && tree_uri != "null" {
+                tree_uri.to_string()
+            } else if let Some(file_uri) = json.get("uri").and_then(|v| v.as_str()) {
+                // Fall back to file URI - the file manager will show its parent
+                file_uri.to_string()
+            } else {
+                return Err("No valid URI found in path JSON".to_string());
+            }
+        } else if let Some(file_uri) = json.get("uri").and_then(|v| v.as_str()) {
+            file_uri.to_string()
+        } else {
+            return Err("No valid URI found in path JSON".to_string());
+        }
+    } else {
+        // Plain URI string
+        path_json.to_string()
+    };
+
+    eprintln!("[SAF] reveal_in_file_manager: opening folder_uri={}", folder_uri);
+
+    // Use the opener plugin to open the URI
+    let app = get_app()?;
+    app.opener()
+        .open_url(&folder_uri, None::<&str>)
+        .map_err(|e| format!("Failed to open file manager: {:?}", e))
 }
 
 /// Get the display name of a file from its URI.
@@ -477,8 +670,21 @@ pub fn create_backup(wiki_uri: &str, backup_dir_uri: &str, filename_stem: &str) 
     let timestamp = Local::now().format("%Y%m%d-%H%M%S");
     let backup_name = format!("{}.{}.html", filename_stem, timestamp);
 
+    eprintln!("[SAF] create_backup: wiki_uri={}", wiki_uri);
+    eprintln!("[SAF] create_backup: backup_dir_uri={}", backup_dir_uri);
+    eprintln!("[SAF] create_backup: backup_name={}", backup_name);
+
     // Copy the wiki file to the backup location
-    copy_document(wiki_uri, backup_dir_uri, &backup_name)
+    match copy_document(wiki_uri, backup_dir_uri, &backup_name) {
+        Ok(uri) => {
+            eprintln!("[SAF] create_backup: success, backup_uri={}", uri);
+            Ok(uri)
+        }
+        Err(e) => {
+            eprintln!("[SAF] create_backup: FAILED - {}", e);
+            Err(e)
+        }
+    }
 }
 
 /// Clean up old backups in a directory, keeping only the most recent ones.
@@ -563,6 +769,219 @@ pub fn get_backup_directory(wiki_uri: &str, custom_backup_dir: Option<&str>) -> 
 }
 
 /// Pick a backup directory via SAF directory picker.
+/// Uses pick_directory_with_write() to ensure write access is available.
 pub async fn pick_backup_directory() -> Result<Option<String>, String> {
-    pick_directory().await
+    pick_directory_with_write().await
+}
+
+/// Copy an attachment file to the wiki's attachments folder.
+/// Returns the relative path to use as _canonical_uri (e.g., "./attachments/image.png").
+///
+/// This is used on Android where SAF content:// URIs can't be stored as _canonical_uri
+/// because permissions expire. Instead, we copy to a local attachments folder.
+pub fn copy_attachment_to_wiki(wiki_uri: &str, source_uri: &str, filename: &str) -> Result<String, String> {
+    eprintln!("[SAF] copy_attachment_to_wiki: wiki_uri={}", wiki_uri);
+    eprintln!("[SAF] copy_attachment_to_wiki: source_uri={}", source_uri);
+    eprintln!("[SAF] copy_attachment_to_wiki: filename={}", filename);
+
+    // Get the documentTopTreeUri from the wiki URI - this is the parent directory
+    let tree_uri = if wiki_uri.starts_with('{') {
+        if let Ok(uri_json) = serde_json::from_str::<serde_json::Value>(wiki_uri) {
+            uri_json.get("documentTopTreeUri")
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty())
+                .map(|s| s.to_string())
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    let tree_uri = tree_uri.ok_or_else(|| {
+        "No tree access for wiki - cannot create attachments folder. Re-open wiki via folder picker.".to_string()
+    })?;
+
+    // Create a FileUri for the parent directory
+    let tree_json = format!(r#"{{"uri":"{}","documentTopTreeUri":"{}"}}"#, tree_uri, tree_uri);
+
+    // Create or find the "attachments" folder
+    let attachments_dir = find_or_create_subdirectory(&tree_json, "attachments")?;
+    eprintln!("[SAF] copy_attachment_to_wiki: attachments_dir={}", attachments_dir);
+
+    // Read source content
+    let source_content = read_document_bytes(source_uri)?;
+    eprintln!("[SAF] copy_attachment_to_wiki: read {} bytes from source", source_content.len());
+
+    // Check if a file with the same name already exists
+    let entries = list_directory_entries(&attachments_dir).unwrap_or_default();
+
+    // Find a unique filename
+    let final_name = find_unique_filename(&entries, filename, &source_content);
+    eprintln!("[SAF] copy_attachment_to_wiki: final_name={}", final_name);
+
+    // If the file already exists with same content, just return the path
+    if final_name == filename {
+        for entry in &entries {
+            if entry.name == filename {
+                // File exists - check if content is the same
+                if let Ok(existing_content) = read_document_bytes(&entry.uri) {
+                    if existing_content == source_content {
+                        eprintln!("[SAF] copy_attachment_to_wiki: identical file already exists, skipping copy");
+                        return Ok(format!("./attachments/{}", filename));
+                    }
+                }
+                break;
+            }
+        }
+    }
+
+    // Guess MIME type from filename
+    let mime_type = guess_mime_type(&final_name);
+
+    // Create the new file
+    let new_file_uri = create_file(&attachments_dir, &final_name, Some(mime_type))?;
+    eprintln!("[SAF] copy_attachment_to_wiki: created file {}", new_file_uri);
+
+    // Write content
+    write_document_bytes(&new_file_uri, &source_content)?;
+    eprintln!("[SAF] copy_attachment_to_wiki: wrote content successfully");
+
+    Ok(format!("./attachments/{}", final_name))
+}
+
+/// Find a unique filename in a directory.
+/// If a file with the same name and content exists, returns that name.
+/// If a file with the same name but different content exists, returns name-N.ext.
+fn find_unique_filename(entries: &[DirEntry], filename: &str, content: &[u8]) -> String {
+    // Check if file already exists
+    let existing = entries.iter().find(|e| e.name == filename);
+
+    if existing.is_none() {
+        return filename.to_string();
+    }
+
+    // File exists - check if content is identical
+    if let Some(entry) = existing {
+        if let Ok(existing_content) = read_document_bytes(&entry.uri) {
+            if existing_content == *content {
+                // Identical file already exists
+                return filename.to_string();
+            }
+        }
+    }
+
+    // Different content - need a unique name
+    let (stem, ext) = if let Some(dot_pos) = filename.rfind('.') {
+        (&filename[..dot_pos], &filename[dot_pos..])
+    } else {
+        (filename, "")
+    };
+
+    for n in 1..1000 {
+        let candidate = format!("{}-{}{}", stem, n, ext);
+        if !entries.iter().any(|e| e.name == candidate) {
+            return candidate;
+        }
+    }
+
+    // Fallback with timestamp
+    let timestamp = Local::now().format("%Y%m%d%H%M%S");
+    format!("{}-{}{}", stem, timestamp, ext)
+}
+
+/// Save attachment content directly to the wiki's attachments folder.
+/// Used when we have file content (e.g., from file picker) instead of a source URI.
+/// Returns the relative path to use as _canonical_uri (e.g., "./attachments/image.png").
+pub fn save_attachment_content(wiki_uri: &str, content: &[u8], filename: &str) -> Result<String, String> {
+    eprintln!("[SAF] save_attachment_content: wiki_uri={}", wiki_uri);
+    eprintln!("[SAF] save_attachment_content: filename={}, content_len={}", filename, content.len());
+
+    // Get the documentTopTreeUri from the wiki URI - this is the parent directory
+    let tree_uri = if wiki_uri.starts_with('{') {
+        if let Ok(uri_json) = serde_json::from_str::<serde_json::Value>(wiki_uri) {
+            uri_json.get("documentTopTreeUri")
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty())
+                .map(|s| s.to_string())
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    let tree_uri = tree_uri.ok_or_else(|| {
+        "No tree access for wiki - cannot create attachments folder. Re-open wiki via folder picker.".to_string()
+    })?;
+
+    // Create a FileUri for the parent directory
+    let tree_json = format!(r#"{{"uri":"{}","documentTopTreeUri":"{}"}}"#, tree_uri, tree_uri);
+
+    // Create or find the "attachments" folder
+    let attachments_dir = find_or_create_subdirectory(&tree_json, "attachments")?;
+    eprintln!("[SAF] save_attachment_content: attachments_dir={}", attachments_dir);
+
+    // Check if a file with the same name already exists
+    let entries = list_directory_entries(&attachments_dir).unwrap_or_default();
+
+    // Find a unique filename
+    let final_name = find_unique_filename(&entries, filename, content);
+    eprintln!("[SAF] save_attachment_content: final_name={}", final_name);
+
+    // If the file already exists with same content, just return the path
+    if final_name == filename {
+        for entry in &entries {
+            if entry.name == filename {
+                // File exists - check if content is the same
+                if let Ok(existing_content) = read_document_bytes(&entry.uri) {
+                    if existing_content == content {
+                        eprintln!("[SAF] save_attachment_content: identical file already exists, skipping save");
+                        return Ok(format!("./attachments/{}", filename));
+                    }
+                }
+                break;
+            }
+        }
+    }
+
+    // Guess MIME type from filename
+    let mime_type = guess_mime_type(&final_name);
+
+    // Create the new file
+    let new_file_uri = create_file(&attachments_dir, &final_name, Some(mime_type))?;
+    eprintln!("[SAF] save_attachment_content: created file {}", new_file_uri);
+
+    // Write content
+    write_document_bytes(&new_file_uri, content)?;
+    eprintln!("[SAF] save_attachment_content: wrote content successfully");
+
+    Ok(format!("./attachments/{}", final_name))
+}
+
+/// Guess MIME type from filename extension.
+fn guess_mime_type(filename: &str) -> &'static str {
+    let ext = filename.rsplit('.').next().unwrap_or("").to_lowercase();
+    match ext.as_str() {
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "svg" => "image/svg+xml",
+        "bmp" => "image/bmp",
+        "ico" => "image/x-icon",
+        "pdf" => "application/pdf",
+        "mp3" => "audio/mpeg",
+        "wav" => "audio/wav",
+        "ogg" => "audio/ogg",
+        "mp4" => "video/mp4",
+        "webm" => "video/webm",
+        "txt" => "text/plain",
+        "json" => "application/json",
+        "xml" => "application/xml",
+        "html" | "htm" => "text/html",
+        "css" => "text/css",
+        "js" => "application/javascript",
+        _ => "application/octet-stream",
+    }
 }

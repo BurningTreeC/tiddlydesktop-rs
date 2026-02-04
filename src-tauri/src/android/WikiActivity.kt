@@ -1,0 +1,3664 @@
+package com.burningtreec.tiddlydesktop_rs
+
+import android.annotation.SuppressLint
+import android.app.ActivityManager
+import android.content.Context
+import android.content.Intent
+import android.graphics.Bitmap
+import android.graphics.Color
+import android.graphics.pdf.PdfRenderer
+import android.net.Uri
+import android.os.Build
+import android.os.Bundle
+import android.os.ParcelFileDescriptor
+import android.os.PowerManager
+import android.util.Base64
+import android.util.Log
+import android.view.KeyEvent
+import android.view.View
+import android.view.WindowInsetsController
+import android.webkit.JavascriptInterface
+import android.webkit.MimeTypeMap
+import android.webkit.ValueCallback
+import android.webkit.WebChromeClient
+import android.webkit.WebResourceRequest
+import android.webkit.WebResourceResponse
+import android.webkit.WebSettings
+import android.webkit.WebView
+import android.webkit.WebViewClient
+import androidx.activity.result.ActivityResultLauncher
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.appcompat.app.AppCompatActivity
+import androidx.documentfile.provider.DocumentFile
+import org.json.JSONObject
+import java.io.ByteArrayInputStream
+import java.io.ByteArrayOutputStream
+import java.net.URLDecoder
+
+/**
+ * Activity for opening individual wiki files in separate app instances.
+ * Each wiki opens in its own task (visible as separate entry in recent apps).
+ *
+ * This is a standalone WebView activity that doesn't use Tauri infrastructure.
+ * It simply loads the wiki URL (http://127.0.0.1:port) in a WebView.
+ *
+ * The wiki URL must be passed via Intent extras:
+ * - EXTRA_WIKI_PATH: The wiki path/URI (used as unique identifier)
+ * - EXTRA_WIKI_URL: The URL to load (required)
+ * - EXTRA_WIKI_TITLE: Display name for the wiki (optional)
+ */
+class WikiActivity : AppCompatActivity() {
+
+    companion object {
+        const val EXTRA_WIKI_PATH = "wiki_path"
+        const val EXTRA_WIKI_URL = "wiki_url"  // Server URL for folder wikis (Node.js --listen)
+        const val EXTRA_WIKI_TITLE = "wiki_title"
+        const val EXTRA_IS_FOLDER = "is_folder"
+        private const val TAG = "WikiActivity"
+
+        init {
+            // Load the native library for JNI calls
+            try {
+                System.loadLibrary("tiddlydesktop_rs")
+                Log.d(TAG, "Native library loaded successfully")
+            } catch (e: UnsatisfiedLinkError) {
+                Log.e(TAG, "Failed to load native library: ${e.message}")
+            }
+        }
+
+        /**
+         * Native method to clean up local wiki copies for folder wikis.
+         * Called from onDestroy() for folder wikis that use Node.js server.
+         */
+        @JvmStatic
+        external fun cleanupWikiLocalCopy(wikiPath: String, isFolder: Boolean)
+
+        /**
+         * Check if a wiki is already open by scanning running tasks.
+         * Returns the task ID if open, or -1 if not.
+         * Works across processes via ActivityManager.
+         */
+        @JvmStatic
+        fun getOpenWikiTaskId(context: Context, wikiPath: String): Int {
+            Log.d(TAG, "getOpenWikiTaskId: checking for $wikiPath")
+
+            val appTask = findWikiTask(context, wikiPath)
+            if (appTask != null) {
+                val taskId = appTask.taskInfo.taskId
+                Log.d(TAG, "getOpenWikiTaskId: found task with taskId $taskId")
+                return taskId
+            }
+
+            Log.d(TAG, "getOpenWikiTaskId: not found")
+            return -1
+        }
+
+        /**
+         * Find an existing wiki task by scanning app tasks.
+         * Works across processes via ActivityManager.
+         * Returns the AppTask if found, null otherwise.
+         */
+        @JvmStatic
+        fun findWikiTask(context: Context, wikiPath: String): ActivityManager.AppTask? {
+            Log.d(TAG, "findWikiTask: scanning for $wikiPath")
+
+            try {
+                val activityManager = context.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
+                val appTasks = activityManager.appTasks
+
+                Log.d(TAG, "findWikiTask: found ${appTasks.size} app tasks")
+
+                for (task in appTasks) {
+                    try {
+                        val taskInfo = task.taskInfo
+                        val baseIntent = taskInfo.baseIntent
+                        val component = baseIntent.component
+
+                        // Check if this is a WikiActivity task
+                        if (component?.className == WikiActivity::class.java.name) {
+                            val taskWikiPath = baseIntent.getStringExtra(EXTRA_WIKI_PATH)
+                            Log.d(TAG, "findWikiTask: found WikiActivity task with path: $taskWikiPath")
+
+                            if (taskWikiPath == wikiPath) {
+                                Log.d(TAG, "findWikiTask: MATCH! taskId=${taskInfo.taskId}")
+                                return task
+                            }
+                        }
+                    } catch (e: Exception) {
+                        Log.w(TAG, "findWikiTask: error checking task: ${e.message}")
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "findWikiTask: error scanning tasks: ${e.message}")
+            }
+
+            Log.d(TAG, "findWikiTask: no matching task found")
+            return null
+        }
+
+        /**
+         * Bring an existing wiki task to the foreground.
+         * Returns true if successful.
+         */
+        @JvmStatic
+        fun bringWikiToFront(context: Context, wikiPath: String): Boolean {
+            Log.d(TAG, "bringWikiToFront: attempting for $wikiPath")
+
+            // Use AppTask API to find and bring task to front
+            val appTask = findWikiTask(context, wikiPath)
+            if (appTask != null) {
+                try {
+                    appTask.moveToFront()
+                    Log.d(TAG, "bringWikiToFront: success via AppTask API")
+                    return true
+                } catch (e: Exception) {
+                    Log.e(TAG, "bringWikiToFront: AppTask.moveToFront failed: ${e.message}")
+                }
+            }
+
+            Log.d(TAG, "bringWikiToFront: failed - no task found")
+            return false
+        }
+
+        /**
+         * Check if any wiki is open by scanning running tasks.
+         * Works across processes via ActivityManager.
+         */
+        @JvmStatic
+        fun hasOpenWikis(context: Context): Boolean {
+            try {
+                val activityManager = context.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
+                val appTasks = activityManager.appTasks
+
+                for (task in appTasks) {
+                    try {
+                        val taskInfo = task.taskInfo
+                        val component = taskInfo.baseIntent.component
+                        if (component?.className == WikiActivity::class.java.name) {
+                            Log.d(TAG, "hasOpenWikis: found open wiki task")
+                            return true
+                        }
+                    } catch (e: Exception) {
+                        // Ignore individual task errors
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "hasOpenWikis: error scanning tasks: ${e.message}")
+            }
+            return false
+        }
+    }
+
+    private lateinit var webView: WebView
+    private var wikiPath: String? = null
+    private var isFolder: Boolean = false
+    private var httpServer: WikiHttpServer? = null
+
+    // WakeLock to keep the HTTP server alive when app is in background
+    private var wakeLock: PowerManager.WakeLock? = null
+
+    // File chooser support for import functionality
+    private var filePathCallback: ValueCallback<Array<Uri>>? = null
+    private lateinit var fileChooserLauncher: ActivityResultLauncher<Intent>
+
+    // Export/save file support
+    private lateinit var createDocumentLauncher: ActivityResultLauncher<Intent>
+    private var pendingExportContent: ByteArray? = null
+    private var pendingExportCallback: String? = null
+
+    /**
+     * JavaScript interface for receiving palette color updates from TiddlyWiki.
+     */
+    inner class PaletteInterface {
+        @JavascriptInterface
+        fun setSystemBarColors(statusBarColor: String, navBarColor: String, foregroundColor: String?) {
+            Log.d(TAG, "setSystemBarColors called: status=$statusBarColor, nav=$navBarColor, fg=$foregroundColor")
+            runOnUiThread {
+                updateSystemBarColors(statusBarColor, navBarColor, foregroundColor)
+            }
+        }
+    }
+
+    /**
+     * JavaScript interface for server control (restart on disconnect).
+     */
+    inner class ServerInterface {
+        /**
+         * Restart the HTTP server and navigate to the new URL.
+         * This clears the WebView history to prevent back-navigation to dead server URLs.
+         * Returns JSON with success status.
+         */
+        @JavascriptInterface
+        fun restartServerAndNavigate(): String {
+            Log.d(TAG, "restartServerAndNavigate called from JavaScript")
+            return try {
+                if (httpServer != null) {
+                    val newUrl = httpServer!!.restart()
+                    Log.d(TAG, "Server restarted at: $newUrl")
+
+                    // Load the new URL and clear history on the UI thread
+                    runOnUiThread {
+                        webView.clearHistory()
+                        webView.loadUrl(newUrl)
+                    }
+
+                    "{\"success\":true}"
+                } else {
+                    Log.e(TAG, "No HTTP server to restart")
+                    "{\"success\":false,\"error\":\"No server available\"}"
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to restart server: ${e.message}")
+                val escapedError = e.message?.replace("\\", "\\\\")?.replace("\"", "\\\"") ?: "Unknown error"
+                "{\"success\":false,\"error\":\"$escapedError\"}"
+            }
+        }
+
+        /**
+         * Legacy method for backwards compatibility.
+         * Prefer restartServerAndNavigate() to avoid back-navigation issues.
+         */
+        @JavascriptInterface
+        fun restartServer(): String {
+            Log.d(TAG, "restartServer called from JavaScript")
+            return try {
+                if (httpServer != null) {
+                    val newUrl = httpServer!!.restart()
+                    Log.d(TAG, "Server restarted at: $newUrl")
+                    "{\"success\":true,\"url\":\"$newUrl\"}"
+                } else {
+                    Log.e(TAG, "No HTTP server to restart")
+                    "{\"success\":false,\"error\":\"No server available\"}"
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to restart server: ${e.message}")
+                val escapedError = e.message?.replace("\\", "\\\\")?.replace("\"", "\\\"") ?: "Unknown error"
+                "{\"success\":false,\"error\":\"$escapedError\"}"
+            }
+        }
+
+        /**
+         * Check if the server is running.
+         */
+        @JavascriptInterface
+        fun isServerRunning(): Boolean {
+            return httpServer?.isRunning() ?: false
+        }
+
+        /**
+         * Check if this is a single-file wiki (has local HTTP server).
+         */
+        @JavascriptInterface
+        fun isSingleFileWiki(): Boolean {
+            return !isFolder && httpServer != null
+        }
+    }
+
+    /**
+     * JavaScript interface for external attachments.
+     * Files stay where they are - we just reference them.
+     */
+    inner class AttachmentInterface {
+        /**
+         * Get the content:// URI for a file that was just picked.
+         * Called from JavaScript import hook to get the URI to store in _canonical_uri.
+         */
+        @JavascriptInterface
+        fun getFileUri(filename: String): String {
+            Log.d(TAG, "getFileUri called: $filename")
+
+            val uri = pendingFileUris[filename]
+            return if (uri != null) {
+                // Remove from pending after retrieval
+                pendingFileUris.remove(filename)
+                Log.d(TAG, "Found URI for $filename: $uri")
+                "{\"success\":true,\"uri\":\"$uri\"}"
+            } else {
+                Log.w(TAG, "No URI found for: $filename")
+                "{\"success\":false,\"error\":\"No URI found for file\"}"
+            }
+        }
+
+        /**
+         * Check if a content:// URI is accessible (has permission).
+         * Returns JSON with success status.
+         */
+        @JavascriptInterface
+        fun checkUriPermission(uriString: String): String {
+            Log.d(TAG, "checkUriPermission called: $uriString")
+            return try {
+                val uri = Uri.parse(uriString)
+                // Try to get the file name - this will fail if we don't have permission
+                contentResolver.query(uri, null, null, null, null)?.use { cursor ->
+                    if (cursor.moveToFirst()) {
+                        "{\"accessible\":true}"
+                    } else {
+                        "{\"accessible\":false,\"error\":\"Empty cursor\"}"
+                    }
+                } ?: "{\"accessible\":false,\"error\":\"Query returned null\"}"
+            } catch (e: SecurityException) {
+                Log.d(TAG, "No permission for URI: $uriString")
+                "{\"accessible\":false,\"error\":\"No permission\"}"
+            } catch (e: Exception) {
+                Log.e(TAG, "Error checking URI: ${e.message}")
+                "{\"accessible\":false,\"error\":\"${e.message?.replace("\"", "\\\"") ?: "Unknown error"}\"}"
+            }
+        }
+
+        /**
+         * Get metadata about a file (filename, size, type).
+         * Used when importing to store alongside _canonical_uri.
+         */
+        @JavascriptInterface
+        fun getFileMetadata(uriString: String): String {
+            Log.d(TAG, "getFileMetadata called: $uriString")
+            return try {
+                val uri = Uri.parse(uriString)
+                var filename: String? = null
+                var size: Long = -1
+                var mimeType: String? = null
+
+                contentResolver.query(uri, null, null, null, null)?.use { cursor ->
+                    if (cursor.moveToFirst()) {
+                        val nameIndex = cursor.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
+                        val sizeIndex = cursor.getColumnIndex(android.provider.OpenableColumns.SIZE)
+                        if (nameIndex >= 0) filename = cursor.getString(nameIndex)
+                        if (sizeIndex >= 0) size = cursor.getLong(sizeIndex)
+                    }
+                }
+
+                mimeType = contentResolver.getType(uri)
+
+                val escapedFilename = filename?.replace("\\", "\\\\")?.replace("\"", "\\\"") ?: ""
+                val escapedMimeType = mimeType?.replace("\\", "\\\\")?.replace("\"", "\\\"") ?: ""
+
+                "{\"success\":true,\"filename\":\"$escapedFilename\",\"size\":$size,\"mimeType\":\"$escapedMimeType\"}"
+            } catch (e: Exception) {
+                Log.e(TAG, "Error getting file metadata: ${e.message}")
+                "{\"success\":false,\"error\":\"${e.message?.replace("\"", "\\\"") ?: "Unknown error"}\"}"
+            }
+        }
+
+        /**
+         * Copy a file from its content:// URI to the wiki's attachments folder.
+         * Returns JSON with the relative path for _canonical_uri.
+         * This avoids SAF permission issues by keeping attachments local.
+         */
+        @JavascriptInterface
+        fun copyToAttachments(sourceUriString: String, suggestedFilename: String, mimeType: String): String {
+            Log.d(TAG, "copyToAttachments called: uri=$sourceUriString, filename=$suggestedFilename, type=$mimeType")
+
+            return try {
+                val sourceUri = Uri.parse(sourceUriString)
+
+                // Check if we have tree access for creating attachments directory
+                if (treeUri == null) {
+                    Log.e(TAG, "No tree URI available - cannot create attachments directory")
+                    return "{\"success\":false,\"error\":\"No folder access. Please re-open this wiki via the folder picker to enable attachments.\"}"
+                }
+
+                val parentDoc = DocumentFile.fromTreeUri(this@WikiActivity, treeUri!!)
+                if (parentDoc == null) {
+                    Log.e(TAG, "Cannot access tree URI")
+                    return "{\"success\":false,\"error\":\"Cannot access wiki folder\"}"
+                }
+
+                // Find or create attachments directory
+                var attachmentsDir = parentDoc.findFile("attachments")
+                if (attachmentsDir == null) {
+                    attachmentsDir = parentDoc.createDirectory("attachments")
+                    if (attachmentsDir == null) {
+                        Log.e(TAG, "Failed to create attachments directory")
+                        return "{\"success\":false,\"error\":\"Failed to create attachments folder\"}"
+                    }
+                    Log.d(TAG, "Created attachments directory")
+                }
+
+                // Sanitize filename
+                val safeName = suggestedFilename.replace("/", "_").replace("\\", "_")
+
+                // Helper to compare file contents byte-by-byte
+                fun filesAreIdentical(uri1: Uri, uri2: Uri): Boolean {
+                    try {
+                        contentResolver.openInputStream(uri1)?.use { stream1 ->
+                            contentResolver.openInputStream(uri2)?.use { stream2 ->
+                                val buffer1 = ByteArray(8192)
+                                val buffer2 = ByteArray(8192)
+                                while (true) {
+                                    val read1 = stream1.read(buffer1)
+                                    val read2 = stream2.read(buffer2)
+                                    if (read1 != read2) return false
+                                    if (read1 == -1) return true
+                                    if (!buffer1.copyOf(read1).contentEquals(buffer2.copyOf(read2))) return false
+                                }
+                            }
+                        }
+                        return false
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Error comparing files: ${e.message}")
+                        return false
+                    }
+                }
+
+                // Check for existing file and generate unique name (or reuse if identical)
+                var finalName = safeName
+                var existingFile = attachmentsDir.findFile(safeName)
+                if (existingFile != null) {
+                    // Check if content is identical - if so, reuse existing file
+                    if (filesAreIdentical(sourceUri, existingFile.uri)) {
+                        val relativePath = "./attachments/$safeName"
+                        Log.d(TAG, "Attachment already exists with identical content: $relativePath")
+                        val escapedPath = relativePath.replace("\\", "\\\\").replace("\"", "\\\"")
+                        return "{\"success\":true,\"path\":\"$escapedPath\",\"reused\":true}"
+                    }
+
+                    // Different content, find unique name
+                    val baseName = safeName.substringBeforeLast(".")
+                    val ext = safeName.substringAfterLast(".", "")
+                    var counter = 1
+                    do {
+                        finalName = if (ext.isNotEmpty()) "${baseName}-$counter.$ext" else "${baseName}-$counter"
+                        existingFile = attachmentsDir.findFile(finalName)
+                        // Also check if this numbered version has identical content
+                        if (existingFile != null && filesAreIdentical(sourceUri, existingFile.uri)) {
+                            val relativePath = "./attachments/$finalName"
+                            Log.d(TAG, "Attachment already exists with identical content: $relativePath")
+                            val escapedPath = relativePath.replace("\\", "\\\\").replace("\"", "\\\"")
+                            return "{\"success\":true,\"path\":\"$escapedPath\",\"reused\":true}"
+                        }
+                        counter++
+                    } while (existingFile != null && counter < 1000)
+                }
+
+                // Create the target file
+                val targetFile = attachmentsDir.createFile(mimeType.ifEmpty { "application/octet-stream" }, finalName)
+                if (targetFile == null) {
+                    Log.e(TAG, "Failed to create attachment file")
+                    return "{\"success\":false,\"error\":\"Failed to create attachment file\"}"
+                }
+
+                // Copy content
+                contentResolver.openInputStream(sourceUri)?.use { input ->
+                    contentResolver.openOutputStream(targetFile.uri)?.use { output ->
+                        input.copyTo(output)
+                    }
+                } ?: run {
+                    targetFile.delete()
+                    Log.e(TAG, "Failed to read source file")
+                    return "{\"success\":false,\"error\":\"Failed to read source file\"}"
+                }
+
+                val relativePath = "./attachments/$finalName"
+                Log.d(TAG, "Attachment copied successfully: $relativePath")
+
+                val escapedPath = relativePath.replace("\\", "\\\\").replace("\"", "\\\"")
+                "{\"success\":true,\"path\":\"$escapedPath\"}"
+            } catch (e: Exception) {
+                Log.e(TAG, "Error copying attachment: ${e.message}", e)
+                val escapedError = e.message?.replace("\\", "\\\\")?.replace("\"", "\\\"") ?: "Unknown error"
+                "{\"success\":false,\"error\":\"$escapedError\"}"
+            }
+        }
+
+        /**
+         * Trigger file picker to re-authorize an attachment.
+         * The result will be sent via callback.
+         */
+        @JavascriptInterface
+        fun pickFileForReauth(callbackId: String, mimeType: String?) {
+            Log.d(TAG, "pickFileForReauth called: callback=$callbackId, mimeType=$mimeType")
+            pendingReauthCallback = callbackId
+
+            runOnUiThread {
+                try {
+                    val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+                        addCategory(Intent.CATEGORY_OPENABLE)
+                        type = mimeType ?: "*/*"
+                        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                        addFlags(Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
+                    }
+                    reauthFileLauncher.launch(intent)
+                } catch (e: Exception) {
+                    Log.e(TAG, "Failed to launch file picker: ${e.message}")
+                    notifyReauthResult(null, "Failed to open file picker: ${e.message}")
+                }
+            }
+        }
+
+        /**
+         * Trigger folder picker for batch re-authorization.
+         * Scans the selected folder and returns all files with metadata.
+         */
+        @JavascriptInterface
+        fun pickFolderForBatchReauth(callbackId: String) {
+            Log.d(TAG, "pickFolderForBatchReauth called: callback=$callbackId")
+            pendingBatchReauthCallback = callbackId
+
+            runOnUiThread {
+                try {
+                    val intent = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).apply {
+                        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                        addFlags(Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
+                    }
+                    batchReauthFolderLauncher.launch(intent)
+                } catch (e: Exception) {
+                    Log.e(TAG, "Failed to launch folder picker: ${e.message}")
+                    notifyBatchReauthResult(null, "Failed to open folder picker: ${e.message}")
+                }
+            }
+        }
+
+        /**
+         * Check if we have folder access for creating attachments.
+         */
+        @JavascriptInterface
+        fun hasFolderAccess(): Boolean {
+            return treeUri != null
+        }
+
+        /**
+         * Request folder access for saving attachments.
+         * Stores the pending attachment info and launches folder picker.
+         * The result will be sent via __pendingAttachmentCallback.
+         */
+        @JavascriptInterface
+        fun requestFolderAccessForAttachment(sourceUri: String, filename: String, mimeType: String) {
+            Log.d(TAG, "requestFolderAccessForAttachment: uri=$sourceUri, filename=$filename")
+            pendingAttachmentCopy = Triple(sourceUri, filename, mimeType)
+
+            runOnUiThread {
+                try {
+                    val intent = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).apply {
+                        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                        addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+                        addFlags(Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
+                    }
+                    attachmentFolderLauncher.launch(intent)
+                } catch (e: Exception) {
+                    Log.e(TAG, "Failed to launch folder picker: ${e.message}")
+                    pendingAttachmentCopy = null
+                    runOnUiThread {
+                        webView.evaluateJavascript("""
+                            if (window.__pendingAttachmentCallback) {
+                                window.__pendingAttachmentCallback({"success":false,"error":"Failed to open folder picker: ${e.message?.replace("\"", "\\\"")}"});
+                                delete window.__pendingAttachmentCallback;
+                            }
+                        """.trimIndent(), null)
+                    }
+                }
+            }
+        }
+    }
+
+    // Pending callback for attachment re-authorization
+    private var pendingReauthCallback: String? = null
+    private lateinit var reauthFileLauncher: ActivityResultLauncher<Intent>
+
+    // Pending callback for batch re-authorization
+    private var pendingBatchReauthCallback: String? = null
+    private lateinit var batchReauthFolderLauncher: ActivityResultLauncher<Intent>
+
+    /**
+     * Notify JavaScript of re-authorization result.
+     */
+    private fun notifyReauthResult(newUri: String?, error: String?) {
+        val callbackId = pendingReauthCallback
+        pendingReauthCallback = null
+
+        if (callbackId != null) {
+            val script = if (newUri != null) {
+                val escapedUri = newUri.replace("\\", "\\\\").replace("'", "\\'")
+                """
+                    (function() {
+                        if (window.__reauthCallbacks && window.__reauthCallbacks['$callbackId']) {
+                            window.__reauthCallbacks['$callbackId'](true, '$escapedUri', null);
+                            delete window.__reauthCallbacks['$callbackId'];
+                        }
+                    })();
+                """.trimIndent()
+            } else {
+                val escapedError = error?.replace("\\", "\\\\")?.replace("'", "\\'")?.replace("\n", "\\n") ?: "Unknown error"
+                """
+                    (function() {
+                        if (window.__reauthCallbacks && window.__reauthCallbacks['$callbackId']) {
+                            window.__reauthCallbacks['$callbackId'](false, null, '$escapedError');
+                            delete window.__reauthCallbacks['$callbackId'];
+                        }
+                    })();
+                """.trimIndent()
+            }
+            runOnUiThread {
+                webView.evaluateJavascript(script, null)
+            }
+        }
+    }
+
+    /**
+     * Notify JavaScript of batch re-authorization result with list of files.
+     */
+    private fun notifyBatchReauthResult(filesJson: String?, error: String?) {
+        val callbackId = pendingBatchReauthCallback
+        pendingBatchReauthCallback = null
+
+        if (callbackId != null) {
+            val script = if (filesJson != null) {
+                """
+                    (function() {
+                        if (window.__batchReauthCallbacks && window.__batchReauthCallbacks['$callbackId']) {
+                            window.__batchReauthCallbacks['$callbackId'](true, $filesJson, null);
+                            delete window.__batchReauthCallbacks['$callbackId'];
+                        }
+                    })();
+                """.trimIndent()
+            } else {
+                val escapedError = error?.replace("\\", "\\\\")?.replace("'", "\\'")?.replace("\n", "\\n") ?: "Unknown error"
+                """
+                    (function() {
+                        if (window.__batchReauthCallbacks && window.__batchReauthCallbacks['$callbackId']) {
+                            window.__batchReauthCallbacks['$callbackId'](false, null, '$escapedError');
+                            delete window.__batchReauthCallbacks['$callbackId'];
+                        }
+                    })();
+                """.trimIndent()
+            }
+            runOnUiThread {
+                webView.evaluateJavascript(script, null)
+            }
+        }
+    }
+
+    /**
+     * Recursively scan a document tree and return all files with metadata.
+     */
+    private fun scanFolderForFiles(treeUri: Uri): List<Map<String, Any>> {
+        val files = mutableListOf<Map<String, Any>>()
+        val rootDoc = DocumentFile.fromTreeUri(this, treeUri) ?: return files
+
+        fun scanDocument(doc: DocumentFile) {
+            if (doc.isDirectory) {
+                doc.listFiles().forEach { child ->
+                    scanDocument(child)
+                }
+            } else if (doc.isFile) {
+                val uri = doc.uri
+                val filename = doc.name ?: ""
+                val size = doc.length()
+                val mimeType = doc.type ?: ""
+
+                // Take persistent permission for each file
+                try {
+                    contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                } catch (e: Exception) {
+                    Log.w(TAG, "Could not take persistent permission for: $uri")
+                }
+
+                files.add(mapOf(
+                    "uri" to uri.toString(),
+                    "filename" to filename,
+                    "size" to size,
+                    "mimeType" to mimeType
+                ))
+            }
+        }
+
+        scanDocument(rootDoc)
+        return files
+    }
+
+    /**
+     * JavaScript interface for exporting/saving files.
+     * Opens a SAF "create document" dialog to let user choose save location.
+     */
+    inner class ExportInterface {
+        /**
+         * Save a file with user-chosen location.
+         * @param filename Suggested filename for the save dialog
+         * @param mimeType MIME type of the content
+         * @param base64Content Base64-encoded file content
+         * @param callbackId Optional callback ID for async result
+         */
+        @JavascriptInterface
+        fun saveFile(filename: String, mimeType: String, base64Content: String, callbackId: String?) {
+            Log.d(TAG, "saveFile called: filename=$filename, mimeType=$mimeType, contentLength=${base64Content.length}, callback=$callbackId")
+
+            try {
+                // Decode the base64 content
+                val content = Base64.decode(base64Content, Base64.DEFAULT)
+                pendingExportContent = content
+                pendingExportCallback = callbackId
+
+                // Launch the create document intent on the UI thread
+                runOnUiThread {
+                    try {
+                        val intent = Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
+                            addCategory(Intent.CATEGORY_OPENABLE)
+                            type = mimeType
+                            putExtra(Intent.EXTRA_TITLE, filename)
+                        }
+                        createDocumentLauncher.launch(intent)
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Failed to launch save dialog: ${e.message}")
+                        notifyExportResult(false, "Failed to open save dialog: ${e.message}")
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to decode export content: ${e.message}")
+                notifyExportResult(false, "Failed to decode content: ${e.message}")
+            }
+        }
+
+        /**
+         * Save text content (convenience method - no base64 encoding needed).
+         */
+        @JavascriptInterface
+        fun saveTextFile(filename: String, mimeType: String, textContent: String, callbackId: String?) {
+            Log.d(TAG, "saveTextFile called: filename=$filename, mimeType=$mimeType, contentLength=${textContent.length}")
+
+            pendingExportContent = textContent.toByteArray(Charsets.UTF_8)
+            pendingExportCallback = callbackId
+
+            runOnUiThread {
+                try {
+                    val intent = Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
+                        addCategory(Intent.CATEGORY_OPENABLE)
+                        type = mimeType
+                        putExtra(Intent.EXTRA_TITLE, filename)
+                    }
+                    createDocumentLauncher.launch(intent)
+                } catch (e: Exception) {
+                    Log.e(TAG, "Failed to launch save dialog: ${e.message}")
+                    notifyExportResult(false, "Failed to open save dialog: ${e.message}")
+                }
+            }
+        }
+    }
+
+    /**
+     * Notify JavaScript of export result.
+     */
+    private fun notifyExportResult(success: Boolean, message: String?) {
+        val callbackId = pendingExportCallback
+        pendingExportCallback = null
+        pendingExportContent = null
+
+        if (callbackId != null) {
+            val escapedMessage = message?.replace("\\", "\\\\")?.replace("'", "\\'")?.replace("\n", "\\n") ?: ""
+            val script = """
+                (function() {
+                    if (window.__exportCallbacks && window.__exportCallbacks['$callbackId']) {
+                        window.__exportCallbacks['$callbackId']($success, '$escapedMessage');
+                        delete window.__exportCallbacks['$callbackId'];
+                    }
+                })();
+            """.trimIndent()
+            runOnUiThread {
+                webView.evaluateJavascript(script, null)
+            }
+        }
+    }
+
+    // Map of filename -> content:// URI for files picked via file chooser
+    private val pendingFileUris = mutableMapOf<String, String>()
+
+    // Tree URI for folder access
+    private var treeUri: Uri? = null
+
+    // Pending attachment copy operation (waiting for folder access)
+    private var pendingAttachmentCopy: Triple<String, String, String>? = null  // sourceUri, filename, mimeType
+
+    // Launcher for requesting folder access for attachments
+    private lateinit var attachmentFolderLauncher: ActivityResultLauncher<Intent>
+
+    /**
+     * Get the display name (filename) from a content:// URI.
+     */
+    private fun getFileName(uri: Uri): String? {
+        var name: String? = null
+        if (uri.scheme == "content") {
+            contentResolver.query(uri, null, null, null, null)?.use { cursor ->
+                if (cursor.moveToFirst()) {
+                    val nameIndex = cursor.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
+                    if (nameIndex >= 0) {
+                        name = cursor.getString(nameIndex)
+                    }
+                }
+            }
+        }
+        if (name == null) {
+            name = uri.lastPathSegment
+        }
+        return name
+    }
+
+    /**
+     * Update the status bar and navigation bar colors.
+     */
+    private fun updateSystemBarColors(statusBarColorHex: String, navBarColorHex: String, foregroundColorHex: String? = null) {
+        try {
+            val statusColor = Color.parseColor(statusBarColorHex)
+            val navColor = Color.parseColor(navBarColorHex)
+
+            window.statusBarColor = statusColor
+            window.navigationBarColor = navColor
+
+            // Determine if we should use dark icons based on foreground color
+            // Dark foreground = light background = use dark icons
+            val useDarkIcons = if (foregroundColorHex != null) {
+                try {
+                    val fgColor = Color.parseColor(foregroundColorHex)
+                    calculateLuminance(fgColor) < 0.5 // Dark foreground = dark icons
+                } catch (e: Exception) {
+                    calculateLuminance(statusColor) > 0.5 // Fallback to background
+                }
+            } else {
+                calculateLuminance(statusColor) > 0.5 // Fallback to background
+            }
+
+            // Update icon colors - dark icons on light background, light icons on dark background
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                val insetsController = window.insetsController
+                if (insetsController != null) {
+                    // APPEARANCE_LIGHT_STATUS_BARS means dark icons (for light backgrounds)
+                    if (useDarkIcons) {
+                        insetsController.setSystemBarsAppearance(
+                            WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS or WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS,
+                            WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS or WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS
+                        )
+                    } else {
+                        insetsController.setSystemBarsAppearance(
+                            0,
+                            WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS or WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS
+                        )
+                    }
+                }
+            } else {
+                @Suppress("DEPRECATION")
+                val flags = window.decorView.systemUiVisibility
+
+                var newFlags = flags
+                newFlags = if (useDarkIcons) {
+                    newFlags or View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR
+                } else {
+                    newFlags and View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR.inv()
+                }
+
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    newFlags = if (useDarkIcons) {
+                        newFlags or View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR
+                    } else {
+                        newFlags and View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR.inv()
+                    }
+                }
+
+                @Suppress("DEPRECATION")
+                window.decorView.systemUiVisibility = newFlags
+            }
+
+            Log.d(TAG, "System bar colors updated successfully")
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to update system bar colors: ${e.message}")
+        }
+    }
+
+    /**
+     * Calculate relative luminance of a color (0.0 = dark, 1.0 = light).
+     */
+    private fun calculateLuminance(color: Int): Double {
+        val r = Color.red(color) / 255.0
+        val g = Color.green(color) / 255.0
+        val b = Color.blue(color) / 255.0
+
+        val rLinear = if (r <= 0.03928) r / 12.92 else Math.pow((r + 0.055) / 1.055, 2.4)
+        val gLinear = if (g <= 0.03928) g / 12.92 else Math.pow((g + 0.055) / 1.055, 2.4)
+        val bLinear = if (b <= 0.03928) b / 12.92 else Math.pow((b + 0.055) / 1.055, 2.4)
+
+        return 0.2126 * rLinear + 0.7152 * gLinear + 0.0722 * bLinear
+    }
+
+    @SuppressLint("SetJavaScriptEnabled")
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+
+        // Register the file chooser launcher for import functionality
+        fileChooserLauncher = registerForActivityResult(
+            ActivityResultContracts.StartActivityForResult()
+        ) { result ->
+            val uris = if (result.resultCode == RESULT_OK && result.data != null) {
+                val data = result.data!!
+                // Handle multiple file selection
+                val clipData = data.clipData
+                if (clipData != null) {
+                    Array(clipData.itemCount) { i -> clipData.getItemAt(i).uri }
+                } else {
+                    // Single file
+                    data.data?.let { arrayOf(it) } ?: emptyArray()
+                }
+            } else {
+                emptyArray()
+            }
+            Log.d(TAG, "File chooser result: ${uris.size} files selected")
+
+            // Store URI -> filename mapping and take persistent permissions
+            for (uri in uris) {
+                try {
+                    // Take persistent permission so we can access the file later
+                    contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    Log.d(TAG, "Took persistent permission for: $uri")
+                } catch (e: Exception) {
+                    Log.w(TAG, "Could not take persistent permission: ${e.message}")
+                }
+
+                // Get the display name and store the mapping
+                val filename = getFileName(uri)
+                if (filename != null) {
+                    pendingFileUris[filename] = uri.toString()
+                    Log.d(TAG, "Stored URI mapping: $filename -> $uri")
+                }
+            }
+
+            filePathCallback?.onReceiveValue(uris)
+            filePathCallback = null
+        }
+
+        // Register the create document launcher for export/save functionality
+        createDocumentLauncher = registerForActivityResult(
+            ActivityResultContracts.StartActivityForResult()
+        ) { result ->
+            if (result.resultCode == RESULT_OK && result.data?.data != null) {
+                val uri = result.data!!.data!!
+                Log.d(TAG, "Save location selected: $uri")
+
+                val content = pendingExportContent
+                if (content != null) {
+                    try {
+                        contentResolver.openOutputStream(uri)?.use { outputStream ->
+                            outputStream.write(content)
+                        }
+                        Log.d(TAG, "File saved successfully: ${content.size} bytes")
+                        notifyExportResult(true, "File saved successfully")
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Failed to save file: ${e.message}")
+                        notifyExportResult(false, "Failed to save file: ${e.message}")
+                    }
+                } else {
+                    Log.e(TAG, "No pending export content")
+                    notifyExportResult(false, "No content to save")
+                }
+            } else {
+                Log.d(TAG, "Save cancelled by user")
+                notifyExportResult(false, "Save cancelled")
+            }
+            pendingExportContent = null
+        }
+
+        // Register the file picker launcher for attachment re-authorization
+        reauthFileLauncher = registerForActivityResult(
+            ActivityResultContracts.StartActivityForResult()
+        ) { result ->
+            if (result.resultCode == RESULT_OK && result.data?.data != null) {
+                val uri = result.data!!.data!!
+                Log.d(TAG, "Re-auth file selected: $uri")
+
+                try {
+                    // Take persistent permission
+                    contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    Log.d(TAG, "Took persistent permission for re-auth: $uri")
+                    notifyReauthResult(uri.toString(), null)
+                } catch (e: Exception) {
+                    Log.w(TAG, "Could not take persistent permission: ${e.message}")
+                    // Still return the URI, it might work for this session
+                    notifyReauthResult(uri.toString(), null)
+                }
+            } else {
+                Log.d(TAG, "Re-auth cancelled by user")
+                notifyReauthResult(null, "Cancelled")
+            }
+        }
+
+        // Register the folder picker launcher for batch re-authorization
+        batchReauthFolderLauncher = registerForActivityResult(
+            ActivityResultContracts.StartActivityForResult()
+        ) { result ->
+            if (result.resultCode == RESULT_OK && result.data?.data != null) {
+                val treeUri = result.data!!.data!!
+                Log.d(TAG, "Batch re-auth folder selected: $treeUri")
+
+                try {
+                    // Take persistent permission for the tree
+                    contentResolver.takePersistableUriPermission(
+                        treeUri,
+                        Intent.FLAG_GRANT_READ_URI_PERMISSION
+                    )
+                    Log.d(TAG, "Took persistent permission for tree: $treeUri")
+
+                    // Scan the folder in a background thread
+                    Thread {
+                        try {
+                            val files = scanFolderForFiles(treeUri)
+                            Log.d(TAG, "Found ${files.size} files in folder")
+
+                            // Convert to JSON
+                            val jsonArray = StringBuilder("[")
+                            files.forEachIndexed { index, file ->
+                                if (index > 0) jsonArray.append(",")
+                                val uri = (file["uri"] as String).replace("\\", "\\\\").replace("\"", "\\\"")
+                                val filename = (file["filename"] as String).replace("\\", "\\\\").replace("\"", "\\\"")
+                                val size = file["size"] as Long
+                                val mimeType = (file["mimeType"] as String).replace("\\", "\\\\").replace("\"", "\\\"")
+                                jsonArray.append("{\"uri\":\"$uri\",\"filename\":\"$filename\",\"size\":$size,\"mimeType\":\"$mimeType\"}")
+                            }
+                            jsonArray.append("]")
+
+                            notifyBatchReauthResult(jsonArray.toString(), null)
+                        } catch (e: Exception) {
+                            Log.e(TAG, "Error scanning folder: ${e.message}")
+                            notifyBatchReauthResult(null, "Error scanning folder: ${e.message}")
+                        }
+                    }.start()
+                } catch (e: Exception) {
+                    Log.w(TAG, "Could not take persistent permission for tree: ${e.message}")
+                    notifyBatchReauthResult(null, "Could not access folder: ${e.message}")
+                }
+            } else {
+                Log.d(TAG, "Batch re-auth cancelled by user")
+                notifyBatchReauthResult(null, "Cancelled")
+            }
+        }
+
+        // Register the folder picker for granting attachment folder access
+        attachmentFolderLauncher = registerForActivityResult(
+            ActivityResultContracts.StartActivityForResult()
+        ) { result ->
+            if (result.resultCode == RESULT_OK && result.data?.data != null) {
+                val newTreeUri = result.data!!.data!!
+                Log.d(TAG, "Attachment folder selected: $newTreeUri")
+
+                try {
+                    // Take persistent permission for the tree (read + write)
+                    contentResolver.takePersistableUriPermission(
+                        newTreeUri,
+                        Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                    )
+                    Log.d(TAG, "Took persistent permission for attachment folder: $newTreeUri")
+
+                    // Update the tree URI
+                    treeUri = newTreeUri
+
+                    // Retry pending attachment copy if any
+                    pendingAttachmentCopy?.let { (sourceUri, filename, mimeType) ->
+                        pendingAttachmentCopy = null
+                        val result = AttachmentInterface().copyToAttachments(sourceUri, filename, mimeType)
+                        Log.d(TAG, "Retry attachment copy result: $result")
+                        // Notify JavaScript of the result
+                        runOnUiThread {
+                            webView.evaluateJavascript("""
+                                if (window.__pendingAttachmentCallback) {
+                                    window.__pendingAttachmentCallback($result);
+                                    delete window.__pendingAttachmentCallback;
+                                }
+                            """.trimIndent(), null)
+                        }
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "Failed to handle attachment folder selection: ${e.message}")
+                    runOnUiThread {
+                        webView.evaluateJavascript("""
+                            if (window.__pendingAttachmentCallback) {
+                                window.__pendingAttachmentCallback({"success":false,"error":"Failed to access folder: ${e.message?.replace("\"", "\\\"")}"});
+                                delete window.__pendingAttachmentCallback;
+                            }
+                        """.trimIndent(), null)
+                    }
+                }
+            } else {
+                Log.d(TAG, "Attachment folder selection cancelled")
+                pendingAttachmentCopy = null
+                runOnUiThread {
+                    webView.evaluateJavascript("""
+                        if (window.__pendingAttachmentCallback) {
+                            window.__pendingAttachmentCallback({"success":false,"error":"Folder selection cancelled"});
+                            delete window.__pendingAttachmentCallback;
+                        }
+                    """.trimIndent(), null)
+                }
+            }
+        }
+
+        // Set unique WebView data directory suffix per wiki for session isolation.
+        // Each wiki gets its own cookies, localStorage, etc.
+        // This also prevents "Using WebView from more than one process at once" error.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            try {
+                val processName = android.app.Application.getProcessName()
+                if (processName != null && processName.contains(":wiki")) {
+                    // Use hash of wiki path for unique per-wiki session directory
+                    val wikiPathForHash = intent.getStringExtra(EXTRA_WIKI_PATH) ?: "default"
+                    val hash = wikiPathForHash.hashCode().toLong() and 0xFFFFFFFFL // Make positive
+                    val suffix = "wiki_${String.format("%08x", hash)}"
+                    WebView.setDataDirectorySuffix(suffix)
+                    Log.d(TAG, "Set WebView data directory suffix to '$suffix' for wiki: $wikiPathForHash")
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed to set WebView data directory suffix: ${e.message}")
+            }
+        }
+
+        wikiPath = intent.getStringExtra(EXTRA_WIKI_PATH)
+        val wikiTitle = intent.getStringExtra(EXTRA_WIKI_TITLE) ?: "TiddlyWiki"
+        isFolder = intent.getBooleanExtra(EXTRA_IS_FOLDER, false)
+        val folderServerUrl = intent.getStringExtra(EXTRA_WIKI_URL)  // For folder wikis: Node.js server URL
+
+        Log.d(TAG, "WikiActivity onCreate - path: $wikiPath, title: $wikiTitle, isFolder: $isFolder, folderUrl: $folderServerUrl")
+
+        if (wikiPath.isNullOrEmpty()) {
+            Log.e(TAG, "No wiki path provided!")
+            finish()
+            return
+        }
+
+        // Parse the wiki path to get URIs (needed for attachment saving)
+        val (wikiUri, parsedTreeUri) = try {
+            parseWikiPath(wikiPath!!)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to parse wiki path: ${e.message}")
+            finish()
+            return
+        }
+        treeUri = parsedTreeUri
+        Log.d(TAG, "Parsed wiki path: wikiUri=$wikiUri, treeUri=$treeUri")
+
+        // Determine the wiki URL based on wiki type
+        val wikiUrl: String
+        val attachmentServerUrl: String
+
+        if (isFolder) {
+            // Folder wiki: use Node.js server URL provided by Rust
+            if (folderServerUrl.isNullOrEmpty()) {
+                Log.e(TAG, "No server URL provided for folder wiki!")
+                finish()
+                return
+            }
+            wikiUrl = folderServerUrl
+            Log.d(TAG, "Folder wiki using Node.js server at: $wikiUrl")
+
+            // Also start an HTTP server for serving attachments (Node.js server doesn't have /_relative/ endpoint)
+            if (wikiUri != null && parsedTreeUri != null) {
+                httpServer = WikiHttpServer(this, wikiUri, parsedTreeUri, true, null)
+                attachmentServerUrl = try {
+                    httpServer!!.start()                } catch (e: Exception) {
+                    Log.e(TAG, "Failed to start attachment server: ${e.message}")
+                    // Fall back to wiki URL (attachments won't display but wiki will work)
+                    wikiUrl
+                }
+                Log.d(TAG, "Folder wiki attachment server at: $attachmentServerUrl")
+            } else {
+                attachmentServerUrl = wikiUrl
+                Log.w(TAG, "No tree URI for folder wiki - attachments won't be served locally")
+            }
+        } else {
+            // Single-file wiki: start local HTTP server in this process
+            if (wikiUri == null) {
+                Log.e(TAG, "No wiki URI in path!")
+                finish()
+                return
+            }
+
+            // Start local HTTP server in this process (independent of Tauri/landing page)
+            httpServer = WikiHttpServer(this, wikiUri, parsedTreeUri, false, null)
+            wikiUrl = try {
+                httpServer!!.start()            } catch (e: Exception) {
+                Log.e(TAG, "Failed to start HTTP server: ${e.message}")
+                finish()
+                return
+            }
+            // For single-file wikis, the wiki server also serves attachments
+            attachmentServerUrl = wikiUrl
+            Log.d(TAG, "Single-file wiki using local server at: $wikiUrl")
+
+            // Acquire WakeLock to keep server alive when app is in background
+            acquireWakeLock()
+        }
+
+        Log.d(TAG, "Wiki opened: path=$wikiPath, url=$wikiUrl, taskId=$taskId")
+
+        // Update the task title
+        setTaskDescription(ActivityManager.TaskDescription(wikiTitle))
+
+        // Create and configure WebView
+        webView = WebView(this).apply {
+            settings.apply {
+                javaScriptEnabled = true
+                domStorageEnabled = true
+                databaseEnabled = true
+                allowFileAccess = true
+                allowContentAccess = true
+                mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
+                // Enable modern web features
+                setSupportZoom(true)
+                builtInZoomControls = true
+                displayZoomControls = false
+                loadWithOverviewMode = true
+                useWideViewPort = true
+            }
+
+            // Custom WebChromeClient to handle file chooser (for Import button)
+            webChromeClient = object : WebChromeClient() {
+                override fun onShowFileChooser(
+                    webView: WebView?,
+                    filePathCallback: ValueCallback<Array<Uri>>?,
+                    fileChooserParams: FileChooserParams?
+                ): Boolean {
+                    // Cancel any pending callback
+                    this@WikiActivity.filePathCallback?.onReceiveValue(null)
+                    this@WikiActivity.filePathCallback = filePathCallback
+
+                    val acceptTypes = fileChooserParams?.acceptTypes ?: arrayOf("*/*")
+                    val mimeTypes = acceptTypes.filter { it.isNotEmpty() }.toTypedArray()
+                    val allowMultiple = fileChooserParams?.mode == FileChooserParams.MODE_OPEN_MULTIPLE
+
+                    Log.d(TAG, "onShowFileChooser: mimeTypes=${mimeTypes.joinToString()}, allowMultiple=$allowMultiple")
+
+                    try {
+                        val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+                            addCategory(Intent.CATEGORY_OPENABLE)
+                            type = if (mimeTypes.isNotEmpty() && mimeTypes[0].isNotEmpty()) mimeTypes[0] else "*/*"
+                            if (mimeTypes.size > 1) {
+                                putExtra(Intent.EXTRA_MIME_TYPES, mimeTypes)
+                            }
+                            if (allowMultiple) {
+                                putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
+                            }
+                        }
+                        fileChooserLauncher.launch(intent)
+                        return true
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Failed to launch file chooser: ${e.message}")
+                        this@WikiActivity.filePathCallback?.onReceiveValue(null)
+                        this@WikiActivity.filePathCallback = null
+                        return false
+                    }
+                }
+            }
+
+            // Add JavaScript interface for palette color updates
+            addJavascriptInterface(PaletteInterface(), "TiddlyDesktopAndroid")
+
+            // Add JavaScript interface for saving attachments
+            addJavascriptInterface(AttachmentInterface(), "TiddlyDesktopAttachments")
+
+            // Add JavaScript interface for exporting/saving files
+            addJavascriptInterface(ExportInterface(), "TiddlyDesktopExport")
+
+            // Add JavaScript interface for server control (restart on disconnect)
+            addJavascriptInterface(ServerInterface(), "TiddlyDesktopServer")
+        }
+
+        setContentView(webView)
+
+        // Inject JavaScript to handle external attachments and saving
+        // This transforms _canonical_uri paths to use the server's /_file/ endpoint
+        // Just use the URLs directly, trimming any trailing slash
+        val serverBaseUrl = wikiUrl.trimEnd('/')
+        val attachmentServerBaseUrl = attachmentServerUrl.trimEnd('/')
+
+        // Escape wikiPath for JavaScript (handle JSON and special characters)
+        val escapedWikiPath = wikiPath?.replace("\\", "\\\\")?.replace("'", "\\'")?.replace("\n", "\\n") ?: ""
+
+        // Script to handle external attachments - comprehensive implementation matching Desktop
+        val externalAttachmentScript = """
+            (function() {
+                // Wait for TiddlyWiki to load
+                if (typeof ${'$'}tw === 'undefined') {
+                    setTimeout(arguments.callee, 100);
+                    return;
+                }
+
+                // Store the server base URL and wiki path
+                window.__TD_SERVER_URL__ = '$serverBaseUrl';
+                window.__TD_ATTACHMENT_SERVER_URL__ = '$attachmentServerBaseUrl';
+                window.__WIKI_PATH__ = '$escapedWikiPath';
+                window.__IS_FOLDER_WIKI__ = $isFolder;
+
+                // ========== External Attachments Configuration ==========
+                var CONFIG_ENABLE = "${'$'}:/temp/tiddlydesktop/ExternalAttachments/Enable";
+                var CONFIG_SETTINGS_TAB = "${'$'}:/temp/tiddlydesktop/external-attachments/settings";
+                var SESSION_AUTH_SETTINGS_TAB = "${'$'}:/temp/tiddlydesktop/session-auth/settings";
+
+                // Helper to add tiddler as shadow (won't be saved with wiki)
+                function addShadowTiddler(fields) {
+                    var tiddler = new ${'$'}tw.Tiddler(fields);
+                    ${'$'}tw.wiki.shadowTiddlers = ${'$'}tw.wiki.shadowTiddlers || {};
+                    ${'$'}tw.wiki.shadowTiddlers[fields.title] = {
+                        tiddler: tiddler,
+                        source: "tiddlydesktop"
+                    };
+                    ${'$'}tw.wiki.addTiddler(tiddler);
+                    ${'$'}tw.wiki.clearCache(fields.title);
+                }
+
+                // Load settings from localStorage
+                function loadSettings() {
+                    try {
+                        var key = 'tiddlydesktop_external_attachments_' + window.__WIKI_PATH__;
+                        var stored = localStorage.getItem(key);
+                        if (stored) {
+                            return JSON.parse(stored);
+                        }
+                    } catch (e) {
+                        console.error('[TiddlyDesktop] Failed to load settings:', e);
+                    }
+                    // Default: enabled for all wikis
+                    return { enabled: true };
+                }
+
+                // Save settings to localStorage
+                function saveSettings(settings) {
+                    try {
+                        var key = 'tiddlydesktop_external_attachments_' + window.__WIKI_PATH__;
+                        localStorage.setItem(key, JSON.stringify(settings));
+                    } catch (e) {
+                        console.error('[TiddlyDesktop] Failed to save settings:', e);
+                    }
+                }
+
+                // Initialize from saved settings
+                var settings = loadSettings();
+
+                function injectSettingsUI() {
+                    var originalNumChanges = ${'$'}tw.saverHandler ? ${'$'}tw.saverHandler.numChanges : 0;
+
+                    // Set initial enable state using shadow tiddler
+                    addShadowTiddler({
+                        title: CONFIG_ENABLE,
+                        text: settings.enabled ? "yes" : "no"
+                    });
+
+                    // Build settings tab content - matches Desktop style
+                    var tabText = "When importing binary files (images, PDFs, etc.) into this wiki, you can optionally store them as external references instead of embedding them.\n\n" +
+                        "This keeps your wiki file smaller and allows the files to be edited externally.\n\n" +
+                        "<${'$'}checkbox tiddler=\"" + CONFIG_ENABLE + "\" field=\"text\" checked=\"yes\" unchecked=\"no\" default=\"yes\"> Enable external attachments</${'$'}checkbox>\n\n" +
+                        "//Attachments will be saved in the ''attachments'' folder next to your wiki.//\n\n";
+
+                    addShadowTiddler({
+                        title: CONFIG_SETTINGS_TAB,
+                        caption: "External Attachments",
+                        tags: "${'$'}:/tags/ControlPanel/SettingsTab",
+                        text: tabText
+                    });
+
+                    // Listen for changes to the enable setting
+                    ${'$'}tw.wiki.addEventListener("change", function(changes) {
+                        if (changes[CONFIG_ENABLE]) {
+                            var enabled = ${'$'}tw.wiki.getTiddlerText(CONFIG_ENABLE) === "yes";
+                            settings.enabled = enabled;
+                            saveSettings(settings);
+                            console.log('[TiddlyDesktop] External attachments ' + (enabled ? 'enabled' : 'disabled'));
+                        }
+                    });
+
+                    setTimeout(function() {
+                        if (${'$'}tw.saverHandler) {
+                            ${'$'}tw.saverHandler.numChanges = originalNumChanges;
+                            ${'$'}tw.saverHandler.updateDirtyStatus();
+                        }
+                    }, 0);
+
+                    console.log('[TiddlyDesktop] External attachments UI injected');
+                }
+
+                // ========== Transform image/media URLs for display ==========
+                // Use MutationObserver to transform src attributes at render time
+                // This preserves the original _canonical_uri (relative path) in the tiddler
+                // while displaying images via the local attachment server
+                function transformUrl(url) {
+                    if (!url) return url;
+                    // Already transformed or external URL
+                    if (url.startsWith('http://') || url.startsWith('https://') || url.startsWith('data:') || url.startsWith('blob:')) {
+                        return url;
+                    }
+                    // Absolute paths or content:// URIs -> /_file/ endpoint
+                    if (url.startsWith('/') || url.startsWith('content://') || url.startsWith('file://')) {
+                        var encoded = btoa(url).replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
+                        return window.__TD_ATTACHMENT_SERVER_URL__ + '/_file/' + encoded;
+                    }
+                    // Relative paths -> /_relative/ endpoint
+                    return window.__TD_ATTACHMENT_SERVER_URL__ + '/_relative/' + encodeURIComponent(url);
+                }
+
+                function transformElement(el) {
+                    // Transform img src
+                    if (el.tagName === 'IMG' && el.src) {
+                        var originalSrc = el.getAttribute('src');
+                        if (originalSrc && !originalSrc.startsWith('http://') && !originalSrc.startsWith('https://') && !originalSrc.startsWith('data:')) {
+                            el.src = transformUrl(originalSrc);
+                        }
+                    }
+                    // Transform video/audio src
+                    if ((el.tagName === 'VIDEO' || el.tagName === 'AUDIO') && el.src) {
+                        var originalSrc = el.getAttribute('src');
+                        if (originalSrc && !originalSrc.startsWith('http://') && !originalSrc.startsWith('https://') && !originalSrc.startsWith('data:')) {
+                            el.src = transformUrl(originalSrc);
+                        }
+                    }
+                    // Transform source elements inside video/audio
+                    if (el.tagName === 'SOURCE' && el.src) {
+                        var originalSrc = el.getAttribute('src');
+                        if (originalSrc && !originalSrc.startsWith('http://') && !originalSrc.startsWith('https://') && !originalSrc.startsWith('data:')) {
+                            el.src = transformUrl(originalSrc);
+                        }
+                    }
+                    // Transform object/embed data
+                    if ((el.tagName === 'OBJECT' || el.tagName === 'EMBED') && el.data) {
+                        var originalData = el.getAttribute('data');
+                        if (originalData && !originalData.startsWith('http://') && !originalData.startsWith('https://') && !originalData.startsWith('data:')) {
+                            el.data = transformUrl(originalData);
+                        }
+                    }
+                    // Transform iframe src for PDFs etc
+                    if (el.tagName === 'IFRAME' && el.src) {
+                        var originalSrc = el.getAttribute('src');
+                        if (originalSrc && !originalSrc.startsWith('http://') && !originalSrc.startsWith('https://') && !originalSrc.startsWith('data:') && !originalSrc.startsWith('about:')) {
+                            el.src = transformUrl(originalSrc);
+                        }
+                    }
+                }
+
+                // Transform existing elements
+                document.querySelectorAll('img, video, audio, source, object, embed, iframe').forEach(transformElement);
+
+                // Watch for new elements
+                var observer = new MutationObserver(function(mutations) {
+                    mutations.forEach(function(mutation) {
+                        mutation.addedNodes.forEach(function(node) {
+                            if (node.nodeType === 1) { // Element node
+                                transformElement(node);
+                                // Also check children
+                                node.querySelectorAll && node.querySelectorAll('img, video, audio, source, object, embed, iframe').forEach(transformElement);
+                            }
+                        });
+                        // Also handle attribute changes on existing elements
+                        if (mutation.type === 'attributes' && mutation.attributeName === 'src') {
+                            transformElement(mutation.target);
+                        }
+                    });
+                });
+                observer.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['src', 'data'] });
+                console.log('[TiddlyDesktop] URL transform observer installed');
+
+                // ========== Import Hook (th-importing-file) - matches Desktop ==========
+                function installImportHook() {
+                    if (!${'$'}tw.hooks) {
+                        setTimeout(installImportHook, 100);
+                        return;
+                    }
+
+                    ${'$'}tw.hooks.addHook("th-importing-file", function(info) {
+                        var file = info.file;
+                        var filename = file.name;
+                        var type = info.type;
+
+                        console.log('[TiddlyDesktop] th-importing-file hook: filename=' + filename + ', type=' + type + ', isBinary=' + info.isBinary);
+
+                        // Check if there's a deserializer for this file type
+                        var hasDeserializer = false;
+                        if (${'$'}tw.Wiki.tiddlerDeserializerModules) {
+                            if (${'$'}tw.Wiki.tiddlerDeserializerModules[type]) {
+                                hasDeserializer = true;
+                            }
+                            if (!hasDeserializer && ${'$'}tw.utils.getFileExtensionInfo) {
+                                var extInfo = ${'$'}tw.utils.getFileExtensionInfo(type);
+                                if (extInfo && ${'$'}tw.Wiki.tiddlerDeserializerModules[extInfo.type]) {
+                                    hasDeserializer = true;
+                                }
+                            }
+                            if (!hasDeserializer && ${'$'}tw.config.contentTypeInfo && ${'$'}tw.config.contentTypeInfo[type]) {
+                                var deserializerType = ${'$'}tw.config.contentTypeInfo[type].deserializerType;
+                                if (deserializerType && ${'$'}tw.Wiki.tiddlerDeserializerModules[deserializerType]) {
+                                    hasDeserializer = true;
+                                }
+                            }
+                        }
+
+                        // If there's a deserializer, let TiddlyWiki handle it
+                        if (hasDeserializer) {
+                            console.log('[TiddlyDesktop] Deserializer found for type ' + type + ', letting TiddlyWiki handle import');
+                            return false;
+                        }
+
+                        // Check if external attachments are enabled
+                        var externalEnabled = ${'$'}tw.wiki.getTiddlerText(CONFIG_ENABLE, "yes") === "yes";
+
+                        // Only handle binary files when external attachments enabled
+                        if (!externalEnabled || !info.isBinary) {
+                            console.log('[TiddlyDesktop] Letting TiddlyWiki handle import (external=' + externalEnabled + ', binary=' + info.isBinary + ')');
+                            return false; // Let TiddlyWiki handle it normally
+                        }
+
+                        console.log('[TiddlyDesktop] Intercepting binary import for external attachment: ' + filename);
+
+                        // Get the content:// URI for this file (stored when file was picked)
+                        if (typeof window.TiddlyDesktopAttachments === 'undefined' ||
+                            typeof window.TiddlyDesktopAttachments.getFileUri !== 'function') {
+                            console.log('[TiddlyDesktop] Attachment interface not available, letting TiddlyWiki handle');
+                            return false;
+                        }
+
+                        try {
+                            var resultJson = window.TiddlyDesktopAttachments.getFileUri(filename);
+                            console.log('[TiddlyDesktop] getFileUri result:', resultJson);
+                            var response = JSON.parse(resultJson);
+
+                            if (response.success && response.uri) {
+                                var sourceUri = response.uri;
+                                console.log('[TiddlyDesktop] Copying attachment to local folder: ' + filename);
+
+                                // Get file metadata first
+                                var metadata = { filename: filename, size: -1, mimeType: type };
+                                try {
+                                    var metaJson = window.TiddlyDesktopAttachments.getFileMetadata(sourceUri);
+                                    var metaResponse = JSON.parse(metaJson);
+                                    if (metaResponse.success) {
+                                        metadata.filename = metaResponse.filename || filename;
+                                        metadata.size = metaResponse.size || -1;
+                                        metadata.mimeType = metaResponse.mimeType || type;
+                                    }
+                                } catch (metaErr) {
+                                    console.warn('[TiddlyDesktop] Could not get file metadata:', metaErr);
+                                }
+
+                                // Check if we have folder access first
+                                if (!window.TiddlyDesktopAttachments.hasFolderAccess()) {
+                                    console.log('[TiddlyDesktop] No folder access - requesting permission');
+                                    // Store callback for when folder picker returns
+                                    window.__pendingAttachmentCallback = function(result) {
+                                        if (result && result.success && result.path) {
+                                            console.log('[TiddlyDesktop] Folder access granted, attachment copied: ' + result.path);
+                                            info.callback([{
+                                                title: metadata.filename,
+                                                type: metadata.mimeType,
+                                                _canonical_uri: result.path
+                                            }]);
+                                        } else {
+                                            console.log('[TiddlyDesktop] Folder access denied or failed, embedding file');
+                                            // Fall back to embedding
+                                            info.callback(null);
+                                        }
+                                    };
+                                    // Request folder access (will call callback when done)
+                                    window.TiddlyDesktopAttachments.requestFolderAccessForAttachment(sourceUri, metadata.filename, metadata.mimeType);
+                                    return true; // Signal we're handling it asynchronously
+                                }
+
+                                // Copy file to attachments folder (avoids SAF permission expiry)
+                                var copyResultJson = window.TiddlyDesktopAttachments.copyToAttachments(sourceUri, metadata.filename, metadata.mimeType);
+                                console.log('[TiddlyDesktop] copyToAttachments result:', copyResultJson);
+                                var copyResult = JSON.parse(copyResultJson);
+
+                                if (copyResult.success && copyResult.path) {
+                                    // Use relative path for _canonical_uri (works after app restart)
+                                    console.log('[TiddlyDesktop] Attachment copied: ' + copyResult.path);
+                                    info.callback([{
+                                        title: metadata.filename,
+                                        type: metadata.mimeType,
+                                        _canonical_uri: copyResult.path
+                                    }]);
+                                    return true;
+                                } else {
+                                    console.error('[TiddlyDesktop] Failed to copy attachment: ' + (copyResult.error || 'unknown error'));
+                                    // Fall through to let TiddlyWiki embed it
+                                }
+                            }
+
+                            console.log('[TiddlyDesktop] Letting TiddlyWiki embed the file');
+                            return false; // Let TiddlyWiki handle it (embed)
+                        } catch (e) {
+                            console.error('[TiddlyDesktop] Error handling import:', e);
+                            return false; // Let TiddlyWiki handle it
+                        }
+                    });
+
+                    console.log('[TiddlyDesktop] Import hook (th-importing-file) installed');
+                }
+
+                // ========== Session Auth Configuration - matches Desktop ==========
+                var CONFIG_AUTH_URLS = "${'$'}:/temp/tiddlydesktop-rs/session-auth/urls";
+
+                // Load auth URLs from localStorage
+                function loadAuthUrls() {
+                    try {
+                        var key = 'tiddlydesktop_auth_urls_' + window.__WIKI_PATH__;
+                        var stored = localStorage.getItem(key);
+                        if (stored) {
+                            return JSON.parse(stored);
+                        }
+                    } catch (e) {
+                        console.error('[TiddlyDesktop] Failed to load auth URLs:', e);
+                    }
+                    return [];
+                }
+
+                // Save auth URLs to localStorage
+                function saveAuthUrls(urls) {
+                    try {
+                        var key = 'tiddlydesktop_auth_urls_' + window.__WIKI_PATH__;
+                        localStorage.setItem(key, JSON.stringify(urls));
+                    } catch (e) {
+                        console.error('[TiddlyDesktop] Failed to save auth URLs:', e);
+                    }
+                }
+
+                function refreshUrlList() {
+                    var count = ${'$'}tw.wiki.filterTiddlers("[prefix[${'$'}:/temp/tiddlydesktop-rs/session-auth/url/]]").length;
+                    ${'$'}tw.wiki.setText(CONFIG_AUTH_URLS, "text", null, String(count));
+                }
+
+                function injectSessionAuthUI() {
+                    var originalNumChanges = ${'$'}tw.saverHandler ? ${'$'}tw.saverHandler.numChanges : 0;
+
+                    // Load and inject auth URL tiddlers
+                    var authUrls = loadAuthUrls();
+                    authUrls.forEach(function(entry, index) {
+                        ${'$'}tw.wiki.addTiddler(new ${'$'}tw.Tiddler({
+                            title: "${'$'}:/temp/tiddlydesktop-rs/session-auth/url/" + index,
+                            name: entry.name,
+                            url: entry.url,
+                            text: ""
+                        }));
+                    });
+
+                    var tabText = "Authenticate with external services to access protected resources (like SharePoint profile images).\n\n" +
+                        "Session cookies will be stored in this wiki's isolated session data.\n\n" +
+                        "!! Authentication URLs\n\n" +
+                        "<${'$'}list filter=\"[prefix[${'$'}:/temp/tiddlydesktop-rs/session-auth/url/]]\" variable=\"urlTiddler\">\n" +
+                        "<div style=\"display:flex;align-items:center;gap:8px;margin-bottom:8px;padding:8px;background:rgba(128,128,128,0.1);border-radius:4px;\">\n" +
+                        "<div style=\"flex:1;\">\n" +
+                        "<strong><${'$'}text text={{{ [<urlTiddler>get[name]] }}}/></strong><br/>\n" +
+                        "<small><${'$'}text text={{{ [<urlTiddler>get[url]] }}}/></small>\n" +
+                        "</div>\n" +
+                        "<${'$'}button class=\"tc-btn-invisible tc-tiddlylink\" message=\"tm-tiddlydesktop-open-auth-url\" param=<<urlTiddler>> tooltip=\"Open login page\">\n" +
+                        "{{${'$'}:/core/images/external-link}} Login\n" +
+                        "</${'$'}button>\n" +
+                        "<${'$'}button class=\"tc-btn-invisible tc-tiddlylink\" message=\"tm-tiddlydesktop-remove-auth-url\" param=<<urlTiddler>> tooltip=\"Remove this URL\">\n" +
+                        "{{${'$'}:/core/images/delete-button}}\n" +
+                        "</${'$'}button>\n" +
+                        "</div>\n" +
+                        "</${'$'}list>\n\n" +
+                        "<${'$'}list filter=\"[prefix[${'$'}:/temp/tiddlydesktop-rs/session-auth/url/]count[]match[0]]\" variable=\"ignore\">\n" +
+                        "//No authentication URLs configured.//\n" +
+                        "</${'$'}list>\n\n" +
+                        "!! Add New URL\n\n" +
+                        "<${'$'}edit-text tiddler=\"${'$'}:/temp/tiddlydesktop-rs/session-auth/new-name\" tag=\"input\" placeholder=\"Name (e.g. SharePoint)\" default=\"\" class=\"tc-edit-texteditor\" style=\"width:100%;margin-bottom:4px;\"/>\n\n" +
+                        "<${'$'}edit-text tiddler=\"${'$'}:/temp/tiddlydesktop-rs/session-auth/new-url\" tag=\"input\" placeholder=\"URL (e.g. https://company.sharepoint.com)\" default=\"\" class=\"tc-edit-texteditor\" style=\"width:100%;margin-bottom:8px;\"/>\n\n" +
+                        "<${'$'}button message=\"tm-tiddlydesktop-add-auth-url\" class=\"tc-btn-big-green\">Add URL</${'$'}button>\n\n" +
+                        "!! Session Data\n\n" +
+                        "This wiki has its own isolated session storage (cookies, localStorage). You can clear it if you want to log out of all services.\n\n" +
+                        "<${'$'}button message=\"tm-tiddlydesktop-clear-session\" class=\"tc-btn-big-green\" style=\"background:#c42b2b;\">Clear Session Data</${'$'}button>\n\n" +
+                        "//This will clear all cookies and localStorage for this wiki. You will need to log in again to any authenticated services.//\n";
+
+                    addShadowTiddler({
+                        title: SESSION_AUTH_SETTINGS_TAB,
+                        caption: "Session Auth",
+                        tags: "${'$'}:/tags/ControlPanel/SettingsTab",
+                        text: tabText
+                    });
+
+                    // Message handler: add new auth URL
+                    ${'$'}tw.rootWidget.addEventListener("tm-tiddlydesktop-add-auth-url", function(event) {
+                        var name = ${'$'}tw.wiki.getTiddlerText("${'$'}:/temp/tiddlydesktop-rs/session-auth/new-name", "").trim();
+                        var url = ${'$'}tw.wiki.getTiddlerText("${'$'}:/temp/tiddlydesktop-rs/session-auth/new-url", "").trim();
+
+                        if (!name || !url) {
+                            alert("Please enter both a name and URL");
+                            return;
+                        }
+
+                        var parsedUrl;
+                        try {
+                            parsedUrl = new URL(url);
+                        } catch (e) {
+                            alert("Please enter a valid URL");
+                            return;
+                        }
+
+                        var isHttps = parsedUrl.protocol === "https:";
+                        var isLocalhost = parsedUrl.hostname === "localhost" || parsedUrl.hostname === "127.0.0.1";
+                        var isLocalhostHttp = parsedUrl.protocol === "http:" && isLocalhost;
+
+                        if (!isHttps && !isLocalhostHttp) {
+                            alert("Security: Only HTTPS URLs are allowed for authentication (except localhost)");
+                            return;
+                        }
+
+                        // Add to list
+                        var authUrls = loadAuthUrls();
+                        authUrls.push({ name: name, url: url });
+                        saveAuthUrls(authUrls);
+
+                        // Add tiddler for UI
+                        var index = authUrls.length - 1;
+                        ${'$'}tw.wiki.addTiddler(new ${'$'}tw.Tiddler({
+                            title: "${'$'}:/temp/tiddlydesktop-rs/session-auth/url/" + index,
+                            name: name,
+                            url: url,
+                            text: ""
+                        }));
+
+                        // Clear input fields
+                        ${'$'}tw.wiki.deleteTiddler("${'$'}:/temp/tiddlydesktop-rs/session-auth/new-name");
+                        ${'$'}tw.wiki.deleteTiddler("${'$'}:/temp/tiddlydesktop-rs/session-auth/new-url");
+
+                        refreshUrlList();
+                    });
+
+                    // Message handler: remove auth URL
+                    ${'$'}tw.rootWidget.addEventListener("tm-tiddlydesktop-remove-auth-url", function(event) {
+                        var tiddlerTitle = event.param;
+                        if (tiddlerTitle) {
+                            var tiddler = ${'$'}tw.wiki.getTiddler(tiddlerTitle);
+                            if (tiddler) {
+                                var urlToRemove = tiddler.fields.url;
+                                // Remove from storage
+                                var authUrls = loadAuthUrls();
+                                authUrls = authUrls.filter(function(entry) { return entry.url !== urlToRemove; });
+                                saveAuthUrls(authUrls);
+
+                                // Remove tiddler
+                                ${'$'}tw.wiki.deleteTiddler(tiddlerTitle);
+                                refreshUrlList();
+                            }
+                        }
+                    });
+
+                    // Message handler: open auth URL in browser
+                    ${'$'}tw.rootWidget.addEventListener("tm-tiddlydesktop-open-auth-url", function(event) {
+                        var tiddlerTitle = event.param;
+                        if (tiddlerTitle) {
+                            var tiddler = ${'$'}tw.wiki.getTiddler(tiddlerTitle);
+                            if (tiddler && tiddler.fields.url) {
+                                // Open in system browser
+                                window.open(tiddler.fields.url, '_blank');
+                            }
+                        }
+                    });
+
+                    // Message handler: clear session data
+                    ${'$'}tw.rootWidget.addEventListener("tm-tiddlydesktop-clear-session", function(event) {
+                        if (confirm("Are you sure you want to clear all session data for this wiki?\n\nThis will log you out of all authenticated services.")) {
+                            try {
+                                // Note: We preserve auth URLs list but clear everything else
+                                var authUrlsKey = 'tiddlydesktop_auth_urls_' + window.__WIKI_PATH__;
+                                var extAttachKey = 'tiddlydesktop_external_attachments_' + window.__WIKI_PATH__;
+                                var authUrls = localStorage.getItem(authUrlsKey);
+                                var extAttach = localStorage.getItem(extAttachKey);
+
+                                localStorage.clear();
+                                sessionStorage.clear();
+
+                                // Restore settings
+                                if (authUrls) localStorage.setItem(authUrlsKey, authUrls);
+                                if (extAttach) localStorage.setItem(extAttachKey, extAttach);
+
+                                alert("Session data cleared. Please reload the wiki for changes to take effect.");
+                            } catch (e) {
+                                alert("Failed to clear session data: " + e.message);
+                            }
+                        }
+                    });
+
+                    setTimeout(function() {
+                        if (${'$'}tw.saverHandler) {
+                            ${'$'}tw.saverHandler.numChanges = originalNumChanges;
+                            ${'$'}tw.saverHandler.updateDirtyStatus();
+                        }
+                    }, 0);
+
+                    refreshUrlList();
+                    console.log('[TiddlyDesktop] Session auth UI injected');
+                }
+
+                // ========== Broken Attachments UI ==========
+                var BROKEN_ATTACHMENTS_TAB = "${'$'}:/plugins/tiddlywiki/tiddlydesktop-rs/settings/broken-attachments";
+                var BROKEN_ATTACHMENTS_PREFIX = "${'$'}:/temp/tiddlydesktop-rs/broken-attachment/";
+
+                // Pending reauth callbacks
+                window.__reauthCallbacks = window.__reauthCallbacks || {};
+                window.__batchReauthCallbacks = window.__batchReauthCallbacks || {};
+
+                // Scan for broken attachments
+                function scanBrokenAttachments(callback) {
+                    if (typeof window.TiddlyDesktopAttachments === 'undefined' ||
+                        typeof window.TiddlyDesktopAttachments.checkUriPermission !== 'function') {
+                        console.log('[TiddlyDesktop] Attachment interface not available for scanning');
+                        callback([]);
+                        return;
+                    }
+
+                    // Find all tiddlers with _canonical_uri containing content://
+                    var tiddlers = ${'$'}tw.wiki.filterTiddlers("[has[_canonical_uri]]");
+                    var brokenAttachments = [];
+                    var pending = 0;
+
+                    if (tiddlers.length === 0) {
+                        callback([]);
+                        return;
+                    }
+
+                    tiddlers.forEach(function(title) {
+                        var tiddler = ${'$'}tw.wiki.getTiddler(title);
+                        if (!tiddler) return;
+
+                        var uri = tiddler.fields._canonical_uri;
+                        if (!uri || !uri.startsWith('content://')) return;
+
+                        pending++;
+                        try {
+                            var resultJson = window.TiddlyDesktopAttachments.checkUriPermission(uri);
+                            var result = JSON.parse(resultJson);
+
+                            if (!result.accessible) {
+                                brokenAttachments.push({
+                                    title: title,
+                                    uri: uri,
+                                    filename: tiddler.fields._attachment_filename || uri.split('/').pop() || 'Unknown',
+                                    size: tiddler.fields._attachment_size || '',
+                                    type: tiddler.fields._attachment_type || tiddler.fields.type || 'Unknown',
+                                    error: result.error || 'Permission denied'
+                                });
+                            }
+                        } catch (e) {
+                            console.warn('[TiddlyDesktop] Error checking permission for ' + title + ':', e);
+                            brokenAttachments.push({
+                                title: title,
+                                uri: uri,
+                                filename: tiddler.fields._attachment_filename || 'Unknown',
+                                size: tiddler.fields._attachment_size || '',
+                                type: tiddler.fields._attachment_type || tiddler.fields.type || 'Unknown',
+                                error: e.message || 'Check failed'
+                            });
+                        }
+                        pending--;
+
+                        if (pending === 0) {
+                            callback(brokenAttachments);
+                        }
+                    });
+
+                    // Handle case where all tiddlers were skipped (no content:// URIs)
+                    if (pending === 0) {
+                        callback(brokenAttachments);
+                    }
+                }
+
+                // Update broken attachments list in UI
+                function updateBrokenAttachmentsList(brokenAttachments) {
+                    var originalNumChanges = ${'$'}tw.saverHandler ? ${'$'}tw.saverHandler.numChanges : 0;
+
+                    // Delete old temp tiddlers
+                    var oldTiddlers = ${'$'}tw.wiki.filterTiddlers("[prefix[" + BROKEN_ATTACHMENTS_PREFIX + "]]");
+                    oldTiddlers.forEach(function(title) {
+                        ${'$'}tw.wiki.deleteTiddler(title);
+                    });
+
+                    // Create temp tiddlers for each broken attachment
+                    brokenAttachments.forEach(function(att, index) {
+                        ${'$'}tw.wiki.addTiddler(new ${'$'}tw.Tiddler({
+                            title: BROKEN_ATTACHMENTS_PREFIX + index,
+                            "tiddler-title": att.title,
+                            uri: att.uri,
+                            filename: att.filename,
+                            "file-size": att.size,
+                            "file-type": att.type,
+                            error: att.error,
+                            text: ""
+                        }));
+                    });
+
+                    // Update count for UI
+                    ${'$'}tw.wiki.setText("${'$'}:/temp/tiddlydesktop-rs/broken-attachments-count", "text", null, String(brokenAttachments.length));
+
+                    setTimeout(function() {
+                        if (${'$'}tw.saverHandler) {
+                            ${'$'}tw.saverHandler.numChanges = originalNumChanges;
+                            ${'$'}tw.saverHandler.updateDirtyStatus();
+                        }
+                    }, 0);
+                }
+
+                // Handle reauth result from native picker
+                window.__notifyReauthResult = function(newUri, error) {
+                    var callbackId = window.__pendingReauthCallback;
+                    window.__pendingReauthCallback = null;
+
+                    if (callbackId && window.__reauthCallbacks[callbackId]) {
+                        window.__reauthCallbacks[callbackId](newUri, error);
+                        delete window.__reauthCallbacks[callbackId];
+                    }
+                };
+
+                function injectBrokenAttachmentsUI() {
+                    var originalNumChanges = ${'$'}tw.saverHandler ? ${'$'}tw.saverHandler.numChanges : 0;
+
+                    var tabText = "After reinstalling the app, access to external attachments may be lost. This tab helps you re-authorize access to those files.\n\n" +
+                        "!! Scan for Broken Attachments\n\n" +
+                        "<${'$'}button message=\"tm-tiddlydesktop-scan-attachments\" class=\"tc-btn-big-green\">Scan Now</${'$'}button>\n\n" +
+                        "<${'$'}list filter=\"[[${'$'}:/temp/tiddlydesktop-rs/broken-attachments-scanning]is[tiddler]]\" variable=\"ignore\">\n" +
+                        "//Scanning...//\n" +
+                        "</${'$'}list>\n\n" +
+                        "!! Broken Attachments\n\n" +
+                        "<${'$'}list filter=\"[prefix[" + BROKEN_ATTACHMENTS_PREFIX + "]count[]!match[0]]\" variable=\"ignore\">\n" +
+                        "<div style=\"margin-bottom:12px;padding:12px;background:rgba(74,153,153,0.1);border:1px solid #4a9;border-radius:4px;\">\n" +
+                        "<${'$'}button message=\"tm-tiddlydesktop-batch-reauth\" class=\"tc-btn-big-green\" style=\"width:100%;\">\n" +
+                        "Re-authorize All from Folder\n" +
+                        "</${'$'}button>\n" +
+                        "<div style=\"font-size:0.85em;color:#666;margin-top:8px;text-align:center;\">\n" +
+                        "Select a folder containing your attachments. Files will be matched by filename and size.\n" +
+                        "</div>\n" +
+                        "</div>\n" +
+                        "</${'$'}list>\n\n" +
+                        "<${'$'}list filter=\"[prefix[" + BROKEN_ATTACHMENTS_PREFIX + "]]\" variable=\"attTiddler\">\n" +
+                        "<div style=\"display:flex;flex-direction:column;gap:4px;margin-bottom:12px;padding:12px;background:rgba(196,43,43,0.1);border:1px solid #c42b2b;border-radius:4px;\">\n" +
+                        "<div style=\"display:flex;justify-content:space-between;align-items:flex-start;\">\n" +
+                        "<div style=\"flex:1;min-width:0;\">\n" +
+                        "<strong style=\"word-break:break-word;\"><${'$'}text text={{{ [<attTiddler>get[tiddler-title]] }}}/></strong>\n" +
+                        "</div>\n" +
+                        "<${'$'}button class=\"tc-btn-invisible tc-tiddlylink\" style=\"background:#4a9;color:white;padding:4px 12px;border-radius:4px;flex-shrink:0;\" message=\"tm-tiddlydesktop-reauth-attachment\" param=<<attTiddler>>>\n" +
+                        "Re-authorize\n" +
+                        "</${'$'}button>\n" +
+                        "</div>\n" +
+                        "<div style=\"font-size:0.9em;color:#666;\">\n" +
+                        "File: <${'$'}text text={{{ [<attTiddler>get[filename]] }}}/>\n" +
+                        "<${'$'}list filter=\"[<attTiddler>get[file-size]!is[blank]]\" variable=\"ignore\">\n" +
+                        " (<${'$'}text text={{{ [<attTiddler>get[file-size]] }}}/> bytes)\n" +
+                        "</${'$'}list>\n" +
+                        "</div>\n" +
+                        "<div style=\"font-size:0.85em;color:#999;word-break:break-all;\"><${'$'}text text={{{ [<attTiddler>get[error]] }}}/></div>\n" +
+                        "</div>\n" +
+                        "</${'$'}list>\n\n" +
+                        "<${'$'}list filter=\"[prefix[" + BROKEN_ATTACHMENTS_PREFIX + "]count[]match[0]]\" variable=\"ignore\">\n" +
+                        "//No broken attachments found. Click \"Scan Now\" to check.//\n" +
+                        "</${'$'}list>\n\n" +
+                        "---\n\n" +
+                        "//When re-authorizing individually, select the same file from your device. For batch re-authorization, select the folder containing your attachments and files will be matched automatically by filename.//\n";
+
+                    addShadowTiddler({
+                        title: BROKEN_ATTACHMENTS_TAB,
+                        caption: "Broken Attachments",
+                        tags: "${'$'}:/tags/ControlPanel/SettingsTab",
+                        text: tabText
+                    });
+
+                    // Message handler: scan for broken attachments
+                    ${'$'}tw.rootWidget.addEventListener("tm-tiddlydesktop-scan-attachments", function(event) {
+                        var originalNumChanges = ${'$'}tw.saverHandler ? ${'$'}tw.saverHandler.numChanges : 0;
+
+                        // Show scanning indicator
+                        ${'$'}tw.wiki.addTiddler(new ${'$'}tw.Tiddler({
+                            title: "${'$'}:/temp/tiddlydesktop-rs/broken-attachments-scanning",
+                            text: "true"
+                        }));
+
+                        setTimeout(function() {
+                            scanBrokenAttachments(function(broken) {
+                                // Hide scanning indicator
+                                ${'$'}tw.wiki.deleteTiddler("${'$'}:/temp/tiddlydesktop-rs/broken-attachments-scanning");
+                                updateBrokenAttachmentsList(broken);
+
+                                if (broken.length === 0) {
+                                    alert("No broken attachments found. All external attachments are accessible.");
+                                } else {
+                                    alert("Found " + broken.length + " broken attachment(s). Use the Re-authorize button to restore access.");
+                                }
+
+                                setTimeout(function() {
+                                    if (${'$'}tw.saverHandler) {
+                                        ${'$'}tw.saverHandler.numChanges = originalNumChanges;
+                                        ${'$'}tw.saverHandler.updateDirtyStatus();
+                                    }
+                                }, 0);
+                            });
+                        }, 100);
+                    });
+
+                    // Message handler: re-authorize a single attachment
+                    ${'$'}tw.rootWidget.addEventListener("tm-tiddlydesktop-reauth-attachment", function(event) {
+                        var attTiddlerTitle = event.param;
+                        if (!attTiddlerTitle) return;
+
+                        var attTiddler = ${'$'}tw.wiki.getTiddler(attTiddlerTitle);
+                        if (!attTiddler) return;
+
+                        var tiddlerTitle = attTiddler.fields["tiddler-title"];
+                        var oldUri = attTiddler.fields.uri;
+                        var mimeType = attTiddler.fields["file-type"];
+                        var expectedFilename = attTiddler.fields.filename;
+
+                        if (!tiddlerTitle) {
+                            alert("Error: Could not determine which tiddler to update.");
+                            return;
+                        }
+
+                        // Generate callback ID
+                        var callbackId = "reauth_" + Date.now() + "_" + Math.random().toString(36).substr(2, 9);
+
+                        // Register callback (receives: success, uri, error)
+                        window.__reauthCallbacks[callbackId] = function(success, newUri, error) {
+                            if (!success || !newUri) {
+                                if (error && error !== "Cancelled") {
+                                    alert("Re-authorization failed: " + error);
+                                }
+                                return;
+                            }
+
+                            // Update the tiddler with the new URI
+                            var tiddler = ${'$'}tw.wiki.getTiddler(tiddlerTitle);
+                            if (tiddler) {
+                                // Get new metadata
+                                var newFilename = expectedFilename;
+                                var newSize = attTiddler.fields["file-size"];
+                                var newType = mimeType;
+
+                                try {
+                                    var metaJson = window.TiddlyDesktopAttachments.getFileMetadata(newUri);
+                                    var metaResult = JSON.parse(metaJson);
+                                    if (metaResult.success) {
+                                        newFilename = metaResult.filename || newFilename;
+                                        newSize = String(metaResult.size || newSize);
+                                        newType = metaResult.mimeType || newType;
+                                    }
+                                } catch (e) {
+                                    console.warn('[TiddlyDesktop] Could not get metadata for new file:', e);
+                                }
+
+                                // Update the tiddler
+                                var newFields = Object.assign({}, tiddler.fields, {
+                                    _canonical_uri: newUri,
+                                    _attachment_filename: newFilename,
+                                    _attachment_size: newSize,
+                                    _attachment_type: newType
+                                });
+
+                                ${'$'}tw.wiki.addTiddler(new ${'$'}tw.Tiddler(newFields));
+
+                                // Remove from broken list
+                                ${'$'}tw.wiki.deleteTiddler(attTiddlerTitle);
+
+                                alert("Attachment re-authorized successfully!\n\nTiddler: " + tiddlerTitle + "\nNew file: " + newFilename);
+                            }
+                        };
+
+                        // Store callback ID for native bridge
+                        window.__pendingReauthCallback = callbackId;
+
+                        // Trigger native file picker
+                        if (typeof window.TiddlyDesktopAttachments !== 'undefined' &&
+                            typeof window.TiddlyDesktopAttachments.pickFileForReauth === 'function') {
+                            window.TiddlyDesktopAttachments.pickFileForReauth(callbackId, mimeType || null);
+                        } else {
+                            alert("Error: File picker not available on this platform.");
+                            delete window.__reauthCallbacks[callbackId];
+                        }
+                    });
+
+                    // Message handler: batch re-authorize all attachments from a folder
+                    ${'$'}tw.rootWidget.addEventListener("tm-tiddlydesktop-batch-reauth", function(event) {
+                        // Get list of broken attachments
+                        var brokenTiddlers = ${'$'}tw.wiki.filterTiddlers("[prefix[" + BROKEN_ATTACHMENTS_PREFIX + "]]");
+                        if (brokenTiddlers.length === 0) {
+                            alert("No broken attachments to re-authorize.");
+                            return;
+                        }
+
+                        // Build lookup map: filename -> attachment info
+                        var lookupByFilename = {};
+                        var lookupByFilenameAndSize = {};
+                        brokenTiddlers.forEach(function(attTiddlerTitle) {
+                            var attTiddler = ${'$'}tw.wiki.getTiddler(attTiddlerTitle);
+                            if (!attTiddler) return;
+
+                            var filename = attTiddler.fields.filename || '';
+                            var size = attTiddler.fields["file-size"] || '';
+                            var tiddlerTitle = attTiddler.fields["tiddler-title"];
+
+                            if (filename) {
+                                // Store by filename (may have multiple with same name)
+                                if (!lookupByFilename[filename]) {
+                                    lookupByFilename[filename] = [];
+                                }
+                                lookupByFilename[filename].push({
+                                    attTiddlerTitle: attTiddlerTitle,
+                                    tiddlerTitle: tiddlerTitle,
+                                    size: size,
+                                    mimeType: attTiddler.fields["file-type"] || ''
+                                });
+
+                                // Store by filename+size for more precise matching
+                                if (size) {
+                                    var key = filename + '|' + size;
+                                    lookupByFilenameAndSize[key] = {
+                                        attTiddlerTitle: attTiddlerTitle,
+                                        tiddlerTitle: tiddlerTitle,
+                                        mimeType: attTiddler.fields["file-type"] || ''
+                                    };
+                                }
+                            }
+                        });
+
+                        // Generate callback ID
+                        var callbackId = "batch_" + Date.now() + "_" + Math.random().toString(36).substr(2, 9);
+
+                        // Register callback (receives: success, files[], error)
+                        window.__batchReauthCallbacks[callbackId] = function(success, files, error) {
+                            if (!success || !files) {
+                                if (error && error !== "Cancelled") {
+                                    alert("Batch re-authorization failed: " + error);
+                                }
+                                return;
+                            }
+
+                            console.log('[TiddlyDesktop] Batch reauth received ' + files.length + ' files');
+
+                            var matched = 0;
+                            var updated = 0;
+
+                            files.forEach(function(file) {
+                                var filename = file.filename;
+                                var size = String(file.size);
+                                var uri = file.uri;
+                                var mimeType = file.mimeType;
+
+                                // Try exact match by filename+size first
+                                var key = filename + '|' + size;
+                                var match = lookupByFilenameAndSize[key];
+
+                                if (!match && lookupByFilename[filename]) {
+                                    // Fall back to filename-only match (first unmatched one)
+                                    var candidates = lookupByFilename[filename];
+                                    for (var i = 0; i < candidates.length; i++) {
+                                        if (!candidates[i].matched) {
+                                            match = candidates[i];
+                                            candidates[i].matched = true;
+                                            break;
+                                        }
+                                    }
+                                }
+
+                                if (match) {
+                                    matched++;
+
+                                    // Update the actual tiddler
+                                    var tiddler = ${'$'}tw.wiki.getTiddler(match.tiddlerTitle);
+                                    if (tiddler) {
+                                        var newFields = Object.assign({}, tiddler.fields, {
+                                            _canonical_uri: uri,
+                                            _attachment_filename: filename,
+                                            _attachment_size: size,
+                                            _attachment_type: mimeType || match.mimeType
+                                        });
+
+                                        ${'$'}tw.wiki.addTiddler(new ${'$'}tw.Tiddler(newFields));
+
+                                        // Remove from broken list
+                                        ${'$'}tw.wiki.deleteTiddler(match.attTiddlerTitle);
+
+                                        updated++;
+                                        console.log('[TiddlyDesktop] Matched and updated: ' + match.tiddlerTitle + ' -> ' + filename);
+                                    }
+                                }
+                            });
+
+                            // Update the broken attachments count
+                            var remaining = brokenTiddlers.length - updated;
+                            ${'$'}tw.wiki.setText("${'$'}:/temp/tiddlydesktop-rs/broken-attachments-count", "text", null, String(remaining));
+
+                            if (updated > 0) {
+                                var message = "Batch re-authorization complete!\n\n" +
+                                    "Files in folder: " + files.length + "\n" +
+                                    "Attachments matched: " + matched + "\n" +
+                                    "Tiddlers updated: " + updated;
+                                if (remaining > 0) {
+                                    message += "\n\nRemaining broken: " + remaining + " (no matching file found)";
+                                }
+                                alert(message);
+                            } else {
+                                alert("No matching files found in the selected folder.\n\n" +
+                                    "Make sure the folder contains files with the same names as your original attachments.");
+                            }
+                        };
+
+                        // Trigger native folder picker
+                        if (typeof window.TiddlyDesktopAttachments !== 'undefined' &&
+                            typeof window.TiddlyDesktopAttachments.pickFolderForBatchReauth === 'function') {
+                            window.TiddlyDesktopAttachments.pickFolderForBatchReauth(callbackId);
+                        } else {
+                            alert("Error: Folder picker not available on this platform.");
+                            delete window.__batchReauthCallbacks[callbackId];
+                        }
+                    });
+
+                    setTimeout(function() {
+                        if (${'$'}tw.saverHandler) {
+                            ${'$'}tw.saverHandler.numChanges = originalNumChanges;
+                            ${'$'}tw.saverHandler.updateDirtyStatus();
+                        }
+                    }, 0);
+
+                    console.log('[TiddlyDesktop] Broken attachments UI injected');
+                }
+
+                // Auto-check for broken attachments on startup and prompt user
+                function autoCheckBrokenAttachments() {
+                    // Wait a bit for wiki to fully load
+                    setTimeout(function() {
+                        if (typeof window.TiddlyDesktopAttachments === 'undefined' ||
+                            typeof window.TiddlyDesktopAttachments.checkUriPermission !== 'function') {
+                            return;
+                        }
+
+                        // Find all tiddlers with _canonical_uri containing content://
+                        var tiddlers = ${'$'}tw.wiki.filterTiddlers("[has[_canonical_uri]]");
+                        var brokenAttachments = [];
+
+                        tiddlers.forEach(function(title) {
+                            var tiddler = ${'$'}tw.wiki.getTiddler(title);
+                            if (!tiddler) return;
+
+                            var uri = tiddler.fields._canonical_uri;
+                            if (!uri || !uri.startsWith('content://')) return;
+
+                            try {
+                                var resultJson = window.TiddlyDesktopAttachments.checkUriPermission(uri);
+                                var result = JSON.parse(resultJson);
+
+                                if (!result.accessible) {
+                                    brokenAttachments.push({
+                                        title: title,
+                                        uri: uri,
+                                        filename: tiddler.fields._attachment_filename || uri.split('/').pop() || 'Unknown',
+                                        size: tiddler.fields._attachment_size || '',
+                                        type: tiddler.fields._attachment_type || tiddler.fields.type || 'Unknown'
+                                    });
+                                }
+                            } catch (e) {
+                                brokenAttachments.push({
+                                    title: title,
+                                    uri: uri,
+                                    filename: tiddler.fields._attachment_filename || 'Unknown',
+                                    size: tiddler.fields._attachment_size || '',
+                                    type: tiddler.fields._attachment_type || tiddler.fields.type || 'Unknown'
+                                });
+                            }
+                        });
+
+                        if (brokenAttachments.length === 0) {
+                            console.log('[TiddlyDesktop] No broken attachments found on startup');
+                            return;
+                        }
+
+                        console.log('[TiddlyDesktop] Found ' + brokenAttachments.length + ' broken attachment(s) on startup');
+
+                        // Prompt user to fix
+                        var doFix = confirm(
+                            "Found " + brokenAttachments.length + " external attachment(s) that need re-authorization.\n\n" +
+                            "This can happen after reinstalling the app.\n\n" +
+                            "Would you like to select the folder containing your attachments to restore access?\n\n" +
+                            "(You can also do this later from Settings > Broken Attachments)"
+                        );
+
+                        if (!doFix) {
+                            return;
+                        }
+
+                        // Build lookup maps
+                        var lookupByFilename = {};
+                        var lookupByFilenameAndSize = {};
+                        brokenAttachments.forEach(function(att) {
+                            var filename = att.filename;
+                            var size = att.size;
+
+                            if (filename) {
+                                if (!lookupByFilename[filename]) {
+                                    lookupByFilename[filename] = [];
+                                }
+                                lookupByFilename[filename].push(att);
+
+                                if (size) {
+                                    var key = filename + '|' + size;
+                                    lookupByFilenameAndSize[key] = att;
+                                }
+                            }
+                        });
+
+                        // Generate callback ID
+                        var callbackId = "auto_" + Date.now() + "_" + Math.random().toString(36).substr(2, 9);
+
+                        // Register callback
+                        window.__batchReauthCallbacks[callbackId] = function(success, files, error) {
+                            if (!success || !files) {
+                                if (error && error !== "Cancelled") {
+                                    alert("Re-authorization failed: " + error);
+                                }
+                                return;
+                            }
+
+                            var matched = 0;
+                            var updated = 0;
+
+                            files.forEach(function(file) {
+                                var filename = file.filename;
+                                var size = String(file.size);
+                                var uri = file.uri;
+                                var mimeType = file.mimeType;
+
+                                // Try exact match first
+                                var key = filename + '|' + size;
+                                var match = lookupByFilenameAndSize[key];
+
+                                if (!match && lookupByFilename[filename]) {
+                                    var candidates = lookupByFilename[filename];
+                                    for (var i = 0; i < candidates.length; i++) {
+                                        if (!candidates[i].matched) {
+                                            match = candidates[i];
+                                            candidates[i].matched = true;
+                                            break;
+                                        }
+                                    }
+                                }
+
+                                if (match) {
+                                    matched++;
+
+                                    var tiddler = ${'$'}tw.wiki.getTiddler(match.title);
+                                    if (tiddler) {
+                                        var newFields = Object.assign({}, tiddler.fields, {
+                                            _canonical_uri: uri,
+                                            _attachment_filename: filename,
+                                            _attachment_size: size,
+                                            _attachment_type: mimeType || match.type
+                                        });
+
+                                        ${'$'}tw.wiki.addTiddler(new ${'$'}tw.Tiddler(newFields));
+                                        updated++;
+                                    }
+                                }
+                            });
+
+                            if (updated > 0) {
+                                alert(
+                                    "Re-authorization complete!\n\n" +
+                                    "Attachments restored: " + updated + " of " + brokenAttachments.length + "\n\n" +
+                                    (updated < brokenAttachments.length ?
+                                        "Some attachments could not be matched. Check Settings > Broken Attachments for details." :
+                                        "All attachments have been restored!")
+                                );
+                            } else {
+                                alert(
+                                    "No matching files found in the selected folder.\n\n" +
+                                    "Make sure you select the folder containing your original attachment files."
+                                );
+                            }
+                        };
+
+                        // Trigger folder picker
+                        window.TiddlyDesktopAttachments.pickFolderForBatchReauth(callbackId);
+
+                    }, 2000); // Wait 2 seconds for wiki to settle
+                }
+
+                // Initialize
+                injectSettingsUI();
+                injectSessionAuthUI();
+                injectBrokenAttachmentsUI();
+                installImportHook();
+                autoCheckBrokenAttachments();
+
+                console.log('[TiddlyDesktop] External attachments handler installed');
+            })();
+        """.trimIndent()
+
+        // Script to install the saver for single-file wikis
+        val saverScript = if (!isFolder) """
+            (function() {
+                // Wait for TiddlyWiki to load
+                if (typeof ${'$'}tw === 'undefined') {
+                    setTimeout(arguments.callee, 100);
+                    return;
+                }
+
+                // Register a custom saver
+                function TiddlyDesktopSaver(wiki) {
+                    this.wiki = wiki;
+                }
+
+                TiddlyDesktopSaver.prototype.save = function(text, method, callback) {
+                    console.log('[TiddlyDesktop Saver] Saving ' + text.length + ' bytes via ' + method + '...');
+
+                    var xhr = new XMLHttpRequest();
+                    xhr.open('PUT', '$wikiUrl', true);
+                    xhr.setRequestHeader('Content-Type', 'text/html;charset=UTF-8');
+
+                    xhr.onload = function() {
+                        if (xhr.status === 200) {
+                            console.log('[TiddlyDesktop Saver] Save successful');
+                            callback(null);
+                        } else {
+                            console.error('[TiddlyDesktop Saver] Save failed: ' + xhr.status + ' ' + xhr.statusText);
+                            callback('Save failed: ' + xhr.status + ' ' + xhr.statusText);
+                        }
+                    };
+
+                    xhr.onerror = function() {
+                        console.error('[TiddlyDesktop Saver] Network error');
+                        callback('Network error during save');
+                    };
+
+                    xhr.send(text);
+                    return true;
+                };
+
+                TiddlyDesktopSaver.prototype.info = {
+                    name: 'tiddlydesktop',
+                    priority: 5000,
+                    capabilities: ['save', 'autosave']
+                };
+
+                // Wait for saverHandler to be ready, then register
+                function addToSaverHandler() {
+                    if (!${'$'}tw.saverHandler) {
+                        setTimeout(addToSaverHandler, 50);
+                        return;
+                    }
+
+                    // Check if already added
+                    var alreadyAdded = ${'$'}tw.saverHandler.savers.some(function(s) {
+                        return s.info && s.info.name === 'tiddlydesktop';
+                    });
+
+                    if (!alreadyAdded) {
+                        var saver = new TiddlyDesktopSaver(${'$'}tw.wiki);
+                        // Add to array and re-sort by priority (TiddlyWiki iterates backwards)
+                        ${'$'}tw.saverHandler.savers.push(saver);
+                        ${'$'}tw.saverHandler.savers.sort(function(a, b) {
+                            if (a.info.priority < b.info.priority) return -1;
+                            if (a.info.priority > b.info.priority) return 1;
+                            return 0;
+                        });
+                        console.log('[TiddlyDesktop] Saver registered via saverHandler');
+                    }
+                }
+
+                addToSaverHandler();
+                console.log('[TiddlyDesktop] Saver script installed');
+            })();
+        """.trimIndent() else ""
+
+        // Script to monitor palette changes and update system bar colors
+        val paletteScript = """
+            (function() {
+                // Wait for TiddlyWiki to load
+                if (typeof ${'$'}tw === 'undefined') {
+                    setTimeout(arguments.callee, 100);
+                    return;
+                }
+
+                // Function to get a color from TiddlyWiki's current palette (with recursive resolution)
+                function getColour(name, fallback, depth) {
+                    depth = depth || 0;
+                    if (depth > 10) return fallback; // Prevent infinite recursion
+
+                    try {
+                        // Get the current palette title
+                        var paletteName = ${'$'}tw.wiki.getTiddlerText('${'$'}:/palette');
+                        if (paletteName) {
+                            paletteName = paletteName.trim();
+                            var paletteTiddler = ${'$'}tw.wiki.getTiddler(paletteName);
+                            if (paletteTiddler) {
+                                // Colors are in the tiddler text (one per line: name: value)
+                                var text = paletteTiddler.fields.text || '';
+                                var lines = text.split('\n');
+                                for (var i = 0; i < lines.length; i++) {
+                                    var line = lines[i].trim();
+                                    var colonIndex = line.indexOf(':');
+                                    if (colonIndex > 0) {
+                                        var colorName = line.substring(0, colonIndex).trim();
+                                        var colorValue = line.substring(colonIndex + 1).trim();
+                                        if (colorName === name && colorValue) {
+                                            // Handle references to other colors like <<colour background>>
+                                            var match = colorValue.match(/<<colour\s+([^>]+)>>/);
+                                            if (match) {
+                                                return getColour(match[1].trim(), fallback, depth + 1);
+                                            }
+                                            return colorValue;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    } catch (e) {
+                        console.error('[TiddlyDesktop] getColour error:', e);
+                    }
+                    return fallback;
+                }
+
+                // Function to update system bar colors via native bridge
+                function updateSystemBarColors() {
+                    var statusBarColor = getColour('page-background', '#ffffff');
+                    var navBarColor = getColour('tiddler-background', statusBarColor);
+                    var foregroundColor = getColour('foreground', '#333333');
+
+                    if (window.TiddlyDesktopAndroid && window.TiddlyDesktopAndroid.setSystemBarColors) {
+                        window.TiddlyDesktopAndroid.setSystemBarColors(statusBarColor, navBarColor, foregroundColor);
+                    }
+                }
+
+                // Wait for palette to be ready before updating colors
+                function waitForPaletteAndUpdate(retries) {
+                    retries = retries || 0;
+                    if (retries > 100) {
+                        // Give up after 5 seconds, use defaults
+                        updateSystemBarColors();
+                        return;
+                    }
+                    var paletteName = (${'$'}tw.wiki.getTiddlerText('${'$'}:/palette') || '').trim();
+                    if (paletteName) {
+                        var paletteTiddler = ${'$'}tw.wiki.getTiddler(paletteName);
+                        // Check that palette exists AND has color content
+                        if (paletteTiddler && paletteTiddler.fields.text && paletteTiddler.fields.text.indexOf(':') > 0) {
+                            // Palette is ready with color definitions, update colors
+                            updateSystemBarColors();
+                            return;
+                        }
+                    }
+                    // Palette not ready yet, try again
+                    setTimeout(function() { waitForPaletteAndUpdate(retries + 1); }, 50);
+                }
+
+                // Set default colors immediately, then update when palette is ready
+                updateSystemBarColors();
+                // Then start checking for palette to get actual colors
+                waitForPaletteAndUpdate(0);
+
+                // Listen for palette changes
+                ${'$'}tw.wiki.addEventListener('change', function(changes) {
+                    // Check if the palette reference changed
+                    if (changes['${'$'}:/palette']) {
+                        updateSystemBarColors();
+                        return;
+                    }
+                    // Check if the referenced palette tiddler itself changed
+                    var paletteName = (${'$'}tw.wiki.getTiddlerText('${'$'}:/palette') || '').trim();
+                    if (paletteName && changes[paletteName]) {
+                        updateSystemBarColors();
+                    }
+                });
+            })();
+        """.trimIndent()
+
+        // Script to handle file exports/downloads
+        val exportScript = """
+            (function() {
+                // Callback storage for async export results
+                window.__exportCallbacks = window.__exportCallbacks || {};
+                var callbackCounter = 0;
+
+                // Helper to generate unique callback ID
+                function generateCallbackId() {
+                    return 'export_' + (++callbackCounter) + '_' + Date.now();
+                }
+
+                // Helper to convert blob to base64
+                function blobToBase64(blob) {
+                    return new Promise(function(resolve, reject) {
+                        var reader = new FileReader();
+                        reader.onloadend = function() {
+                            // Remove data URL prefix to get just base64
+                            var base64 = reader.result.split(',')[1] || '';
+                            resolve(base64);
+                        };
+                        reader.onerror = reject;
+                        reader.readAsDataURL(blob);
+                    });
+                }
+
+                // Helper to extract filename from Content-Disposition or URL
+                function extractFilename(url, contentDisposition) {
+                    if (contentDisposition) {
+                        var match = contentDisposition.match(/filename[^;=\n]*=((['"]).*?\2|[^;\n]*)/);
+                        if (match && match[1]) {
+                            return match[1].replace(/['"]/g, '');
+                        }
+                    }
+                    // Try to get from URL
+                    try {
+                        var urlObj = new URL(url, window.location.href);
+                        var pathname = urlObj.pathname;
+                        var filename = pathname.substring(pathname.lastIndexOf('/') + 1);
+                        if (filename) return decodeURIComponent(filename);
+                    } catch (e) {}
+                    return 'download';
+                }
+
+                // Helper to get MIME type
+                function getMimeType(filename, blob) {
+                    if (blob && blob.type) return blob.type;
+                    var ext = filename.split('.').pop().toLowerCase();
+                    var mimeTypes = {
+                        'json': 'application/json',
+                        'html': 'text/html',
+                        'htm': 'text/html',
+                        'txt': 'text/plain',
+                        'tid': 'text/plain',
+                        'css': 'text/css',
+                        'js': 'application/javascript',
+                        'xml': 'application/xml',
+                        'csv': 'text/csv',
+                        'md': 'text/markdown',
+                        'png': 'image/png',
+                        'jpg': 'image/jpeg',
+                        'jpeg': 'image/jpeg',
+                        'gif': 'image/gif',
+                        'svg': 'image/svg+xml',
+                        'pdf': 'application/pdf',
+                        'zip': 'application/zip'
+                    };
+                    return mimeTypes[ext] || 'application/octet-stream';
+                }
+
+                // Intercept anchor click downloads
+                document.addEventListener('click', function(event) {
+                    var anchor = event.target.closest('a[download]');
+                    if (!anchor) return;
+
+                    var href = anchor.getAttribute('href');
+                    var downloadAttr = anchor.getAttribute('download');
+
+                    if (!href) return;
+
+                    // Handle blob: URLs
+                    if (href.startsWith('blob:')) {
+                        event.preventDefault();
+                        event.stopPropagation();
+
+                        console.log('[TiddlyDesktop Export] Intercepted blob download:', downloadAttr);
+
+                        fetch(href)
+                            .then(function(response) { return response.blob(); })
+                            .then(function(blob) {
+                                var filename = downloadAttr || 'download';
+                                var mimeType = getMimeType(filename, blob);
+                                return blobToBase64(blob).then(function(base64) {
+                                    var callbackId = generateCallbackId();
+                                    window.__exportCallbacks[callbackId] = function(success, message) {
+                                        console.log('[TiddlyDesktop Export] Save result:', success, message);
+                                    };
+                                    window.TiddlyDesktopExport.saveFile(filename, mimeType, base64, callbackId);
+                                });
+                            })
+                            .catch(function(error) {
+                                console.error('[TiddlyDesktop Export] Error:', error);
+                            });
+                        return;
+                    }
+
+                    // Handle data: URLs
+                    if (href.startsWith('data:')) {
+                        event.preventDefault();
+                        event.stopPropagation();
+
+                        console.log('[TiddlyDesktop Export] Intercepted data URL download:', downloadAttr);
+
+                        var filename = downloadAttr || 'download';
+                        // Parse data URL: data:[<mediatype>][;base64],<data>
+                        var match = href.match(/^data:([^;,]+)?(?:;base64)?,(.*)$/);
+                        if (match) {
+                            var mimeType = match[1] || getMimeType(filename, null);
+                            var data = match[2];
+                            var isBase64 = href.indexOf(';base64,') !== -1;
+
+                            if (isBase64) {
+                                var callbackId = generateCallbackId();
+                                window.__exportCallbacks[callbackId] = function(success, message) {
+                                    console.log('[TiddlyDesktop Export] Save result:', success, message);
+                                };
+                                window.TiddlyDesktopExport.saveFile(filename, mimeType, data, callbackId);
+                            } else {
+                                // URL-encoded data - decode and convert to base64
+                                try {
+                                    var decoded = decodeURIComponent(data);
+                                    var callbackId = generateCallbackId();
+                                    window.__exportCallbacks[callbackId] = function(success, message) {
+                                        console.log('[TiddlyDesktop Export] Save result:', success, message);
+                                    };
+                                    window.TiddlyDesktopExport.saveTextFile(filename, mimeType, decoded, callbackId);
+                                } catch (e) {
+                                    console.error('[TiddlyDesktop Export] Failed to decode data URL:', e);
+                                }
+                            }
+                        }
+                        return;
+                    }
+                }, true);
+
+                // Also intercept programmatic downloads via createElement('a').click()
+                var originalCreateElement = document.createElement.bind(document);
+                document.createElement = function(tagName) {
+                    var element = originalCreateElement(tagName);
+
+                    if (tagName.toLowerCase() === 'a') {
+                        var originalClick = element.click.bind(element);
+                        element.click = function() {
+                            var href = element.getAttribute('href');
+                            var download = element.getAttribute('download');
+
+                            if (download && href && (href.startsWith('blob:') || href.startsWith('data:'))) {
+                                console.log('[TiddlyDesktop Export] Intercepted programmatic download:', download);
+
+                                // Create and dispatch a fake click event that our listener will catch
+                                var event = new MouseEvent('click', {
+                                    bubbles: true,
+                                    cancelable: true,
+                                    view: window
+                                });
+                                element.dispatchEvent(event);
+                                return;
+                            }
+
+                            return originalClick();
+                        };
+                    }
+
+                    return element;
+                };
+
+                console.log('[TiddlyDesktop] Export handler installed');
+            })();
+        """.trimIndent()
+
+        // Add a WebViewClient that injects the script after page load
+        webView.webViewClient = object : WebViewClient() {
+            override fun shouldOverrideUrlLoading(view: WebView, url: String): Boolean {
+                return false
+            }
+
+            override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse? {
+                val url = request.url.toString()
+
+                // Check if this is a PDF request to our attachment endpoints
+                if (url.contains("/_relative/") || url.contains("/_file/")) {
+                    // Determine the file type
+                    val isPdf = when {
+                        url.contains("/_relative/") -> {
+                            val path = URLDecoder.decode(url.substringAfter("/_relative/"), "UTF-8")
+                            path.lowercase().endsWith(".pdf")
+                        }
+                        url.contains("/_file/") -> {
+                            // Decode base64 path
+                            try {
+                                val encoded = url.substringAfter("/_file/").substringBefore("?")
+                                val decoded = String(Base64.decode(
+                                    encoded.replace("-", "+").replace("_", "/"),
+                                    Base64.DEFAULT
+                                ))
+                                decoded.lowercase().endsWith(".pdf")
+                            } catch (e: Exception) {
+                                false
+                            }
+                        }
+                        else -> false
+                    }
+
+                    if (isPdf) {
+                        Log.d(TAG, "Intercepting PDF request: $url")
+                        return renderPdfAsHtml(url)
+                    }
+                }
+
+                return super.shouldInterceptRequest(view, request)
+            }
+
+            override fun onPageFinished(view: WebView, url: String) {
+                super.onPageFinished(view, url)
+                // Inject the external attachment handler
+                view.evaluateJavascript(externalAttachmentScript, null)
+                // Inject the saver for single-file wikis
+                if (saverScript.isNotEmpty()) {
+                    view.evaluateJavascript(saverScript, null)
+                }
+                // Inject the palette monitoring script
+                view.evaluateJavascript(paletteScript, null)
+                // Inject the export/download handler
+                view.evaluateJavascript(exportScript, null)
+                // Inject server health check for single-file wikis
+                injectServerHealthCheck()
+            }
+        }
+
+        // Load the wiki URL
+        Log.d(TAG, "Loading wiki URL: $wikiUrl")
+        webView.loadUrl(wikiUrl)
+    }
+
+    // Flag to track if we're waiting for unsaved changes check
+    private var pendingBackAction = false
+
+    override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
+        // Handle back button for WebView navigation
+        if (keyCode == KeyEvent.KEYCODE_BACK) {
+            // For single-file wikis: Don't go back to old server URLs after reconnect
+            if (!isFolder && httpServer != null) {
+                val currentPort = httpServer!!.port
+
+                // Check if we can go back and if the back URL is from the same server
+                if (webView.canGoBack()) {
+                    val history = webView.copyBackForwardList()
+                    val currentIndex = history.currentIndex
+
+                    if (currentIndex > 0) {
+                        val backUrl = history.getItemAtIndex(currentIndex - 1).url
+                        // If back URL is from a different port (dead server), check for unsaved changes then close
+                        if (!backUrl.contains(":$currentPort/")) {
+                            Log.d(TAG, "Back would go to old server URL, checking for unsaved changes")
+                            checkUnsavedChangesAndClose()
+                            return true
+                        }
+                        // Same server, allow normal back navigation
+                        webView.goBack()
+                        return true
+                    }
+                }
+                // No history or at start, check for unsaved changes then close
+                checkUnsavedChangesAndClose()
+                return true
+            }
+
+            // For folder wikis: normal back behavior
+            if (webView.canGoBack()) {
+                webView.goBack()
+                return true
+            }
+        }
+        return super.onKeyDown(keyCode, event)
+    }
+
+    /**
+     * Check for unsaved changes before closing the activity.
+     * If there are unsaved changes, prompt the user to save them first.
+     */
+    private fun checkUnsavedChangesAndClose() {
+        if (pendingBackAction) return
+        pendingBackAction = true
+
+        // Check for unsaved changes via JavaScript
+        webView.evaluateJavascript("""
+            (function() {
+                if (typeof ${'$'}tw !== 'undefined' && ${'$'}tw.wiki && ${'$'}tw.wiki.getChangeCount) {
+                    return ${'$'}tw.wiki.getChangeCount();
+                }
+                return 0;
+            })();
+        """.trimIndent()) { result ->
+            val changeCount = result?.toIntOrNull() ?: 0
+            pendingBackAction = false
+
+            if (changeCount > 0) {
+                // Show confirmation dialog
+                runOnUiThread {
+                    android.app.AlertDialog.Builder(this)
+                        .setTitle("Unsaved Changes")
+                        .setMessage("You have $changeCount unsaved change(s). What would you like to do?")
+                        .setPositiveButton("Save & Close") { _, _ ->
+                            // Save changes to localStorage and close
+                            webView.evaluateJavascript("""
+                                (function() {
+                                    try {
+                                        var key = 'tiddlydesktop_unsaved_' + btoa(window.__WIKI_PATH__ || 'default').replace(/[^a-zA-Z0-9]/g, '');
+                                        var modified = [];
+                                        if (${'$'}tw.syncer && ${'$'}tw.syncer.tiddlerInfo) {
+                                            for (var title in ${'$'}tw.syncer.tiddlerInfo) {
+                                                var info = ${'$'}tw.syncer.tiddlerInfo[title];
+                                                if (info && info.changeCount > 0) {
+                                                    var tiddler = ${'$'}tw.wiki.getTiddler(title);
+                                                    if (tiddler) modified.push(JSON.parse(JSON.stringify(tiddler.fields)));
+                                                }
+                                            }
+                                        }
+                                        if (modified.length > 0) {
+                                            localStorage.setItem(key, JSON.stringify({
+                                                timestamp: Date.now(),
+                                                path: window.__WIKI_PATH__,
+                                                tiddlers: modified
+                                            }));
+                                        }
+                                        return true;
+                                    } catch(e) { return false; }
+                                })();
+                            """.trimIndent()) { saved ->
+                                finish()
+                            }
+                        }
+                        .setNegativeButton("Discard & Close") { _, _ ->
+                            finish()
+                        }
+                        .setNeutralButton("Cancel", null)
+                        .show()
+                }
+            } else {
+                finish()
+            }
+        }
+    }
+
+    override fun onPause() {
+        super.onPause()
+        webView.onPause()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        webView.onResume()
+
+        // Check if HTTP server needs restart (single-file wikis only)
+        // This handles the case where the phone went to sleep and Android killed the socket
+        if (!isFolder && httpServer != null) {
+            if (!httpServer!!.isRunning()) {
+                Log.d(TAG, "HTTP server died while paused, restarting...")
+                try {
+                    val newUrl = httpServer!!.restart()
+                    Log.d(TAG, "Server restarted at: $newUrl")
+                    // Reload the page with the new server URL
+                    webView.loadUrl(newUrl)
+                } catch (e: Exception) {
+                    Log.e(TAG, "Failed to restart HTTP server: ${e.message}")
+                    // Show error to user
+                    webView.loadData(
+                        "<html><body><h1>Server Error</h1><p>Failed to restart wiki server: ${e.message}</p><p>Please close and reopen this wiki.</p></body></html>",
+                        "text/html",
+                        "UTF-8"
+                    )
+                }
+            } else {
+                Log.d(TAG, "HTTP server still running on port ${httpServer!!.port}")
+            }
+        }
+
+        // For folder wikis using Node.js server, we can check if the server is still accessible
+        // by attempting a quick HTTP request. If it fails, show a reload button.
+        if (isFolder) {
+            checkFolderServerHealth()
+        }
+    }
+
+    /**
+     * Check if the folder wiki's Node.js server is still accessible.
+     * If not, inject a message suggesting to reload.
+     */
+    private fun checkFolderServerHealth() {
+        val serverUrl = intent.getStringExtra(EXTRA_WIKI_URL) ?: return
+
+        Thread {
+            try {
+                val url = java.net.URL("$serverUrl/status")
+                val connection = url.openConnection() as java.net.HttpURLConnection
+                connection.connectTimeout = 2000
+                connection.readTimeout = 2000
+                connection.requestMethod = "GET"
+
+                val responseCode = connection.responseCode
+                connection.disconnect()
+
+                if (responseCode != 200) {
+                    Log.w(TAG, "Folder wiki server health check failed: $responseCode")
+                    showServerUnavailableMessage(serverUrl)
+                } else {
+                    Log.d(TAG, "Folder wiki server is healthy")
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "Folder wiki server health check failed: ${e.message}")
+                showServerUnavailableMessage(serverUrl)
+            }
+        }.start()
+    }
+
+    /**
+     * Show a message when the wiki server is unavailable.
+     * For single-file wikis: Offers to restart the local HTTP server
+     * For folder wikis: Offers to reload the page
+     */
+    @Suppress("UNUSED_PARAMETER")
+    private fun showServerUnavailableMessage(serverUrl: String) {
+        runOnUiThread {
+            // Inject a message into the page with appropriate action
+            val script = if (!isFolder && httpServer != null) {
+                // Single-file wiki: Can restart the local HTTP server
+                """
+                (function() {
+                    // Only show if we haven't already
+                    if (document.getElementById('td-server-unavailable')) return;
+
+                    var div = document.createElement('div');
+                    div.id = 'td-server-unavailable';
+                    div.style.cssText = 'position:fixed;top:0;left:0;right:0;background:#c42b2b;color:white;padding:12px;text-align:center;z-index:999999;font-family:sans-serif;';
+                    div.innerHTML = 'Server connection lost. <button id="td-reconnect-btn" style="margin-left:8px;padding:4px 12px;background:white;color:#c42b2b;border:none;border-radius:4px;cursor:pointer;">Reconnect</button>';
+                    document.body.insertBefore(div, document.body.firstChild);
+
+                    document.getElementById('td-reconnect-btn').onclick = function() {
+                        this.textContent = 'Reconnecting...';
+                        this.disabled = true;
+                        try {
+                            var resultJson = window.TiddlyDesktopServer.restartServerAndNavigate();
+                            var result = JSON.parse(resultJson);
+                            if (!result.success) {
+                                alert('Failed to restart server: ' + (result.error || 'Unknown error'));
+                                this.textContent = 'Reconnect';
+                                this.disabled = false;
+                            }
+                        } catch (e) {
+                            alert('Error: ' + e.message);
+                            this.textContent = 'Reconnect';
+                            this.disabled = false;
+                        }
+                    };
+                })();
+                """.trimIndent()
+            } else {
+                // Folder wiki: Can only reload (Node.js server is in main process)
+                """
+                (function() {
+                    // Only show if we haven't already
+                    if (document.getElementById('td-server-unavailable')) return;
+
+                    var div = document.createElement('div');
+                    div.id = 'td-server-unavailable';
+                    div.style.cssText = 'position:fixed;top:0;left:0;right:0;background:#c42b2b;color:white;padding:12px;text-align:center;z-index:999999;font-family:sans-serif;';
+                    div.innerHTML = 'Server connection lost. <button onclick="location.reload()" style="margin-left:8px;padding:4px 12px;background:white;color:#c42b2b;border:none;border-radius:4px;cursor:pointer;">Reload</button>';
+                    document.body.insertBefore(div, document.body.firstChild);
+                })();
+                """.trimIndent()
+            }
+            webView.evaluateJavascript(script, null)
+        }
+    }
+
+    /**
+     * Inject a periodic server health check that shows reconnect banner if server dies.
+     * This is called once during wiki load.
+     */
+    private fun injectServerHealthCheck() {
+        // Only for single-file wikis with local HTTP server
+        if (isFolder || httpServer == null) return
+
+        val serverPort = httpServer!!.port
+        val script = """
+            (function() {
+                var checkInterval = 5000; // Check every 5 seconds
+                var serverUrl = 'http://127.0.0.1:$serverPort';
+                var consecutiveFailures = 0;
+
+                function checkServerHealth() {
+                    fetch(serverUrl + '/', { method: 'HEAD' })
+                        .then(function(response) {
+                            if (!response.ok) {
+                                consecutiveFailures++;
+                                if (consecutiveFailures >= 2) {
+                                    showDisconnectBanner();
+                                }
+                            } else {
+                                consecutiveFailures = 0;
+                                hideDisconnectBanner();
+                            }
+                        })
+                        .catch(function() {
+                            consecutiveFailures++;
+                            if (consecutiveFailures >= 2) {
+                                showDisconnectBanner();
+                            }
+                        });
+                }
+
+                // Get modified tiddlers that haven't been saved
+                function getModifiedTiddlers() {
+                    if (typeof ${'$'}tw === 'undefined' || !${'$'}tw.wiki) return [];
+                    if (!${'$'}tw.wiki.getChangeCount || ${'$'}tw.wiki.getChangeCount() === 0) return [];
+
+                    var modified = [];
+
+                    // Method 1: Check syncer's changed tiddlers
+                    if (${'$'}tw.syncer && ${'$'}tw.syncer.tiddlerInfo) {
+                        for (var title in ${'$'}tw.syncer.tiddlerInfo) {
+                            var info = ${'$'}tw.syncer.tiddlerInfo[title];
+                            // Check if tiddler has local changes not synced
+                            if (info && info.changeCount > 0) {
+                                var tiddler = ${'$'}tw.wiki.getTiddler(title);
+                                if (tiddler) {
+                                    modified.push(JSON.parse(JSON.stringify(tiddler.fields)));
+                                }
+                            }
+                        }
+                    }
+
+                    // Method 2: If syncer method found nothing, check all recent tiddlers
+                    if (modified.length === 0) {
+                        ${'$'}tw.wiki.forEachTiddler(function(title, tiddler) {
+                            // Include non-system tiddlers modified recently (within this session)
+                            if (!title.startsWith('$:/') || title.startsWith('$:/temp/') || title.indexOf('/Draft/') !== -1) {
+                                var fields = tiddler.fields;
+                                // Include drafts and recently modified tiddlers
+                                if (title.indexOf('/Draft/') !== -1 || (fields.modified && new Date(fields.modified) > window.__TD_SESSION_START__)) {
+                                    modified.push(JSON.parse(JSON.stringify(fields)));
+                                }
+                            }
+                        });
+                    }
+
+                    return modified;
+                }
+
+                // Save modified tiddlers to localStorage
+                function saveModifiedToStorage() {
+                    var modified = getModifiedTiddlers();
+                    if (modified.length === 0) return true;
+
+                    try {
+                        var key = 'tiddlydesktop_unsaved_' + btoa(window.__WIKI_PATH__ || 'default').replace(/[^a-zA-Z0-9]/g, '');
+                        localStorage.setItem(key, JSON.stringify({
+                            timestamp: Date.now(),
+                            path: window.__WIKI_PATH__,
+                            tiddlers: modified
+                        }));
+                        console.log('[TiddlyDesktop] Saved ' + modified.length + ' modified tiddlers to localStorage');
+                        return true;
+                    } catch (e) {
+                        console.error('[TiddlyDesktop] Failed to save to localStorage:', e);
+                        return false;
+                    }
+                }
+
+                // Record session start time for change detection
+                window.__TD_SESSION_START__ = window.__TD_SESSION_START__ || new Date();
+
+                function showDisconnectBanner() {
+                    if (document.getElementById('td-server-unavailable')) return;
+
+                    var hasUnsaved = typeof ${'$'}tw !== 'undefined' && ${'$'}tw.wiki && ${'$'}tw.wiki.getChangeCount && ${'$'}tw.wiki.getChangeCount() > 0;
+                    var changeCount = hasUnsaved ? ${'$'}tw.wiki.getChangeCount() : 0;
+
+                    var div = document.createElement('div');
+                    div.id = 'td-server-unavailable';
+                    div.style.cssText = 'position:fixed;top:0;left:0;right:0;background:#c42b2b;color:white;padding:12px;text-align:center;z-index:999999;font-family:sans-serif;';
+
+                    if (hasUnsaved) {
+                        div.innerHTML = 'Server connection lost. <strong>' + changeCount + ' unsaved change(s)</strong>. ' +
+                            '<button id="td-reconnect-btn" style="margin-left:8px;padding:4px 12px;background:white;color:#c42b2b;border:none;border-radius:4px;cursor:pointer;">Save & Reconnect</button>';
+                    } else {
+                        div.innerHTML = 'Server connection lost. ' +
+                            '<button id="td-reconnect-btn" style="margin-left:8px;padding:4px 12px;background:white;color:#c42b2b;border:none;border-radius:4px;cursor:pointer;">Reconnect</button>';
+                    }
+                    document.body.insertBefore(div, document.body.firstChild);
+
+                    document.getElementById('td-reconnect-btn').onclick = function() {
+                        var btn = this;
+                        btn.textContent = hasUnsaved ? 'Saving...' : 'Reconnecting...';
+                        btn.disabled = true;
+
+                        try {
+                            // Save modified tiddlers to localStorage first
+                            if (hasUnsaved) {
+                                if (!saveModifiedToStorage()) {
+                                    if (!confirm('Failed to backup changes to local storage. Reconnect anyway? (Changes may be lost)')) {
+                                        btn.textContent = 'Save & Reconnect';
+                                        btn.disabled = false;
+                                        return;
+                                    }
+                                }
+                                btn.textContent = 'Reconnecting...';
+                            }
+
+                            if (window.TiddlyDesktopServer && window.TiddlyDesktopServer.restartServerAndNavigate) {
+                                var resultJson = window.TiddlyDesktopServer.restartServerAndNavigate();
+                                var result = JSON.parse(resultJson);
+                                if (!result.success) {
+                                    alert('Failed to restart server: ' + (result.error || 'Unknown error'));
+                                    btn.textContent = hasUnsaved ? 'Save & Reconnect' : 'Reconnect';
+                                    btn.disabled = false;
+                                }
+                            } else {
+                                location.reload();
+                            }
+                        } catch (e) {
+                            alert('Error: ' + e.message);
+                            btn.textContent = hasUnsaved ? 'Save & Reconnect' : 'Reconnect';
+                            btn.disabled = false;
+                        }
+                    };
+                }
+
+                function hideDisconnectBanner() {
+                    var banner = document.getElementById('td-server-unavailable');
+                    if (banner) {
+                        banner.remove();
+                    }
+                }
+
+                // Check for and restore saved tiddlers from previous session
+                function checkAndRestoreSavedTiddlers() {
+                    if (typeof ${'$'}tw === 'undefined' || !${'$'}tw.wiki) {
+                        // TiddlyWiki not ready, try again later
+                        setTimeout(checkAndRestoreSavedTiddlers, 500);
+                        return;
+                    }
+
+                    try {
+                        var key = 'tiddlydesktop_unsaved_' + btoa(window.__WIKI_PATH__ || 'default').replace(/[^a-zA-Z0-9]/g, '');
+                        var saved = localStorage.getItem(key);
+                        if (!saved) return;
+
+                        var data = JSON.parse(saved);
+                        var age = Date.now() - data.timestamp;
+                        var maxAge = 60 * 60 * 1000; // 1 hour
+
+                        if (age > maxAge) {
+                            // Too old, discard
+                            localStorage.removeItem(key);
+                            console.log('[TiddlyDesktop] Discarded old saved tiddlers (age: ' + Math.round(age/1000/60) + ' minutes)');
+                            return;
+                        }
+
+                        if (!data.tiddlers || data.tiddlers.length === 0) {
+                            localStorage.removeItem(key);
+                            return;
+                        }
+
+                        // Show restore prompt
+                        var minutes = Math.round(age / 1000 / 60);
+                        var timeAgo = minutes < 1 ? 'just now' : minutes + ' minute(s) ago';
+
+                        if (confirm('Found ' + data.tiddlers.length + ' unsaved change(s) from ' + timeAgo + '. Restore them?')) {
+                            var restored = 0;
+                            data.tiddlers.forEach(function(fields) {
+                                try {
+                                    ${'$'}tw.wiki.addTiddler(new ${'$'}tw.Tiddler(fields));
+                                    restored++;
+                                } catch (e) {
+                                    console.error('[TiddlyDesktop] Failed to restore tiddler:', fields.title, e);
+                                }
+                            });
+                            console.log('[TiddlyDesktop] Restored ' + restored + ' tiddlers');
+
+                            // Show notification
+                            if (restored > 0) {
+                                ${'$'}tw.notifier.display('${'$'}:/core/images/done-button', {
+                                    title: 'Changes Restored',
+                                    text: 'Restored ' + restored + ' unsaved change(s). Remember to save!'
+                                });
+                            }
+                        }
+
+                        // Clear the backup after restore (or rejection)
+                        localStorage.removeItem(key);
+
+                    } catch (e) {
+                        console.error('[TiddlyDesktop] Error checking for saved tiddlers:', e);
+                    }
+                }
+
+                // Start periodic health check after page is fully loaded
+                setTimeout(function() {
+                    setInterval(checkServerHealth, checkInterval);
+                    // Also check for saved tiddlers to restore
+                    checkAndRestoreSavedTiddlers();
+                }, 5000);
+
+                console.log('[TiddlyDesktop] Server health check installed');
+            })();
+        """.trimIndent()
+
+        webView.evaluateJavascript(script, null)
+    }
+
+    override fun onDestroy() {
+        Log.d(TAG, "Wiki closed: path=$wikiPath, isFolder=$isFolder")
+
+        // Release WakeLock
+        releaseWakeLock()
+
+        // Stop the HTTP server (for single-file wikis)
+        httpServer?.stop()
+        httpServer = null
+
+        // For folder wikis, clean up the local copy used by Node.js server
+        // This triggers cleanup in the main process via JNI
+        if (isFolder && !wikiPath.isNullOrEmpty()) {
+            try {
+                cleanupWikiLocalCopy(wikiPath!!, true)
+                Log.d(TAG, "Triggered cleanup for folder wiki local copy")
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to cleanup wiki local copy: ${e.message}")
+            }
+        }
+
+        webView.destroy()
+        super.onDestroy()
+    }
+
+    /**
+     * Acquire a partial WakeLock to keep the HTTP server alive when the app is in background.
+     * This prevents Android from killing the server thread when the screen is off.
+     */
+    @SuppressLint("WakelockTimeout")
+    private fun acquireWakeLock() {
+        if (wakeLock != null) return  // Already acquired
+
+        try {
+            val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
+            wakeLock = powerManager.newWakeLock(
+                PowerManager.PARTIAL_WAKE_LOCK,
+                "TiddlyDesktop:WikiServer"
+            )
+            wakeLock?.acquire()
+            Log.d(TAG, "WakeLock acquired to keep server alive")
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to acquire WakeLock: ${e.message}")
+        }
+    }
+
+    /**
+     * Release the WakeLock when the activity is destroyed.
+     */
+    private fun releaseWakeLock() {
+        try {
+            if (wakeLock?.isHeld == true) {
+                wakeLock?.release()
+                Log.d(TAG, "WakeLock released")
+            }
+            wakeLock = null
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to release WakeLock: ${e.message}")
+        }
+    }
+
+    /**
+     * Render a PDF file as HTML with embedded images using Android's PdfRenderer.
+     * Returns a WebResourceResponse containing HTML with rendered PDF pages.
+     */
+    private fun renderPdfAsHtml(url: String): WebResourceResponse? {
+        try {
+            Log.d(TAG, "Rendering PDF: $url")
+
+            // Get the file descriptor for the PDF
+            val pfd = getPdfFileDescriptor(url) ?: run {
+                Log.e(TAG, "Could not get file descriptor for PDF: $url")
+                return createErrorResponse("Could not open PDF file")
+            }
+
+            pfd.use { descriptor ->
+                val renderer = PdfRenderer(descriptor)
+                renderer.use { pdfRenderer ->
+                    val pageCount = pdfRenderer.pageCount
+                    Log.d(TAG, "PDF has $pageCount pages")
+
+                    // Build HTML with rendered pages
+                    val htmlBuilder = StringBuilder()
+                    htmlBuilder.append("""
+                        <!DOCTYPE html>
+                        <html>
+                        <head>
+                            <meta charset="UTF-8">
+                            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                            <title>PDF Viewer</title>
+                            <style>
+                                * { margin: 0; padding: 0; box-sizing: border-box; }
+                                body {
+                                    background: #525659;
+                                    display: flex;
+                                    flex-direction: column;
+                                    align-items: center;
+                                    padding: 20px;
+                                    gap: 20px;
+                                }
+                                .pdf-page {
+                                    background: white;
+                                    box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+                                    max-width: 100%;
+                                }
+                                .pdf-page img {
+                                    display: block;
+                                    max-width: 100%;
+                                    height: auto;
+                                }
+                                .page-info {
+                                    color: #ccc;
+                                    font-family: sans-serif;
+                                    font-size: 12px;
+                                    margin-top: 4px;
+                                    text-align: center;
+                                }
+                                .header {
+                                    position: fixed;
+                                    top: 0;
+                                    left: 0;
+                                    right: 0;
+                                    background: #333;
+                                    color: white;
+                                    padding: 10px 20px;
+                                    display: flex;
+                                    justify-content: space-between;
+                                    align-items: center;
+                                    z-index: 1000;
+                                    font-family: sans-serif;
+                                }
+                                .header button {
+                                    background: #666;
+                                    border: none;
+                                    color: white;
+                                    padding: 8px 16px;
+                                    border-radius: 4px;
+                                    cursor: pointer;
+                                    font-size: 14px;
+                                }
+                                .header button:hover {
+                                    background: #888;
+                                }
+                                .content {
+                                    margin-top: 60px;
+                                    display: flex;
+                                    flex-direction: column;
+                                    align-items: center;
+                                    gap: 20px;
+                                }
+                            </style>
+                        </head>
+                        <body>
+                            <div class="header">
+                                <span>$pageCount page${if (pageCount != 1) "s" else ""}</span>
+                                <button onclick="history.back()">Close</button>
+                            </div>
+                            <div class="content">
+                    """.trimIndent())
+
+                    // Render each page
+                    for (pageIndex in 0 until pageCount) {
+                        pdfRenderer.openPage(pageIndex).use { page ->
+                            // Calculate bitmap size (render at 2x for better quality on high-DPI screens)
+                            val scale = 2.0f
+                            val width = (page.width * scale).toInt()
+                            val height = (page.height * scale).toInt()
+
+                            // Create bitmap and render the page
+                            val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+                            bitmap.eraseColor(Color.WHITE)
+                            page.render(bitmap, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
+
+                            // Convert bitmap to base64 PNG
+                            val outputStream = ByteArrayOutputStream()
+                            bitmap.compress(Bitmap.CompressFormat.PNG, 90, outputStream)
+                            val base64 = Base64.encodeToString(outputStream.toByteArray(), Base64.NO_WRAP)
+                            bitmap.recycle()
+
+                            // Add image to HTML
+                            htmlBuilder.append("""
+                                <div class="pdf-page">
+                                    <img src="data:image/png;base64,$base64" alt="Page ${pageIndex + 1}">
+                                    <div class="page-info">Page ${pageIndex + 1} of $pageCount</div>
+                                </div>
+                            """.trimIndent())
+                        }
+                    }
+
+                    htmlBuilder.append("""
+                            </div>
+                        </body>
+                        </html>
+                    """.trimIndent())
+
+                    // Return the HTML as a WebResourceResponse
+                    val htmlBytes = htmlBuilder.toString().toByteArray(Charsets.UTF_8)
+                    return WebResourceResponse(
+                        "text/html",
+                        "UTF-8",
+                        ByteArrayInputStream(htmlBytes)
+                    )
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error rendering PDF: ${e.message}", e)
+            return createErrorResponse("Error rendering PDF: ${e.message}")
+        }
+    }
+
+    /**
+     * Get a ParcelFileDescriptor for a PDF at the given URL.
+     * Handles both /_relative/ and /_file/ endpoints.
+     */
+    private fun getPdfFileDescriptor(url: String): ParcelFileDescriptor? {
+        try {
+            when {
+                url.contains("/_relative/") -> {
+                    // Relative path to wiki location
+                    val relativePath = URLDecoder.decode(url.substringAfter("/_relative/").substringBefore("?"), "UTF-8")
+                    Log.d(TAG, "Opening relative PDF: $relativePath")
+
+                    val currentTreeUri = treeUri ?: return null
+                    val parentDoc = DocumentFile.fromTreeUri(this, currentTreeUri) ?: return null
+
+                    // Navigate to the file
+                    var currentDoc: DocumentFile? = parentDoc
+                    val parts = relativePath.removePrefix("./").split("/")
+                    for (part in parts) {
+                        if (part.isEmpty()) continue
+                        currentDoc = currentDoc?.findFile(part)
+                        if (currentDoc == null) {
+                            Log.e(TAG, "Could not find path component: $part")
+                            return null
+                        }
+                    }
+
+                    if (currentDoc == null || !currentDoc.isFile) {
+                        Log.e(TAG, "Target is not a file: $relativePath")
+                        return null
+                    }
+
+                    return contentResolver.openFileDescriptor(currentDoc.uri, "r")
+                }
+
+                url.contains("/_file/") -> {
+                    // Absolute path encoded in base64
+                    val encoded = url.substringAfter("/_file/").substringBefore("?")
+                    val decoded = String(Base64.decode(
+                        encoded.replace("-", "+").replace("_", "/"),
+                        Base64.DEFAULT
+                    ))
+                    Log.d(TAG, "Opening absolute PDF: $decoded")
+
+                    val uri = Uri.parse(decoded)
+                    return contentResolver.openFileDescriptor(uri, "r")
+                }
+
+                else -> {
+                    Log.e(TAG, "Unknown PDF URL format: $url")
+                    return null
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error getting PDF file descriptor: ${e.message}", e)
+            return null
+        }
+    }
+
+    /**
+     * Create an error response HTML page.
+     */
+    private fun createErrorResponse(message: String): WebResourceResponse {
+        val html = """
+            <!DOCTYPE html>
+            <html>
+            <head>
+                <meta charset="UTF-8">
+                <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                <title>PDF Error</title>
+                <style>
+                    body {
+                        font-family: sans-serif;
+                        display: flex;
+                        justify-content: center;
+                        align-items: center;
+                        min-height: 100vh;
+                        margin: 0;
+                        background: #f5f5f5;
+                    }
+                    .error {
+                        background: white;
+                        padding: 40px;
+                        border-radius: 8px;
+                        box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+                        text-align: center;
+                    }
+                    .error h1 { color: #c42b2b; margin-bottom: 16px; }
+                    .error p { color: #666; }
+                    .error button {
+                        margin-top: 20px;
+                        padding: 10px 20px;
+                        background: #007bff;
+                        color: white;
+                        border: none;
+                        border-radius: 4px;
+                        cursor: pointer;
+                    }
+                </style>
+            </head>
+            <body>
+                <div class="error">
+                    <h1>Cannot Display PDF</h1>
+                    <p>${message.replace("<", "&lt;").replace(">", "&gt;")}</p>
+                    <button onclick="history.back()">Go Back</button>
+                </div>
+            </body>
+            </html>
+        """.trimIndent()
+
+        return WebResourceResponse(
+            "text/html",
+            "UTF-8",
+            ByteArrayInputStream(html.toByteArray(Charsets.UTF_8))
+        )
+    }
+
+    /**
+     * Parse the wiki path JSON to extract URIs.
+     * Format: {"uri":"content://...","documentTopTreeUri":"content://..." or null}
+     */
+    private fun parseWikiPath(pathJson: String): Pair<Uri?, Uri?> {
+        return try {
+            val json = JSONObject(pathJson)
+            val uriStr = json.optString("uri", "")
+            val treeUriStr = json.optString("documentTopTreeUri", "")
+
+            val uri = if (uriStr.isNotEmpty()) Uri.parse(uriStr) else null
+            val treeUri = if (treeUriStr.isNotEmpty() && treeUriStr != "null") Uri.parse(treeUriStr) else null
+
+            Pair(uri, treeUri)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to parse wiki path JSON: ${e.message}")
+            // Try as plain URI string
+            Pair(Uri.parse(pathJson), null)
+        }
+    }
+}

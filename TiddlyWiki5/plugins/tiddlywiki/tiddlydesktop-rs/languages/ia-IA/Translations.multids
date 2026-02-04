@@ -17,6 +17,7 @@ Buttons/CreateWikiFile: Crear file wiki
 Buttons/CreateWikiFolder: Crear dossier wiki
 Buttons/ToFile: a file
 Buttons/ToFolder: a dossier
+Buttons/Reauthorize: Re-authorize
 
 Tooltips/BackupsEnabled: Copias de securitate activate - clicca pro disactivar
 Tooltips/ConvertWiki: Converter formato de wiki
@@ -42,6 +43,7 @@ Labels/SaveTo: salvar in:
 Labels/InFolder: in dossier:
 Labels/Language: Lingua:
 Labels/AutoDetect: Detection automatic
+Labels/CheckingPermission: checking...
 
 Placeholders/NewGroupName: Nomine de nove gruppo...
 Placeholders/SearchWikis: Cercar wikis...

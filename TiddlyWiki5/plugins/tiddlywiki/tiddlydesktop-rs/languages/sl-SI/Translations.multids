@@ -17,6 +17,7 @@ Buttons/CreateWikiFile: Ustvari wiki datoteko
 Buttons/CreateWikiFolder: Ustvari wiki mapo
 Buttons/ToFile: v datoteko
 Buttons/ToFolder: v mapo
+Buttons/Reauthorize: Re-authorize
 
 Tooltips/BackupsEnabled: Varnostne kopije omogočene - kliknite za onemogočenje
 Tooltips/ConvertWiki: Pretvori format wikija
@@ -42,6 +43,7 @@ Labels/SaveTo: shrani v:
 Labels/InFolder: v mapi:
 Labels/Language: Jezik:
 Labels/AutoDetect: Samodejna zaznava
+Labels/CheckingPermission: checking...
 
 Placeholders/NewGroupName: Ime nove skupine...
 Placeholders/SearchWikis: Išči wikije...

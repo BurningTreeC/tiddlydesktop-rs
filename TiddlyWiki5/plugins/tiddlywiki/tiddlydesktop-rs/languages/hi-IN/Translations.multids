@@ -17,6 +17,7 @@ Buttons/CreateWikiFile: विकी फ़ाइल बनाएं
 Buttons/CreateWikiFolder: विकी फ़ोल्डर बनाएं
 Buttons/ToFile: फ़ाइल में
 Buttons/ToFolder: फ़ोल्डर में
+Buttons/Reauthorize: Re-authorize
 
 Tooltips/BackupsEnabled: बैकअप सक्षम - अक्षम करने के लिए क्लिक करें
 Tooltips/ConvertWiki: विकी प्रारूप बदलें
@@ -42,6 +43,7 @@ Labels/SaveTo: यहां सहेजें:
 Labels/InFolder: फ़ोल्डर में:
 Labels/Language: भाषा:
 Labels/AutoDetect: स्वतः पता लगाएं
+Labels/CheckingPermission: checking...
 
 Placeholders/NewGroupName: नया समूह नाम...
 Placeholders/SearchWikis: विकी खोजें...

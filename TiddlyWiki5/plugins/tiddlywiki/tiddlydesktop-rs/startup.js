@@ -62,8 +62,15 @@ exports.startup = function(callback) {
 	}
 
 	// Add body class for Android (used by CSS for Android-specific styling)
+	// Also add to html element since :has() selector isn't supported in Android WebView
 	if (isAndroid) {
 		document.body.classList.add("td-is-android");
+		document.documentElement.classList.add("td-is-android");
+	}
+
+	// Add class to html element for main wiki on Android (for scroll fix)
+	if (isAndroid && isMainWiki) {
+		document.documentElement.classList.add("td-android-main-wiki");
 	}
 
 	// ========================================
@@ -372,11 +379,46 @@ exports.startup = function(callback) {
 				backup_dir: entry.backup_dir || "",
 				backup_count: entry.backup_count !== undefined ? String(entry.backup_count) : "",
 				group: entry.group || "",
+				needs_reauth: "checking", // Will be updated by permission check on Android
 				text: ""
 			});
 		});
 
 		$tw.wiki.setText("$:/temp/tiddlydesktop-rs/wiki-count", "text", null, String(entries.length));
+
+		// On Android, check permissions for each wiki
+		if (isAndroid) {
+			checkWikiPermissions(entries);
+		}
+	}
+
+	// Check permissions for all wiki entries (Android only)
+	function checkWikiPermissions(entries) {
+		entries.forEach(function(entry, index) {
+			var tempTitle = "$:/temp/tiddlydesktop-rs/wikis/" + index;
+			// Extract the URI from the path (which is JSON for Android)
+			var uri = null;
+			try {
+				var pathData = JSON.parse(entry.path);
+				uri = pathData.uri;
+			} catch (e) {
+				// Not JSON, use path directly (legacy format)
+				uri = entry.path;
+			}
+
+			if (uri && uri.startsWith("content://")) {
+				// Check if we have permission for this URI
+				invoke("android_has_permission", { uri: uri }).then(function(hasPermission) {
+					$tw.wiki.setText(tempTitle, "needs_reauth", null, hasPermission ? "no" : "yes");
+				}).catch(function(err) {
+					console.error("Permission check failed for " + uri + ":", err);
+					$tw.wiki.setText(tempTitle, "needs_reauth", null, "yes");
+				});
+			} else {
+				// Not a content:// URI, no permission check needed
+				$tw.wiki.setText(tempTitle, "needs_reauth", null, "no");
+			}
+		});
 	}
 
 	// ========================================
@@ -743,6 +785,45 @@ exports.startup = function(callback) {
 			removeFromWikiList(path);
 			refreshWikiList();
 		}
+	});
+
+	// Message handler: re-authorize a wiki (Android only - permission expired)
+	$tw.rootWidget.addEventListener("tm-tiddlydesktop-rs-reauthorize", function(event) {
+		var oldPath = event.param || (event.paramObject && event.paramObject.path);
+		var isFolder = event.paramObject && event.paramObject.isFolder === "true";
+
+		if (!oldPath || !isAndroid) return;
+
+		// Show file picker to re-select the file
+		var pickPromise = isFolder
+			? invoke("android_pick_directory")
+			: invoke("android_pick_wiki_file");
+
+		pickPromise.then(function(newUri) {
+			if (!newUri) return; // User cancelled
+
+			// Update the wiki list entry with the new URI
+			var entries = getWikiListEntries();
+			var entryIndex = -1;
+
+			for (var i = 0; i < entries.length; i++) {
+				if (entries[i].path === oldPath) {
+					entryIndex = i;
+					break;
+				}
+			}
+
+			if (entryIndex >= 0) {
+				// Update the path but preserve all other settings
+				entries[entryIndex].path = newUri;
+				saveWikiList(entries);
+				refreshWikiList();
+				console.log("[TiddlyDesktop] Re-authorized wiki: " + oldPath + " -> " + newUri);
+			}
+		}).catch(function(err) {
+			console.error("Re-authorization failed:", err);
+			alert("Failed to re-authorize: " + err);
+		});
 	});
 
 	// Message handler: toggle backups for a wiki

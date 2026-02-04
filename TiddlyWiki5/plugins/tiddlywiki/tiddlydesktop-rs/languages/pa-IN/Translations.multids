@@ -17,6 +17,7 @@ Buttons/CreateWikiFile: ਵਿਕੀ ਫ਼ਾਈਲ ਬਣਾਓ
 Buttons/CreateWikiFolder: ਵਿਕੀ ਫੋਲਡਰ ਬਣਾਓ
 Buttons/ToFile: ਫਾਈਲ ਵਿੱਚ
 Buttons/ToFolder: ਫੋਲਡਰ ਵਿੱਚ
+Buttons/Reauthorize: Re-authorize
 
 Tooltips/BackupsEnabled: ਬੈਕਅੱਪ ਚਾਲੂ - ਬੰਦ ਕਰਨ ਲਈ ਕਲਿੱਕ ਕਰੋ
 Tooltips/ConvertWiki: ਵਿਕੀ ਫਾਰਮੈਟ ਬਦਲੋ
@@ -42,6 +43,7 @@ Labels/SaveTo: ਇੱਥੇ ਸੇਵ ਕਰੋ:
 Labels/InFolder: ਫੋਲਡਰ ਵਿੱਚ:
 Labels/Language: ਭਾਸ਼ਾ:
 Labels/AutoDetect: ਆਪਣੇ ਆਪ ਪਤਾ ਲਗਾਓ
+Labels/CheckingPermission: checking...
 
 Placeholders/NewGroupName: ਨਵਾਂ ਗਰੁੱਪ ਨਾਮ...
 Placeholders/SearchWikis: ਵਿਕੀ ਖੋਜੋ...

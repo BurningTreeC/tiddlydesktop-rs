@@ -17,6 +17,7 @@ Buttons/CreateWikiFile: Vytvoriť wiki súbor
 Buttons/CreateWikiFolder: Vytvoriť wiki priečinok
 Buttons/ToFile: do súboru
 Buttons/ToFolder: do priečinka
+Buttons/Reauthorize: Re-authorize
 
 Tooltips/BackupsEnabled: Zálohy povolené - kliknite pre zakázanie
 Tooltips/ConvertWiki: Previesť formát wiki
@@ -42,6 +43,7 @@ Labels/SaveTo: uložiť do:
 Labels/InFolder: v priečinku:
 Labels/Language: Jazyk:
 Labels/AutoDetect: Automatická detekcia
+Labels/CheckingPermission: checking...
 
 Placeholders/NewGroupName: Názov novej skupiny...
 Placeholders/SearchWikis: Hľadať wiki...

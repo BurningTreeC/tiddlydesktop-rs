@@ -1961,23 +1961,92 @@
                 var originalPath = window.__pendingExternalFiles && window.__pendingExternalFiles[filename];
                 invoke("js_log", { message: "th-importing-file: originalPath=" + (originalPath || "null") + ", externalEnabled=" + externalEnabled });
 
+                // Check if we're on Android (wiki path starts with content:// or is a JSON with content://)
+                var isAndroid = wikiPath && (wikiPath.indexOf("content://") !== -1 || (wikiPath.charAt(0) === '{' && wikiPath.indexOf("content://") !== -1));
+                invoke("js_log", { message: "th-importing-file: isAndroid=" + isAndroid });
+
                 if (originalPath && externalEnabled && info.isBinary) {
-                    var canonicalUri = makePathRelative(originalPath, wikiPath, {
-                        useAbsoluteForDescendents: useAbsDesc,
-                        useAbsoluteForNonDescendents: useAbsNonDesc
-                    });
+                    if (isAndroid) {
+                        // Android: Copy attachment to ./attachments/ folder
+                        // This is async, so we handle it differently
+                        invoke("android_copy_attachment", {
+                            wikiUri: wikiPath,
+                            sourceUri: originalPath,
+                            filename: filename
+                        }).then(function(relativePath) {
+                            delete window.__pendingExternalFiles[filename];
+                            console.log("[TiddlyDesktop] Android: Created attachment '" + filename + "' -> " + relativePath);
+                            info.callback([{
+                                title: filename,
+                                type: info.type,
+                                "_canonical_uri": relativePath
+                            }]);
+                        }).catch(function(err) {
+                            console.error("[TiddlyDesktop] Android: Failed to copy attachment:", err);
+                            // Fall back to embedding
+                            delete window.__pendingExternalFiles[filename];
+                            info.callback(null);
+                        });
+                        return true; // Signal we're handling it asynchronously
+                    } else {
+                        // Desktop: Use relative path to original file location
+                        var canonicalUri = makePathRelative(originalPath, wikiPath, {
+                            useAbsoluteForDescendents: useAbsDesc,
+                            useAbsoluteForNonDescendents: useAbsNonDesc
+                        });
 
-                    delete window.__pendingExternalFiles[filename];
+                        delete window.__pendingExternalFiles[filename];
 
-                    console.log("[TiddlyDesktop] Creating external attachment for '" + filename + "' -> " + canonicalUri);
+                        console.log("[TiddlyDesktop] Creating external attachment for '" + filename + "' -> " + canonicalUri);
 
-                    info.callback([{
-                        title: filename,
-                        type: info.type,
-                        "_canonical_uri": canonicalUri
-                    }]);
+                        info.callback([{
+                            title: filename,
+                            type: info.type,
+                            "_canonical_uri": canonicalUri
+                        }]);
 
-                    return true;
+                        return true;
+                    }
+                }
+
+                // Android fallback: If no originalPath but we're on Android with a binary file,
+                // read the file content and save it to attachments folder
+                if (isAndroid && externalEnabled && info.isBinary && file) {
+                    invoke("js_log", { message: "th-importing-file: Android fallback - reading file content for " + filename });
+
+                    var reader = new FileReader();
+                    reader.onload = function(e) {
+                        // Convert ArrayBuffer to base64
+                        var bytes = new Uint8Array(e.target.result);
+                        var binary = '';
+                        for (var i = 0; i < bytes.byteLength; i++) {
+                            binary += String.fromCharCode(bytes[i]);
+                        }
+                        var base64 = btoa(binary);
+
+                        invoke("android_save_attachment", {
+                            wikiUri: wikiPath,
+                            contentBase64: base64,
+                            filename: filename
+                        }).then(function(relativePath) {
+                            console.log("[TiddlyDesktop] Android: Saved attachment '" + filename + "' -> " + relativePath);
+                            info.callback([{
+                                title: filename,
+                                type: info.type,
+                                "_canonical_uri": relativePath
+                            }]);
+                        }).catch(function(err) {
+                            console.error("[TiddlyDesktop] Android: Failed to save attachment:", err);
+                            // Fall back to embedding - return false/null to let TW handle it
+                            info.callback(null);
+                        });
+                    };
+                    reader.onerror = function() {
+                        console.error("[TiddlyDesktop] Failed to read file content");
+                        info.callback(null);
+                    };
+                    reader.readAsArrayBuffer(file);
+                    return true; // Signal we're handling it asynchronously
                 }
 
                 return false;

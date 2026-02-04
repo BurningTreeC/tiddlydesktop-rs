@@ -17,6 +17,7 @@ Buttons/CreateWikiFile: צור קובץ ויקי
 Buttons/CreateWikiFolder: צור תיקיית ויקי
 Buttons/ToFile: לקובץ
 Buttons/ToFolder: לתיקייה
+Buttons/Reauthorize: Re-authorize
 
 Tooltips/BackupsEnabled: גיבויים מופעלים - לחץ להשבתה
 Tooltips/ConvertWiki: המר תבנית ויקי
@@ -42,6 +43,7 @@ Labels/SaveTo: שמור ב:
 Labels/InFolder: בתיקייה:
 Labels/Language: שפה:
 Labels/AutoDetect: זיהוי אוטומטי
+Labels/CheckingPermission: checking...
 
 Placeholders/NewGroupName: שם קבוצה חדשה...
 Placeholders/SearchWikis: חיפוש ויקי...

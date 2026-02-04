@@ -17,6 +17,7 @@ Buttons/CreateWikiFile: Δημιουργία αρχείου wiki
 Buttons/CreateWikiFolder: Δημιουργία φακέλου wiki
 Buttons/ToFile: σε αρχείο
 Buttons/ToFolder: σε φάκελο
+Buttons/Reauthorize: Re-authorize
 
 Tooltips/BackupsEnabled: Αντίγραφα ασφαλείας ενεργά - κλικ για απενεργοποίηση
 Tooltips/ConvertWiki: Μετατροπή μορφής wiki
@@ -42,6 +43,7 @@ Labels/SaveTo: αποθήκευση σε:
 Labels/InFolder: στον φάκελο:
 Labels/Language: Γλώσσα:
 Labels/AutoDetect: Αυτόματη ανίχνευση
+Labels/CheckingPermission: checking...
 
 Placeholders/NewGroupName: Νέο όνομα ομάδας...
 Placeholders/SearchWikis: Αναζήτηση wiki...

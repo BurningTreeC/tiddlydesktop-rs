@@ -17,6 +17,7 @@ Buttons/CreateWikiFile: Criar arquivo wiki
 Buttons/CreateWikiFolder: Criar pasta wiki
 Buttons/ToFile: para arquivo
 Buttons/ToFolder: para pasta
+Buttons/Reauthorize: Re-authorize
 
 Tooltips/BackupsEnabled: Backups ativados - clique para desativar
 Tooltips/ConvertWiki: Converter formato do wiki
@@ -42,6 +43,7 @@ Labels/SaveTo: salvar em:
 Labels/InFolder: na pasta:
 Labels/Language: Idioma:
 Labels/AutoDetect: Detectar automaticamente
+Labels/CheckingPermission: checking...
 
 Placeholders/NewGroupName: Nome do novo grupo...
 Placeholders/SearchWikis: Pesquisar wikis...

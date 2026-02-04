@@ -17,6 +17,7 @@ Buttons/CreateWikiFile: Utwórz plik wiki
 Buttons/CreateWikiFolder: Utwórz folder wiki
 Buttons/ToFile: do pliku
 Buttons/ToFolder: do folderu
+Buttons/Reauthorize: Re-authorize
 
 Tooltips/BackupsEnabled: Kopie zapasowe włączone - kliknij aby wyłączyć
 Tooltips/ConvertWiki: Konwertuj format wiki
@@ -42,6 +43,7 @@ Labels/SaveTo: zapisz do:
 Labels/InFolder: w folderze:
 Labels/Language: Język:
 Labels/AutoDetect: Automatyczne wykrywanie
+Labels/CheckingPermission: checking...
 
 Placeholders/NewGroupName: Nazwa nowej grupy...
 Placeholders/SearchWikis: Szukaj wiki...

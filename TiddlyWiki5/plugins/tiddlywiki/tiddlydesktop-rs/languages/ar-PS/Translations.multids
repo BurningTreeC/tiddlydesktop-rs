@@ -17,6 +17,7 @@ Buttons/CreateWikiFile: إنشاء ملف ويكي
 Buttons/CreateWikiFolder: إنشاء مجلد ويكي
 Buttons/ToFile: إلى ملف
 Buttons/ToFolder: إلى مجلد
+Buttons/Reauthorize: Re-authorize
 
 Tooltips/BackupsEnabled: النسخ الاحتياطي مفعل - انقر للتعطيل
 Tooltips/ConvertWiki: تحويل تنسيق الويكي
@@ -42,6 +43,7 @@ Labels/SaveTo: حفظ في:
 Labels/InFolder: في المجلد:
 Labels/Language: اللغة:
 Labels/AutoDetect: كشف تلقائي
+Labels/CheckingPermission: checking...
 
 Placeholders/NewGroupName: اسم المجموعة الجديدة...
 Placeholders/SearchWikis: البحث في الويكي...

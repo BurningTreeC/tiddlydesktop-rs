@@ -4141,11 +4141,11 @@ async fn reveal_in_folder(path: String) -> Result<(), String> {
     Ok(())
 }
 
-/// Android stub for reveal_in_folder
+/// Android implementation: open folder containing the wiki in file manager
 #[cfg(target_os = "android")]
 #[tauri::command]
-async fn reveal_in_folder(_path: String) -> Result<(), String> {
-    Err("Reveal in folder is not available on Android".to_string())
+async fn reveal_in_folder(path: String) -> Result<(), String> {
+    android::saf::reveal_in_file_manager(&path)
 }
 
 // ============================================================================
@@ -4197,6 +4197,41 @@ fn android_release_permission(uri: String) {
 #[tauri::command]
 async fn android_pick_backup_directory() -> Result<Option<String>, String> {
     android::saf::pick_backup_directory().await
+}
+
+/// Copy an attachment file to the wiki's attachments folder on Android.
+/// Returns the relative path to use as _canonical_uri (e.g., "./attachments/image.png").
+#[cfg(target_os = "android")]
+#[tauri::command]
+fn android_copy_attachment(wiki_uri: String, source_uri: String, filename: String) -> Result<String, String> {
+    android::saf::copy_attachment_to_wiki(&wiki_uri, &source_uri, &filename)
+}
+
+/// Stub for non-Android platforms.
+#[cfg(not(target_os = "android"))]
+#[tauri::command]
+fn android_copy_attachment(_wiki_uri: String, _source_uri: String, _filename: String) -> Result<String, String> {
+    Err("Android-only feature".to_string())
+}
+
+/// Save attachment content directly to the wiki's attachments folder on Android.
+/// Used when we have file content (from file picker) instead of a source URI.
+/// Takes base64-encoded content and returns the relative path.
+#[cfg(target_os = "android")]
+#[tauri::command]
+fn android_save_attachment(wiki_uri: String, content_base64: String, filename: String) -> Result<String, String> {
+    use base64::Engine;
+    let content = base64::engine::general_purpose::STANDARD
+        .decode(&content_base64)
+        .map_err(|e| format!("Failed to decode base64: {}", e))?;
+    android::saf::save_attachment_content(&wiki_uri, &content, &filename)
+}
+
+/// Stub for non-Android platforms.
+#[cfg(not(target_os = "android"))]
+#[tauri::command]
+fn android_save_attachment(_wiki_uri: String, _content_base64: String, _filename: String) -> Result<String, String> {
+    Err("Android-only feature".to_string())
 }
 
 /// Pick a wiki folder (directory containing tiddlywiki.info) on Android.
@@ -5918,43 +5953,60 @@ window.__SAVE_URL__ = "{save_url}";
     }};
 
     // Hook into TiddlyWiki's module registration
+    // Supports both modern (5.3.7+) and older TiddlyWiki versions
     function registerWithTiddlyWiki() {{
         if(typeof $tw === 'undefined') {{
             setTimeout(registerWithTiddlyWiki, 50);
             return;
         }}
 
-        // Register as a module if modules system exists
-        if($tw.modules && $tw.modules.types) {{
+        var MODULE_TITLE = '$:/plugins/tiddlydesktop/saver';
+
+        // Method 1: Use $tw.modules.define() if available (TiddlyWiki 5.1.3+)
+        // This is the preferred method for module registration
+        if($tw.modules && typeof $tw.modules.define === 'function') {{
+            $tw.modules.define(MODULE_TITLE, 'saver', window.$TiddlyDesktopSaver);
+            console.log('TiddlyDesktop saver: registered via $tw.modules.define()');
+        }}
+        // Method 2: Direct assignment to modules.types (older TiddlyWiki)
+        else if($tw.modules && $tw.modules.types) {{
             $tw.modules.types['saver'] = $tw.modules.types['saver'] || {{}};
-            $tw.modules.types['saver']['$:/plugins/tiddlydesktop/saver'] = window.$TiddlyDesktopSaver;
-            console.log('TiddlyDesktop saver: registered as module');
+            $tw.modules.types['saver'][MODULE_TITLE] = window.$TiddlyDesktopSaver;
+            console.log('TiddlyDesktop saver: registered via direct module assignment');
         }}
 
-        // Wait for saverHandler and add directly
+        // Method 3: Wait for saverHandler and add directly (works on all versions)
+        // This is a backup method that ensures the saver is always available
         function addToSaverHandler() {{
             if(!$tw.saverHandler) {{
                 setTimeout(addToSaverHandler, 50);
                 return;
             }}
 
-            // Check if already added
-            var alreadyAdded = $tw.saverHandler.savers.some(function(s) {{
-                return s.info && s.info.name === 'tiddlydesktop';
-            }});
+            // Check if already added by checking both the savers array and trying canSave
+            var alreadyAdded = false;
+            if($tw.saverHandler.savers) {{
+                alreadyAdded = $tw.saverHandler.savers.some(function(s) {{
+                    return s && s.info && s.info.name === 'tiddlydesktop';
+                }});
+            }}
 
             if(!alreadyAdded) {{
                 var saver = window.$TiddlyDesktopSaver.create($tw.wiki);
                 // Add to array and re-sort (TiddlyWiki iterates backwards, so highest priority must be at the END)
+                $tw.saverHandler.savers = $tw.saverHandler.savers || [];
                 $tw.saverHandler.savers.push(saver);
                 $tw.saverHandler.savers.sort(function(a, b) {{
-                    if(a.info.priority < b.info.priority) {{
+                    var aPriority = (a && a.info && a.info.priority) || 0;
+                    var bPriority = (b && b.info && b.info.priority) || 0;
+                    if(aPriority < bPriority) {{
                         return -1;
-                    }} else if(a.info.priority > b.info.priority) {{
+                    }} else if(aPriority > bPriority) {{
                         return 1;
                     }}
                     return 0;
                 }});
+                console.log('TiddlyDesktop saver: added to saverHandler directly');
             }}
         }}
 
@@ -7586,7 +7638,9 @@ pub fn run() {
             android_release_permission,
             android_check_folder_status,
             android_pick_folder_for_wiki_creation,
-            android_set_system_bar_colors
+            android_set_system_bar_colors,
+            android_copy_attachment,
+            android_save_attachment
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

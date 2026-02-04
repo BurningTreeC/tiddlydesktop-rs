@@ -17,6 +17,7 @@ Buttons/CreateWikiFile: Wiki-bestand maken
 Buttons/CreateWikiFolder: Wiki-map maken
 Buttons/ToFile: naar bestand
 Buttons/ToFolder: naar map
+Buttons/Reauthorize: Re-authorize
 
 Tooltips/BackupsEnabled: Back-ups ingeschakeld - klik om uit te schakelen
 Tooltips/ConvertWiki: Wiki-formaat converteren
@@ -42,6 +43,7 @@ Labels/SaveTo: opslaan in:
 Labels/InFolder: in map:
 Labels/Language: Taal:
 Labels/AutoDetect: Automatisch detecteren
+Labels/CheckingPermission: checking...
 
 Placeholders/NewGroupName: Nieuwe groepsnaam...
 Placeholders/SearchWikis: Zoek wiki's...

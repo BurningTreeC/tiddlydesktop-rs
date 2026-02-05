@@ -137,29 +137,100 @@
                 return false;
             });
 
-            // tm-download-file handler - download files using Tauri's save dialog
-            // TiddlyWiki's Blob + download attribute doesn't work reliably in webviews
-            $tw.rootWidget.addEventListener('tm-download-file', function(event) {
-                var paramObject = event.paramObject || {};
-                var filename = paramObject.filename || event.param || 'download.txt';
-                var content = paramObject.content || '';
-                var contentType = paramObject.type || 'text/plain';
+            // Intercept Blob downloads - TW's download saver creates a Blob,
+            // builds an <a download="filename"> element, and clicks it.
+            // We intercept that click, read the Blob, and show Tauri's save dialog instead.
+            // This works for all TW versions and all export formats.
+            var _origCreateObjectURL = URL.createObjectURL;
+            var _pendingBlobs = {};
 
-                invoke('download_file', {
-                    filename: filename,
-                    content: content,
-                    contentType: contentType
-                }).then(function(savedPath) {
-                    console.log('[TiddlyDesktop] File saved to:', savedPath);
-                    $tw.notifier.display('$:/language/Notifications/Save/Done');
-                }).catch(function(err) {
-                    if (err !== 'Save cancelled') {
-                        console.error('[TiddlyDesktop] Failed to save file:', err);
-                        $tw.notifier.display('$:/language/Notifications/Save/Error');
+            URL.createObjectURL = function(obj) {
+                var url = _origCreateObjectURL.call(URL, obj);
+                if (obj instanceof Blob) {
+                    _pendingBlobs[url] = obj;
+                }
+                return url;
+            };
+
+            function handleDownloadAnchor(anchor) {
+                if (!anchor || anchor.tagName !== 'A' || !anchor.hasAttribute('download')) return false;
+
+                var href = anchor.href || anchor.getAttribute('href') || '';
+                var filename = anchor.download || anchor.getAttribute('download') || 'download';
+                var blob = _pendingBlobs[href];
+
+                // Handle blob: URLs
+                if (blob) {
+                    var reader = new FileReader();
+                    reader.onload = function() {
+                        invoke('download_file', {
+                            filename: filename,
+                            content: reader.result,
+                            contentType: blob.type || 'text/plain'
+                        }).then(function(savedPath) {
+                            console.log('[TiddlyDesktop] File saved to:', savedPath);
+                            if (typeof $tw !== 'undefined' && $tw.notifier) {
+                                $tw.notifier.display('$:/language/Notifications/Save/Done');
+                            }
+                        }).catch(function(err) {
+                            if (err !== 'Save cancelled') {
+                                console.error('[TiddlyDesktop] Failed to save file:', err);
+                            }
+                        });
+                    };
+                    reader.readAsText(blob);
+                    delete _pendingBlobs[href];
+                    URL.revokeObjectURL(href);
+                    return true;
+                }
+
+                // Handle data: URIs (fallback when Blob is unavailable)
+                if (href.indexOf('data:') === 0) {
+                    var commaIdx = href.indexOf(',');
+                    if (commaIdx !== -1) {
+                        var meta = href.substring(5, commaIdx);
+                        var encoded = href.substring(commaIdx + 1);
+                        var content = meta.indexOf('base64') !== -1
+                            ? atob(encoded)
+                            : decodeURIComponent(encoded);
+                        var contentType = meta.split(';')[0] || 'text/plain';
+                        invoke('download_file', {
+                            filename: filename,
+                            content: content,
+                            contentType: contentType
+                        }).catch(function(err) {
+                            if (err !== 'Save cancelled') {
+                                console.error('[TiddlyDesktop] Failed to save file:', err);
+                            }
+                        });
+                        return true;
                     }
-                });
+                }
+
                 return false;
-            });
+            }
+
+            // Method 1: Capture-phase click listener for DOM-attached anchors
+            document.addEventListener('click', function(e) {
+                var anchor = e.target;
+                while (anchor && anchor.tagName !== 'A') {
+                    anchor = anchor.parentElement;
+                }
+                if (handleDownloadAnchor(anchor)) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                }
+            }, true);
+
+            // Method 2: Override HTMLAnchorElement.prototype.click to catch
+            // detached anchors (not in DOM) that some TW versions may use
+            var _origAnchorClick = HTMLAnchorElement.prototype.click;
+            HTMLAnchorElement.prototype.click = function() {
+                if (handleDownloadAnchor(this)) {
+                    return; // Intercepted - don't trigger browser download
+                }
+                return _origAnchorClick.call(this);
+            };
 
             // ========================================
             // Cross-window tiddler synchronization (via Tauri events)
@@ -283,8 +354,22 @@
                 if (storyList) unsavedChanges['$:/StoryList'] = storyList;
                 if (historyList) unsavedChanges['$:/HistoryList'] = historyList;
             }
-            $tw.rootWidget.addEventListener('tm-auto-save-wiki', clearSavedChanges);
-            $tw.rootWidget.addEventListener('tm-save-wiki', clearSavedChanges);
+            // Hook into save events WITHOUT replacing existing handlers
+            // TiddlyWiki < 5.3.7 uses single-function eventListeners (not arrays),
+            // so addEventListener would REPLACE SaverHandler's tm-save-wiki handler
+            function wrapEventListener(eventType, extraFn) {
+                var existing = $tw.rootWidget.eventListeners && $tw.rootWidget.eventListeners[eventType];
+                $tw.rootWidget.addEventListener(eventType, function(event) {
+                    extraFn();
+                    // Call the original handler and preserve its return value
+                    if (existing) {
+                        return existing(event);
+                    }
+                    return true; // Allow propagation if no existing handler
+                });
+            }
+            wrapEventListener('tm-auto-save-wiki', clearSavedChanges);
+            wrapEventListener('tm-save-wiki', clearSavedChanges);
 
             // If this is a tiddler window, request unsaved changes from source wiki
             if (isTiddlerWindow) {

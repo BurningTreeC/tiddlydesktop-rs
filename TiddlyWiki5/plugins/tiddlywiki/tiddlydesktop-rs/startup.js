@@ -387,8 +387,13 @@ exports.startup = function(callback) {
 		$tw.wiki.setText("$:/temp/tiddlydesktop-rs/wiki-count", "text", null, String(entries.length));
 
 		// On Android, check permissions for each wiki
+		// On desktop, permissions are always OK (regular file paths)
 		if (isAndroid) {
 			checkWikiPermissions(entries);
+		} else {
+			entries.forEach(function(entry, index) {
+				$tw.wiki.setText("$:/temp/tiddlydesktop-rs/wikis/" + index, "needs_reauth", null, "no");
+			});
 		}
 	}
 

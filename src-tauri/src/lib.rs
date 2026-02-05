@@ -5860,7 +5860,13 @@ window.__SAVE_URL__ = "{save_url}";
 
     // Define the saver module globally so TiddlyWiki can find it during boot
     // Check if user wants to use a different saver (GitHub, GitLab, Gitea, etc.)
-    function shouldUseLocalSaver(wiki) {{
+    function shouldUseLocalSaver(wikiOrHandler) {{
+        // TiddlyWiki's initSavers() passes SaverHandler (which has .wiki), not wiki directly
+        var wiki = (wikiOrHandler && wikiOrHandler.wiki && typeof wikiOrHandler.wiki.getTiddlerText === 'function')
+            ? wikiOrHandler.wiki : wikiOrHandler;
+        if (!wiki || typeof wiki.getTiddlerText !== 'function') {{
+            return true; // Default to local saver if wiki not available yet
+        }}
         // Check if local saving is explicitly disabled
         var localSaverEnabled = wiki.getTiddlerText('$:/config/TiddlyDesktop/LocalSaver', 'yes');
         if (localSaverEnabled === 'no') {{
@@ -5895,7 +5901,8 @@ window.__SAVE_URL__ = "{save_url}";
             capabilities: ['save', 'autosave']
         }},
         canSave: function(wiki) {{
-            return shouldUseLocalSaver(wiki);
+            try {{ return shouldUseLocalSaver(wiki); }}
+            catch(e) {{ console.error('TiddlyDesktop saver canSave error:', e); return true; }}
         }},
         create: function(wiki) {{
             return {{
@@ -5906,7 +5913,8 @@ window.__SAVE_URL__ = "{save_url}";
                     capabilities: ['save', 'autosave']
                 }},
                 canSave: function(wiki) {{
-                    return shouldUseLocalSaver(wiki);
+                    try {{ return shouldUseLocalSaver(wiki); }}
+                    catch(e) {{ console.error('TiddlyDesktop saver canSave error:', e); return true; }}
                 }},
                 save: function(text, method, callback) {{
                     var wikiPath = window.__WIKI_PATH__;
@@ -5963,16 +5971,19 @@ window.__SAVE_URL__ = "{save_url}";
         var MODULE_TITLE = '$:/plugins/tiddlydesktop/saver';
 
         // Method 1: Use $tw.modules.define() if available (TiddlyWiki 5.1.3+)
-        // This is the preferred method for module registration
         if($tw.modules && typeof $tw.modules.define === 'function') {{
             $tw.modules.define(MODULE_TITLE, 'saver', window.$TiddlyDesktopSaver);
             console.log('TiddlyDesktop saver: registered via $tw.modules.define()');
         }}
-        // Method 2: Direct assignment to modules.types (older TiddlyWiki)
-        else if($tw.modules && $tw.modules.types) {{
+
+        // Method 2: ALWAYS also register in $tw.modules.types directly
+        // In TiddlyWiki < 5.3.7, forEachModuleOfType() only checks $tw.modules.types,
+        // NOT $tw.modules.titles (which is where define() stores modules).
+        // So define() alone is not enough for older versions.
+        if($tw.modules && $tw.modules.types) {{
             $tw.modules.types['saver'] = $tw.modules.types['saver'] || {{}};
             $tw.modules.types['saver'][MODULE_TITLE] = window.$TiddlyDesktopSaver;
-            console.log('TiddlyDesktop saver: registered via direct module assignment');
+            console.log('TiddlyDesktop saver: registered in $tw.modules.types[saver]');
         }}
 
         // Method 3: Wait for saverHandler and add directly (works on all versions)
@@ -5983,7 +5994,7 @@ window.__SAVE_URL__ = "{save_url}";
                 return;
             }}
 
-            // Check if already added by checking both the savers array and trying canSave
+            // Check if already added
             var alreadyAdded = false;
             if($tw.saverHandler.savers) {{
                 alreadyAdded = $tw.saverHandler.savers.some(function(s) {{

@@ -4,18 +4,16 @@ import android.annotation.SuppressLint
 import android.app.ActivityManager
 import android.content.Context
 import android.content.Intent
-import android.graphics.Bitmap
 import android.graphics.Color
-import android.graphics.pdf.PdfRenderer
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
-import android.os.ParcelFileDescriptor
 import android.os.PowerManager
 import android.util.Base64
 import android.util.Log
 import android.view.KeyEvent
 import android.view.View
+import android.view.ViewGroup
 import android.view.WindowInsetsController
 import android.webkit.JavascriptInterface
 import android.webkit.MimeTypeMap
@@ -26,13 +24,12 @@ import android.webkit.WebResourceResponse
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import android.widget.FrameLayout
 import androidx.activity.result.ActivityResultLauncher
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.documentfile.provider.DocumentFile
 import org.json.JSONObject
-import java.io.ByteArrayInputStream
-import java.io.ByteArrayOutputStream
 import java.net.URLDecoder
 
 /**
@@ -190,9 +187,14 @@ class WikiActivity : AppCompatActivity() {
     }
 
     private lateinit var webView: WebView
+    private lateinit var rootLayout: FrameLayout
     private var wikiPath: String? = null
     private var isFolder: Boolean = false
     private var httpServer: WikiHttpServer? = null
+
+    // Fullscreen video support
+    private var fullscreenView: View? = null
+    private var fullscreenCallback: WebChromeClient.CustomViewCallback? = null
 
     // WakeLock to keep the HTTP server alive when app is in background
     private var wakeLock: PowerManager.WakeLock? = null
@@ -1241,7 +1243,7 @@ class WikiActivity : AppCompatActivity() {
                 useWideViewPort = true
             }
 
-            // Custom WebChromeClient to handle file chooser (for Import button)
+            // Custom WebChromeClient to handle file chooser and fullscreen video
             webChromeClient = object : WebChromeClient() {
                 override fun onShowFileChooser(
                     webView: WebView?,
@@ -1278,6 +1280,48 @@ class WikiActivity : AppCompatActivity() {
                         return false
                     }
                 }
+
+                override fun onShowCustomView(view: View?, callback: CustomViewCallback?) {
+                    if (fullscreenView != null) {
+                        callback?.onCustomViewHidden()
+                        return
+                    }
+                    fullscreenView = view
+                    fullscreenCallback = callback
+                    rootLayout.addView(view, FrameLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.MATCH_PARENT
+                    ))
+                    webView.visibility = View.GONE
+                    // Immersive fullscreen
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                        window.insetsController?.hide(android.view.WindowInsets.Type.systemBars())
+                        window.insetsController?.systemBarsBehavior =
+                            WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+                    } else {
+                        @Suppress("DEPRECATION")
+                        window.decorView.systemUiVisibility = (
+                            View.SYSTEM_UI_FLAG_FULLSCREEN
+                            or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+                            or View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
+                        )
+                    }
+                }
+
+                override fun onHideCustomView() {
+                    fullscreenView?.let { rootLayout.removeView(it) }
+                    fullscreenView = null
+                    fullscreenCallback?.onCustomViewHidden()
+                    fullscreenCallback = null
+                    webView.visibility = View.VISIBLE
+                    // Restore system bars
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                        window.insetsController?.show(android.view.WindowInsets.Type.systemBars())
+                    } else {
+                        @Suppress("DEPRECATION")
+                        window.decorView.systemUiVisibility = View.SYSTEM_UI_FLAG_VISIBLE
+                    }
+                }
             }
 
             // Add JavaScript interface for palette color updates
@@ -1293,7 +1337,10 @@ class WikiActivity : AppCompatActivity() {
             addJavascriptInterface(ServerInterface(), "TiddlyDesktopServer")
         }
 
-        setContentView(webView)
+        // Use FrameLayout wrapper for fullscreen video support
+        rootLayout = FrameLayout(this)
+        rootLayout.addView(webView)
+        setContentView(rootLayout)
 
         // Inject JavaScript to handle external attachments and saving
         // This transforms _canonical_uri paths to use the server's /_file/ endpoint
@@ -2773,6 +2820,236 @@ class WikiActivity : AppCompatActivity() {
             })();
         """.trimIndent()
 
+        // Inline PDF.js renderer and Plyr video enhancement script
+        val inlineMediaScript = """
+            (function() {
+                if (window.__tdMediaEnhanced) return;
+                window.__tdMediaEnhanced = true;
+
+                var TD_BASE = '/_td/';
+
+                // ---- Helper: dynamically load a script ----
+                function loadScript(src, cb) {
+                    var s = document.createElement('script');
+                    s.src = src;
+                    s.onload = cb || function(){};
+                    s.onerror = function(){ console.error('[TD] Failed to load ' + src); };
+                    document.head.appendChild(s);
+                }
+
+                // ---- Helper: dynamically load CSS ----
+                function loadCSS(href) {
+                    var l = document.createElement('link');
+                    l.rel = 'stylesheet';
+                    l.href = href;
+                    document.head.appendChild(l);
+                }
+
+                // ---- PDF.js inline renderer ----
+                function getPdfSrc(el) {
+                    var tag = el.tagName.toLowerCase();
+                    var src = el.getAttribute('src') || el.getAttribute('data') || '';
+                    if (tag === 'object') src = el.getAttribute('data') || src;
+                    if (!src) return null;
+                    // Only handle PDF sources
+                    if (src.toLowerCase().indexOf('.pdf') === -1 &&
+                        (el.getAttribute('type') || '').toLowerCase() !== 'application/pdf') return null;
+                    return src;
+                }
+
+                function replacePdfElement(el) {
+                    if (el.__tdPdfDone) return;
+                    el.__tdPdfDone = true;
+                    var src = getPdfSrc(el);
+                    if (!src) return;
+
+                    console.log('[TD-PDF] Replacing PDF element:', src);
+
+                    var container = document.createElement('div');
+                    container.className = 'td-pdf-container';
+                    container.style.cssText = 'width:100%;max-width:100%;overflow:auto;background:#525659;padding:8px 0;border-radius:4px;position:relative;';
+
+                    // Toolbar
+                    var toolbar = document.createElement('div');
+                    toolbar.style.cssText = 'display:flex;align-items:center;justify-content:center;gap:8px;padding:6px 8px;background:#333;color:#fff;font:13px sans-serif;border-radius:4px 4px 0 0;flex-wrap:wrap;position:sticky;top:0;z-index:10;';
+                    toolbar.innerHTML =
+                        '<button class="td-pdf-btn" data-action="prev" title="Previous page">&#9664;</button>' +
+                        '<span class="td-pdf-pageinfo">- / -</span>' +
+                        '<button class="td-pdf-btn" data-action="next" title="Next page">&#9654;</button>' +
+                        '<span style="margin:0 4px">|</span>' +
+                        '<button class="td-pdf-btn" data-action="zoomout" title="Zoom out">&#8722;</button>' +
+                        '<button class="td-pdf-btn" data-action="fitwidth" title="Fit width">Fit</button>' +
+                        '<button class="td-pdf-btn" data-action="zoomin" title="Zoom in">&#43;</button>';
+                    container.appendChild(toolbar);
+
+                    // Style toolbar buttons
+                    var style = document.createElement('style');
+                    if (!document.querySelector('#td-pdf-styles')) {
+                        style.id = 'td-pdf-styles';
+                        style.textContent = '.td-pdf-btn{background:#555;color:#fff;border:none;border-radius:3px;padding:4px 10px;font-size:14px;cursor:pointer;min-width:32px;}.td-pdf-btn:active{background:#777;}.td-pdf-pages-wrap{overflow-y:auto;-webkit-overflow-scrolling:touch;}.td-pdf-page-wrap{display:flex;justify-content:center;padding:8px 0;}.td-pdf-page-wrap canvas{background:#fff;box-shadow:0 2px 8px rgba(0,0,0,.3);display:block;max-width:none;}';
+                        document.head.appendChild(style);
+                    }
+
+                    // Scrollable page area
+                    var pagesWrap = document.createElement('div');
+                    pagesWrap.className = 'td-pdf-pages-wrap';
+                    pagesWrap.style.cssText = 'max-height:80vh;overflow-y:auto;-webkit-overflow-scrolling:touch;';
+                    container.appendChild(pagesWrap);
+
+                    el.parentNode.replaceChild(container, el);
+
+                    // Load PDF
+                    var scale = 1.5;
+                    var pdfDoc = null;
+                    var pageCanvases = [];
+                    var pageInfo = toolbar.querySelector('.td-pdf-pageinfo');
+
+                    function renderPage(num, canvas) {
+                        pdfDoc.getPage(num).then(function(page) {
+                            var viewport = page.getViewport({ scale: scale });
+                            canvas.width = viewport.width;
+                            canvas.height = viewport.height;
+                            var ctx = canvas.getContext('2d');
+                            page.render({ canvasContext: ctx, viewport: viewport });
+                        });
+                    }
+
+                    function renderAll() {
+                        pageCanvases.forEach(function(c, i) { renderPage(i + 1, c); });
+                    }
+
+                    function fitWidth() {
+                        if (!pdfDoc) return;
+                        pdfDoc.getPage(1).then(function(page) {
+                            var vp = page.getViewport({ scale: 1 });
+                            var containerWidth = pagesWrap.clientWidth - 16;
+                            scale = containerWidth / vp.width;
+                            if (scale < 0.5) scale = 0.5;
+                            if (scale > 5) scale = 5;
+                            renderAll();
+                        });
+                    }
+
+                    pdfjsLib.getDocument({ url: src, cMapUrl: TD_BASE + 'pdfjs/cmaps/', cMapPacked: true }).promise.then(function(pdf) {
+                        pdfDoc = pdf;
+                        var total = pdf.numPages;
+                        pageInfo.textContent = total + ' page' + (total !== 1 ? 's' : '');
+
+                        for (var p = 1; p <= total; p++) {
+                            var wrap = document.createElement('div');
+                            wrap.className = 'td-pdf-page-wrap';
+                            var canvas = document.createElement('canvas');
+                            wrap.appendChild(canvas);
+                            pagesWrap.appendChild(wrap);
+                            pageCanvases.push(canvas);
+                        }
+
+                        // Initial fit-width render
+                        fitWidth();
+
+                        // Use IntersectionObserver for lazy rendering
+                        if (typeof IntersectionObserver !== 'undefined') {
+                            var observer = new IntersectionObserver(function(entries) {
+                                entries.forEach(function(entry) {
+                                    if (entry.isIntersecting) {
+                                        var idx = pageCanvases.indexOf(entry.target);
+                                        if (idx >= 0) renderPage(idx + 1, entry.target);
+                                    }
+                                });
+                            }, { root: pagesWrap, rootMargin: '200px' });
+                            pageCanvases.forEach(function(c) { observer.observe(c); });
+                        }
+                    }).catch(function(err) {
+                        console.error('[TD-PDF] Error loading PDF:', err);
+                        pagesWrap.innerHTML = '<p style="color:#f88;padding:20px;text-align:center;">Failed to load PDF: ' + err.message + '</p>';
+                    });
+
+                    // Toolbar actions
+                    toolbar.addEventListener('click', function(e) {
+                        var btn = e.target.closest('[data-action]');
+                        if (!btn) return;
+                        var action = btn.getAttribute('data-action');
+                        if (action === 'zoomin') { scale = Math.min(scale * 1.25, 5); renderAll(); }
+                        else if (action === 'zoomout') { scale = Math.max(scale / 1.25, 0.5); renderAll(); }
+                        else if (action === 'fitwidth') { fitWidth(); }
+                        else if (action === 'prev') { pagesWrap.scrollBy(0, -pagesWrap.clientHeight * 0.8); }
+                        else if (action === 'next') { pagesWrap.scrollBy(0, pagesWrap.clientHeight * 0.8); }
+                    });
+                }
+
+                // ---- Plyr video enhancement ----
+                function enhanceVideo(el) {
+                    if (el.__tdPlyrDone) return;
+                    el.__tdPlyrDone = true;
+                    // Small delay to let URL-transform complete
+                    setTimeout(function() {
+                        try {
+                            new Plyr(el, {
+                                controls: ['play-large','play','progress','current-time','duration','mute','volume','settings','fullscreen'],
+                                settings: ['speed'],
+                                speed: { selected: 1, options: [0.5, 0.75, 1, 1.25, 1.5, 2] },
+                                iconUrl: TD_BASE + 'plyr/dist/plyr.svg',
+                                blankVideo: ''
+                            });
+                            console.log('[TD-Plyr] Enhanced video:', el.src || '(no src yet)');
+                        } catch(err) {
+                            console.error('[TD-Plyr] Error:', err);
+                        }
+                    }, 50);
+                }
+
+                // ---- Scan and enhance existing elements ----
+                function scanAll() {
+                    document.querySelectorAll('embed, object, iframe').forEach(function(el) {
+                        if (getPdfSrc(el)) replacePdfElement(el);
+                    });
+                    document.querySelectorAll('video').forEach(function(el) { enhanceVideo(el); });
+                }
+
+                // ---- MutationObserver to catch dynamically added elements ----
+                var obs = new MutationObserver(function(mutations) {
+                    mutations.forEach(function(m) {
+                        m.addedNodes.forEach(function(node) {
+                            if (node.nodeType !== 1) return;
+                            // Check the node itself
+                            var tag = node.tagName ? node.tagName.toLowerCase() : '';
+                            if ((tag === 'embed' || tag === 'object' || tag === 'iframe') && getPdfSrc(node)) {
+                                replacePdfElement(node);
+                            } else if (tag === 'video') {
+                                enhanceVideo(node);
+                            }
+                            // Check children
+                            if (node.querySelectorAll) {
+                                node.querySelectorAll('embed, object, iframe').forEach(function(el) {
+                                    if (getPdfSrc(el)) replacePdfElement(el);
+                                });
+                                node.querySelectorAll('video').forEach(function(el) { enhanceVideo(el); });
+                            }
+                        });
+                    });
+                });
+                obs.observe(document.body, { childList: true, subtree: true });
+
+                // ---- Load libraries then scan ----
+                // Load PDF.js
+                window.pdfjsLib = window.pdfjsLib || null;
+                loadScript(TD_BASE + 'pdfjs/build/pdf.min.js', function() {
+                    pdfjsLib.GlobalWorkerOptions.workerSrc = TD_BASE + 'pdfjs/build/pdf.worker.min.js';
+                    console.log('[TD-PDF] PDF.js loaded');
+                    scanAll();
+                });
+
+                // Load Plyr
+                loadCSS(TD_BASE + 'plyr/dist/plyr.css');
+                loadScript(TD_BASE + 'plyr/dist/plyr.min.js', function() {
+                    console.log('[TD-Plyr] Plyr loaded');
+                    scanAll();
+                });
+
+                console.log('[TiddlyDesktop] Inline media enhancement initialized');
+            })();
+        """.trimIndent()
+
         // Add a WebViewClient that injects the script after page load
         webView.webViewClient = object : WebViewClient() {
             override fun shouldOverrideUrlLoading(view: WebView, url: String): Boolean {
@@ -2780,36 +3057,11 @@ class WikiActivity : AppCompatActivity() {
             }
 
             override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse? {
-                val url = request.url.toString()
+                val path = request.url.path ?: return super.shouldInterceptRequest(view, request)
 
-                // Check if this is a PDF request to our attachment endpoints
-                if (url.contains("/_relative/") || url.contains("/_file/")) {
-                    // Determine the file type
-                    val isPdf = when {
-                        url.contains("/_relative/") -> {
-                            val path = URLDecoder.decode(url.substringAfter("/_relative/"), "UTF-8")
-                            path.lowercase().endsWith(".pdf")
-                        }
-                        url.contains("/_file/") -> {
-                            // Decode base64 path
-                            try {
-                                val encoded = url.substringAfter("/_file/").substringBefore("?")
-                                val decoded = String(Base64.decode(
-                                    encoded.replace("-", "+").replace("_", "/"),
-                                    Base64.DEFAULT
-                                ))
-                                decoded.lowercase().endsWith(".pdf")
-                            } catch (e: Exception) {
-                                false
-                            }
-                        }
-                        else -> false
-                    }
-
-                    if (isPdf) {
-                        Log.d(TAG, "Intercepting PDF request: $url")
-                        return renderPdfAsHtml(url)
-                    }
+                // Serve bundled library assets from /_td/ prefix
+                if (path.startsWith("/_td/")) {
+                    return serveTdAsset(path.removePrefix("/_td/"))
                 }
 
                 return super.shouldInterceptRequest(view, request)
@@ -2829,6 +3081,8 @@ class WikiActivity : AppCompatActivity() {
                 view.evaluateJavascript(exportScript, null)
                 // Inject server health check for single-file wikis
                 injectServerHealthCheck()
+                // Inject inline PDF.js and Plyr enhancement
+                view.evaluateJavascript(inlineMediaScript, null)
             }
         }
 
@@ -2841,6 +3095,12 @@ class WikiActivity : AppCompatActivity() {
     private var pendingBackAction = false
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
+        // Handle back button - exit fullscreen first
+        if (keyCode == KeyEvent.KEYCODE_BACK && fullscreenView != null) {
+            fullscreenCallback?.onCustomViewHidden()
+            return true
+        }
+
         // Handle back button for WebView navigation
         if (keyCode == KeyEvent.KEYCODE_BACK) {
             // For single-file wikis: Don't go back to old server URLs after reconnect
@@ -3376,269 +3636,24 @@ class WikiActivity : AppCompatActivity() {
     }
 
     /**
-     * Render a PDF file as HTML with embedded images using Android's PdfRenderer.
-     * Returns a WebResourceResponse containing HTML with rendered PDF pages.
+     * Serve a bundled asset from the td/ directory in Android assets.
+     * Used for PDF.js and Plyr library files accessed via /_td/ URL prefix.
      */
-    private fun renderPdfAsHtml(url: String): WebResourceResponse? {
-        try {
-            Log.d(TAG, "Rendering PDF: $url")
-
-            // Get the file descriptor for the PDF
-            val pfd = getPdfFileDescriptor(url) ?: run {
-                Log.e(TAG, "Could not get file descriptor for PDF: $url")
-                return createErrorResponse("Could not open PDF file")
+    private fun serveTdAsset(assetPath: String): WebResourceResponse? {
+        return try {
+            val inputStream = assets.open("td/$assetPath")
+            val mimeType = when {
+                assetPath.endsWith(".js") -> "application/javascript"
+                assetPath.endsWith(".css") -> "text/css"
+                assetPath.endsWith(".svg") -> "image/svg+xml"
+                assetPath.endsWith(".bcmap") -> "application/octet-stream"
+                else -> "application/octet-stream"
             }
-
-            pfd.use { descriptor ->
-                val renderer = PdfRenderer(descriptor)
-                renderer.use { pdfRenderer ->
-                    val pageCount = pdfRenderer.pageCount
-                    Log.d(TAG, "PDF has $pageCount pages")
-
-                    // Build HTML with rendered pages
-                    val htmlBuilder = StringBuilder()
-                    htmlBuilder.append("""
-                        <!DOCTYPE html>
-                        <html>
-                        <head>
-                            <meta charset="UTF-8">
-                            <meta name="viewport" content="width=device-width, initial-scale=1.0">
-                            <title>PDF Viewer</title>
-                            <style>
-                                * { margin: 0; padding: 0; box-sizing: border-box; }
-                                body {
-                                    background: #525659;
-                                    display: flex;
-                                    flex-direction: column;
-                                    align-items: center;
-                                    padding: 20px;
-                                    gap: 20px;
-                                }
-                                .pdf-page {
-                                    background: white;
-                                    box-shadow: 0 4px 12px rgba(0,0,0,0.3);
-                                    max-width: 100%;
-                                }
-                                .pdf-page img {
-                                    display: block;
-                                    max-width: 100%;
-                                    height: auto;
-                                }
-                                .page-info {
-                                    color: #ccc;
-                                    font-family: sans-serif;
-                                    font-size: 12px;
-                                    margin-top: 4px;
-                                    text-align: center;
-                                }
-                                .header {
-                                    position: fixed;
-                                    top: 0;
-                                    left: 0;
-                                    right: 0;
-                                    background: #333;
-                                    color: white;
-                                    padding: 10px 20px;
-                                    display: flex;
-                                    justify-content: space-between;
-                                    align-items: center;
-                                    z-index: 1000;
-                                    font-family: sans-serif;
-                                }
-                                .header button {
-                                    background: #666;
-                                    border: none;
-                                    color: white;
-                                    padding: 8px 16px;
-                                    border-radius: 4px;
-                                    cursor: pointer;
-                                    font-size: 14px;
-                                }
-                                .header button:hover {
-                                    background: #888;
-                                }
-                                .content {
-                                    margin-top: 60px;
-                                    display: flex;
-                                    flex-direction: column;
-                                    align-items: center;
-                                    gap: 20px;
-                                }
-                            </style>
-                        </head>
-                        <body>
-                            <div class="header">
-                                <span>$pageCount page${if (pageCount != 1) "s" else ""}</span>
-                                <button onclick="history.back()">Close</button>
-                            </div>
-                            <div class="content">
-                    """.trimIndent())
-
-                    // Render each page
-                    for (pageIndex in 0 until pageCount) {
-                        pdfRenderer.openPage(pageIndex).use { page ->
-                            // Calculate bitmap size (render at 2x for better quality on high-DPI screens)
-                            val scale = 2.0f
-                            val width = (page.width * scale).toInt()
-                            val height = (page.height * scale).toInt()
-
-                            // Create bitmap and render the page
-                            val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
-                            bitmap.eraseColor(Color.WHITE)
-                            page.render(bitmap, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
-
-                            // Convert bitmap to base64 PNG
-                            val outputStream = ByteArrayOutputStream()
-                            bitmap.compress(Bitmap.CompressFormat.PNG, 90, outputStream)
-                            val base64 = Base64.encodeToString(outputStream.toByteArray(), Base64.NO_WRAP)
-                            bitmap.recycle()
-
-                            // Add image to HTML
-                            htmlBuilder.append("""
-                                <div class="pdf-page">
-                                    <img src="data:image/png;base64,$base64" alt="Page ${pageIndex + 1}">
-                                    <div class="page-info">Page ${pageIndex + 1} of $pageCount</div>
-                                </div>
-                            """.trimIndent())
-                        }
-                    }
-
-                    htmlBuilder.append("""
-                            </div>
-                        </body>
-                        </html>
-                    """.trimIndent())
-
-                    // Return the HTML as a WebResourceResponse
-                    val htmlBytes = htmlBuilder.toString().toByteArray(Charsets.UTF_8)
-                    return WebResourceResponse(
-                        "text/html",
-                        "UTF-8",
-                        ByteArrayInputStream(htmlBytes)
-                    )
-                }
-            }
+            WebResourceResponse(mimeType, "UTF-8", inputStream)
         } catch (e: Exception) {
-            Log.e(TAG, "Error rendering PDF: ${e.message}", e)
-            return createErrorResponse("Error rendering PDF: ${e.message}")
+            Log.e(TAG, "Failed to serve td asset: $assetPath - ${e.message}")
+            null
         }
-    }
-
-    /**
-     * Get a ParcelFileDescriptor for a PDF at the given URL.
-     * Handles both /_relative/ and /_file/ endpoints.
-     */
-    private fun getPdfFileDescriptor(url: String): ParcelFileDescriptor? {
-        try {
-            when {
-                url.contains("/_relative/") -> {
-                    // Relative path to wiki location
-                    val relativePath = URLDecoder.decode(url.substringAfter("/_relative/").substringBefore("?"), "UTF-8")
-                    Log.d(TAG, "Opening relative PDF: $relativePath")
-
-                    val currentTreeUri = treeUri ?: return null
-                    val parentDoc = DocumentFile.fromTreeUri(this, currentTreeUri) ?: return null
-
-                    // Navigate to the file
-                    var currentDoc: DocumentFile? = parentDoc
-                    val parts = relativePath.removePrefix("./").split("/")
-                    for (part in parts) {
-                        if (part.isEmpty()) continue
-                        currentDoc = currentDoc?.findFile(part)
-                        if (currentDoc == null) {
-                            Log.e(TAG, "Could not find path component: $part")
-                            return null
-                        }
-                    }
-
-                    if (currentDoc == null || !currentDoc.isFile) {
-                        Log.e(TAG, "Target is not a file: $relativePath")
-                        return null
-                    }
-
-                    return contentResolver.openFileDescriptor(currentDoc.uri, "r")
-                }
-
-                url.contains("/_file/") -> {
-                    // Absolute path encoded in base64
-                    val encoded = url.substringAfter("/_file/").substringBefore("?")
-                    val decoded = String(Base64.decode(
-                        encoded.replace("-", "+").replace("_", "/"),
-                        Base64.DEFAULT
-                    ))
-                    Log.d(TAG, "Opening absolute PDF: $decoded")
-
-                    val uri = Uri.parse(decoded)
-                    return contentResolver.openFileDescriptor(uri, "r")
-                }
-
-                else -> {
-                    Log.e(TAG, "Unknown PDF URL format: $url")
-                    return null
-                }
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "Error getting PDF file descriptor: ${e.message}", e)
-            return null
-        }
-    }
-
-    /**
-     * Create an error response HTML page.
-     */
-    private fun createErrorResponse(message: String): WebResourceResponse {
-        val html = """
-            <!DOCTYPE html>
-            <html>
-            <head>
-                <meta charset="UTF-8">
-                <meta name="viewport" content="width=device-width, initial-scale=1.0">
-                <title>PDF Error</title>
-                <style>
-                    body {
-                        font-family: sans-serif;
-                        display: flex;
-                        justify-content: center;
-                        align-items: center;
-                        min-height: 100vh;
-                        margin: 0;
-                        background: #f5f5f5;
-                    }
-                    .error {
-                        background: white;
-                        padding: 40px;
-                        border-radius: 8px;
-                        box-shadow: 0 2px 8px rgba(0,0,0,0.1);
-                        text-align: center;
-                    }
-                    .error h1 { color: #c42b2b; margin-bottom: 16px; }
-                    .error p { color: #666; }
-                    .error button {
-                        margin-top: 20px;
-                        padding: 10px 20px;
-                        background: #007bff;
-                        color: white;
-                        border: none;
-                        border-radius: 4px;
-                        cursor: pointer;
-                    }
-                </style>
-            </head>
-            <body>
-                <div class="error">
-                    <h1>Cannot Display PDF</h1>
-                    <p>${message.replace("<", "&lt;").replace(">", "&gt;")}</p>
-                    <button onclick="history.back()">Go Back</button>
-                </div>
-            </body>
-            </html>
-        """.trimIndent()
-
-        return WebResourceResponse(
-            "text/html",
-            "UTF-8",
-            ByteArrayInputStream(html.toByteArray(Charsets.UTF_8))
-        )
     }
 
     /**

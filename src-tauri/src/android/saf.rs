@@ -166,13 +166,33 @@ pub fn is_directory(uri: &str) -> bool {
             if mime == "vnd.android.document/directory" {
                 return true;
             }
+            // If we got a MIME type and it's NOT a directory type, it's definitely a file
+            // Common file MIME types start with text/, application/, image/, audio/, video/
+            // The directory MIME type is specifically "vnd.android.document/directory"
+            if !mime.is_empty() && mime != "application/octet-stream" {
+                eprintln!("[SAF] is_directory: MIME type '{}' indicates file, not directory", mime);
+                return false;
+            }
         }
         Err(e) => {
             eprintln!("[SAF] is_directory: get_mime_type failed: {:?}", e);
         }
     }
 
-    // Method 2: Try to list directory contents - if it works, it's a directory
+    // Method 2: Try to open the file for reading - files can be opened, directories cannot
+    // This is more reliable than read_dir() which can sometimes succeed on files
+    match api.open_file(&file_uri, FileAccessMode::Read) {
+        Ok(_) => {
+            // Successfully opened as a file - it's NOT a directory
+            eprintln!("[SAF] is_directory: open_file succeeded, so it's a FILE (not directory)");
+            return false;
+        }
+        Err(e) => {
+            eprintln!("[SAF] is_directory: open_file failed: {:?}", e);
+        }
+    }
+
+    // Method 3: If we couldn't open as a file, try read_dir as last resort
     // This handles tree URIs from folder picker that may not have a MIME type
     match api.read_dir(&file_uri) {
         Ok(_) => {

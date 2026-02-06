@@ -4547,7 +4547,12 @@ async fn open_auth_window(app: tauri::AppHandle, wiki_path: String, url: String,
 /// Returns WikiEntry so frontend can update its wiki list
 #[cfg(not(target_os = "android"))]
 #[tauri::command]
-async fn open_wiki_window(app: tauri::AppHandle, path: String) -> Result<WikiEntry, String> {
+async fn open_wiki_window(
+    app: tauri::AppHandle,
+    path: String,
+    _backups_enabled: Option<bool>,
+    _backup_count: Option<u32>,
+) -> Result<WikiEntry, String> {
     // Security: Validate path is a user-accessible wiki file
     let path_buf = drag_drop::sanitize::validate_user_file_path(&path)?;
 
@@ -7848,4 +7853,49 @@ pub extern "system" fn Java_com_burningtreec_tiddlydesktop_1rs_WikiActivity_clea
 
     eprintln!("[TiddlyDesktop] JNI cleanupWikiLocalCopy called for: {}", wiki_path_str);
     android::node_bridge::cleanup_wiki_local_copy(&wiki_path_str);
+}
+
+/// JNI function to check if a wiki needs reload due to tiddlywiki.info changes.
+/// Called from WikiActivity to poll for reload status.
+#[cfg(target_os = "android")]
+#[no_mangle]
+pub extern "system" fn Java_com_burningtreec_tiddlydesktop_1rs_WikiActivity_checkNeedsReload(
+    mut env: jni::JNIEnv,
+    _class: jni::objects::JClass,
+    wiki_path: jni::objects::JString,
+) -> jni::sys::jboolean {
+    let wiki_path_str: String = match env.get_string(&wiki_path) {
+        Ok(s) => s.into(),
+        Err(e) => {
+            eprintln!("[TiddlyDesktop] JNI checkNeedsReload: Failed to get wiki_path string: {}", e);
+            return 0;
+        }
+    };
+
+    if android::node_bridge::check_needs_reload(&wiki_path_str) {
+        1 // true
+    } else {
+        0 // false
+    }
+}
+
+/// JNI function to clear the reload flag after a wiki has been reloaded.
+/// Called from WikiActivity after it reloads the webview.
+#[cfg(target_os = "android")]
+#[no_mangle]
+pub extern "system" fn Java_com_burningtreec_tiddlydesktop_1rs_WikiActivity_clearReloadFlag(
+    mut env: jni::JNIEnv,
+    _class: jni::objects::JClass,
+    wiki_path: jni::objects::JString,
+) {
+    let wiki_path_str: String = match env.get_string(&wiki_path) {
+        Ok(s) => s.into(),
+        Err(e) => {
+            eprintln!("[TiddlyDesktop] JNI clearReloadFlag: Failed to get wiki_path string: {}", e);
+            return;
+        }
+    };
+
+    eprintln!("[TiddlyDesktop] JNI clearReloadFlag called for: {}", wiki_path_str);
+    android::node_bridge::clear_reload_flag(&wiki_path_str);
 }

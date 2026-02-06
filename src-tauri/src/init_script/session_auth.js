@@ -1,11 +1,11 @@
 // TiddlyDesktop Initialization Script - Session Authentication Module
 // Handles: authentication URL management for external services
-// Uses shadow tiddlers to avoid polluting the wiki with TiddlyDesktop-specific tiddlers
+// Uses runtime plugin injection to provide shadow tiddlers
 
 (function(TD) {
     'use strict';
 
-    var PLUGIN_SOURCE = "$:/plugins/tiddlydesktop-rs/injected";
+    var PLUGIN_TITLE = "$:/plugins/tiddlydesktop-rs/injected";
 
     function setupSessionAuthentication() {
         if (window.__IS_MAIN_WIKI__) {
@@ -31,47 +31,21 @@
         var CONFIG_AUTH_URLS = CONFIG_PREFIX + "urls";
         var invoke = window.__TAURI__.core.invoke;
 
-        // Helper to add a shadow tiddler (never saved with wiki)
-        function addShadowTiddler(fields) {
-            var tiddler = new $tw.Tiddler(fields);
-            // Add to shadow tiddlers store
-            $tw.wiki.shadowTiddlers[fields.title] = {
-                tiddler: tiddler,
-                source: PLUGIN_SOURCE
-            };
-            // Clear any cache for this tiddler
-            $tw.wiki.clearCache(fields.title);
-            // Trigger change event so UI updates
-            $tw.wiki.enqueueTiddlerEvent(fields.title);
-        }
-
-        // Helper to delete a shadow tiddler
-        function deleteShadowTiddler(title) {
-            if ($tw.wiki.shadowTiddlers[title]) {
-                delete $tw.wiki.shadowTiddlers[title];
-                $tw.wiki.clearCache(title);
-                $tw.wiki.enqueueTiddlerEvent(title);
-            }
-        }
-
-        // Install save hook to prevent any TiddlyDesktop tiddlers from being saved
-        // This catches regular tiddlers created when users interact with widgets (edit-text, checkbox)
-        if (!window.__tdGlobalSaveHookInstalled && $tw.hooks) {
+        // Install save hook to filter out the injected plugin tiddler
+        if (!window.__tdSaveHookInstalled && $tw.hooks) {
             $tw.hooks.addHook("th-saving-tiddler", function(tiddler) {
                 if (tiddler && tiddler.fields && tiddler.fields.title) {
                     var title = tiddler.fields.title;
-                    if (title.indexOf("$:/plugins/tiddlydesktop-rs/") === 0 ||
-                        title.indexOf("$:/config/tiddlydesktop-rs/") === 0 ||
-                        title.indexOf("$:/temp/tiddlydesktop-rs/") === 0 ||
-                        title.indexOf("$:/temp/tiddlydesktop/") === 0 ||
-                        title.indexOf("$:/state/tiddlydesktop-rs/") === 0) {
-                        return null; // Exclude from save
+                    if (title === PLUGIN_TITLE ||
+                        title.indexOf("$:/plugins/tiddlydesktop-rs/") === 0 ||
+                        title.indexOf("$:/temp/tiddlydesktop") === 0) {
+                        return null;
                     }
                 }
                 return tiddler;
             });
-            window.__tdGlobalSaveHookInstalled = true;
-            console.log("[TiddlyDesktop] Global save hook installed");
+            window.__tdSaveHookInstalled = true;
+            console.log("[TiddlyDesktop] Save hook installed");
         }
 
         // Cleanup: Delete any accidentally-saved tiddlers from previous versions
@@ -80,13 +54,11 @@
             var cleanupPrefixes = [
                 "$:/temp/tiddlydesktop-rs/",
                 "$:/temp/tiddlydesktop/",
-                "$:/config/tiddlydesktop-rs/",
                 "$:/plugins/tiddlydesktop-rs/"
             ];
             var deletedCount = 0;
             cleanupPrefixes.forEach(function(prefix) {
                 $tw.wiki.filterTiddlers("[prefix[" + prefix + "]]").forEach(function(title) {
-                    // Only delete if it's a real tiddler (not shadow) that was incorrectly saved
                     if ($tw.wiki.tiddlerExists(title) && !$tw.wiki.isShadowTiddler(title)) {
                         $tw.wiki.deleteTiddler(title);
                         deletedCount++;
@@ -98,15 +70,62 @@
             }
         }
 
+        // Plugin tiddlers collection (shared with drag_drop.js via TD namespace)
+        TD.pluginTiddlers = TD.pluginTiddlers || {};
+
+        function addPluginTiddler(fields) {
+            TD.pluginTiddlers[fields.title] = fields;
+        }
+
+        function removePluginTiddler(title) {
+            delete TD.pluginTiddlers[title];
+        }
+
+        function registerPlugin() {
+            // Build plugin content
+            var pluginContent = { tiddlers: {} };
+            Object.keys(TD.pluginTiddlers).forEach(function(title) {
+                pluginContent.tiddlers[title] = TD.pluginTiddlers[title];
+            });
+
+            // Create/update the plugin tiddler
+            $tw.wiki.addTiddler(new $tw.Tiddler({
+                title: PLUGIN_TITLE,
+                type: "application/json",
+                "plugin-type": "plugin",
+                name: "TiddlyDesktop Injected",
+                description: "Runtime-injected TiddlyDesktop settings UI",
+                version: "1.0.0",
+                text: JSON.stringify(pluginContent)
+            }));
+
+            // Re-process plugins to unpack shadow tiddlers
+            $tw.wiki.readPluginInfo();
+            $tw.wiki.registerPluginTiddlers("plugin");
+            $tw.wiki.unpackPluginTiddlers();
+
+            // Trigger UI refresh
+            $tw.rootWidget.refresh({});
+
+            console.log("[TiddlyDesktop] Plugin registered with " + Object.keys(TD.pluginTiddlers).length + " shadow tiddlers");
+        }
+
+        // Export for other modules
+        TD.addPluginTiddler = addPluginTiddler;
+        TD.removePluginTiddler = removePluginTiddler;
+        TD.registerPlugin = registerPlugin;
+
         function saveConfigToTauri() {
             var authUrls = [];
-            $tw.wiki.filterTiddlers("[prefix[" + CONFIG_PREFIX + "url/]]").forEach(function(title) {
-                var tiddler = $tw.wiki.getTiddler(title);
-                if (tiddler) {
-                    authUrls.push({
-                        name: tiddler.fields.name || "",
-                        url: tiddler.fields.url || ""
-                    });
+            Object.keys(TD.pluginTiddlers).forEach(function(title) {
+                if (title.indexOf(CONFIG_PREFIX + "url/") === 0) {
+                    var tiddler = TD.pluginTiddlers[title];
+                    if (tiddler) {
+                        authUrls.push({
+                            name: tiddler.name || "",
+                            url: tiddler.url || ""
+                        });
+                    }
                 }
             });
             invoke("set_session_auth_config", {
@@ -117,18 +136,15 @@
             });
         }
 
-        function deleteConfigTiddlers() {
-            $tw.wiki.filterTiddlers("[prefix[" + CONFIG_PREFIX + "]]").forEach(function(title) {
-                deleteShadowTiddler(title);
-            });
-        }
-
         function refreshUrlList() {
-            var count = $tw.wiki.filterTiddlers("[prefix[" + CONFIG_PREFIX + "url/]]").length;
-            addShadowTiddler({
+            var count = Object.keys(TD.pluginTiddlers).filter(function(title) {
+                return title.indexOf(CONFIG_PREFIX + "url/") === 0;
+            }).length;
+            addPluginTiddler({
                 title: CONFIG_AUTH_URLS,
                 text: String(count)
             });
+            registerPlugin();
         }
 
         function injectConfigTiddlers(config) {
@@ -136,7 +152,7 @@
 
             if (config.auth_urls) {
                 config.auth_urls.forEach(function(entry, index) {
-                    addShadowTiddler({
+                    addPluginTiddler({
                         title: CONFIG_PREFIX + "url/" + index,
                         name: entry.name,
                         url: entry.url,
@@ -176,12 +192,15 @@
                 "<$button message=\"tm-tiddlydesktop-clear-session\" class=\"tc-btn-big-green\" style=\"background:#c42b2b;\">Clear Session Data</$button>\n" +
                 "<p><small>Note: This will clear all cookies and localStorage for this wiki. You will need to log in again to any authenticated services.</small></p>\n";
 
-            addShadowTiddler({
+            addPluginTiddler({
                 title: CONFIG_SETTINGS_TAB,
                 caption: "Session Auth",
                 tags: "$:/tags/ControlPanel/SettingsTab",
                 text: tabText
             });
+
+            // Register plugin with all tiddlers
+            registerPlugin();
 
             setTimeout(function() {
                 if ($tw.saverHandler) {
@@ -190,8 +209,7 @@
                 }
             }, 0);
 
-            refreshUrlList();
-            console.log("[TiddlyDesktop] Session Authentication settings UI ready (using shadow tiddlers)");
+            console.log("[TiddlyDesktop] Session Authentication settings UI ready");
         }
 
         // Message handler: add new auth URL
@@ -223,19 +241,20 @@
                 return;
             }
 
-            var existingUrls = $tw.wiki.filterTiddlers("[prefix[" + CONFIG_PREFIX + "url/]]");
-            var nextIndex = existingUrls.length;
+            var existingCount = Object.keys(TD.pluginTiddlers).filter(function(title) {
+                return title.indexOf(CONFIG_PREFIX + "url/") === 0;
+            }).length;
 
-            addShadowTiddler({
-                title: CONFIG_PREFIX + "url/" + nextIndex,
+            addPluginTiddler({
+                title: CONFIG_PREFIX + "url/" + existingCount,
                 name: name,
                 url: url,
                 text: ""
             });
 
-            // Clear the input fields (delete as shadow tiddlers)
-            deleteShadowTiddler(CONFIG_PREFIX + "new-name");
-            deleteShadowTiddler(CONFIG_PREFIX + "new-url");
+            // Clear the input fields (these are real tiddlers created by edit-text widget)
+            $tw.wiki.deleteTiddler(CONFIG_PREFIX + "new-name");
+            $tw.wiki.deleteTiddler(CONFIG_PREFIX + "new-url");
 
             saveConfigToTauri();
             refreshUrlList();
@@ -245,7 +264,7 @@
         $tw.rootWidget.addEventListener("tm-tiddlydesktop-remove-auth-url", function(event) {
             var tiddlerTitle = event.param;
             if (tiddlerTitle) {
-                deleteShadowTiddler(tiddlerTitle);
+                removePluginTiddler(tiddlerTitle);
                 saveConfigToTauri();
                 refreshUrlList();
             }
@@ -255,10 +274,10 @@
         $tw.rootWidget.addEventListener("tm-tiddlydesktop-open-auth-url", function(event) {
             var tiddlerTitle = event.param;
             if (tiddlerTitle) {
-                var tiddler = $tw.wiki.getTiddler(tiddlerTitle);
+                var tiddler = TD.pluginTiddlers[tiddlerTitle];
                 if (tiddler) {
-                    var name = tiddler.fields.name || "Authentication";
-                    var url = tiddler.fields.url;
+                    var name = tiddler.name || "Authentication";
+                    var url = tiddler.url;
                     if (url) {
                         invoke("open_auth_window", {
                             wikiPath: wikiPath,
@@ -296,12 +315,6 @@
                 console.error("[TiddlyDesktop] Failed to load session auth config, using defaults:", err);
                 injectConfigTiddlers({ auth_urls: [] });
             });
-
-        // Cleanup on window close
-        window.addEventListener("beforeunload", function() {
-            saveConfigToTauri();
-            deleteConfigTiddlers();
-        });
 
         console.log("[TiddlyDesktop] Session authentication ready for:", wikiPath);
     }

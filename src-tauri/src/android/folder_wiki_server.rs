@@ -635,26 +635,66 @@ fn title_to_filename(title: &str) -> String {
 fn guess_mime_type(filename: &str) -> String {
     let ext = filename.rsplit('.').next().unwrap_or("").to_lowercase();
     match ext.as_str() {
+        // Text/markup
         "html" | "htm" => "text/html".to_string(),
         "css" => "text/css".to_string(),
         "js" => "application/javascript".to_string(),
         "json" => "application/json".to_string(),
+        "txt" => "text/plain".to_string(),
+        "xml" => "application/xml".to_string(),
+        "md" => "text/markdown".to_string(),
+        "tid" => "text/vnd.tiddlywiki".to_string(),
+        // Images
         "png" => "image/png".to_string(),
         "jpg" | "jpeg" => "image/jpeg".to_string(),
         "gif" => "image/gif".to_string(),
         "svg" => "image/svg+xml".to_string(),
+        "webp" => "image/webp".to_string(),
         "ico" => "image/x-icon".to_string(),
+        "bmp" => "image/bmp".to_string(),
+        "tiff" | "tif" => "image/tiff".to_string(),
+        "heic" | "heif" => "image/heic".to_string(),
+        // Audio
+        "mp3" => "audio/mpeg".to_string(),
+        "m4a" => "audio/mp4".to_string(),
+        "aac" => "audio/aac".to_string(),
+        "ogg" | "oga" => "audio/ogg".to_string(),
+        "opus" => "audio/opus".to_string(),
+        "wav" => "audio/wav".to_string(),
+        "flac" => "audio/flac".to_string(),
+        "aiff" | "aif" => "audio/aiff".to_string(),
+        "wma" => "audio/x-ms-wma".to_string(),
+        "mid" | "midi" => "audio/midi".to_string(),
+        // Video
+        "mp4" | "m4v" => "video/mp4".to_string(),
+        "webm" => "video/webm".to_string(),
+        "ogv" => "video/ogg".to_string(),
+        "avi" => "video/x-msvideo".to_string(),
+        "mov" => "video/quicktime".to_string(),
+        "wmv" => "video/x-ms-wmv".to_string(),
+        "mkv" => "video/x-matroska".to_string(),
+        "3gp" => "video/3gpp".to_string(),
+        // Fonts
         "woff" => "font/woff".to_string(),
         "woff2" => "font/woff2".to_string(),
         "ttf" => "font/ttf".to_string(),
+        "otf" => "font/otf".to_string(),
         "eot" => "application/vnd.ms-fontobject".to_string(),
-        "txt" | "tid" => "text/plain".to_string(),
-        "xml" => "application/xml".to_string(),
+        // Documents
         "pdf" => "application/pdf".to_string(),
-        "mp3" => "audio/mpeg".to_string(),
-        "mp4" => "video/mp4".to_string(),
-        "webm" => "video/webm".to_string(),
-        "ogg" => "audio/ogg".to_string(),
+        "doc" => "application/msword".to_string(),
+        "docx" => "application/vnd.openxmlformats-officedocument.wordprocessingml.document".to_string(),
+        "xls" => "application/vnd.ms-excel".to_string(),
+        "xlsx" => "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet".to_string(),
+        "ppt" => "application/vnd.ms-powerpoint".to_string(),
+        "pptx" => "application/vnd.openxmlformats-officedocument.presentationml.presentation".to_string(),
+        // Archives
+        "zip" => "application/zip".to_string(),
+        "tar" => "application/x-tar".to_string(),
+        "gz" | "gzip" => "application/gzip".to_string(),
+        "rar" => "application/vnd.rar".to_string(),
+        "7z" => "application/x-7z-compressed".to_string(),
+        // Default
         _ => "application/octet-stream".to_string(),
     }
 }

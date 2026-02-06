@@ -95,26 +95,65 @@
     function getMimeType(filename) {
         var ext = filename.split(".").pop().toLowerCase();
         var mimeTypes = {
+            // Images
             "png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg",
             "gif": "image/gif", "webp": "image/webp", "svg": "image/svg+xml",
-            "ico": "image/x-icon", "bmp": "image/bmp", "tiff": "image/tiff",
+            "ico": "image/x-icon", "bmp": "image/bmp",
+            "tiff": "image/tiff", "tif": "image/tiff",
+            "heic": "image/heic", "heif": "image/heic",
+            // Audio
+            "mp3": "audio/mpeg",
+            "m4a": "audio/mp4",
+            "aac": "audio/aac",
+            "ogg": "audio/ogg", "oga": "audio/ogg",
+            "opus": "audio/opus",
+            "wav": "audio/wav",
+            "flac": "audio/flac",
+            "aiff": "audio/aiff", "aif": "audio/aiff",
+            "wma": "audio/x-ms-wma",
+            "mid": "audio/midi", "midi": "audio/midi",
+            // Video
+            "mp4": "video/mp4", "m4v": "video/mp4",
+            "webm": "video/webm",
+            "ogv": "video/ogg",
+            "avi": "video/x-msvideo",
+            "mov": "video/quicktime",
+            "wmv": "video/x-ms-wmv",
+            "mkv": "video/x-matroska",
+            "3gp": "video/3gpp",
+            // Documents
             "pdf": "application/pdf",
-            "mp3": "audio/mpeg", "ogg": "audio/ogg", "wav": "audio/wav",
-            "flac": "audio/flac", "m4a": "audio/mp4",
-            "mp4": "video/mp4", "webm": "video/webm", "ogv": "video/ogg",
-            "mov": "video/quicktime", "avi": "video/x-msvideo",
-            "zip": "application/zip",
+            "doc": "application/msword",
+            "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            "xls": "application/vnd.ms-excel",
+            "xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            "ppt": "application/vnd.ms-powerpoint",
+            "pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+            // Text/markup
             "json": "application/json",
-            "tid": "application/x-tiddler",
-            "tiddler": "application/x-tiddler-html-div",
-            "multids": "application/x-tiddlers",
+            "xml": "application/xml",
             "html": "text/html", "htm": "text/html",
             "csv": "text/csv",
             "txt": "text/plain",
             "css": "text/css",
             "js": "application/javascript",
-            "xml": "application/xml",
-            "md": "text/x-markdown"
+            "md": "text/markdown",
+            // TiddlyWiki specific
+            "tid": "text/vnd.tiddlywiki",
+            "tiddler": "application/x-tiddler-html-div",
+            "multids": "application/x-tiddlers",
+            // Fonts
+            "woff": "font/woff",
+            "woff2": "font/woff2",
+            "ttf": "font/ttf",
+            "otf": "font/otf",
+            "eot": "application/vnd.ms-fontobject",
+            // Archives
+            "zip": "application/zip",
+            "tar": "application/x-tar",
+            "gz": "application/gzip", "gzip": "application/gzip",
+            "rar": "application/vnd.rar",
+            "7z": "application/x-7z-compressed"
         };
         return mimeTypes[ext] || "application/octet-stream";
     }
@@ -1867,36 +1906,25 @@
         // External Attachments Configuration
         // ========================================
 
-        // Use $:/plugins/tiddlydesktop-rs/ prefix for shadow tiddlers
-        var PLUGIN_SOURCE = "$:/plugins/tiddlydesktop-rs/injected";
+        // Use $:/plugins/tiddlydesktop-rs/ prefix - shared with session_auth.js
         var CONFIG_PREFIX = "$:/plugins/tiddlydesktop-rs/external-attachments/";
         var CONFIG_ENABLE = CONFIG_PREFIX + "Enable";
         var CONFIG_ABS_DESC = CONFIG_PREFIX + "UseAbsoluteForDescendents";
         var CONFIG_ABS_NONDESC = CONFIG_PREFIX + "UseAbsoluteForNonDescendents";
         var CONFIG_SETTINGS_TAB = CONFIG_PREFIX + "settings";
-        var ALL_CONFIG_TIDDLERS = [CONFIG_ENABLE, CONFIG_ABS_DESC, CONFIG_ABS_NONDESC, CONFIG_SETTINGS_TAB];
 
-        // Helper to add a shadow tiddler (never saved with wiki)
-        function addShadowTiddler(fields) {
-            var tiddler = new $tw.Tiddler(fields);
-            $tw.wiki.shadowTiddlers[fields.title] = {
-                tiddler: tiddler,
-                source: PLUGIN_SOURCE
-            };
-            $tw.wiki.clearCache(fields.title);
-            $tw.wiki.enqueueTiddlerEvent(fields.title);
+        // Use shared plugin tiddlers from session_auth.js (or initialize if not present)
+        TD.pluginTiddlers = TD.pluginTiddlers || {};
+
+        function addPluginTiddler(fields) {
+            TD.pluginTiddlers[fields.title] = fields;
         }
 
-        // Helper to delete a shadow tiddler
-        function deleteShadowTiddler(title) {
-            if ($tw.wiki.shadowTiddlers[title]) {
-                delete $tw.wiki.shadowTiddlers[title];
-                $tw.wiki.clearCache(title);
-                $tw.wiki.enqueueTiddlerEvent(title);
-            }
+        function removePluginTiddler(title) {
+            delete TD.pluginTiddlers[title];
         }
 
-        // Note: Global save hook is installed by session_auth.js
+        // Note: registerPlugin and save hook are provided by session_auth.js
 
         function installImportHook() {
             if (typeof $tw === 'undefined' || !$tw.hooks) {
@@ -2084,8 +2112,9 @@
 
             var originalNumChanges = $tw.saverHandler ? $tw.saverHandler.numChanges : 0;
 
-            ALL_CONFIG_TIDDLERS.forEach(function(title) {
-                deleteShadowTiddler(title);
+            // Remove our tiddlers from the plugin
+            [CONFIG_ENABLE, CONFIG_ABS_DESC, CONFIG_ABS_NONDESC, CONFIG_SETTINGS_TAB].forEach(function(title) {
+                removePluginTiddler(title);
                 // Also delete any regular tiddler that may have been created by widget interaction
                 if ($tw.wiki.tiddlerExists(title)) {
                     $tw.wiki.deleteTiddler(title);
@@ -2101,28 +2130,28 @@
         }
 
         function injectConfigTiddlers(config) {
-            if (typeof $tw === 'undefined' || !$tw.wiki || !$tw.wiki.shadowTiddlers || !$tw.saverHandler) {
+            if (typeof $tw === 'undefined' || !$tw.wiki || !$tw.saverHandler) {
                 setTimeout(function() { injectConfigTiddlers(config); }, 100);
                 return;
             }
 
             var originalNumChanges = $tw.saverHandler.numChanges || 0;
 
-            // Use shadow tiddlers so settings are never saved with the wiki
-            addShadowTiddler({
+            // Add tiddlers to plugin
+            addPluginTiddler({
                 title: CONFIG_ENABLE,
                 text: config.enabled ? "yes" : "no"
             });
-            addShadowTiddler({
+            addPluginTiddler({
                 title: CONFIG_ABS_DESC,
                 text: config.use_absolute_for_descendents ? "yes" : "no"
             });
-            addShadowTiddler({
+            addPluginTiddler({
                 title: CONFIG_ABS_NONDESC,
                 text: config.use_absolute_for_non_descendents ? "yes" : "no"
             });
 
-            addShadowTiddler({
+            addPluginTiddler({
                 title: CONFIG_SETTINGS_TAB,
                 caption: "External Attachments",
                 tags: "$:/tags/ControlPanel/SettingsTab",
@@ -2132,6 +2161,11 @@
                       "<$checkbox tiddler=\"" + CONFIG_ABS_DESC + "\" field=\"text\" checked=\"yes\" unchecked=\"no\" default=\"no\"> Use absolute paths for files inside wiki folder</$checkbox>\n\n" +
                       "<$checkbox tiddler=\"" + CONFIG_ABS_NONDESC + "\" field=\"text\" checked=\"yes\" unchecked=\"no\" default=\"no\"> Use absolute paths for files outside wiki folder</$checkbox>"
             });
+
+            // Register plugin (function provided by session_auth.js)
+            if (TD.registerPlugin) {
+                TD.registerPlugin();
+            }
 
             setTimeout(function() {
                 $tw.saverHandler.numChanges = originalNumChanges;
@@ -2144,7 +2178,7 @@
                 }
             });
 
-            console.log("[TiddlyDesktop] External Attachments settings UI ready (using shadow tiddlers)");
+            console.log("[TiddlyDesktop] External Attachments settings UI ready");
         }
 
         function setupCleanup() {

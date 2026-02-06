@@ -29,7 +29,9 @@ class WikiHttpServer(
     private val wikiUri: Uri,
     private val treeUri: Uri?,  // Tree URI for folder wikis or backups
     private val isFolder: Boolean = false,
-    private val folderHtmlPath: String? = null  // Path to pre-rendered HTML for folder wikis
+    private val folderHtmlPath: String? = null,  // Path to pre-rendered HTML for folder wikis
+    private val backupsEnabled: Boolean = true,  // Whether to create backups on save
+    private val backupCount: Int = 20  // Max backups to keep (0 = unlimited)
 ) {
     companion object {
         private const val TAG = "WikiHttpServer"
@@ -60,6 +62,163 @@ class WikiHttpServer(
     private val running = AtomicBoolean(false)
     var port: Int = 0
         private set
+
+    // Cached backup directory (lazy-initialized)
+    private var backupDirectory: DocumentFile? = null
+    private var backupDirectoryChecked = false
+
+    /**
+     * Get the wiki filename stem (without .html extension).
+     */
+    private fun getWikiFilenameStem(): String? {
+        return try {
+            val wikiFile = DocumentFile.fromSingleUri(context, wikiUri) ?: return null
+            val name = wikiFile.name ?: return null
+            name.removeSuffix(".html").removeSuffix(".htm")
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to get wiki filename: ${e.message}")
+            null
+        }
+    }
+
+    /**
+     * Get or create the backup directory for this wiki.
+     * Returns null if backups are not available (no tree access).
+     */
+    private fun getOrCreateBackupDirectory(): DocumentFile? {
+        if (backupDirectoryChecked) return backupDirectory
+
+        backupDirectoryChecked = true
+
+        // Need tree access to create backup folder
+        val tree = treeUri ?: run {
+            Log.d(TAG, "No tree URI - backups disabled")
+            return null
+        }
+
+        val stem = getWikiFilenameStem() ?: run {
+            Log.e(TAG, "Could not determine wiki filename for backups")
+            return null
+        }
+
+        val backupDirName = "$stem.backups"
+
+        try {
+            val parentDir = DocumentFile.fromTreeUri(context, tree) ?: run {
+                Log.e(TAG, "Could not access tree URI")
+                return null
+            }
+
+            // Look for existing backup directory
+            backupDirectory = parentDir.findFile(backupDirName)
+            if (backupDirectory != null && backupDirectory!!.isDirectory) {
+                Log.d(TAG, "Found existing backup directory: $backupDirName")
+                return backupDirectory
+            }
+
+            // Create backup directory
+            backupDirectory = parentDir.createDirectory(backupDirName)
+            if (backupDirectory != null) {
+                Log.d(TAG, "Created backup directory: $backupDirName")
+            } else {
+                Log.e(TAG, "Failed to create backup directory: $backupDirName")
+            }
+            return backupDirectory
+        } catch (e: Exception) {
+            Log.e(TAG, "Error getting/creating backup directory: ${e.message}")
+            return null
+        }
+    }
+
+    /**
+     * Create a backup of the wiki file before saving.
+     * Returns true if backup was created successfully (or skipped because disabled).
+     */
+    private fun createBackup(): Boolean {
+        Log.d(TAG, "createBackup() called - backupsEnabled=$backupsEnabled, isFolder=$isFolder, treeUri=$treeUri")
+        if (!backupsEnabled) {
+            Log.d(TAG, "Backups disabled - skipping")
+            return true
+        }
+        if (isFolder) {
+            Log.d(TAG, "Folder wiki - skipping backup")
+            return true  // Folder wikis don't need backups (they use git or similar)
+        }
+
+        val backupDir = getOrCreateBackupDirectory() ?: run {
+            // No backup directory available - continue without backup
+            // This happens when user opened wiki without folder access
+            Log.w(TAG, "Skipping backup - no backup directory available")
+            return true
+        }
+
+        val stem = getWikiFilenameStem() ?: return false
+
+        try {
+            // Generate timestamped filename
+            val timestamp = java.text.SimpleDateFormat("yyyyMMdd-HHmmss", java.util.Locale.US)
+                .format(java.util.Date())
+            val backupName = "$stem.$timestamp.html"
+
+            // Check if wiki file exists (first save won't have anything to backup)
+            val wikiFile = DocumentFile.fromSingleUri(context, wikiUri)
+            if (wikiFile == null || !wikiFile.exists()) {
+                Log.d(TAG, "Wiki file doesn't exist yet - skipping backup")
+                return true
+            }
+
+            // Create backup file
+            val backupFile = backupDir.createFile("text/html", backupName)
+            if (backupFile == null) {
+                Log.e(TAG, "Failed to create backup file: $backupName")
+                return false
+            }
+
+            // Copy content from wiki to backup
+            context.contentResolver.openInputStream(wikiUri)?.use { input ->
+                context.contentResolver.openOutputStream(backupFile.uri)?.use { output ->
+                    input.copyTo(output)
+                }
+            }
+
+            Log.d(TAG, "Created backup: $backupName")
+
+            // Clean up old backups
+            cleanupOldBackups(backupDir, stem)
+
+            return true
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to create backup: ${e.message}", e)
+            return false
+        }
+    }
+
+    /**
+     * Remove old backups, keeping only the most recent ones.
+     */
+    private fun cleanupOldBackups(backupDir: DocumentFile, stem: String) {
+        if (backupCount == 0) return  // Keep unlimited
+
+        try {
+            val prefix = "$stem."
+            val backups = backupDir.listFiles()
+                .filter { it.isFile && it.name?.startsWith(prefix) == true && it.name?.endsWith(".html") == true }
+                .sortedByDescending { it.name }  // Newest first (timestamp sorts correctly)
+
+            // Delete backups beyond the limit
+            if (backups.size > backupCount) {
+                for (oldBackup in backups.drop(backupCount)) {
+                    if (oldBackup.delete()) {
+                        Log.d(TAG, "Deleted old backup: ${oldBackup.name}")
+                    } else {
+                        Log.w(TAG, "Failed to delete old backup: ${oldBackup.name}")
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error cleaning up old backups: ${e.message}")
+        }
+    }
 
     /**
      * Start the HTTP server on an available port.
@@ -305,6 +464,9 @@ class WikiHttpServer(
             val content = String(buffer, 0, totalRead, Charsets.UTF_8)
 
             Log.d(TAG, "Saving wiki: ${content.length} characters")
+
+            // Create backup before writing (if enabled and available)
+            createBackup()
 
             // Write to the wiki file via SAF
             context.contentResolver.openOutputStream(wikiUri, "wt")?.use { os ->

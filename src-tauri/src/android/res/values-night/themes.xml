@@ -1,0 +1,11 @@
+<resources xmlns:tools="http://schemas.android.com/tools">
+    <!-- Base application theme. -->
+    <style name="Theme.tiddlydesktop_rs" parent="Theme.MaterialComponents.DayNight.NoActionBar">
+        <!-- Set initial status bar colors to match TiddlyWiki Vanilla palette -->
+        <!-- Same as day theme - TiddlyWiki will override with user's palette once loaded -->
+        <item name="android:statusBarColor">#f4f4f4</item>
+        <item name="android:navigationBarColor">#ffffff</item>
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:windowLightNavigationBar" tools:targetApi="o_mr1">true</item>
+    </style>
+</resources>

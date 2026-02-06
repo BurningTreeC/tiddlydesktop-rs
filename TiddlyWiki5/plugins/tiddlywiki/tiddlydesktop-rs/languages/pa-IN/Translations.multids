@@ -53,6 +53,7 @@ DropZone/Hint: TiddlyWiki ਫ਼ਾਈਲਾਂ ਜਾਂ ਫੋਲਡਰ ਇੱ
 
 EmptyMessage/Title: ਅਜੇ ਕੋਈ ਵਿਕੀ ਨਹੀਂ।
 EmptyMessage/Hint: ਸ਼ੁਰੂ ਕਰਨ ਲਈ "ਵਿਕੀ ਫ਼ਾਈਲ ਖੋਲ੍ਹੋ" ਤੇ ਕਲਿੱਕ ਕਰੋ ਜਾਂ TiddlyWiki ਫ਼ਾਈਲ ਛੱਡੋ।
+EmptyMessage/HintAndroid: ਸ਼ੁਰੂ ਕਰਨ ਲਈ "ਵਿਕੀ ਫ਼ਾਈਲ ਖੋਲ੍ਹੋ" ਤੇ ਟੈਪ ਕਰੋ।
 
 GroupManager/Title: ਗਰੁੱਪ ਪ੍ਰਬੰਧਿਤ ਕਰੋ
 GroupManager/NoGroups: ਅਜੇ ਕੋਈ ਗਰੁੱਪ ਨਹੀਂ ਬਣਾਇਆ। ਬਣਾਉਣ ਲਈ ਵਿਕੀ ਨੂੰ ਗਰੁੱਪ ਵਿੱਚ ਸ਼ਾਮਲ ਕਰੋ।

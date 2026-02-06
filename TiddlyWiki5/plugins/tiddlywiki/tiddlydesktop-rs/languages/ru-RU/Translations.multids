@@ -53,6 +53,7 @@ DropZone/Hint: Перетащите файлы или папки TiddlyWiki сю
 
 EmptyMessage/Title: Пока нет вики.
 EmptyMessage/Hint: Нажмите "Открыть файл вики" или перетащите файл TiddlyWiki, чтобы начать.
+EmptyMessage/HintAndroid: Нажмите «Открыть файл вики», чтобы начать.
 
 GroupManager/Title: Управление группами
 GroupManager/NoGroups: Группы ещё не созданы. Назначьте вики группу, чтобы создать её.

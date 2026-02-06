@@ -53,6 +53,7 @@ DropZone/Hint: أفلت ملفات أو مجلدات TiddlyWiki هنا
 
 EmptyMessage/Title: لا يوجد ويكي حتى الآن.
 EmptyMessage/Hint: انقر على "فتح ملف ويكي" أو أفلت ملف TiddlyWiki للبدء.
+EmptyMessage/HintAndroid: اضغط على "فتح ملف ويكي" للبدء.
 
 GroupManager/Title: إدارة المجموعات
 GroupManager/NoGroups: لم يتم إنشاء مجموعات بعد. عين ويكي إلى مجموعة لإنشاء واحدة.

@@ -53,6 +53,7 @@ DropZone/Hint: Slip TiddlyWiki-filer eller -mapper her
 
 EmptyMessage/Title: Ingen wikis endnu.
 EmptyMessage/Hint: Klik på "Åbn wiki-fil" eller slip en TiddlyWiki-fil for at komme i gang.
+EmptyMessage/HintAndroid: Tryk på "Åbn wiki-fil" for at komme i gang.
 
 GroupManager/Title: Administrer grupper
 GroupManager/NoGroups: Ingen grupper oprettet endnu. Tildel en wiki til en gruppe for at oprette en.

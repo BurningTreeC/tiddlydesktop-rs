@@ -53,6 +53,7 @@ DropZone/Hint: Upuść pliki lub foldery TiddlyWiki tutaj
 
 EmptyMessage/Title: Brak wiki.
 EmptyMessage/Hint: Kliknij "Otwórz plik wiki" lub upuść plik TiddlyWiki aby rozpocząć.
+EmptyMessage/HintAndroid: Dotknij „Otwórz plik wiki", aby rozpocząć.
 
 GroupManager/Title: Zarządzaj grupami
 GroupManager/NoGroups: Nie utworzono jeszcze grup. Przypisz wiki do grupy aby ją utworzyć.

@@ -53,6 +53,7 @@ DropZone/Hint: Sleep TiddlyWiki-bestanden of -mappen hierheen
 
 EmptyMessage/Title: Nog geen wiki's.
 EmptyMessage/Hint: Klik op "Wiki-bestand openen" of sleep een TiddlyWiki-bestand om te beginnen.
+EmptyMessage/HintAndroid: Tik op "Wiki-bestand openen" om te beginnen.
 
 GroupManager/Title: Groepen beheren
 GroupManager/NoGroups: Nog geen groepen aangemaakt. Wijs een wiki toe aan een groep om er een te maken.

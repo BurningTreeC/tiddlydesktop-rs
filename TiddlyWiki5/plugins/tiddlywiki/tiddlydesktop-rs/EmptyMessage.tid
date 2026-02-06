@@ -2,5 +2,10 @@ title: $:/plugins/tiddlywiki/tiddlydesktop-rs/EmptyMessage
 
 <div class="td-empty-message">
 <p><<td-lingo EmptyMessage/Title>></p>
+<$list filter="[<td-is-android>match[yes]]" variable="ignore">
+<p><<td-lingo EmptyMessage/HintAndroid>></p>
+</$list>
+<$list filter="[<td-is-android>match[no]]" variable="ignore">
 <p><<td-lingo EmptyMessage/Hint>></p>
+</$list>
 </div>

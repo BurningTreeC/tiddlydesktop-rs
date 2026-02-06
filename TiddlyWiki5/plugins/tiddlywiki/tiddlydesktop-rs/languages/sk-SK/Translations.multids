@@ -53,6 +53,7 @@ DropZone/Hint: Pretiahnite TiddlyWiki súbory alebo priečinky sem
 
 EmptyMessage/Title: Zatiaľ žiadne wiki.
 EmptyMessage/Hint: Kliknite na "Otvoriť wiki súbor" alebo pretiahnite TiddlyWiki súbor pre začatie.
+EmptyMessage/HintAndroid: Ťuknite na „Otvoriť wiki súbor" pre začatie.
 
 GroupManager/Title: Spravovať skupiny
 GroupManager/NoGroups: Zatiaľ neboli vytvorené žiadne skupiny. Priraďte wiki k skupine pre jej vytvorenie.

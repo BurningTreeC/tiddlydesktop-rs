@@ -53,6 +53,7 @@ DropZone/Hint: Αποθέστε αρχεία ή φακέλους TiddlyWiki εδ
 
 EmptyMessage/Title: Δεν υπάρχουν wiki ακόμα.
 EmptyMessage/Hint: Κάντε κλικ στο "Άνοιγμα αρχείου wiki" ή αποθέστε ένα αρχείο TiddlyWiki για να ξεκινήσετε.
+EmptyMessage/HintAndroid: Πατήστε "Άνοιγμα αρχείου wiki" για να ξεκινήσετε.
 
 GroupManager/Title: Διαχείριση ομάδων
 GroupManager/NoGroups: Δεν έχουν δημιουργηθεί ομάδες ακόμα. Αντιστοιχίστε ένα wiki σε ομάδα για να δημιουργήσετε μία.

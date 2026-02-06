@@ -2969,6 +2969,7 @@ async fn open_wiki_folder(app: tauri::AppHandle, path: String) -> Result<WikiEnt
             return Ok(WikiEntry {
                 path: path.clone(),
                 filename: folder_name,
+                display_path: Some(path.clone()),
                 favicon: existing_favicon,
                 is_folder: true,
                 backups_enabled: false,
@@ -3047,8 +3048,9 @@ async fn open_wiki_folder(app: tauri::AppHandle, path: String) -> Result<WikiEnt
 
     // Create the wiki entry
     let entry = WikiEntry {
-        path,
+        path: path.clone(),
         filename: folder_name,
+        display_path: Some(path),
         favicon,
         is_folder: true,
         backups_enabled: false, // Not applicable for folder wikis (they use autosave)
@@ -3130,12 +3132,15 @@ async fn open_wiki_folder(app: tauri::AppHandle, path: String) -> Result<WikiEnt
         &wiki_name,
         true, // is_folder
         Some(&server_url), // Node.js server URL for folder wiki
+        false, // backups not applicable for folder wikis
+        0, // backup_count not applicable
     )?;
 
     // Create wiki entry for the recent files list
     let entry = WikiEntry {
         path: path.clone(),
         filename: wiki_name.clone(),
+        display_path: Some(android::saf::get_display_path(&path)),
         favicon: None,
         backups_enabled: false, // Not applicable for folder wikis (autosave to tiddler files)
         backup_dir: None,
@@ -3631,12 +3636,15 @@ async fn init_wiki_folder(app: tauri::AppHandle, path: String, edition: String, 
         &wiki_name,
         true, // is_folder
         Some(&server_url), // Node.js server URL
+        false, // backups not applicable for folder wikis
+        0, // backup_count not applicable
     )?;
 
     // Create wiki entry for the recent files list
     let entry = WikiEntry {
         path: path.clone(),
         filename: wiki_name.clone(),
+        display_path: Some(android::saf::get_display_path(&path)),
         favicon: None,
         backups_enabled: false,
         backup_dir: None,
@@ -3936,6 +3944,11 @@ async fn convert_wiki(app: tauri::AppHandle, source_path: String, dest_path: Str
         let mut cmd = Command::new(&node_path);
         cmd.arg(&tw_path)
             .arg(&source)
+            // Remove server-only plugins that don't work in single-file wikis
+            .arg("--deletetiddlers")
+            .arg("$:/plugins/tiddlywiki/tiddlyweb")
+            .arg("--deletetiddlers")
+            .arg("$:/plugins/tiddlywiki/filesystem")
             .arg("--output")
             .arg(&temp_output)
             .arg("--render")
@@ -4566,6 +4579,7 @@ async fn open_wiki_window(app: tauri::AppHandle, path: String) -> Result<WikiEnt
             return Ok(WikiEntry {
                 path: path.clone(),
                 filename,
+                display_path: Some(path.clone()),
                 favicon: existing_favicon,
                 is_folder: false,
                 backups_enabled: true,
@@ -4655,8 +4669,9 @@ async fn open_wiki_window(app: tauri::AppHandle, path: String) -> Result<WikiEnt
 
     // Create the wiki entry
     let entry = WikiEntry {
-        path,
+        path: path.clone(),
         filename,
+        display_path: Some(path),
         favicon,
         is_folder: false,
         backups_enabled: true,
@@ -4677,7 +4692,12 @@ async fn open_wiki_window(app: tauri::AppHandle, path: String) -> Result<WikiEnt
 /// WikiActivity starts its own HTTP server in the :wiki process, independent of Tauri.
 #[cfg(target_os = "android")]
 #[tauri::command]
-async fn open_wiki_window(app: tauri::AppHandle, path: String) -> Result<WikiEntry, String> {
+async fn open_wiki_window(
+    app: tauri::AppHandle,
+    path: String,
+    backups_enabled: Option<bool>,
+    backup_count: Option<u32>,
+) -> Result<WikiEntry, String> {
     // Path is a content:// URI or JSON-serialized FileUri on Android
     let is_saf_uri = path.starts_with("content://") || path.starts_with("{");
 
@@ -4715,22 +4735,29 @@ async fn open_wiki_window(app: tauri::AppHandle, path: String) -> Result<WikiEnt
         Err(e) => eprintln!("[TiddlyDesktop] Warning: Failed to start foreground service: {} (wiki will still open)", e),
     }
 
+    // Get backup settings - use provided values or defaults
+    let use_backups = backups_enabled.unwrap_or(true); // Default: enabled
+    let use_backup_count = backup_count.unwrap_or(20); // Default: 20 backups
+
     // Launch WikiActivity - it will start its own server in the :wiki process
     android::wiki_activity::launch_wiki_activity(
         &path,
         &filename,
         false, // is_folder
         None,  // No pre-rendered HTML for single-file wikis
+        use_backups,
+        use_backup_count,
     )?;
 
     let entry = WikiEntry {
-        path,
+        path: path.clone(),
         filename,
+        display_path: Some(android::saf::get_display_path(&path)),
         favicon,
         is_folder: false,
-        backups_enabled: false, // Backups handled by Kotlin server
+        backups_enabled: use_backups,
         backup_dir: None,
-        backup_count: None,
+        backup_count: Some(use_backup_count),
         group: None,
     };
 
@@ -5088,9 +5115,100 @@ struct UpdateCheckResult {
     current_version: String,
 }
 
-/// Check for application updates by querying GitHub releases
+/// Check for application updates
+/// On Android: Checks Google Play Store
+/// On Desktop: Checks GitHub releases
 #[tauri::command]
 async fn check_for_updates() -> Result<UpdateCheckResult, String> {
+    #[cfg(target_os = "android")]
+    {
+        check_for_updates_android().await
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        check_for_updates_desktop().await
+    }
+}
+
+/// Android version - separate from desktop versioning
+#[cfg(target_os = "android")]
+const ANDROID_VERSION: &str = "0.0.1";
+
+/// Check for updates on Android via Play Store
+#[cfg(target_os = "android")]
+async fn check_for_updates_android() -> Result<UpdateCheckResult, String> {
+    let current_version = ANDROID_VERSION;
+    let releases_url = "https://play.google.com/store/apps/details?id=com.burningtreec.tiddlydesktop_rs".to_string();
+
+    // Fetch Play Store page to extract version
+    let client = reqwest::Client::builder()
+        .user_agent("Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36")
+        .build()
+        .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
+
+    let response = client
+        .get(&releases_url)
+        .send()
+        .await
+        .map_err(|e| format!("Failed to fetch Play Store page: {}", e))?;
+
+    if !response.status().is_success() {
+        return Err(format!("Play Store returned status: {}", response.status()));
+    }
+
+    let html = response
+        .text()
+        .await
+        .map_err(|e| format!("Failed to read Play Store page: {}", e))?;
+
+    // Parse version from Play Store HTML
+    // The version is typically in a pattern like: [["X.Y.Z"]] or "X.Y.Z" near version indicators
+    let latest_version = extract_play_store_version(&html);
+
+    let update_available = if let Some(ref latest) = latest_version {
+        version_is_newer(latest, current_version)
+    } else {
+        false
+    };
+
+    Ok(UpdateCheckResult {
+        update_available,
+        latest_version,
+        releases_url,
+        current_version: current_version.to_string(),
+    })
+}
+
+/// Extract version string from Play Store HTML
+#[cfg(target_os = "android")]
+fn extract_play_store_version(html: &str) -> Option<String> {
+    // Play Store embeds version in JSON-like structures
+    // Look for patterns like [["0.0.1"]] or similar version patterns
+    // The version often appears after "Current Version" or in AF_initDataCallback
+
+    // Try to find version pattern in the HTML
+    // Common patterns: "softwareVersion":"X.Y.Z" or [["X.Y.Z"
+    let patterns = [
+        r#""softwareVersion":"([0-9]+\.[0-9]+\.[0-9]+)"#,
+        r#"\[\["([0-9]+\.[0-9]+\.[0-9]+)"\]\]"#,
+    ];
+
+    for pattern in patterns {
+        if let Ok(re) = regex::Regex::new(pattern) {
+            if let Some(captures) = re.captures(html) {
+                if let Some(version) = captures.get(1) {
+                    return Some(version.as_str().to_string());
+                }
+            }
+        }
+    }
+
+    None
+}
+
+/// Check for updates on Desktop via GitHub releases
+#[cfg(not(target_os = "android"))]
+async fn check_for_updates_desktop() -> Result<UpdateCheckResult, String> {
     let current_version = env!("CARGO_PKG_VERSION");
     let releases_url = "https://github.com/BurningTreeC/tiddlydesktop-rs/releases".to_string();
 
@@ -7543,7 +7661,7 @@ pub fn run() {
                             let app_handle = app.handle().clone();
                             let path_str = arg.clone();
                             tauri::async_runtime::spawn(async move {
-                                if let Ok(entry) = open_wiki_window(app_handle.clone(), path_str).await {
+                                if let Ok(entry) = open_wiki_window(app_handle.clone(), path_str, None, None).await {
                                     // Emit event to refresh wiki list in main window
                                     let _ = app_handle.emit("wiki-list-changed", entry);
                                 }
@@ -7677,7 +7795,7 @@ pub fn run() {
                                     let app_handle = app.clone();
                                     let path_str = path.to_string_lossy().to_string();
                                     tauri::async_runtime::spawn(async move {
-                                        if let Ok(entry) = open_wiki_window(app_handle.clone(), path_str).await {
+                                        if let Ok(entry) = open_wiki_window(app_handle.clone(), path_str, None, None).await {
                                             // Emit event to refresh wiki list in main window
                                             let _ = app_handle.emit("wiki-list-changed", entry);
                                         }

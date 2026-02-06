@@ -53,6 +53,7 @@ DropZone/Hint: Spustite TiddlyWiki datoteke ali mape sem
 
 EmptyMessage/Title: Še ni wikijev.
 EmptyMessage/Hint: Kliknite "Odpri wiki datoteko" ali spustite TiddlyWiki datoteko za začetek.
+EmptyMessage/HintAndroid: Tapnite "Odpri wiki datoteko" za začetek.
 
 GroupManager/Title: Upravljaj skupine
 GroupManager/NoGroups: Še ni ustvarjenih skupin. Dodelite wiki v skupino za ustvarjanje.

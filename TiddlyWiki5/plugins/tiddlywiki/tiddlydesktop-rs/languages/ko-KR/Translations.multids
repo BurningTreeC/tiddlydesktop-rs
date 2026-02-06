@@ -53,6 +53,7 @@ DropZone/Hint: TiddlyWiki 파일 또는 폴더를 여기에 놓으세요
 
 EmptyMessage/Title: 아직 위키가 없습니다.
 EmptyMessage/Hint: "위키 파일 열기"를 클릭하거나 TiddlyWiki 파일을 놓아 시작하세요.
+EmptyMessage/HintAndroid: "위키 파일 열기"를 탭하여 시작하세요.
 
 GroupManager/Title: 그룹 관리
 GroupManager/NoGroups: 아직 그룹이 없습니다. 위키를 그룹에 할당하여 만드세요.

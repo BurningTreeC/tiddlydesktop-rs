@@ -1,7 +1,7 @@
 title: $:/plugins/tiddlywiki/tiddlydesktop-rs/WikiList
 
 \define render-wiki-item()
-<$let path={{!!path}} filename={{!!filename}} favicon={{!!favicon}} isFolder={{!!is_folder}} backupsEnabled={{!!backups_enabled}} backupDir={{!!backup_dir}} backupCount={{!!backup_count}} wikiGroup={{!!group}} needsReauth={{!!needs_reauth}}>
+<$let path={{!!path}} displayPath={{!!display_path}} filename={{!!filename}} favicon={{!!favicon}} isFolder={{!!is_folder}} backupsEnabled={{!!backups_enabled}} backupDir={{!!backup_dir}} backupCount={{!!backup_count}} wikiGroup={{!!group}} needsReauth={{!!needs_reauth}}>
 <div class={{{ [<needsReauth>match[yes]then[td-wikilist-item td-needs-reauth]else[td-wikilist-item]] }}}>
 <div class="td-wikilist-thumbnail">
 <$button class="tc-btn-invisible">
@@ -34,7 +34,7 @@ title: $:/plugins/tiddlywiki/tiddlydesktop-rs/WikiList
 </$list>
 <$text text=<<filename>>/>
 </div>
-<div class="td-wiki-url"><$text text=<<path>>/></div>
+<div class="td-wiki-url"><$text text=<<displayPath>>/></div>
 <div class="td-wiki-toolbar">
 <!-- Show re-authorize button when permission expired (Android) -->
 <$list filter="[<needsReauth>match[yes]]" variable="ignore">

@@ -53,6 +53,7 @@ DropZone/Hint: שחרר קבצי או תיקיות TiddlyWiki כאן
 
 EmptyMessage/Title: אין ויקי עדיין.
 EmptyMessage/Hint: לחץ על "פתח קובץ ויקי" או שחרר קובץ TiddlyWiki כדי להתחיל.
+EmptyMessage/HintAndroid: לחץ על "פתח קובץ ויקי" כדי להתחיל.
 
 GroupManager/Title: נהל קבוצות
 GroupManager/NoGroups: עדיין לא נוצרו קבוצות. הקצה ויקי לקבוצה כדי ליצור אחת.

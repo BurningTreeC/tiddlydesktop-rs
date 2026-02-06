@@ -217,11 +217,15 @@ pub fn wiki_closed() -> Result<(), String> {
 /// * `wiki_title` - Display name for the wiki (shown in recent apps)
 /// * `is_folder` - Whether this is a folder wiki
 /// * `server_url` - For folder wikis: Node.js server URL
+/// * `backups_enabled` - Whether to create backups on save
+/// * `backup_count` - Max backups to keep (0 = unlimited)
 pub fn launch_wiki_activity(
     wiki_path: &str,
     wiki_title: &str,
     is_folder: bool,
     server_url: Option<&str>,
+    backups_enabled: bool,
+    backup_count: u32,
 ) -> Result<(), String> {
     eprintln!("[WikiActivity] launch_wiki_activity called:");
     eprintln!("[WikiActivity]   wiki_path: {}", wiki_path);
@@ -330,6 +334,26 @@ pub fn launch_wiki_activity(
             &[(&extra_wiki_url).into(), (&value_wiki_url).into()],
         ).map_err(|e| format!("Failed to putExtra wiki_url: {}", e))?;
     }
+
+    // Add backup settings
+    let extra_backups_enabled = env.new_string("backups_enabled")
+        .map_err(|e| format!("Failed to create string: {}", e))?;
+    let extra_backup_count = env.new_string("backup_count")
+        .map_err(|e| format!("Failed to create string: {}", e))?;
+
+    env.call_method(
+        &intent,
+        "putExtra",
+        "(Ljava/lang/String;Z)Landroid/content/Intent;",
+        &[(&extra_backups_enabled).into(), jni::objects::JValue::Bool(backups_enabled as u8)],
+    ).map_err(|e| format!("Failed to putExtra backups_enabled: {}", e))?;
+
+    env.call_method(
+        &intent,
+        "putExtra",
+        "(Ljava/lang/String;I)Landroid/content/Intent;",
+        &[(&extra_backup_count).into(), jni::objects::JValue::Int(backup_count as i32)],
+    ).map_err(|e| format!("Failed to putExtra backup_count: {}", e))?;
 
     // Start the activity
     eprintln!("[WikiActivity] Calling startActivity...");

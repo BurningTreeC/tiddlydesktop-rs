@@ -1867,27 +1867,36 @@
         // External Attachments Configuration
         // ========================================
 
-        // Use $:/temp/ prefix so tiddlers are never saved with wiki
-        var CONFIG_ENABLE = "$:/temp/tiddlydesktop/ExternalAttachments/Enable";
-        var CONFIG_ABS_DESC = "$:/temp/tiddlydesktop/ExternalAttachments/UseAbsoluteForDescendents";
-        var CONFIG_ABS_NONDESC = "$:/temp/tiddlydesktop/ExternalAttachments/UseAbsoluteForNonDescendents";
-        var CONFIG_SETTINGS_TAB = "$:/temp/tiddlydesktop/external-attachments/settings";
+        // Use $:/plugins/tiddlydesktop-rs/ prefix for shadow tiddlers
+        var PLUGIN_SOURCE = "$:/plugins/tiddlydesktop-rs/injected";
+        var CONFIG_PREFIX = "$:/plugins/tiddlydesktop-rs/external-attachments/";
+        var CONFIG_ENABLE = CONFIG_PREFIX + "Enable";
+        var CONFIG_ABS_DESC = CONFIG_PREFIX + "UseAbsoluteForDescendents";
+        var CONFIG_ABS_NONDESC = CONFIG_PREFIX + "UseAbsoluteForNonDescendents";
+        var CONFIG_SETTINGS_TAB = CONFIG_PREFIX + "settings";
         var ALL_CONFIG_TIDDLERS = [CONFIG_ENABLE, CONFIG_ABS_DESC, CONFIG_ABS_NONDESC, CONFIG_SETTINGS_TAB];
 
-        // Helper to add tiddler as shadow (won't be saved with wiki)
+        // Helper to add a shadow tiddler (never saved with wiki)
         function addShadowTiddler(fields) {
             var tiddler = new $tw.Tiddler(fields);
-            // Add to shadow store so it's not saved with the wiki
-            $tw.wiki.shadowTiddlers = $tw.wiki.shadowTiddlers || {};
             $tw.wiki.shadowTiddlers[fields.title] = {
                 tiddler: tiddler,
-                source: "tiddlydesktop"
+                source: PLUGIN_SOURCE
             };
-            // Also add to main wiki for immediate visibility
-            $tw.wiki.addTiddler(tiddler);
-            // Clear cache to ensure consistency
             $tw.wiki.clearCache(fields.title);
+            $tw.wiki.enqueueTiddlerEvent(fields.title);
         }
+
+        // Helper to delete a shadow tiddler
+        function deleteShadowTiddler(title) {
+            if ($tw.wiki.shadowTiddlers[title]) {
+                delete $tw.wiki.shadowTiddlers[title];
+                $tw.wiki.clearCache(title);
+                $tw.wiki.enqueueTiddlerEvent(title);
+            }
+        }
+
+        // Note: Global save hook is installed by session_auth.js
 
         function installImportHook() {
             if (typeof $tw === 'undefined' || !$tw.hooks) {
@@ -2076,6 +2085,8 @@
             var originalNumChanges = $tw.saverHandler ? $tw.saverHandler.numChanges : 0;
 
             ALL_CONFIG_TIDDLERS.forEach(function(title) {
+                deleteShadowTiddler(title);
+                // Also delete any regular tiddler that may have been created by widget interaction
                 if ($tw.wiki.tiddlerExists(title)) {
                     $tw.wiki.deleteTiddler(title);
                 }
@@ -2090,7 +2101,7 @@
         }
 
         function injectConfigTiddlers(config) {
-            if (typeof $tw === 'undefined' || !$tw.wiki || !$tw.wiki.addTiddler || !$tw.saverHandler) {
+            if (typeof $tw === 'undefined' || !$tw.wiki || !$tw.wiki.shadowTiddlers || !$tw.saverHandler) {
                 setTimeout(function() { injectConfigTiddlers(config); }, 100);
                 return;
             }
@@ -2133,7 +2144,7 @@
                 }
             });
 
-            console.log("[TiddlyDesktop] External Attachments settings UI ready");
+            console.log("[TiddlyDesktop] External Attachments settings UI ready (using shadow tiddlers)");
         }
 
         function setupCleanup() {

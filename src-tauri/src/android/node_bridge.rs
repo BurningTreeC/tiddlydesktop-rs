@@ -1198,9 +1198,12 @@ pub fn convert_folder_to_file(source_saf_uri: &str, dest_saf_uri: &str) -> Resul
 
     let temp_output_str = temp_output.to_string_lossy();
 
-    // Run TiddlyWiki render: tiddlywiki <folder> --output <temp> --render '$:/core/save/all' wiki.html text/plain
+    // Run TiddlyWiki render: tiddlywiki <folder> --deletetiddlers <plugins> --output <temp> --render '$:/core/save/all' wiki.html text/plain
+    // We must remove server-only plugins (tiddlyweb, filesystem) that don't work in single-file wikis
     let args = vec![
         local_path.as_str(),
+        "--deletetiddlers", "$:/plugins/tiddlywiki/tiddlyweb",
+        "--deletetiddlers", "$:/plugins/tiddlywiki/filesystem",
         "--output", temp_output_str.as_ref(),
         "--render", "$:/core/save/all", "wiki.html", "text/plain",
     ];

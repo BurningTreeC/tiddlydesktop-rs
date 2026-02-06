@@ -53,6 +53,7 @@ DropZone/Hint: Deixeu anar fitxers o carpetes TiddlyWiki aquí
 
 EmptyMessage/Title: Encara no hi ha wikis.
 EmptyMessage/Hint: Feu clic a "Obrir fitxer wiki" o deixeu anar un fitxer TiddlyWiki per començar.
+EmptyMessage/HintAndroid: Toqueu a "Obrir fitxer wiki" per començar.
 
 GroupManager/Title: Gestionar grups
 GroupManager/NoGroups: Encara no s'han creat grups. Assigneu un wiki a un grup per crear-ne un.

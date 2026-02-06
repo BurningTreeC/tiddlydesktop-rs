@@ -640,6 +640,105 @@ pub fn get_display_name(uri: &str) -> Result<String, String> {
         .map_err(|e| format!("Failed to get file name: {:?}", e))
 }
 
+/// Extract a human-readable path from a SAF content:// URI.
+///
+/// SAF URIs often contain the document path encoded in them:
+/// - `content://com.android.externalstorage.documents/document/primary:Documents%2FMyWiki.html`
+///   -> "Documents/MyWiki.html"
+/// - `content://com.android.providers.downloads.documents/document/12345`
+///   -> "Downloads" (fallback)
+///
+/// Returns a user-friendly path string for display purposes.
+pub fn get_display_path(uri_json: &str) -> String {
+    // Try to parse as JSON first
+    let uri_str = if uri_json.starts_with('{') {
+        if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(uri_json) {
+            parsed.get("uri")
+                .and_then(|v| v.as_str())
+                .unwrap_or(uri_json)
+                .to_string()
+        } else {
+            uri_json.to_string()
+        }
+    } else {
+        uri_json.to_string()
+    };
+
+    // Try to extract path from common SAF URI patterns
+    if let Some(path) = extract_path_from_saf_uri(&uri_str) {
+        return path;
+    }
+
+    // Fallback: try to get display name
+    if let Ok(name) = get_display_name(uri_json) {
+        return name;
+    }
+
+    // Last resort: show a shortened URI
+    if uri_str.len() > 50 {
+        format!("...{}", &uri_str[uri_str.len() - 40..])
+    } else {
+        uri_str
+    }
+}
+
+/// Extract a readable path from SAF URI patterns.
+fn extract_path_from_saf_uri(uri: &str) -> Option<String> {
+    // Common pattern: content://authority/document/storage:path or content://authority/tree/storage:path/document/...
+
+    // URL decode the URI first
+    let decoded = urlencoding::decode(uri).ok()?.into_owned();
+
+    // Pattern 1: .../document/primary:path or .../document/home:path
+    if let Some(doc_idx) = decoded.find("/document/") {
+        let after_doc = &decoded[doc_idx + 10..]; // Skip "/document/"
+        if let Some(colon_idx) = after_doc.find(':') {
+            let path = &after_doc[colon_idx + 1..];
+            // Clean up any remaining encoded characters and normalize slashes
+            let clean_path = path.replace("%2F", "/").replace("%20", " ");
+            if !clean_path.is_empty() {
+                return Some(clean_path);
+            }
+        }
+    }
+
+    // Pattern 2: .../tree/primary:path (for folder wikis)
+    if let Some(tree_idx) = decoded.find("/tree/") {
+        let after_tree = &decoded[tree_idx + 6..]; // Skip "/tree/"
+        // Find the end of the tree path (before /document/ if present)
+        let tree_path = if let Some(doc_idx) = after_tree.find("/document/") {
+            &after_tree[..doc_idx]
+        } else {
+            after_tree
+        };
+        if let Some(colon_idx) = tree_path.find(':') {
+            let path = &tree_path[colon_idx + 1..];
+            let clean_path = path.replace("%2F", "/").replace("%20", " ");
+            if !clean_path.is_empty() {
+                return Some(clean_path);
+            }
+        }
+    }
+
+    // Pattern 3: Downloads provider - show "Downloads"
+    if decoded.contains("downloads.documents") {
+        return Some("Downloads".to_string());
+    }
+
+    // Pattern 4: Media provider
+    if decoded.contains("media/") {
+        if decoded.contains("/images/") {
+            return Some("Pictures".to_string());
+        } else if decoded.contains("/video/") {
+            return Some("Videos".to_string());
+        } else if decoded.contains("/audio/") {
+            return Some("Music".to_string());
+        }
+    }
+
+    None
+}
+
 /// Get all persisted URI permissions as JSON-serialized FileUris.
 /// Note: This queries the API for available permissions.
 pub fn get_persisted_permissions() -> Result<Vec<String>, String> {

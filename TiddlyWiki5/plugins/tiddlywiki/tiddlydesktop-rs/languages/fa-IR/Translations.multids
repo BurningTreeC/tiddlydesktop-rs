@@ -53,6 +53,7 @@ DropZone/Hint: فایل‌ها یا پوشه‌های TiddlyWiki را اینجا
 
 EmptyMessage/Title: هنوز ویکی‌ای وجود ندارد.
 EmptyMessage/Hint: روی "باز کردن فایل ویکی" کلیک کنید یا یک فایل TiddlyWiki را رها کنید تا شروع کنید.
+EmptyMessage/HintAndroid: روی "باز کردن فایل ویکی" ضربه بزنید تا شروع کنید.
 
 GroupManager/Title: مدیریت گروه‌ها
 GroupManager/NoGroups: هنوز گروهی ایجاد نشده است. یک ویکی را به گروهی اختصاص دهید تا ایجاد شود.

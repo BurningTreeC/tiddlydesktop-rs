@@ -372,6 +372,7 @@ exports.startup = function(callback) {
 			$tw.wiki.addTiddler({
 				title: "$:/temp/tiddlydesktop-rs/wikis/" + index,
 				path: entry.path,
+				display_path: entry.display_path || entry.path,
 				filename: entry.filename,
 				favicon: entry.favicon || "",
 				is_folder: entry.is_folder ? "true" : "false",
@@ -762,9 +763,27 @@ exports.startup = function(callback) {
 		var path = event.param || event.paramObject.path;
 		var isFolder = event.paramObject && event.paramObject.isFolder === "true";
 		if (path) {
+			// Look up the entry to get backup settings
+			var entries = getWikiListEntries();
+			var entry = null;
+			for (var i = 0; i < entries.length; i++) {
+				if (entries[i].path === path) {
+					entry = entries[i];
+					break;
+				}
+			}
+
 			var command = isFolder ? "open_wiki_folder" : "open_wiki_window";
-			invoke(command, { path: path }).then(function(entry) {
-				addToWikiList(entry);
+			var params = { path: path };
+
+			// Pass backup settings if we have them (single-file wikis only)
+			if (!isFolder && entry) {
+				params.backupsEnabled = entry.backups_enabled !== false; // Default true
+				params.backupCount = entry.backup_count !== undefined ? entry.backup_count : null;
+			}
+
+			invoke(command, params).then(function(resultEntry) {
+				addToWikiList(resultEntry);
 				refreshWikiList();
 			}).catch(function(err) {
 				console.error("Failed to open wiki:", err);

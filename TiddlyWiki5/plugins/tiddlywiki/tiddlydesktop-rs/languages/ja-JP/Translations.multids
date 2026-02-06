@@ -53,6 +53,7 @@ DropZone/Hint: TiddlyWikiファイルまたはフォルダをここにドロッ�
 
 EmptyMessage/Title: Wikiがまだありません。
 EmptyMessage/Hint: 「Wikiファイルを開く」をクリックするか、TiddlyWikiファイルをドロップして開始してください。
+EmptyMessage/HintAndroid: 「Wikiファイルを開く」をタップして開始してください。
 
 GroupManager/Title: グループを管理
 GroupManager/NoGroups: グループがまだ作成されていません。Wikiをグループに割り当てて作成してください。

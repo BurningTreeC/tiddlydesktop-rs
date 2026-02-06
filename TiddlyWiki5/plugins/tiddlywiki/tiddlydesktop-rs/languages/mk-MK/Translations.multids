@@ -53,6 +53,7 @@ DropZone/Hint: Пуштете TiddlyWiki датотеки или папки ту
 
 EmptyMessage/Title: Сè уште нема викија.
 EmptyMessage/Hint: Кликнете на "Отвори вики датотека" или пуштете TiddlyWiki датотека за да започнете.
+EmptyMessage/HintAndroid: Допрете „Отвори вики датотека" за да започнете.
 
 GroupManager/Title: Управувај со групи
 GroupManager/NoGroups: Сè уште нема создадени групи. Доделете вики во група за да создадете една.

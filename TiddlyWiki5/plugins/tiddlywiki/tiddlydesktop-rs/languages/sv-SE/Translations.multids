@@ -53,6 +53,7 @@ DropZone/Hint: Släpp TiddlyWiki-filer eller -mappar här
 
 EmptyMessage/Title: Inga wikis ännu.
 EmptyMessage/Hint: Klicka på "Öppna wiki-fil" eller släpp en TiddlyWiki-fil för att komma igång.
+EmptyMessage/HintAndroid: Tryck på "Öppna wiki-fil" för att komma igång.
 
 GroupManager/Title: Hantera grupper
 GroupManager/NoGroups: Inga grupper skapade ännu. Tilldela en wiki till en grupp för att skapa en.

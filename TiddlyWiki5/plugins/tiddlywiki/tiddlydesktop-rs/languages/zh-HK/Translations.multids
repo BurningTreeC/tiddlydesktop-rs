@@ -53,6 +53,7 @@ DropZone/Hint: 將 TiddlyWiki 檔案或資料夾拖放到此處
 
 EmptyMessage/Title: 尚無維基。
 EmptyMessage/Hint: 點擊「開啟維基檔案」或拖放 TiddlyWiki 檔案以開始。
+EmptyMessage/HintAndroid: 點擊「開啟維基檔案」以開始。
 
 GroupManager/Title: 管理群組
 GroupManager/NoGroups: 尚未建立群組。將維基指派到群組以建立一個。

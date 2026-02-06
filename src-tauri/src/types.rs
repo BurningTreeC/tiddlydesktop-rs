@@ -14,6 +14,8 @@ pub struct WikiEntry {
     pub path: String,
     pub filename: String,
     #[serde(default)]
+    pub display_path: Option<String>, // Human-readable path for UI (e.g., "Documents/MyWiki.html" on Android)
+    #[serde(default)]
     pub favicon: Option<String>, // Data URI for favicon
     #[serde(default)]
     pub is_folder: bool, // true if this is a wiki folder

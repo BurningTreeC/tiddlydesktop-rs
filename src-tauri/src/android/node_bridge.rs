@@ -1112,6 +1112,58 @@ pub fn render_folder_wiki_html(saf_uri: &str) -> Result<String, String> {
     Ok(html_content)
 }
 
+/// Add tiddlyweb and filesystem plugins to tiddlywiki.info for proper folder wiki operation.
+/// These plugins are required for the TiddlyWiki server to handle saving and file operations.
+fn add_server_plugins_to_info(info_path: &std::path::Path) -> Result<(), String> {
+    use std::io::{Read, Write};
+
+    // Read the existing tiddlywiki.info
+    let mut file = std::fs::File::open(info_path)
+        .map_err(|e| format!("Failed to open tiddlywiki.info: {}", e))?;
+    let mut content = String::new();
+    file.read_to_string(&mut content)
+        .map_err(|e| format!("Failed to read tiddlywiki.info: {}", e))?;
+    drop(file);
+
+    // Parse as JSON
+    let mut info: serde_json::Value = serde_json::from_str(&content)
+        .map_err(|e| format!("Failed to parse tiddlywiki.info: {}", e))?;
+
+    // Ensure plugins array exists
+    if !info.get("plugins").is_some() {
+        info["plugins"] = serde_json::json!([]);
+    }
+
+    // Get the plugins array
+    let plugins = info["plugins"].as_array_mut()
+        .ok_or_else(|| "plugins is not an array".to_string())?;
+
+    // Required server plugins
+    let required_plugins = [
+        "tiddlywiki/tiddlyweb",
+        "tiddlywiki/filesystem",
+    ];
+
+    // Add each required plugin if not already present
+    for plugin in &required_plugins {
+        let plugin_str = serde_json::Value::String(plugin.to_string());
+        if !plugins.contains(&plugin_str) {
+            plugins.push(plugin_str);
+            eprintln!("[NodeBridge] Added plugin: {}", plugin);
+        }
+    }
+
+    // Write back
+    let updated_content = serde_json::to_string_pretty(&info)
+        .map_err(|e| format!("Failed to serialize tiddlywiki.info: {}", e))?;
+    let mut file = std::fs::File::create(info_path)
+        .map_err(|e| format!("Failed to create tiddlywiki.info: {}", e))?;
+    file.write_all(updated_content.as_bytes())
+        .map_err(|e| format!("Failed to write tiddlywiki.info: {}", e))?;
+
+    Ok(())
+}
+
 /// Convert a single-file wiki to a folder wiki.
 ///
 /// # Arguments
@@ -1145,12 +1197,17 @@ pub fn convert_file_to_folder(source_saf_uri: &str, dest_saf_uri: &str) -> Resul
     std::fs::create_dir_all(&temp_output)
         .map_err(|e| format!("Failed to create temp output directory: {}", e))?;
 
-    // Run TiddlyWiki conversion: tiddlywiki --load <source> --savewikifolder <dest>
+    // Run TiddlyWiki conversion: tiddlywiki --load <source> --deletetiddlers <filters> --savewikifolder <dest>
+    // We strip TiddlyDesktop-injected tiddlers that were accidentally saved or shouldn't be in standalone wikis
     let temp_wiki_str = temp_wiki.to_string_lossy();
     let temp_output_str = temp_output.to_string_lossy();
 
     let args = vec![
         "--load", temp_wiki_str.as_ref(),
+        // TiddlyDesktop injected plugin and tiddlers (filter for prefix match)
+        "--deletetiddlers", "[prefix[$:/plugins/tiddlywiki/tiddlydesktop-rs]]",
+        "--deletetiddlers", "[prefix[$:/plugins/tiddlydesktop-rs]]",
+        "--deletetiddlers", "[prefix[$:/temp/tiddlydesktop]]",
         "--savewikifolder", temp_output_str.as_ref(),
     ];
 
@@ -1158,9 +1215,16 @@ pub fn convert_file_to_folder(source_saf_uri: &str, dest_saf_uri: &str) -> Resul
     run_tiddlywiki_command(&args)?;
 
     // Verify conversion succeeded
-    if !temp_output.join("tiddlywiki.info").exists() {
+    let tiddlywiki_info_path = temp_output.join("tiddlywiki.info");
+    if !tiddlywiki_info_path.exists() {
         let _ = std::fs::remove_dir_all(&temp_dir);
         return Err("Conversion failed - tiddlywiki.info not created".to_string());
+    }
+
+    // Add tiddlyweb and filesystem plugins to tiddlywiki.info for proper folder wiki operation
+    match add_server_plugins_to_info(&tiddlywiki_info_path) {
+        Ok(()) => eprintln!("[NodeBridge] Added server plugins to tiddlywiki.info"),
+        Err(e) => eprintln!("[NodeBridge] Warning: Failed to add server plugins: {}", e),
     }
 
     // Copy the folder structure to SAF
@@ -1199,11 +1263,18 @@ pub fn convert_folder_to_file(source_saf_uri: &str, dest_saf_uri: &str) -> Resul
     let temp_output_str = temp_output.to_string_lossy();
 
     // Run TiddlyWiki render: tiddlywiki <folder> --deletetiddlers <plugins> --output <temp> --render '$:/core/save/all' wiki.html text/plain
-    // We must remove server-only plugins (tiddlyweb, filesystem) that don't work in single-file wikis
+    // We must remove:
+    // - Server-only plugins (tiddlyweb, filesystem) that don't work in single-file wikis
+    // - TiddlyDesktop-injected tiddlers that shouldn't be saved to standalone wikis
     let args = vec![
         local_path.as_str(),
+        // Server-only plugins
         "--deletetiddlers", "$:/plugins/tiddlywiki/tiddlyweb",
         "--deletetiddlers", "$:/plugins/tiddlywiki/filesystem",
+        // TiddlyDesktop injected plugin and tiddlers (filter for prefix match)
+        "--deletetiddlers", "[prefix[$:/plugins/tiddlywiki/tiddlydesktop-rs]]",
+        "--deletetiddlers", "[prefix[$:/plugins/tiddlydesktop-rs]]",
+        "--deletetiddlers", "[prefix[$:/temp/tiddlydesktop]]",
         "--output", temp_output_str.as_ref(),
         "--render", "$:/core/save/all", "wiki.html", "text/plain",
     ];

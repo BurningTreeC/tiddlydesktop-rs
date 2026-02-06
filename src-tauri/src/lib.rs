@@ -3862,6 +3862,58 @@ async fn create_wiki_file(_app: tauri::AppHandle, path: String, edition: String,
     Ok(())
 }
 
+/// Add tiddlyweb and filesystem plugins to tiddlywiki.info for proper folder wiki operation.
+#[cfg(not(target_os = "android"))]
+fn add_server_plugins_to_tiddlywiki_info(info_path: &std::path::Path) -> Result<(), String> {
+    use std::io::{Read, Write};
+
+    // Read the existing tiddlywiki.info
+    let mut file = std::fs::File::open(info_path)
+        .map_err(|e| format!("Failed to open tiddlywiki.info: {}", e))?;
+    let mut content = String::new();
+    file.read_to_string(&mut content)
+        .map_err(|e| format!("Failed to read tiddlywiki.info: {}", e))?;
+    drop(file);
+
+    // Parse as JSON
+    let mut info: serde_json::Value = serde_json::from_str(&content)
+        .map_err(|e| format!("Failed to parse tiddlywiki.info: {}", e))?;
+
+    // Ensure plugins array exists
+    if info.get("plugins").is_none() {
+        info["plugins"] = serde_json::json!([]);
+    }
+
+    // Get the plugins array
+    let plugins = info["plugins"].as_array_mut()
+        .ok_or_else(|| "plugins is not an array".to_string())?;
+
+    // Required server plugins
+    let required_plugins = [
+        "tiddlywiki/tiddlyweb",
+        "tiddlywiki/filesystem",
+    ];
+
+    // Add each required plugin if not already present
+    for plugin in &required_plugins {
+        let plugin_str = serde_json::Value::String(plugin.to_string());
+        if !plugins.contains(&plugin_str) {
+            plugins.push(plugin_str);
+            println!("Added plugin to tiddlywiki.info: {}", plugin);
+        }
+    }
+
+    // Write back
+    let updated_content = serde_json::to_string_pretty(&info)
+        .map_err(|e| format!("Failed to serialize tiddlywiki.info: {}", e))?;
+    let mut file = std::fs::File::create(info_path)
+        .map_err(|e| format!("Failed to create tiddlywiki.info: {}", e))?;
+    file.write_all(updated_content.as_bytes())
+        .map_err(|e| format!("Failed to write tiddlywiki.info: {}", e))?;
+
+    Ok(())
+}
+
 /// Convert a wiki between single-file and folder formats
 #[cfg(not(target_os = "android"))]
 #[tauri::command]
@@ -3911,6 +3963,13 @@ async fn convert_wiki(app: tauri::AppHandle, source_path: String, dest_path: Str
         cmd.arg(&tw_path)
             .arg("--load")
             .arg(&source)
+            // Strip TiddlyDesktop-injected tiddlers that shouldn't be in standalone wikis
+            .arg("--deletetiddlers")
+            .arg("[prefix[$:/plugins/tiddlywiki/tiddlydesktop-rs]]")
+            .arg("--deletetiddlers")
+            .arg("[prefix[$:/plugins/tiddlydesktop-rs]]")
+            .arg("--deletetiddlers")
+            .arg("[prefix[$:/temp/tiddlydesktop]]")
             .arg("--savewikifolder")
             .arg(&dest);
         #[cfg(target_os = "windows")]
@@ -3926,8 +3985,14 @@ async fn convert_wiki(app: tauri::AppHandle, source_path: String, dest_path: Str
         }
 
         // Verify tiddlywiki.info was created
-        if !dest.join("tiddlywiki.info").exists() {
+        let info_path = dest.join("tiddlywiki.info");
+        if !info_path.exists() {
             return Err("Conversion failed - tiddlywiki.info not created".to_string());
+        }
+
+        // Add tiddlyweb and filesystem plugins to tiddlywiki.info for proper folder wiki operation
+        if let Err(e) = add_server_plugins_to_tiddlywiki_info(&info_path) {
+            println!("Warning: Failed to add server plugins to tiddlywiki.info: {}", e);
         }
 
         println!("Successfully converted to folder wiki: {:?}", dest);
@@ -3961,6 +4026,13 @@ async fn convert_wiki(app: tauri::AppHandle, source_path: String, dest_path: Str
             .arg("$:/plugins/tiddlywiki/tiddlyweb")
             .arg("--deletetiddlers")
             .arg("$:/plugins/tiddlywiki/filesystem")
+            // Strip TiddlyDesktop-injected tiddlers that shouldn't be in standalone wikis
+            .arg("--deletetiddlers")
+            .arg("[prefix[$:/plugins/tiddlywiki/tiddlydesktop-rs]]")
+            .arg("--deletetiddlers")
+            .arg("[prefix[$:/plugins/tiddlydesktop-rs]]")
+            .arg("--deletetiddlers")
+            .arg("[prefix[$:/temp/tiddlydesktop]]")
             .arg("--output")
             .arg(&temp_output)
             .arg("--render")
@@ -4032,13 +4104,17 @@ async fn convert_wiki(_app: tauri::AppHandle, source_path: String, dest_path: St
             return Err("Source is already a folder wiki".to_string());
         }
 
-        // Verify destination folder exists
-        if !android::saf::is_directory(&dest_path) {
-            return Err("Destination folder does not exist. Please create it first using the folder picker.".to_string());
-        }
+        // Verify destination folder exists by trying to list it
+        // This is more reliable than is_directory() for tree URIs from the folder picker
+        let entries = match android::saf::list_directory_entries(&dest_path) {
+            Ok(entries) => entries,
+            Err(e) => {
+                eprintln!("[TiddlyDesktop] Failed to list destination folder: {}", e);
+                return Err("Destination folder does not exist or is not accessible. Please create it first using the folder picker.".to_string());
+            }
+        };
 
         // Check if destination is empty or a wiki folder
-        let entries = android::saf::list_directory_entries(&dest_path)?;
         if !entries.is_empty() {
             // Check if it's already a wiki folder
             let has_tiddlywiki_info = entries.iter().any(|e| e.name == "tiddlywiki.info");

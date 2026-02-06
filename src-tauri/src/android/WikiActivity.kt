@@ -32,8 +32,11 @@ import androidx.activity.result.ActivityResultLauncher
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.documentfile.provider.DocumentFile
+import org.json.JSONArray
 import org.json.JSONObject
+import java.io.File
 import java.net.URLDecoder
+import java.net.URLEncoder
 
 /**
  * Activity for opening individual wiki files in separate app instances.
@@ -56,6 +59,7 @@ class WikiActivity : AppCompatActivity() {
         const val EXTRA_IS_FOLDER = "is_folder"
         const val EXTRA_BACKUPS_ENABLED = "backups_enabled"
         const val EXTRA_BACKUP_COUNT = "backup_count"
+        const val EXTRA_TIDDLER_TITLE = "tiddler_title"  // For tm-open-window: navigate to specific tiddler
         private const val TAG = "WikiActivity"
 
         init {
@@ -189,11 +193,116 @@ class WikiActivity : AppCompatActivity() {
             }
             return false
         }
+
+        /**
+         * Update recent_wikis.json with a newly opened wiki.
+         * This file is read by the home screen widget to display recent wikis.
+         * Maximum 10 recent wikis are stored, sorted by last opened time.
+         */
+        @JvmStatic
+        fun updateRecentWikis(context: Context, wikiPath: String, wikiTitle: String, isFolder: Boolean) {
+            try {
+                val recentWikisFile = File(context.filesDir, "recent_wikis.json")
+                val maxWikis = 10
+
+                // Read existing data
+                val existingWikis = if (recentWikisFile.exists()) {
+                    try {
+                        JSONArray(recentWikisFile.readText())
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Could not parse recent_wikis.json, starting fresh: ${e.message}")
+                        JSONArray()
+                    }
+                } else {
+                    JSONArray()
+                }
+
+                // Remove this wiki if it already exists (we'll re-add it at the top)
+                val filteredWikis = JSONArray()
+                for (i in 0 until existingWikis.length()) {
+                    val wiki = existingWikis.optJSONObject(i)
+                    if (wiki != null && wiki.optString("path") != wikiPath) {
+                        filteredWikis.put(wiki)
+                    }
+                }
+
+                // Create new entry for this wiki
+                val newEntry = JSONObject().apply {
+                    put("path", wikiPath)
+                    put("title", wikiTitle)
+                    put("is_folder", isFolder)
+                    put("last_opened", System.currentTimeMillis())
+                }
+
+                // Build new list with this wiki at the top
+                val newWikis = JSONArray()
+                newWikis.put(newEntry)
+                for (i in 0 until minOf(filteredWikis.length(), maxWikis - 1)) {
+                    newWikis.put(filteredWikis.getJSONObject(i))
+                }
+
+                // Write to file
+                recentWikisFile.writeText(newWikis.toString(2))
+                Log.d(TAG, "Updated recent_wikis.json with: $wikiTitle")
+
+                // Request widget update
+                try {
+                    RecentWikisWidgetProvider.requestUpdate(context)
+                } catch (e: Exception) {
+                    Log.w(TAG, "Could not request widget update: ${e.message}")
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to update recent_wikis.json: ${e.message}")
+            }
+        }
+
+        /**
+         * Update recent_wikis.json with favicon path for an existing wiki entry.
+         */
+        @JvmStatic
+        fun updateRecentWikisWithFavicon(context: Context, wikiPath: String, faviconPath: String) {
+            try {
+                val recentWikisFile = File(context.filesDir, "recent_wikis.json")
+
+                if (!recentWikisFile.exists()) {
+                    Log.w(TAG, "recent_wikis.json does not exist, cannot update favicon")
+                    return
+                }
+
+                val existingWikis = JSONArray(recentWikisFile.readText())
+                var updated = false
+
+                // Find and update the wiki entry with the favicon path
+                for (i in 0 until existingWikis.length()) {
+                    val wiki = existingWikis.optJSONObject(i)
+                    if (wiki != null && wiki.optString("path") == wikiPath) {
+                        wiki.put("favicon_path", faviconPath)
+                        updated = true
+                        break
+                    }
+                }
+
+                if (updated) {
+                    recentWikisFile.writeText(existingWikis.toString(2))
+                    Log.d(TAG, "Updated favicon path for wiki: $wikiPath")
+
+                    // Request widget update to show the new favicon
+                    try {
+                        RecentWikisWidgetProvider.requestUpdate(context)
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Could not request widget update: ${e.message}")
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to update favicon in recent_wikis.json: ${e.message}")
+            }
+        }
     }
 
     private lateinit var webView: WebView
     private lateinit var rootLayout: FrameLayout
     private var wikiPath: String? = null
+    private var wikiTitle: String = "TiddlyWiki"
     private var isFolder: Boolean = false
     private var httpServer: WikiHttpServer? = null
 
@@ -203,6 +312,10 @@ class WikiActivity : AppCompatActivity() {
 
     // App immersive fullscreen mode (toggled via tm-full-screen)
     private var isImmersiveFullscreen: Boolean = false
+
+    // Flag to track if this window was opened via tm-open-window
+    // If true, back button returns to parent window instead of closing
+    private var isChildWindow: Boolean = false
 
     // WakeLock to keep the HTTP server alive when app is in background
     private var wakeLock: PowerManager.WakeLock? = null
@@ -383,6 +496,130 @@ class WikiActivity : AppCompatActivity() {
                 Log.e(TAG, "Failed to get clipboard: ${e.message}")
                 val escapedError = e.message?.replace("\\", "\\\\")?.replace("\"", "\\\"") ?: "Unknown error"
                 "{\"success\":false,\"error\":\"$escapedError\"}"
+            }
+        }
+    }
+
+    /**
+     * JavaScript interface for printing.
+     * Handles tm-print message from TiddlyWiki.
+     */
+    inner class PrintInterface {
+        @JavascriptInterface
+        fun print() {
+            Log.d(TAG, "print() called")
+            runOnUiThread {
+                try {
+                    val printManager = getSystemService(Context.PRINT_SERVICE) as android.print.PrintManager
+                    val jobName = "${wikiTitle ?: "TiddlyWiki"} - ${System.currentTimeMillis()}"
+                    val printAdapter = webView.createPrintDocumentAdapter(jobName)
+                    printManager.print(jobName, printAdapter, null)
+                    Log.d(TAG, "Print job started: $jobName")
+                } catch (e: Exception) {
+                    Log.e(TAG, "Print failed: ${e.message}")
+                }
+            }
+        }
+    }
+
+    /**
+     * JavaScript interface for opening URLs in external browser/apps.
+     * Handles tm-open-external-window message from TiddlyWiki.
+     */
+    inner class ExternalWindowInterface {
+        @JavascriptInterface
+        fun openExternal(url: String): String {
+            Log.d(TAG, "openExternal called: $url")
+            return try {
+                runOnUiThread {
+                    val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
+                    startActivity(intent)
+                }
+                "{\"success\":true}"
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to open external URL: ${e.message}")
+                "{\"success\":false,\"error\":\"${e.message?.replace("\"", "\\\"") ?: "Unknown"}\"}"
+            }
+        }
+    }
+
+    /**
+     * JavaScript interface for opening tiddlers in new windows.
+     * Handles tm-open-window message from TiddlyWiki.
+     * Opens a new WikiActivity connected to the same wiki.
+     * Back button in the child window returns to this parent window.
+     */
+    inner class OpenWindowInterface {
+        @JavascriptInterface
+        fun openWindow(tiddlerTitle: String): String {
+            Log.d(TAG, "openWindow called: $tiddlerTitle")
+            return try {
+                val newIntent = Intent(this@WikiActivity, WikiActivity::class.java).apply {
+                    putExtra(EXTRA_WIKI_PATH, wikiPath)
+                    putExtra(EXTRA_WIKI_TITLE, this@WikiActivity.wikiTitle)
+                    putExtra(EXTRA_IS_FOLDER, isFolder)
+                    putExtra(EXTRA_TIDDLER_TITLE, tiddlerTitle)
+                    if (isFolder) {
+                        putExtra(EXTRA_WIKI_URL, intent.getStringExtra(EXTRA_WIKI_URL))
+                    }
+                    putExtra(EXTRA_BACKUPS_ENABLED, intent.getBooleanExtra(EXTRA_BACKUPS_ENABLED, true))
+                    putExtra(EXTRA_BACKUP_COUNT, intent.getIntExtra(EXTRA_BACKUP_COUNT, 20))
+                    // Don't use FLAG_ACTIVITY_NEW_TASK so back button returns to parent
+                    addFlags(Intent.FLAG_ACTIVITY_MULTIPLE_TASK)
+                }
+                startActivity(newIntent)
+                "{\"success\":true}"
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to open new window: ${e.message}")
+                "{\"success\":false,\"error\":\"${e.message?.replace("\"", "\\\"") ?: "Unknown"}\"}"
+            }
+        }
+    }
+
+    /**
+     * JavaScript interface for favicon extraction.
+     * Receives favicon data from TiddlyWiki and saves it to disk.
+     */
+    inner class FaviconInterface {
+        @JavascriptInterface
+        fun saveFavicon(base64Data: String, mimeType: String): String {
+            Log.d(TAG, "saveFavicon called: mimeType=$mimeType, dataLength=${base64Data.length}")
+            return try {
+                if (base64Data.isEmpty()) {
+                    Log.d(TAG, "No favicon data provided")
+                    return "{\"success\":false,\"error\":\"No favicon data\"}"
+                }
+
+                // Create favicons directory
+                val faviconsDir = File(applicationContext.filesDir, "favicons")
+                if (!faviconsDir.exists()) {
+                    faviconsDir.mkdirs()
+                }
+
+                // Generate filename based on wiki path hash
+                val pathHash = wikiPath?.hashCode()?.let { Math.abs(it).toString() } ?: "unknown"
+                val extension = when {
+                    mimeType.contains("png") -> "png"
+                    mimeType.contains("jpeg") || mimeType.contains("jpg") -> "jpg"
+                    mimeType.contains("gif") -> "gif"
+                    mimeType.contains("svg") -> "svg"
+                    else -> "ico"
+                }
+                val faviconFile = File(faviconsDir, "$pathHash.$extension")
+
+                // Decode base64 and save
+                val imageData = android.util.Base64.decode(base64Data, android.util.Base64.DEFAULT)
+                faviconFile.writeBytes(imageData)
+
+                Log.d(TAG, "Saved favicon to: ${faviconFile.absolutePath}")
+
+                // Update recent_wikis.json with favicon path
+                updateRecentWikisWithFavicon(applicationContext, wikiPath ?: "", faviconFile.absolutePath)
+
+                "{\"success\":true,\"path\":\"${faviconFile.absolutePath}\"}"
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to save favicon: ${e.message}")
+                "{\"success\":false,\"error\":\"${e.message?.replace("\"", "\\\"") ?: "Unknown"}\"}"
             }
         }
     }
@@ -1037,7 +1274,7 @@ class WikiActivity : AppCompatActivity() {
         }
 
         wikiPath = intent.getStringExtra(EXTRA_WIKI_PATH)
-        val wikiTitle = intent.getStringExtra(EXTRA_WIKI_TITLE) ?: "TiddlyWiki"
+        wikiTitle = intent.getStringExtra(EXTRA_WIKI_TITLE) ?: "TiddlyWiki"
         isFolder = intent.getBooleanExtra(EXTRA_IS_FOLDER, false)
         val folderServerUrl = intent.getStringExtra(EXTRA_WIKI_URL)  // For folder wikis: Node.js server URL
         val backupsEnabled = intent.getBooleanExtra(EXTRA_BACKUPS_ENABLED, true)  // Default: enabled
@@ -1063,7 +1300,7 @@ class WikiActivity : AppCompatActivity() {
         Log.d(TAG, "Parsed wiki path: wikiUri=$wikiUri, treeUri=$treeUri")
 
         // Determine the wiki URL based on wiki type
-        val wikiUrl: String
+        var wikiUrl: String
         val attachmentServerUrl: String
 
         if (isFolder) {
@@ -1114,7 +1351,18 @@ class WikiActivity : AppCompatActivity() {
             acquireWakeLock()
         }
 
+        // Handle tm-open-window: append tiddler title as URL fragment for navigation
+        val tiddlerTitle = intent.getStringExtra(EXTRA_TIDDLER_TITLE)
+        if (!tiddlerTitle.isNullOrEmpty()) {
+            wikiUrl = "$wikiUrl#${URLEncoder.encode(tiddlerTitle, "UTF-8")}"
+            isChildWindow = true  // Mark as child window so back button returns to parent
+            Log.d(TAG, "Navigating to tiddler: $tiddlerTitle (child window)")
+        }
+
         Log.d(TAG, "Wiki opened: path=$wikiPath, url=$wikiUrl, taskId=$taskId")
+
+        // Update recent wikis list for home screen widget
+        updateRecentWikis(applicationContext, wikiPath!!, wikiTitle, isFolder)
 
         // Update the task title
         setTaskDescription(ActivityManager.TaskDescription(wikiTitle))
@@ -1138,6 +1386,19 @@ class WikiActivity : AppCompatActivity() {
 
             // Custom WebChromeClient to handle file chooser and fullscreen video
             webChromeClient = object : WebChromeClient() {
+                override fun onConsoleMessage(consoleMessage: android.webkit.ConsoleMessage?): Boolean {
+                    consoleMessage?.let {
+                        val level = when (it.messageLevel()) {
+                            android.webkit.ConsoleMessage.MessageLevel.ERROR -> "E"
+                            android.webkit.ConsoleMessage.MessageLevel.WARNING -> "W"
+                            else -> "I"
+                        }
+                        Log.println(when(level) { "E" -> Log.ERROR; "W" -> Log.WARN; else -> Log.INFO },
+                            "WebConsole", "${it.message()} [${it.sourceId()}:${it.lineNumber()}]")
+                    }
+                    return true
+                }
+
                 override fun onShowFileChooser(
                     webView: WebView?,
                     filePathCallback: ValueCallback<Array<Uri>>?,
@@ -1231,6 +1492,18 @@ class WikiActivity : AppCompatActivity() {
 
             // Add JavaScript interface for clipboard operations
             addJavascriptInterface(ClipboardInterface(), "TiddlyDesktopClipboard")
+
+            // Add JavaScript interface for printing
+            addJavascriptInterface(PrintInterface(), "TiddlyDesktopPrint")
+
+            // Add JavaScript interface for opening URLs in external browser/apps
+            addJavascriptInterface(ExternalWindowInterface(), "TiddlyDesktopExternal")
+
+            // Add JavaScript interface for opening tiddlers in new windows
+            addJavascriptInterface(OpenWindowInterface(), "TiddlyDesktopOpenWindow")
+
+            // Add JavaScript interface for favicon extraction
+            addJavascriptInterface(FaviconInterface(), "TiddlyDesktopFavicon")
         }
 
         // Use FrameLayout wrapper for fullscreen video support
@@ -1399,8 +1672,24 @@ class WikiActivity : AppCompatActivity() {
                 // while displaying images via the local attachment server
                 function transformUrl(url) {
                     if (!url) return url;
-                    // Already transformed or external URL
-                    if (url.startsWith('http://') || url.startsWith('https://') || url.startsWith('data:') || url.startsWith('blob:')) {
+                    // data: and blob: URLs should never be transformed
+                    if (url.startsWith('data:') || url.startsWith('blob:')) {
+                        return url;
+                    }
+                    // For folder wikis: transform Node.js server URLs to use Kotlin attachment server
+                    // This is needed because Node.js TiddlyWiki server may not support range requests
+                    // for video seeking/thumbnail generation
+                    if (window.__IS_FOLDER_WIKI__ && url.startsWith('http://') && window.__TD_SERVER_URL__) {
+                        var serverBase = window.__TD_SERVER_URL__.replace(/\/$/, '');
+                        if (url.startsWith(serverBase + '/')) {
+                            // Extract the path after the server URL (e.g., /files/video.mp4 -> files/video.mp4)
+                            var path = url.substring(serverBase.length + 1);
+                            // Transform to attachment server's /_relative/ endpoint
+                            return window.__TD_ATTACHMENT_SERVER_URL__ + '/_relative/' + encodeURIComponent(path);
+                        }
+                    }
+                    // Already transformed or external URL (https:// or http:// from different origin)
+                    if (url.startsWith('http://') || url.startsWith('https://')) {
                         return url;
                     }
                     // Absolute paths or content:// URIs -> /_file/ endpoint
@@ -1412,39 +1701,58 @@ class WikiActivity : AppCompatActivity() {
                     return window.__TD_ATTACHMENT_SERVER_URL__ + '/_relative/' + encodeURIComponent(url);
                 }
 
+                // Helper: check if a URL should be transformed
+                // For folder wikis, we also need to transform http:// URLs that point to the Node.js server
+                function shouldTransform(url) {
+                    if (!url) return false;
+                    if (url.startsWith('data:') || url.startsWith('blob:')) return false;
+                    // For folder wikis: transform Node.js server URLs
+                    if (window.__IS_FOLDER_WIKI__ && url.startsWith('http://') && window.__TD_SERVER_URL__) {
+                        var serverBase = window.__TD_SERVER_URL__.replace(/\/$/, '');
+                        console.log('[TiddlyDesktop] shouldTransform check:', url, 'serverBase:', serverBase, 'match:', url.startsWith(serverBase + '/'));
+                        if (url.startsWith(serverBase + '/')) return true;
+                    }
+                    // Transform relative paths and local file paths
+                    if (!url.startsWith('http://') && !url.startsWith('https://')) return true;
+                    return false;
+                }
+
                 function transformElement(el) {
                     // Transform img src
                     if (el.tagName === 'IMG' && el.src) {
                         var originalSrc = el.getAttribute('src');
-                        if (originalSrc && !originalSrc.startsWith('http://') && !originalSrc.startsWith('https://') && !originalSrc.startsWith('data:')) {
+                        if (shouldTransform(originalSrc)) {
                             el.src = transformUrl(originalSrc);
                         }
                     }
                     // Transform video/audio src
                     if ((el.tagName === 'VIDEO' || el.tagName === 'AUDIO') && el.src) {
                         var originalSrc = el.getAttribute('src');
-                        if (originalSrc && !originalSrc.startsWith('http://') && !originalSrc.startsWith('https://') && !originalSrc.startsWith('data:')) {
-                            el.src = transformUrl(originalSrc);
+                        console.log('[TiddlyDesktop] transformElement VIDEO/AUDIO:', originalSrc, 'isFolder:', window.__IS_FOLDER_WIKI__, 'serverUrl:', window.__TD_SERVER_URL__);
+                        if (shouldTransform(originalSrc)) {
+                            var newSrc = transformUrl(originalSrc);
+                            console.log('[TiddlyDesktop] Transformed video src:', originalSrc, '->', newSrc);
+                            el.src = newSrc;
                         }
                     }
                     // Transform source elements inside video/audio
                     if (el.tagName === 'SOURCE' && el.src) {
                         var originalSrc = el.getAttribute('src');
-                        if (originalSrc && !originalSrc.startsWith('http://') && !originalSrc.startsWith('https://') && !originalSrc.startsWith('data:')) {
+                        if (shouldTransform(originalSrc)) {
                             el.src = transformUrl(originalSrc);
                         }
                     }
                     // Transform object/embed data
                     if ((el.tagName === 'OBJECT' || el.tagName === 'EMBED') && el.data) {
                         var originalData = el.getAttribute('data');
-                        if (originalData && !originalData.startsWith('http://') && !originalData.startsWith('https://') && !originalData.startsWith('data:')) {
+                        if (shouldTransform(originalData)) {
                             el.data = transformUrl(originalData);
                         }
                     }
                     // Transform iframe src for PDFs etc
                     if (el.tagName === 'IFRAME' && el.src) {
                         var originalSrc = el.getAttribute('src');
-                        if (originalSrc && !originalSrc.startsWith('http://') && !originalSrc.startsWith('https://') && !originalSrc.startsWith('data:') && !originalSrc.startsWith('about:')) {
+                        if (shouldTransform(originalSrc) && !originalSrc.startsWith('about:')) {
                             el.src = transformUrl(originalSrc);
                         }
                     }
@@ -1815,14 +2123,14 @@ class WikiActivity : AppCompatActivity() {
 
                 // ========== Android Drag/Drop Bracket Stripping ==========
                 // When dragging tiddler links with spaces on Android, WebView wraps them in [[...]]
-                // This handler strips those brackets on drop
+                // This handler strips those brackets on drop for non-editable targets (like tc-droppable)
+                // For editable elements (inputs), we let native handling work - brackets are fine there
                 function installBracketStripping() {
                     if (window.__tdBracketStripInstalled) return;
                     window.__tdBracketStripInstalled = true;
 
                     function stripBrackets(text) {
                         if (!text || typeof text !== 'string') return text;
-                        // Strip [[...]] wrapper if present (for tiddler titles with spaces)
                         var match = text.match(/^\[\[(.+)\]\]$/);
                         if (match) {
                             console.log('[TiddlyDesktop] Stripped brackets from: ' + text);
@@ -1831,35 +2139,44 @@ class WikiActivity : AppCompatActivity() {
                         return text;
                     }
 
-                    // Intercept drop events in capture phase
+                    function isEditable(el) {
+                        if (!el) return false;
+                        var tagName = el.tagName;
+                        if (tagName === 'INPUT') {
+                            var type = (el.type || 'text').toLowerCase();
+                            return ['text', 'search', 'url', 'tel', 'email', 'password'].indexOf(type) !== -1;
+                        }
+                        if (tagName === 'TEXTAREA') return true;
+                        if (el.isContentEditable) return true;
+                        return false;
+                    }
+
                     document.addEventListener('drop', function(event) {
                         var dt = event.dataTransfer;
-                        if (!dt || !dt.items) return;
+                        if (!dt) return;
 
-                        // Check for text/plain data that might have [[...]] brackets
+                        // Skip editable elements - let native handling work
+                        if (isEditable(event.target)) return;
+
                         var textData = null;
                         try {
                             textData = dt.getData('text/plain');
                         } catch(e) {}
 
                         if (textData && /^\[\[.+\]\]$/.test(textData)) {
-                            // Found bracketed text - create a new drop event with stripped data
                             var strippedText = stripBrackets(textData);
-
-                            // Prevent the original event
                             event.preventDefault();
                             event.stopImmediatePropagation();
 
-                            // Create new DataTransfer with stripped text
                             var newDt = new DataTransfer();
                             newDt.setData('text/plain', strippedText);
 
-                            // Copy any files if present
-                            for (var i = 0; i < dt.files.length; i++) {
-                                newDt.items.add(dt.files[i]);
+                            if (dt.files) {
+                                for (var i = 0; i < dt.files.length; i++) {
+                                    newDt.items.add(dt.files[i]);
+                                }
                             }
 
-                            // Create and dispatch new drop event
                             var newEvent = new DragEvent('drop', {
                                 bubbles: true,
                                 cancelable: true,
@@ -1872,7 +2189,7 @@ class WikiActivity : AppCompatActivity() {
                             newEvent.__tdBracketStripped = true;
                             event.target.dispatchEvent(newEvent);
                         }
-                    }, true);  // capture phase
+                    }, true);
 
                     console.log('[TiddlyDesktop] Android bracket stripping installed');
                 }
@@ -1980,8 +2297,8 @@ class WikiActivity : AppCompatActivity() {
         // Script to monitor palette changes and update system bar colors
         val paletteScript = """
             (function() {
-                // Wait for TiddlyWiki to load
-                if (typeof ${'$'}tw === 'undefined') {
+                // Wait for TiddlyWiki to fully load (including after decryption for encrypted wikis)
+                if (typeof ${'$'}tw === 'undefined' || !${'$'}tw.wiki) {
                     setTimeout(arguments.callee, 100);
                     return;
                 }
@@ -2082,8 +2399,8 @@ class WikiActivity : AppCompatActivity() {
         // Script to handle tm-full-screen message for toggling immersive fullscreen
         val fullscreenScript = """
             (function() {
-                // Wait for TiddlyWiki to load
-                if (typeof ${'$'}tw === 'undefined') {
+                // Wait for TiddlyWiki to fully load (including after decryption for encrypted wikis)
+                if (typeof ${'$'}tw === 'undefined' || !${'$'}tw.rootWidget) {
                     setTimeout(arguments.callee, 100);
                     return;
                 }
@@ -2116,8 +2433,8 @@ class WikiActivity : AppCompatActivity() {
         // Script to handle clipboard operations (tm-copy-to-clipboard)
         val clipboardScript = """
             (function() {
-                // Wait for TiddlyWiki to load
-                if (typeof ${'$'}tw === 'undefined') {
+                // Wait for TiddlyWiki to fully load (including after decryption for encrypted wikis)
+                if (typeof ${'$'}tw === 'undefined' || !${'$'}tw.rootWidget) {
                     setTimeout(arguments.callee, 100);
                     return;
                 }
@@ -2161,6 +2478,122 @@ class WikiActivity : AppCompatActivity() {
                 });
 
                 console.log('[TiddlyDesktop] tm-copy-to-clipboard handler installed');
+            })();
+        """.trimIndent()
+
+        // Script to handle tm-print message
+        val printScript = """
+            (function() {
+                // Wait for TiddlyWiki to fully load (including after decryption for encrypted wikis)
+                if (typeof ${'$'}tw === 'undefined' || !${'$'}tw.rootWidget) {
+                    setTimeout(arguments.callee, 100);
+                    return;
+                }
+
+                // tm-print handler - use native print API
+                ${'$'}tw.rootWidget.addEventListener('tm-print', function(event) {
+                    console.log('[TiddlyDesktop] tm-print received');
+                    try {
+                        if (window.TiddlyDesktopPrint && window.TiddlyDesktopPrint.print) {
+                            window.TiddlyDesktopPrint.print();
+                        } else {
+                            // Fallback to browser print if native interface not available
+                            window.print();
+                        }
+                    } catch (e) {
+                        console.error('[TiddlyDesktop] Error printing:', e);
+                        // Fallback to browser print
+                        window.print();
+                    }
+                    return false;
+                });
+
+                console.log('[TiddlyDesktop] tm-print handler installed');
+            })();
+        """.trimIndent()
+
+        // Script to handle tm-open-external-window message (open URLs in external browser)
+        val externalWindowScript = """
+            (function() {
+                if (typeof ${'$'}tw === 'undefined' || !${'$'}tw.rootWidget) {
+                    setTimeout(arguments.callee, 100);
+                    return;
+                }
+                ${'$'}tw.rootWidget.addEventListener('tm-open-external-window', function(event) {
+                    var url = event.paramObject ? event.paramObject.url : event.param;
+                    console.log('[TiddlyDesktop] tm-open-external-window received:', url);
+                    if (url && window.TiddlyDesktopExternal) {
+                        window.TiddlyDesktopExternal.openExternal(url);
+                    }
+                    return false;
+                });
+                console.log('[TiddlyDesktop] tm-open-external-window handler installed');
+            })();
+        """.trimIndent()
+
+        // Script to handle tm-open-window message (open tiddler in new window)
+        val openWindowScript = """
+            (function() {
+                if (typeof ${'$'}tw === 'undefined' || !${'$'}tw.rootWidget) {
+                    setTimeout(arguments.callee, 100);
+                    return;
+                }
+                ${'$'}tw.rootWidget.addEventListener('tm-open-window', function(event) {
+                    var tiddler = event.param || '';
+                    console.log('[TiddlyDesktop] tm-open-window received:', tiddler);
+                    if (tiddler && window.TiddlyDesktopOpenWindow) {
+                        window.TiddlyDesktopOpenWindow.openWindow(tiddler);
+                    }
+                    return false;
+                });
+                console.log('[TiddlyDesktop] tm-open-window handler installed');
+            })();
+        """.trimIndent()
+
+        // Script to extract and save favicon from TiddlyWiki
+        val faviconScript = """
+            (function() {
+                if (typeof ${'$'}tw === 'undefined' || !${'$'}tw.wiki) {
+                    setTimeout(arguments.callee, 100);
+                    return;
+                }
+
+                // Check if we already extracted favicon for this session
+                if (window.__faviconExtracted) {
+                    return;
+                }
+                window.__faviconExtracted = true;
+
+                // Try to get favicon tiddler
+                var faviconTiddler = ${'$'}tw.wiki.getTiddler('${'$'}:/favicon.ico');
+                if (!faviconTiddler) {
+                    console.log('[TiddlyDesktop] No favicon tiddler found');
+                    return;
+                }
+
+                var faviconText = faviconTiddler.fields.text || '';
+                var faviconType = faviconTiddler.fields.type || 'image/x-icon';
+
+                if (!faviconText) {
+                    console.log('[TiddlyDesktop] Favicon tiddler has no content');
+                    return;
+                }
+
+                // The favicon is typically stored as base64 data
+                // Remove any data URL prefix if present
+                var base64Data = faviconText;
+                if (base64Data.indexOf('base64,') !== -1) {
+                    base64Data = base64Data.split('base64,')[1];
+                }
+
+                // Clean up whitespace that might be in the base64 data
+                base64Data = base64Data.replace(/\s/g, '');
+
+                if (base64Data && window.TiddlyDesktopFavicon) {
+                    console.log('[TiddlyDesktop] Extracting favicon, type:', faviconType, 'length:', base64Data.length);
+                    var result = window.TiddlyDesktopFavicon.saveFavicon(base64Data, faviconType);
+                    console.log('[TiddlyDesktop] Favicon save result:', result);
+                }
             })();
         """.trimIndent()
 
@@ -2553,7 +2986,8 @@ class WikiActivity : AppCompatActivity() {
                     video.muted = true;
                     video.playsInline = true;
                     video.preload = 'metadata';
-                    // Don't set crossOrigin for local/same-origin videos
+                    // Set crossOrigin for CORS-enabled servers (needed for canvas capture)
+                    video.crossOrigin = 'anonymous';
 
                     var thumbs = [];
                     var duration = 0;
@@ -2699,6 +3133,7 @@ class WikiActivity : AppCompatActivity() {
                     video.muted = true;
                     video.playsInline = true;
                     video.preload = 'metadata';
+                    video.crossOrigin = 'anonymous';
                     var done = false;
                     var timeoutId = null;
 
@@ -2764,6 +3199,7 @@ class WikiActivity : AppCompatActivity() {
                     // Small delay to let URL-transform complete
                     setTimeout(function() {
                         var videoSrc = el.src || (el.querySelector('source') ? el.querySelector('source').src : null);
+                        console.log('[TD-Plyr] enhanceVideo videoSrc:', videoSrc);
 
                         function initPlyr(vttUrl) {
                             try {
@@ -2925,11 +3361,19 @@ class WikiActivity : AppCompatActivity() {
             }
 
             override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse? {
-                val path = request.url.path ?: return super.shouldInterceptRequest(view, request)
+                val url = request.url
+                val path = url.path ?: return super.shouldInterceptRequest(view, request)
 
                 // Serve bundled library assets from /_td/ prefix
                 if (path.startsWith("/_td/")) {
-                    return serveTdAsset(path.removePrefix("/_td/"))
+                    Log.d(TAG, "Intercepting /_td/ request: $url")
+                    val response = serveTdAsset(path.removePrefix("/_td/"))
+                    if (response != null) {
+                        Log.d(TAG, "Served /_td/ asset: ${path.removePrefix("/_td/")}")
+                    } else {
+                        Log.e(TAG, "Failed to serve /_td/ asset: ${path.removePrefix("/_td/")}")
+                    }
+                    return response
                 }
 
                 return super.shouldInterceptRequest(view, request)
@@ -2949,6 +3393,14 @@ class WikiActivity : AppCompatActivity() {
                 view.evaluateJavascript(fullscreenScript, null)
                 // Inject the clipboard handler
                 view.evaluateJavascript(clipboardScript, null)
+                // Inject the print handler
+                view.evaluateJavascript(printScript, null)
+                // Inject the external window handler (open URLs in external browser)
+                view.evaluateJavascript(externalWindowScript, null)
+                // Inject the open window handler (open tiddler in new window)
+                view.evaluateJavascript(openWindowScript, null)
+                // Inject the favicon extraction handler
+                view.evaluateJavascript(faviconScript, null)
                 // Inject the export/download handler
                 view.evaluateJavascript(exportScript, null)
                 // Inject server health check for single-file wikis
@@ -2974,6 +3426,14 @@ class WikiActivity : AppCompatActivity() {
         // Handle back button - exit fullscreen first
         if (keyCode == KeyEvent.KEYCODE_BACK && fullscreenView != null) {
             fullscreenCallback?.onCustomViewHidden()
+            return true
+        }
+
+        // Handle back button for child windows (opened via tm-open-window)
+        // Just finish to return to parent window
+        if (keyCode == KeyEvent.KEYCODE_BACK && isChildWindow) {
+            Log.d(TAG, "Child window back pressed, returning to parent")
+            finish()
             return true
         }
 

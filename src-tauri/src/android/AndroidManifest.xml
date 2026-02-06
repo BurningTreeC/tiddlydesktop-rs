@@ -40,6 +40,66 @@
             android:taskAffinity=""
             android:process=":wiki" />
 
+        <!-- Open With activity for handling external file open requests -->
+        <activity
+            android:name=".OpenWithActivity"
+            android:label="TiddlyDesktopRS"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar"
+            android:exported="true">
+            <!-- Handle VIEW intent for HTML files -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:mimeType="text/html" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:mimeType="application/xhtml+xml" />
+            </intent-filter>
+            <!-- Handle VIEW intent for HTML files by extension (content:// URIs) -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:scheme="content" />
+                <data android:mimeType="*/*" />
+                <data android:pathPattern=".*\\.html" />
+                <data android:pathPattern=".*\\.htm" />
+                <data android:pathPattern=".*\\.HTML" />
+                <data android:pathPattern=".*\\.HTM" />
+            </intent-filter>
+            <!-- Handle VIEW intent for HTML files by extension (file:// URIs) -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:scheme="file" />
+                <data android:mimeType="*/*" />
+                <data android:pathPattern=".*\\.html" />
+                <data android:pathPattern=".*\\.htm" />
+                <data android:pathPattern=".*\\.HTML" />
+                <data android:pathPattern=".*\\.HTM" />
+            </intent-filter>
+            <!-- Handle SEND intent (share) for HTML files -->
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="text/html" />
+            </intent-filter>
+            <!-- Handle VIEW intent for directories (folder wikis) -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="vnd.android.document/directory" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="resource/folder" />
+            </intent-filter>
+        </activity>
+
         <provider
           android:name="androidx.core.content.FileProvider"
           android:authorities="${applicationId}.fileprovider"
@@ -59,6 +119,24 @@
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="wiki_server" />
         </service>
+
+        <!-- Recent Wikis home screen widget -->
+        <receiver
+            android:name=".RecentWikisWidgetProvider"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/widget_info" />
+        </receiver>
+
+        <!-- Service to provide data for the Recent Wikis widget -->
+        <service
+            android:name=".WikiWidgetService"
+            android:permission="android.permission.BIND_REMOTEVIEWS"
+            android:exported="false" />
     </application>
     <!-- ANDROID FS PLUGIN. AUTO-GENERATED. DO NOT REMOVE. -->
     

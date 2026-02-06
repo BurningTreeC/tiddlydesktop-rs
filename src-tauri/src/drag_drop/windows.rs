@@ -13,6 +13,7 @@ use std::sync::atomic::{AtomicU8, AtomicU32, Ordering};
 use std::sync::Mutex;
 
 use tauri::{Emitter, Manager, WebviewWindow};
+use wry::WebViewExtWindows;  // TiddlyDesktop: For composition_controller() access
 
 use windows::core::{implement, HRESULT, w};
 use windows::Win32::Foundation::{HWND, POINTL, S_OK, POINT};
@@ -257,8 +258,9 @@ pub fn setup_drag_handlers(window: &WebviewWindow) {
             }
 
             // Get composition controller for DragStarting handler
-            // In composition hosting mode, the controller IS a composition controller
-            let composition_controller3 = controller.cast::<ICoreWebView2CompositionController3>().ok();
+            // TiddlyDesktop: Use composition_controller() method instead of casting
+            let composition_controller = webview.composition_controller();
+            let composition_controller3 = composition_controller.and_then(|c| c.cast::<ICoreWebView2CompositionController3>().ok());
 
             if let Some(comp_ctrl) = composition_controller3 {
                 eprintln!("[TiddlyDesktop] Windows: Got ICoreWebView2CompositionController3 - composition mode active");

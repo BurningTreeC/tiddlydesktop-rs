@@ -3913,6 +3913,9 @@ class WikiActivity : AppCompatActivity() {
     override fun onDestroy() {
         Log.d(TAG, "Wiki closed: path=$wikiPath, isFolder=$isFolder")
 
+        // Notify foreground service that wiki is closed
+        WikiServerService.wikiClosed(applicationContext)
+
         // Release WakeLock
         releaseWakeLock()
 

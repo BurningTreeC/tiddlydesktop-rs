@@ -1,18 +1,59 @@
 package com.burningtreec.tiddlydesktop_rs
 
+import android.Manifest
 import android.content.Intent
+import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
 import android.util.Log
+import androidx.core.app.ActivityCompat
+import androidx.core.content.ContextCompat
 
 class MainActivity : TauriActivity() {
 
     companion object {
         private const val TAG = "MainActivity"
+        private const val NOTIFICATION_PERMISSION_REQUEST_CODE = 1001
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        requestNotificationPermission()
         handleWidgetIntent(intent)
+    }
+
+    /**
+     * Request POST_NOTIFICATIONS permission on Android 13+
+     */
+    private fun requestNotificationPermission() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS)
+                != PackageManager.PERMISSION_GRANTED) {
+                Log.d(TAG, "Requesting POST_NOTIFICATIONS permission")
+                ActivityCompat.requestPermissions(
+                    this,
+                    arrayOf(Manifest.permission.POST_NOTIFICATIONS),
+                    NOTIFICATION_PERMISSION_REQUEST_CODE
+                )
+            } else {
+                Log.d(TAG, "POST_NOTIFICATIONS permission already granted")
+            }
+        }
+    }
+
+    override fun onRequestPermissionsResult(
+        requestCode: Int,
+        permissions: Array<out String>,
+        grantResults: IntArray
+    ) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == NOTIFICATION_PERMISSION_REQUEST_CODE) {
+            if (grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+                Log.d(TAG, "POST_NOTIFICATIONS permission granted")
+            } else {
+                Log.d(TAG, "POST_NOTIFICATIONS permission denied")
+            }
+        }
     }
 
     override fun onNewIntent(intent: Intent) {

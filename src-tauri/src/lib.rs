@@ -2187,6 +2187,18 @@ fn set_over_droppable(over: bool) {
     let _ = over; // Suppress unused warning on non-Windows
 }
 
+/// Set the internal drag state (Windows only)
+/// Called from JavaScript at dragstart to tell the native layer what type of drag is happening.
+/// This is more reliable than the WebView2 DragStarting event because JS dragstart fires earlier.
+/// drag_type: "tiddler", "link", "text", or "none" (to clear)
+#[tauri::command]
+fn set_internal_drag_type(drag_type: String) {
+    #[cfg(target_os = "windows")]
+    drag_drop::windows::set_internal_drag_type_from_js(&drag_type);
+    #[cfg(not(target_os = "windows"))]
+    let _ = drag_type; // Suppress unused warning on non-Windows
+}
+
 /// Check if a command + args combination is potentially destructive
 /// Returns true if the command should ALWAYS require confirmation
 /// Covers dangerous commands on Linux, macOS, and Windows
@@ -6923,6 +6935,7 @@ fn run_wiki_mode(args: WikiModeArgs) {
             set_drag_dest_enabled,
             ungrab_seat_for_focus,
             set_over_droppable,
+            set_internal_drag_type,
             // Tiddler window commands (same process, shares $tw.wiki)
             open_tiddler_window,
             close_window_by_label,
@@ -7249,6 +7262,7 @@ fn run_wiki_folder_mode(args: WikiFolderModeArgs) {
             set_drag_dest_enabled,
             ungrab_seat_for_focus,
             set_over_droppable,
+            set_internal_drag_type,
         ])
         .build(tauri::generate_context!())
         .expect("error while building wiki-folder-mode application")
@@ -7760,6 +7774,7 @@ pub fn run() {
             set_drag_dest_enabled,
             ungrab_seat_for_focus,
             set_over_droppable,
+            set_internal_drag_type,
             check_for_updates,
             // Android SAF commands (stubs on desktop)
             android_pick_wiki_file,
@@ -7853,49 +7868,4 @@ pub extern "system" fn Java_com_burningtreec_tiddlydesktop_1rs_WikiActivity_clea
 
     eprintln!("[TiddlyDesktop] JNI cleanupWikiLocalCopy called for: {}", wiki_path_str);
     android::node_bridge::cleanup_wiki_local_copy(&wiki_path_str);
-}
-
-/// JNI function to check if a wiki needs reload due to tiddlywiki.info changes.
-/// Called from WikiActivity to poll for reload status.
-#[cfg(target_os = "android")]
-#[no_mangle]
-pub extern "system" fn Java_com_burningtreec_tiddlydesktop_1rs_WikiActivity_checkNeedsReload(
-    mut env: jni::JNIEnv,
-    _class: jni::objects::JClass,
-    wiki_path: jni::objects::JString,
-) -> jni::sys::jboolean {
-    let wiki_path_str: String = match env.get_string(&wiki_path) {
-        Ok(s) => s.into(),
-        Err(e) => {
-            eprintln!("[TiddlyDesktop] JNI checkNeedsReload: Failed to get wiki_path string: {}", e);
-            return 0;
-        }
-    };
-
-    if android::node_bridge::check_needs_reload(&wiki_path_str) {
-        1 // true
-    } else {
-        0 // false
-    }
-}
-
-/// JNI function to clear the reload flag after a wiki has been reloaded.
-/// Called from WikiActivity after it reloads the webview.
-#[cfg(target_os = "android")]
-#[no_mangle]
-pub extern "system" fn Java_com_burningtreec_tiddlydesktop_1rs_WikiActivity_clearReloadFlag(
-    mut env: jni::JNIEnv,
-    _class: jni::objects::JClass,
-    wiki_path: jni::objects::JString,
-) {
-    let wiki_path_str: String = match env.get_string(&wiki_path) {
-        Ok(s) => s.into(),
-        Err(e) => {
-            eprintln!("[TiddlyDesktop] JNI clearReloadFlag: Failed to get wiki_path string: {}", e);
-            return;
-        }
-    };
-
-    eprintln!("[TiddlyDesktop] JNI clearReloadFlag called for: {}", wiki_path_str);
-    android::node_bridge::clear_reload_flag(&wiki_path_str);
 }

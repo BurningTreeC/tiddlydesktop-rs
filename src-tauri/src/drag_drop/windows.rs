@@ -180,6 +180,24 @@ pub fn set_over_droppable(over: bool) {
     OVER_DROPPABLE.store(over, Ordering::Release);
 }
 
+/// Set the internal drag type from JavaScript.
+/// This is called from the JS dragstart handler and is more reliable than
+/// the WebView2 DragStarting event because JS events fire before IDropTarget::DragEnter.
+pub fn set_internal_drag_type_from_js(drag_type: &str) {
+    let state = match drag_type {
+        "tiddler" => DRAG_STATE_TIDDLER,
+        "link" => DRAG_STATE_LINK,
+        "text" => DRAG_STATE_TEXT_SELECTION,
+        "none" => DRAG_STATE_NONE,
+        _ => {
+            eprintln!("[TiddlyDesktop] Windows: Unknown drag type from JS: {}", drag_type);
+            DRAG_STATE_NONE
+        }
+    };
+    eprintln!("[TiddlyDesktop] Windows: set_internal_drag_type_from_js({}) -> state={}", drag_type, state);
+    INTERNAL_DRAG_STATE.store(state, Ordering::Release);
+}
+
 // ============================================================================
 // Public API
 // ============================================================================

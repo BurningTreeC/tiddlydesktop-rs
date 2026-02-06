@@ -875,6 +875,15 @@
 
         log('Captured drag data types (immediate): ' + Object.keys(dragData).join(', '));
 
+        // Tell the native layer what type of drag is starting (Windows only)
+        // This is more reliable than the WebView2 DragStarting event because
+        // JS dragstart fires before IDropTarget::DragEnter
+        if (window.__TAURI__?.core?.invoke) {
+            var dragTypeForNative = isTextSelectionDrag ? 'text' :
+                (dragData['text/vnd.tiddler'] ? 'tiddler' : 'link');
+            window.__TAURI__.core.invoke('set_internal_drag_type', { dragType: dragTypeForNative });
+        }
+
         // For text-selection drags, capture the selection if not in DataTransfer
         if (isTextSelectionDrag && !dragData['text/plain']) {
             var selection = window.getSelection();
@@ -948,6 +957,8 @@
         // Clean up Rust state
         if (window.__TAURI__?.core?.invoke) {
             window.__TAURI__.core.invoke('cleanup_native_drag').catch(function() {});
+            // Clear the internal drag type on Windows
+            window.__TAURI__.core.invoke('set_internal_drag_type', { dragType: 'none' }).catch(function() {});
         }
 
         cleanup();

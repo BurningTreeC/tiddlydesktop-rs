@@ -2,6 +2,8 @@ package com.burningtreec.tiddlydesktop_rs
 
 import android.annotation.SuppressLint
 import android.app.ActivityManager
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.graphics.Color
@@ -331,6 +333,57 @@ class WikiActivity : AppCompatActivity() {
         @JavascriptInterface
         fun isFullscreen(): Boolean {
             return isImmersiveFullscreen
+        }
+    }
+
+    /**
+     * JavaScript interface for clipboard operations.
+     * Handles copy-to-clipboard since document.execCommand doesn't work reliably in WebView.
+     */
+    inner class ClipboardInterface {
+        /**
+         * Copy text to the system clipboard.
+         * Returns JSON with success status.
+         */
+        @JavascriptInterface
+        fun copyText(text: String): String {
+            Log.d(TAG, "copyText called: ${text.take(50)}...")
+            return try {
+                val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                val clip = ClipData.newPlainText("TiddlyWiki", text)
+                clipboard.setPrimaryClip(clip)
+                Log.d(TAG, "Text copied to clipboard: ${text.length} chars")
+                "{\"success\":true}"
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to copy to clipboard: ${e.message}")
+                val escapedError = e.message?.replace("\\", "\\\\")?.replace("\"", "\\\"") ?: "Unknown error"
+                "{\"success\":false,\"error\":\"$escapedError\"}"
+            }
+        }
+
+        /**
+         * Get text from the system clipboard.
+         * Returns JSON with the text or error.
+         */
+        @JavascriptInterface
+        fun getText(): String {
+            Log.d(TAG, "getText called")
+            return try {
+                val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                val clip = clipboard.primaryClip
+                if (clip != null && clip.itemCount > 0) {
+                    val text = clip.getItemAt(0).coerceToText(this@WikiActivity).toString()
+                    val escapedText = text.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n").replace("\r", "\\r")
+                    Log.d(TAG, "Got clipboard text: ${text.length} chars")
+                    "{\"success\":true,\"text\":\"$escapedText\"}"
+                } else {
+                    "{\"success\":true,\"text\":\"\"}"
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to get clipboard: ${e.message}")
+                val escapedError = e.message?.replace("\\", "\\\\")?.replace("\"", "\\\"") ?: "Unknown error"
+                "{\"success\":false,\"error\":\"$escapedError\"}"
+            }
         }
     }
 
@@ -1175,6 +1228,9 @@ class WikiActivity : AppCompatActivity() {
 
             // Add JavaScript interface for server control (restart on disconnect)
             addJavascriptInterface(ServerInterface(), "TiddlyDesktopServer")
+
+            // Add JavaScript interface for clipboard operations
+            addJavascriptInterface(ClipboardInterface(), "TiddlyDesktopClipboard")
         }
 
         // Use FrameLayout wrapper for fullscreen video support
@@ -1194,8 +1250,9 @@ class WikiActivity : AppCompatActivity() {
         // Script to handle external attachments - comprehensive implementation matching Desktop
         val externalAttachmentScript = """
             (function() {
-                // Wait for TiddlyWiki to load
-                if (typeof ${'$'}tw === 'undefined') {
+                // Wait for TiddlyWiki to fully load (including ${'$'}tw.wiki)
+                var twReady = (typeof ${'$'}tw !== 'undefined') && ${'$'}tw && ${'$'}tw.wiki;
+                if (!twReady) {
                     setTimeout(arguments.callee, 100);
                     return;
                 }
@@ -1207,20 +1264,72 @@ class WikiActivity : AppCompatActivity() {
                 window.__IS_FOLDER_WIKI__ = $isFolder;
 
                 // ========== External Attachments Configuration ==========
-                var CONFIG_ENABLE = "${'$'}:/temp/tiddlydesktop/ExternalAttachments/Enable";
-                var CONFIG_SETTINGS_TAB = "${'$'}:/temp/tiddlydesktop/external-attachments/settings";
-                var SESSION_AUTH_SETTINGS_TAB = "${'$'}:/temp/tiddlydesktop/session-auth/settings";
+                var PLUGIN_TITLE = "${'$'}:/plugins/tiddlydesktop-rs/injected";
+                var CONFIG_PREFIX = "${'$'}:/plugins/tiddlydesktop-rs/external-attachments/";
+                var CONFIG_ENABLE = CONFIG_PREFIX + "enable";
+                var CONFIG_SETTINGS_TAB = CONFIG_PREFIX + "settings";
+                var SESSION_AUTH_PREFIX = "${'$'}:/plugins/tiddlydesktop-rs/session-auth/";
+                var SESSION_AUTH_SETTINGS_TAB = SESSION_AUTH_PREFIX + "settings";
 
-                // Helper to add tiddler as shadow (won't be saved with wiki)
-                function addShadowTiddler(fields) {
-                    var tiddler = new ${'$'}tw.Tiddler(fields);
-                    ${'$'}tw.wiki.shadowTiddlers = ${'$'}tw.wiki.shadowTiddlers || {};
-                    ${'$'}tw.wiki.shadowTiddlers[fields.title] = {
-                        tiddler: tiddler,
-                        source: "tiddlydesktop"
-                    };
-                    ${'$'}tw.wiki.addTiddler(tiddler);
-                    ${'$'}tw.wiki.clearCache(fields.title);
+                // Install save hook to filter out our injected plugin
+                if (!window.__tdSaveHookInstalled && ${'$'}tw.hooks) {
+                    ${'$'}tw.hooks.addHook("th-saving-tiddler", function(tiddler) {
+                        if (tiddler && tiddler.fields && tiddler.fields.title) {
+                            var title = tiddler.fields.title;
+                            if (title === PLUGIN_TITLE ||
+                                title.indexOf("${'$'}:/plugins/tiddlydesktop-rs/") === 0 ||
+                                title.indexOf("${'$'}:/temp/tiddlydesktop") === 0) {
+                                return null;
+                            }
+                        }
+                        return tiddler;
+                    });
+                    window.__tdSaveHookInstalled = true;
+                    console.log("[TiddlyDesktop] Save hook installed");
+                }
+
+                // Plugin tiddlers collection
+                var pluginTiddlers = {};
+
+                function addPluginTiddler(fields) {
+                    pluginTiddlers[fields.title] = fields;
+                }
+
+                function removePluginTiddler(title) {
+                    delete pluginTiddlers[title];
+                }
+
+                function registerPlugin() {
+                    // Build plugin content
+                    var pluginContent = { tiddlers: {} };
+                    Object.keys(pluginTiddlers).forEach(function(title) {
+                        pluginContent.tiddlers[title] = pluginTiddlers[title];
+                    });
+
+                    // Create/update the plugin tiddler
+                    ${'$'}tw.wiki.addTiddler(new ${'$'}tw.Tiddler({
+                        title: PLUGIN_TITLE,
+                        type: "application/json",
+                        "plugin-type": "plugin",
+                        name: "TiddlyDesktop Injected",
+                        description: "Runtime-injected TiddlyDesktop settings UI",
+                        version: "1.0.0",
+                        text: JSON.stringify(pluginContent)
+                    }));
+
+                    // Re-process plugins to unpack shadow tiddlers
+                    ${'$'}tw.wiki.readPluginInfo();
+                    ${'$'}tw.wiki.registerPluginTiddlers("plugin");
+                    ${'$'}tw.wiki.unpackPluginTiddlers();
+
+                    // Trigger UI refresh
+                    ${'$'}tw.rootWidget.refresh({});
+
+                    console.log("[TiddlyDesktop] Plugin registered with " + Object.keys(pluginTiddlers).length + " shadow tiddlers");
+                }
+
+                function updatePlugin() {
+                    registerPlugin();
                 }
 
                 // Load settings from localStorage
@@ -1252,10 +1361,8 @@ class WikiActivity : AppCompatActivity() {
                 var settings = loadSettings();
 
                 function injectSettingsUI() {
-                    var originalNumChanges = ${'$'}tw.saverHandler ? ${'$'}tw.saverHandler.numChanges : 0;
-
                     // Set initial enable state using shadow tiddler
-                    addShadowTiddler({
+                    addPluginTiddler({
                         title: CONFIG_ENABLE,
                         text: settings.enabled ? "yes" : "no"
                     });
@@ -1266,7 +1373,7 @@ class WikiActivity : AppCompatActivity() {
                         "<${'$'}checkbox tiddler=\"" + CONFIG_ENABLE + "\" field=\"text\" checked=\"yes\" unchecked=\"no\" default=\"yes\"> Enable external attachments</${'$'}checkbox>\n\n" +
                         "//Attachments will be saved in the ''attachments'' folder next to your wiki.//\n\n";
 
-                    addShadowTiddler({
+                    addPluginTiddler({
                         title: CONFIG_SETTINGS_TAB,
                         caption: "External Attachments",
                         tags: "${'$'}:/tags/ControlPanel/SettingsTab",
@@ -1282,13 +1389,6 @@ class WikiActivity : AppCompatActivity() {
                             console.log('[TiddlyDesktop] External attachments ' + (enabled ? 'enabled' : 'disabled'));
                         }
                     });
-
-                    setTimeout(function() {
-                        if (${'$'}tw.saverHandler) {
-                            ${'$'}tw.saverHandler.numChanges = originalNumChanges;
-                            ${'$'}tw.saverHandler.updateDirtyStatus();
-                        }
-                    }, 0);
 
                     console.log('[TiddlyDesktop] External attachments UI injected');
                 }
@@ -1415,9 +1515,18 @@ class WikiActivity : AppCompatActivity() {
                         // Check if external attachments are enabled
                         var externalEnabled = ${'$'}tw.wiki.getTiddlerText(CONFIG_ENABLE, "yes") === "yes";
 
+                        // Determine if this is a binary file
+                        // TiddlyWiki may not recognize all audio/video MIME types, so check explicitly
+                        var isBinaryType = info.isBinary ||
+                            type.indexOf('audio/') === 0 ||
+                            type.indexOf('video/') === 0 ||
+                            type.indexOf('image/') === 0 ||
+                            type === 'application/pdf' ||
+                            type === 'application/octet-stream';
+
                         // Only handle binary files when external attachments enabled
-                        if (!externalEnabled || !info.isBinary) {
-                            console.log('[TiddlyDesktop] Letting TiddlyWiki handle import (external=' + externalEnabled + ', binary=' + info.isBinary + ')');
+                        if (!externalEnabled || !isBinaryType) {
+                            console.log('[TiddlyDesktop] Letting TiddlyWiki handle import (external=' + externalEnabled + ', binary=' + info.isBinary + ', isBinaryType=' + isBinaryType + ')');
                             return false; // Let TiddlyWiki handle it normally
                         }
 
@@ -1508,7 +1617,7 @@ class WikiActivity : AppCompatActivity() {
                 }
 
                 // ========== Session Auth Configuration - matches Desktop ==========
-                var CONFIG_AUTH_URLS = "${'$'}:/temp/tiddlydesktop-rs/session-auth/urls";
+                var CONFIG_AUTH_URLS = SESSION_AUTH_PREFIX + "urls";
 
                 // Load auth URLs from localStorage
                 function loadAuthUrls() {
@@ -1535,28 +1644,33 @@ class WikiActivity : AppCompatActivity() {
                 }
 
                 function refreshUrlList() {
-                    var count = ${'$'}tw.wiki.filterTiddlers("[prefix[${'$'}:/temp/tiddlydesktop-rs/session-auth/url/]]").length;
-                    ${'$'}tw.wiki.setText(CONFIG_AUTH_URLS, "text", null, String(count));
+                    // Count from pluginTiddlers (before shadow registration)
+                    var count = Object.keys(pluginTiddlers).filter(function(title) {
+                        return title.indexOf(SESSION_AUTH_PREFIX + "url/") === 0;
+                    }).length;
+                    addPluginTiddler({
+                        title: CONFIG_AUTH_URLS,
+                        text: String(count)
+                    });
+                    updatePlugin();
                 }
 
                 function injectSessionAuthUI() {
-                    var originalNumChanges = ${'$'}tw.saverHandler ? ${'$'}tw.saverHandler.numChanges : 0;
-
-                    // Load and inject auth URL tiddlers
+                    // Load and inject auth URL tiddlers as shadows
                     var authUrls = loadAuthUrls();
                     authUrls.forEach(function(entry, index) {
-                        ${'$'}tw.wiki.addTiddler(new ${'$'}tw.Tiddler({
-                            title: "${'$'}:/temp/tiddlydesktop-rs/session-auth/url/" + index,
+                        addPluginTiddler({
+                            title: SESSION_AUTH_PREFIX + "url/" + index,
                             name: entry.name,
                             url: entry.url,
                             text: ""
-                        }));
+                        });
                     });
 
                     var tabText = "Authenticate with external services to access protected resources (like SharePoint profile images).\n\n" +
                         "Session cookies will be stored in this wiki's isolated session data.\n\n" +
                         "!! Authentication URLs\n\n" +
-                        "<${'$'}list filter=\"[prefix[${'$'}:/temp/tiddlydesktop-rs/session-auth/url/]]\" variable=\"urlTiddler\">\n" +
+                        "<${'$'}list filter=\"[prefix[" + SESSION_AUTH_PREFIX + "url/]]\" variable=\"urlTiddler\">\n" +
                         "<div style=\"display:flex;align-items:center;gap:8px;margin-bottom:8px;padding:8px;background:rgba(128,128,128,0.1);border-radius:4px;\">\n" +
                         "<div style=\"flex:1;\">\n" +
                         "<strong><${'$'}text text={{{ [<urlTiddler>get[name]] }}}/></strong><br/>\n" +
@@ -1570,19 +1684,19 @@ class WikiActivity : AppCompatActivity() {
                         "</${'$'}button>\n" +
                         "</div>\n" +
                         "</${'$'}list>\n\n" +
-                        "<${'$'}list filter=\"[prefix[${'$'}:/temp/tiddlydesktop-rs/session-auth/url/]count[]match[0]]\" variable=\"ignore\">\n" +
+                        "<${'$'}list filter=\"[prefix[" + SESSION_AUTH_PREFIX + "url/]count[]match[0]]\" variable=\"ignore\">\n" +
                         "//No authentication URLs configured.//\n" +
                         "</${'$'}list>\n\n" +
                         "!! Add New URL\n\n" +
-                        "<${'$'}edit-text tiddler=\"${'$'}:/temp/tiddlydesktop-rs/session-auth/new-name\" tag=\"input\" placeholder=\"Name (e.g. SharePoint)\" default=\"\" class=\"tc-edit-texteditor\" style=\"width:100%;margin-bottom:4px;\"/>\n\n" +
-                        "<${'$'}edit-text tiddler=\"${'$'}:/temp/tiddlydesktop-rs/session-auth/new-url\" tag=\"input\" placeholder=\"URL (e.g. https://company.sharepoint.com)\" default=\"\" class=\"tc-edit-texteditor\" style=\"width:100%;margin-bottom:8px;\"/>\n\n" +
+                        "<${'$'}edit-text tiddler=\"" + SESSION_AUTH_PREFIX + "new-name\" tag=\"input\" placeholder=\"Name (e.g. SharePoint)\" default=\"\" class=\"tc-edit-texteditor\" style=\"width:100%;margin-bottom:4px;\"/>\n\n" +
+                        "<${'$'}edit-text tiddler=\"" + SESSION_AUTH_PREFIX + "new-url\" tag=\"input\" placeholder=\"URL (e.g. https://company.sharepoint.com)\" default=\"\" class=\"tc-edit-texteditor\" style=\"width:100%;margin-bottom:8px;\"/>\n\n" +
                         "<${'$'}button message=\"tm-tiddlydesktop-add-auth-url\" class=\"tc-btn-big-green\">Add URL</${'$'}button>\n\n" +
                         "!! Session Data\n\n" +
                         "This wiki has its own isolated session storage (cookies, localStorage). You can clear it if you want to log out of all services.\n\n" +
                         "<${'$'}button message=\"tm-tiddlydesktop-clear-session\" class=\"tc-btn-big-green\" style=\"background:#c42b2b;\">Clear Session Data</${'$'}button>\n\n" +
                         "//This will clear all cookies and localStorage for this wiki. You will need to log in again to any authenticated services.//\n";
 
-                    addShadowTiddler({
+                    addPluginTiddler({
                         title: SESSION_AUTH_SETTINGS_TAB,
                         caption: "Session Auth",
                         tags: "${'$'}:/tags/ControlPanel/SettingsTab",
@@ -1591,8 +1705,8 @@ class WikiActivity : AppCompatActivity() {
 
                     // Message handler: add new auth URL
                     ${'$'}tw.rootWidget.addEventListener("tm-tiddlydesktop-add-auth-url", function(event) {
-                        var name = ${'$'}tw.wiki.getTiddlerText("${'$'}:/temp/tiddlydesktop-rs/session-auth/new-name", "").trim();
-                        var url = ${'$'}tw.wiki.getTiddlerText("${'$'}:/temp/tiddlydesktop-rs/session-auth/new-url", "").trim();
+                        var name = ${'$'}tw.wiki.getTiddlerText(SESSION_AUTH_PREFIX + "new-name", "").trim();
+                        var url = ${'$'}tw.wiki.getTiddlerText(SESSION_AUTH_PREFIX + "new-url", "").trim();
 
                         if (!name || !url) {
                             alert("Please enter both a name and URL");
@@ -1621,18 +1735,18 @@ class WikiActivity : AppCompatActivity() {
                         authUrls.push({ name: name, url: url });
                         saveAuthUrls(authUrls);
 
-                        // Add tiddler for UI
+                        // Add shadow tiddler for UI
                         var index = authUrls.length - 1;
-                        ${'$'}tw.wiki.addTiddler(new ${'$'}tw.Tiddler({
-                            title: "${'$'}:/temp/tiddlydesktop-rs/session-auth/url/" + index,
+                        addPluginTiddler({
+                            title: SESSION_AUTH_PREFIX + "url/" + index,
                             name: name,
                             url: url,
                             text: ""
-                        }));
+                        });
 
-                        // Clear input fields
-                        ${'$'}tw.wiki.deleteTiddler("${'$'}:/temp/tiddlydesktop-rs/session-auth/new-name");
-                        ${'$'}tw.wiki.deleteTiddler("${'$'}:/temp/tiddlydesktop-rs/session-auth/new-url");
+                        // Clear input fields (these are real tiddlers created by edit-text widget)
+                        ${'$'}tw.wiki.deleteTiddler(SESSION_AUTH_PREFIX + "new-name");
+                        ${'$'}tw.wiki.deleteTiddler(SESSION_AUTH_PREFIX + "new-url");
 
                         refreshUrlList();
                     });
@@ -1649,8 +1763,8 @@ class WikiActivity : AppCompatActivity() {
                                 authUrls = authUrls.filter(function(entry) { return entry.url !== urlToRemove; });
                                 saveAuthUrls(authUrls);
 
-                                // Remove tiddler
-                                ${'$'}tw.wiki.deleteTiddler(tiddlerTitle);
+                                // Remove shadow tiddler
+                                removePluginTiddler(tiddlerTitle);
                                 refreshUrlList();
                             }
                         }
@@ -1692,13 +1806,6 @@ class WikiActivity : AppCompatActivity() {
                         }
                     });
 
-                    setTimeout(function() {
-                        if (${'$'}tw.saverHandler) {
-                            ${'$'}tw.saverHandler.numChanges = originalNumChanges;
-                            ${'$'}tw.saverHandler.updateDirtyStatus();
-                        }
-                    }, 0);
-
                     refreshUrlList();
                     console.log('[TiddlyDesktop] Session auth UI injected');
                 }
@@ -1706,10 +1813,89 @@ class WikiActivity : AppCompatActivity() {
                 // NOTE: Broken Attachments UI removed - now using local "attachments" subfolder approach
                 // which doesn't require re-authorization after app reinstall
 
-                // Initialize
+                // ========== Android Drag/Drop Bracket Stripping ==========
+                // When dragging tiddler links with spaces on Android, WebView wraps them in [[...]]
+                // This handler strips those brackets on drop
+                function installBracketStripping() {
+                    if (window.__tdBracketStripInstalled) return;
+                    window.__tdBracketStripInstalled = true;
+
+                    function stripBrackets(text) {
+                        if (!text || typeof text !== 'string') return text;
+                        // Strip [[...]] wrapper if present (for tiddler titles with spaces)
+                        var match = text.match(/^\[\[(.+)\]\]$/);
+                        if (match) {
+                            console.log('[TiddlyDesktop] Stripped brackets from: ' + text);
+                            return match[1];
+                        }
+                        return text;
+                    }
+
+                    // Intercept drop events in capture phase
+                    document.addEventListener('drop', function(event) {
+                        var dt = event.dataTransfer;
+                        if (!dt || !dt.items) return;
+
+                        // Check for text/plain data that might have [[...]] brackets
+                        var textData = null;
+                        try {
+                            textData = dt.getData('text/plain');
+                        } catch(e) {}
+
+                        if (textData && /^\[\[.+\]\]$/.test(textData)) {
+                            // Found bracketed text - create a new drop event with stripped data
+                            var strippedText = stripBrackets(textData);
+
+                            // Prevent the original event
+                            event.preventDefault();
+                            event.stopImmediatePropagation();
+
+                            // Create new DataTransfer with stripped text
+                            var newDt = new DataTransfer();
+                            newDt.setData('text/plain', strippedText);
+
+                            // Copy any files if present
+                            for (var i = 0; i < dt.files.length; i++) {
+                                newDt.items.add(dt.files[i]);
+                            }
+
+                            // Create and dispatch new drop event
+                            var newEvent = new DragEvent('drop', {
+                                bubbles: true,
+                                cancelable: true,
+                                dataTransfer: newDt,
+                                clientX: event.clientX,
+                                clientY: event.clientY,
+                                screenX: event.screenX,
+                                screenY: event.screenY
+                            });
+                            newEvent.__tdBracketStripped = true;
+                            event.target.dispatchEvent(newEvent);
+                        }
+                    }, true);  // capture phase
+
+                    console.log('[TiddlyDesktop] Android bracket stripping installed');
+                }
+                installBracketStripping();
+
+                // Initialize - add UI tiddlers then register as plugin
+                // Capture dirty state before any modifications
+                var originalNumChanges = ${'$'}tw.saverHandler ? ${'$'}tw.saverHandler.numChanges : 0;
+
                 injectSettingsUI();
                 injectSessionAuthUI();
+                registerPlugin();  // Register all shadow tiddlers as a plugin
                 installImportHook();
+
+                // Restore dirty state after event loop completes - plugin injection should not mark wiki as modified
+                // Using setTimeout(0) ensures all synchronous change events have propagated
+                setTimeout(function() {
+                    if (${'$'}tw.saverHandler) {
+                        ${'$'}tw.saverHandler.numChanges = originalNumChanges;
+                        ${'$'}tw.saverHandler.updateDirtyStatus();
+                        console.log('[TiddlyDesktop] Dirty state restored after plugin injection');
+                    }
+                }, 0);
 
                 console.log('[TiddlyDesktop] External attachments handler installed');
             })();
@@ -1927,6 +2113,57 @@ class WikiActivity : AppCompatActivity() {
             })();
         """.trimIndent()
 
+        // Script to handle clipboard operations (tm-copy-to-clipboard)
+        val clipboardScript = """
+            (function() {
+                // Wait for TiddlyWiki to load
+                if (typeof ${'$'}tw === 'undefined') {
+                    setTimeout(arguments.callee, 100);
+                    return;
+                }
+
+                // tm-copy-to-clipboard handler - use native clipboard API
+                ${'$'}tw.rootWidget.addEventListener('tm-copy-to-clipboard', function(event) {
+                    var text = event.param || '';
+                    console.log('[TiddlyDesktop] tm-copy-to-clipboard received: ' + text.substring(0, 50) + '...');
+
+                    try {
+                        if (window.TiddlyDesktopClipboard && window.TiddlyDesktopClipboard.copyText) {
+                            var resultJson = window.TiddlyDesktopClipboard.copyText(text);
+                            var result = JSON.parse(resultJson);
+                            if (result.success) {
+                                console.log('[TiddlyDesktop] Text copied to clipboard');
+                                // Show notification if TiddlyWiki's notify is available
+                                if (${'$'}tw.notifier && ${'$'}tw.notifier.display) {
+                                    ${'$'}tw.notifier.display("${'$'}:/core/images/copy-clipboard");
+                                }
+                            } else {
+                                console.error('[TiddlyDesktop] Failed to copy to clipboard:', result.error);
+                            }
+                        } else {
+                            console.warn('[TiddlyDesktop] Clipboard interface not available, using fallback');
+                            // Fallback to navigator.clipboard if available
+                            if (navigator.clipboard && navigator.clipboard.writeText) {
+                                navigator.clipboard.writeText(text).then(function() {
+                                    console.log('[TiddlyDesktop] Copied via navigator.clipboard');
+                                    if (${'$'}tw.notifier && ${'$'}tw.notifier.display) {
+                                        ${'$'}tw.notifier.display("${'$'}:/core/images/copy-clipboard");
+                                    }
+                                }).catch(function(err) {
+                                    console.error('[TiddlyDesktop] navigator.clipboard.writeText failed:', err);
+                                });
+                            }
+                        }
+                    } catch (e) {
+                        console.error('[TiddlyDesktop] Error copying to clipboard:', e);
+                    }
+                    return false;
+                });
+
+                console.log('[TiddlyDesktop] tm-copy-to-clipboard handler installed');
+            })();
+        """.trimIndent()
+
         // Script to handle file exports/downloads
         val exportScript = """
             (function() {
@@ -1976,22 +2213,49 @@ class WikiActivity : AppCompatActivity() {
                     if (blob && blob.type) return blob.type;
                     var ext = filename.split('.').pop().toLowerCase();
                     var mimeTypes = {
+                        // Text/markup
                         'json': 'application/json',
                         'html': 'text/html',
                         'htm': 'text/html',
                         'txt': 'text/plain',
-                        'tid': 'text/plain',
+                        'tid': 'text/vnd.tiddlywiki',
                         'css': 'text/css',
                         'js': 'application/javascript',
                         'xml': 'application/xml',
                         'csv': 'text/csv',
                         'md': 'text/markdown',
+                        // Images
                         'png': 'image/png',
                         'jpg': 'image/jpeg',
                         'jpeg': 'image/jpeg',
                         'gif': 'image/gif',
                         'svg': 'image/svg+xml',
+                        'webp': 'image/webp',
+                        'bmp': 'image/bmp',
+                        'ico': 'image/x-icon',
+                        // Audio
+                        'mp3': 'audio/mpeg',
+                        'm4a': 'audio/mp4',
+                        'aac': 'audio/aac',
+                        'ogg': 'audio/ogg',
+                        'oga': 'audio/ogg',
+                        'opus': 'audio/opus',
+                        'wav': 'audio/wav',
+                        'flac': 'audio/flac',
+                        'aiff': 'audio/aiff',
+                        'aif': 'audio/aiff',
+                        // Video
+                        'mp4': 'video/mp4',
+                        'm4v': 'video/mp4',
+                        'webm': 'video/webm',
+                        'ogv': 'video/ogg',
+                        'mov': 'video/quicktime',
+                        'avi': 'video/x-msvideo',
+                        'mkv': 'video/x-matroska',
+                        '3gp': 'video/3gpp',
+                        // Documents
                         'pdf': 'application/pdf',
+                        // Archives
                         'zip': 'application/zip'
                     };
                     return mimeTypes[ext] || 'application/octet-stream';
@@ -2429,6 +2693,60 @@ class WikiActivity : AppCompatActivity() {
                     video.load();
                 }
 
+                // ---- Extract poster frame from video ----
+                function extractPosterFrame(videoSrc, callback) {
+                    var video = document.createElement('video');
+                    video.muted = true;
+                    video.playsInline = true;
+                    video.preload = 'metadata';
+                    var done = false;
+                    var timeoutId = null;
+
+                    function finish(result) {
+                        if (done) return;
+                        done = true;
+                        if (timeoutId) clearTimeout(timeoutId);
+                        video.src = '';
+                        callback(result);
+                    }
+
+                    // Timeout after 5 seconds
+                    timeoutId = setTimeout(function() {
+                        console.warn('[TD-Plyr] Poster extraction timed out');
+                        finish(null);
+                    }, 5000);
+
+                    video.onloadeddata = function() {
+                        // Seek to 0.5s or 10% of duration, whichever is smaller
+                        var seekTime = Math.min(0.5, video.duration * 0.1);
+                        video.currentTime = seekTime;
+                    };
+
+                    video.onseeked = function() {
+                        try {
+                            var canvas = document.createElement('canvas');
+                            canvas.width = video.videoWidth || 320;
+                            canvas.height = video.videoHeight || 180;
+                            var ctx = canvas.getContext('2d');
+                            ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+                            var posterUrl = canvas.toDataURL('image/jpeg', 0.8);
+                            console.log('[TD-Plyr] Extracted poster frame: ' + canvas.width + 'x' + canvas.height);
+                            finish(posterUrl);
+                        } catch(e) {
+                            console.warn('[TD-Plyr] Could not extract poster frame:', e.message);
+                            finish(null);
+                        }
+                    };
+
+                    video.onerror = function(e) {
+                        console.warn('[TD-Plyr] Could not load video for poster:', e);
+                        finish(null);
+                    };
+
+                    video.src = videoSrc;
+                    video.load();
+                }
+
                 function enhanceVideo(el) {
                     if (el.__tdPlyrDone) return;
                     el.__tdPlyrDone = true;
@@ -2473,20 +2791,27 @@ class WikiActivity : AppCompatActivity() {
                         }
 
                         if (videoSrc) {
-                            // Initialize Plyr immediately, generate thumbnails in background
-                            initPlyr(null);
-
-                            // Generate thumbnails and update Plyr later
-                            generateThumbnails(videoSrc, function(vttUrl) {
-                                if (vttUrl && el.plyr) {
-                                    // Update Plyr with thumbnails after generation
-                                    try {
-                                        el.plyr.config.previewThumbnails = { enabled: true, src: vttUrl };
-                                        console.log('[TD-Plyr] Added thumbnails to player');
-                                    } catch(e) {
-                                        console.warn('[TD-Plyr] Could not add thumbnails:', e);
-                                    }
+                            // Extract poster frame first, then init Plyr
+                            extractPosterFrame(videoSrc, function(posterUrl) {
+                                if (posterUrl && !el.hasAttribute('poster')) {
+                                    el.setAttribute('poster', posterUrl);
+                                    console.log('[TD-Plyr] Set poster attribute');
                                 }
+
+                                // Initialize Plyr after poster is set
+                                initPlyr(null);
+
+                                // Generate thumbnails in background and update Plyr
+                                generateThumbnails(videoSrc, function(vttUrl) {
+                                    if (vttUrl && el.plyr) {
+                                        try {
+                                            el.plyr.config.previewThumbnails = { enabled: true, src: vttUrl };
+                                            console.log('[TD-Plyr] Added thumbnails to player');
+                                        } catch(e) {
+                                            console.warn('[TD-Plyr] Could not add thumbnails:', e);
+                                        }
+                                    }
+                                });
                             });
                         } else {
                             initPlyr(null);
@@ -2622,6 +2947,8 @@ class WikiActivity : AppCompatActivity() {
                 view.evaluateJavascript(paletteScript, null)
                 // Inject the fullscreen toggle handler
                 view.evaluateJavascript(fullscreenScript, null)
+                // Inject the clipboard handler
+                view.evaluateJavascript(clipboardScript, null)
                 // Inject the export/download handler
                 view.evaluateJavascript(exportScript, null)
                 // Inject server health check for single-file wikis

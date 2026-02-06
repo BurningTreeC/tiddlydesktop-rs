@@ -26,11 +26,6 @@ static SAF_SYNC_WATCHERS: std::sync::LazyLock<Mutex<HashMap<String, Arc<SyncWatc
 static WIKI_LOCAL_PATHS: std::sync::LazyLock<Mutex<HashMap<String, String>>> =
     std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
 
-/// Tracks wikis that need to reload due to tiddlywiki.info changes
-/// Maps local_path -> needs_reload flag
-static WIKIS_NEEDING_RELOAD: std::sync::LazyLock<Mutex<HashMap<String, bool>>> =
-    std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
-
 /// A file sync watcher that polls for changes and syncs them back to SAF.
 pub struct SyncWatcher {
     local_path: String,
@@ -176,15 +171,6 @@ impl SyncWatcher {
         // Sync changed files
         if !changed_files.is_empty() {
             eprintln!("[SyncWatcher] {} files changed, syncing to SAF...", changed_files.len());
-
-            // Check if tiddlywiki.info changed - this requires a wiki reload
-            let tiddlywiki_info_changed = changed_files.iter().any(|p| p == "tiddlywiki.info");
-            if tiddlywiki_info_changed {
-                eprintln!("[SyncWatcher] tiddlywiki.info changed! Wiki reload required.");
-                // Set the flag for this wiki
-                let mut reload_flags = WIKIS_NEEDING_RELOAD.lock().unwrap();
-                reload_flags.insert(self.local_path.clone(), true);
-            }
 
             for rel_path in changed_files {
                 if let Err(e) = self.sync_file_to_saf(&rel_path) {
@@ -1340,42 +1326,4 @@ pub fn ensure_node_binary(_app: &tauri::App) -> Result<(), String> {
     }
 
     Err(format!("Node.js binary (libnode.so) not found in native library directory: {}. Ensure libnode.so is included in jniLibs.", native_lib_dir))
-}
-
-/// Check if a wiki needs to reload due to tiddlywiki.info changes.
-/// Returns true if reload is needed.
-///
-/// # Arguments
-/// * `wiki_path` - The SAF URI of the wiki to check
-pub fn check_needs_reload(wiki_path: &str) -> bool {
-    // Get the local path for this wiki
-    let local_path = {
-        let paths = WIKI_LOCAL_PATHS.lock().unwrap();
-        paths.get(wiki_path).cloned()
-    };
-
-    if let Some(local_path) = local_path {
-        let reload_flags = WIKIS_NEEDING_RELOAD.lock().unwrap();
-        reload_flags.get(&local_path).copied().unwrap_or(false)
-    } else {
-        false
-    }
-}
-
-/// Clear the reload flag for a wiki after it has been reloaded.
-///
-/// # Arguments
-/// * `wiki_path` - The SAF URI of the wiki
-pub fn clear_reload_flag(wiki_path: &str) {
-    // Get the local path for this wiki
-    let local_path = {
-        let paths = WIKI_LOCAL_PATHS.lock().unwrap();
-        paths.get(wiki_path).cloned()
-    };
-
-    if let Some(local_path) = local_path {
-        let mut reload_flags = WIKIS_NEEDING_RELOAD.lock().unwrap();
-        reload_flags.remove(&local_path);
-        eprintln!("[NodeBridge] Cleared reload flag for wiki: {}", wiki_path);
-    }
 }

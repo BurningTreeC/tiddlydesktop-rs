@@ -191,7 +191,12 @@ pub fn add_to_recent_files(app: &tauri::AppHandle, mut entry: WikiEntry) -> Resu
     // Keep only the most recent 50 entries
     entries.truncate(50);
 
-    save_recent_files_to_disk(app, &entries)
+    save_recent_files_to_disk(app, &entries)?;
+
+    #[cfg(target_os = "android")]
+    sync_to_android_widget(app, &entries);
+
+    Ok(())
 }
 
 // ============================================================================
@@ -215,7 +220,12 @@ pub fn get_recent_files(app: tauri::AppHandle) -> Vec<WikiEntry> {
 pub fn remove_recent_file(app: tauri::AppHandle, path: String) -> Result<(), String> {
     let mut entries = load_recent_files_from_disk(&app);
     entries.retain(|e| !utils::paths_equal(&e.path, &path));
-    save_recent_files_to_disk(&app, &entries)
+    save_recent_files_to_disk(&app, &entries)?;
+
+    #[cfg(target_os = "android")]
+    sync_to_android_widget(&app, &entries);
+
+    Ok(())
 }
 
 /// Set backups enabled/disabled for a wiki
@@ -367,6 +377,9 @@ pub fn update_wiki_favicon(app: tauri::AppHandle, path: String, favicon: Option<
 
     save_recent_files_to_disk(&app, &entries)?;
 
+    #[cfg(target_os = "android")]
+    sync_to_android_widget(&app, &entries);
+
     // Emit event to update just this favicon in the landing page
     let _ = app.emit("wiki-favicon-updated", serde_json::json!({
         "path": path,
@@ -513,6 +526,81 @@ pub fn get_palette(app: tauri::AppHandle) -> Option<String> {
     load_app_settings(&app)
         .map(|s| s.palette)
         .unwrap_or(None)
+}
+
+/// Compute Java's String.hashCode() for compatibility with WikiActivity.FaviconInterface.
+/// Java's algorithm: for each char c, hash = hash * 31 + c (using wrapping i32 arithmetic).
+#[cfg(target_os = "android")]
+fn java_string_hash_code(s: &str) -> i32 {
+    let mut hash: i32 = 0;
+    for c in s.encode_utf16() {
+        hash = hash.wrapping_mul(31).wrapping_add(c as i32);
+    }
+    hash
+}
+
+/// Sync recent wikis list to Android widget's data file.
+/// The widget reads from `{filesDir}/recent_wikis.json` (i.e. `{data_dir}/files/recent_wikis.json`),
+/// while Rust writes to `{data_dir}/recent_wikis.json`. This function writes a copy in the
+/// widget's expected format so the widget stays in sync.
+#[cfg(target_os = "android")]
+fn sync_to_android_widget(app: &tauri::AppHandle, entries: &[WikiEntry]) {
+    let data_dir = match app.path().app_data_dir() {
+        Ok(d) => d,
+        Err(_) => return,
+    };
+
+    let files_dir = data_dir.join("files");
+    if std::fs::create_dir_all(&files_dir).is_err() {
+        return;
+    }
+
+    let widget_path = files_dir.join("recent_wikis.json");
+
+    // Build widget-format JSON array (max 10 entries)
+    let favicons_dir = files_dir.join("favicons");
+    let mut widget_entries = Vec::new();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0);
+
+    for (i, entry) in entries.iter().take(10).enumerate() {
+        // Derive favicon file path using Java's String.hashCode() to match
+        // WikiActivity.FaviconInterface.saveFavicon() which uses:
+        //   Math.abs(wikiPath.hashCode()).toString()
+        let path_hash = java_string_hash_code(&entry.path).unsigned_abs();
+
+        // Check for existing favicon files with any extension
+        let favicon_path = ["png", "jpg", "gif", "svg", "ico"]
+            .iter()
+            .map(|ext| favicons_dir.join(format!("{}.{}", path_hash, ext)))
+            .find(|p| p.exists())
+            .map(|p| p.to_string_lossy().to_string());
+
+        let mut obj = serde_json::json!({
+            "path": entry.path,
+            "title": entry.filename,
+            "is_folder": entry.is_folder,
+            "last_opened": now - (i as i64 * 1000), // Preserve ordering
+        });
+
+        if let Some(fp) = favicon_path {
+            obj["favicon_path"] = serde_json::Value::String(fp);
+        }
+
+        widget_entries.push(obj);
+    }
+
+    let json = match serde_json::to_string_pretty(&widget_entries) {
+        Ok(j) => j,
+        Err(_) => return,
+    };
+
+    match std::fs::write(&widget_path, &json) {
+        Ok(_) => eprintln!("[TiddlyDesktop] sync_to_android_widget: wrote {} entries to {:?}", widget_entries.len(), widget_path),
+        Err(e) => eprintln!("[TiddlyDesktop] sync_to_android_widget: failed to write {:?}: {}", widget_path, e),
+    }
 }
 
 /// Set palette preference (empty string = default)

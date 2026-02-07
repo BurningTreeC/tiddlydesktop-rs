@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.os.FileObserver
 import android.util.Log
 import android.widget.RemoteViews
 import android.widget.RemoteViewsService
@@ -24,6 +25,7 @@ class WikiWidgetService : RemoteViewsService() {
 /**
  * RemoteViewsFactory that creates RemoteViews for each wiki item in the widget.
  * Reads recent_wikis.json to populate the list.
+ * Uses a FileObserver to watch for changes and auto-refresh the widget.
  */
 class WikiWidgetFactory(private val context: Context) : RemoteViewsService.RemoteViewsFactory {
 
@@ -42,10 +44,12 @@ class WikiWidgetFactory(private val context: Context) : RemoteViewsService.Remot
     )
 
     private var wikis: List<WikiInfo> = emptyList()
+    private var fileObserver: FileObserver? = null
 
     override fun onCreate() {
         Log.d(TAG, "onCreate")
         loadWikiData()
+        startFileObserver()
     }
 
     override fun onDataSetChanged() {
@@ -55,6 +59,7 @@ class WikiWidgetFactory(private val context: Context) : RemoteViewsService.Remot
 
     override fun onDestroy() {
         Log.d(TAG, "onDestroy")
+        stopFileObserver()
         wikis = emptyList()
     }
 
@@ -107,7 +112,48 @@ class WikiWidgetFactory(private val context: Context) : RemoteViewsService.Remot
 
     override fun getItemId(position: Int): Long = position.toLong()
 
-    override fun hasStableIds(): Boolean = true
+    override fun hasStableIds(): Boolean = false
+
+    /**
+     * Start a FileObserver to watch for recent_wikis.json modifications.
+     * Watches the directory (not the file) so it works even if the file
+     * doesn't exist yet or gets recreated with a new inode.
+     * When the Rust side updates the file, this triggers a widget refresh.
+     */
+    private fun startFileObserver() {
+        try {
+            val dataDir = context.filesDir
+            fileObserver = object : FileObserver(dataDir, CLOSE_WRITE or MOVED_TO or CREATE) {
+                override fun onEvent(event: Int, path: String?) {
+                    if (path == "recent_wikis.json") {
+                        Log.d(TAG, "FileObserver: recent_wikis.json changed (event=$event), requesting widget update")
+                        try {
+                            RecentWikisWidgetProvider.requestUpdate(context)
+                        } catch (e: Exception) {
+                            Log.w(TAG, "FileObserver: failed to request widget update: ${e.message}")
+                        }
+                    }
+                }
+            }
+            fileObserver?.startWatching()
+            Log.d(TAG, "FileObserver started for directory: ${dataDir.absolutePath}")
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to start FileObserver: ${e.message}")
+        }
+    }
+
+    /**
+     * Stop the FileObserver.
+     */
+    private fun stopFileObserver() {
+        try {
+            fileObserver?.stopWatching()
+            fileObserver = null
+            Log.d(TAG, "FileObserver stopped")
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to stop FileObserver: ${e.message}")
+        }
+    }
 
     /**
      * Load wiki data from recent_wikis.json file.
@@ -139,7 +185,7 @@ class WikiWidgetFactory(private val context: Context) : RemoteViewsService.Remot
                     val title = wikiObj.optString("title", wikiObj.optString("name", "Unknown Wiki"))
                     val isFolder = wikiObj.optBoolean("is_folder", false)
                     val lastOpened = wikiObj.optLong("last_opened", 0)
-                    val faviconPath = wikiObj.optString("favicon_path", null)
+                    val faviconPath: String? = if (wikiObj.has("favicon_path")) wikiObj.getString("favicon_path") else null
 
                     if (path.isNotEmpty()) {
                         loadedWikis.add(WikiInfo(path, title, isFolder, lastOpened, faviconPath))

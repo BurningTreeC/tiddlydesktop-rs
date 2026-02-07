@@ -68,7 +68,6 @@ fn copy_node_to_jnilibs() {
 /// Also includes the Node.js binary for subprocess spawning
 fn create_tiddlywiki_zip() {
     let resources_dir = Path::new("resources/tiddlywiki");
-    let node_bin_dir = Path::new("resources/node-bin");
     // Put ZIP in OUT_DIR so it can be embedded directly into the binary via include_bytes!
     let out_dir = std::env::var("OUT_DIR").unwrap();
     let zip_path = Path::new(&out_dir).join("tiddlywiki.zip");
@@ -87,9 +86,14 @@ fn create_tiddlywiki_zip() {
         .compression_level(Some(6));
 
     // Walk the tiddlywiki directory and add all files to the ZIP
+    // Skip .git directories to avoid bundling 75MB+ of git history
     let mut file_count = 0;
     for entry in walkdir::WalkDir::new(resources_dir)
         .into_iter()
+        .filter_entry(|e| {
+            // Skip .git directories entirely
+            e.file_name() != ".git"
+        })
         .filter_map(|e| e.ok())
     {
         let path = entry.path();
@@ -113,26 +117,8 @@ fn create_tiddlywiki_zip() {
         }
     }
 
-    // Add Node.js binary for ARM64 (if it exists)
-    let node_binary = node_bin_dir.join("arm64-v8a").join("node");
-    if node_binary.exists() {
-        eprintln!("Adding Node.js binary to ZIP...");
-        let mut file = File::open(&node_binary).expect("Failed to open node binary");
-        let mut contents = Vec::new();
-        file.read_to_end(&mut contents).expect("Failed to read node binary");
-
-        // Store node binary with minimal compression (it's already compressed-ish)
-        let node_options = zip::write::SimpleFileOptions::default()
-            .compression_method(zip::CompressionMethod::Deflated)
-            .compression_level(Some(1));
-
-        zip.start_file("node-bin/node", node_options).expect("Failed to add node binary");
-        zip.write_all(&contents).expect("Failed to write node binary");
-        file_count += 1;
-        eprintln!("Added Node.js binary ({} bytes)", contents.len());
-    } else {
-        eprintln!("Warning: Node.js binary not found at {:?}", node_binary);
-    }
+    // Node.js binary is NOT included in the ZIP - it's copied to jniLibs by copy_node_to_jnilibs()
+    // and loaded as a native library, which is the only way to get executable binaries on Android
 
     zip.finish().expect("Failed to finalize ZIP");
 

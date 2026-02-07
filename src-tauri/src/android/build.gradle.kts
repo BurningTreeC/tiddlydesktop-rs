@@ -23,7 +23,7 @@ android {
         targetSdk = 36
         // Android has its own versioning, separate from desktop releases
         // versionCode must increase with each Play Store release
-        versionCode = 1
+        versionCode = 2
         versionName = "0.0.1"
     }
     buildTypes {

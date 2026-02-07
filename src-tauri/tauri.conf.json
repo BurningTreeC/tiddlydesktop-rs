@@ -57,6 +57,9 @@
     "macOS": {
       "minimumSystemVersion": "10.13"
     },
+    "android": {
+      "versionCode": 3
+    },
     "fileAssociations": [
       {
         "ext": ["html", "htm"],

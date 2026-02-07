@@ -28,6 +28,7 @@ import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.FrameLayout
+import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.ActivityResultLauncher
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
@@ -65,7 +66,7 @@ class WikiActivity : AppCompatActivity() {
         init {
             // Load the native library for JNI calls
             try {
-                System.loadLibrary("tiddlydesktop_rs")
+                System.loadLibrary("tiddlydesktop_rs_lib")
                 Log.d(TAG, "Native library loaded successfully")
             } catch (e: UnsatisfiedLinkError) {
                 Log.e(TAG, "Failed to load native library: ${e.message}")
@@ -538,39 +539,6 @@ class WikiActivity : AppCompatActivity() {
                 "{\"success\":true}"
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to open external URL: ${e.message}")
-                "{\"success\":false,\"error\":\"${e.message?.replace("\"", "\\\"") ?: "Unknown"}\"}"
-            }
-        }
-    }
-
-    /**
-     * JavaScript interface for opening tiddlers in new windows.
-     * Handles tm-open-window message from TiddlyWiki.
-     * Opens a new WikiActivity connected to the same wiki.
-     * Back button in the child window returns to this parent window.
-     */
-    inner class OpenWindowInterface {
-        @JavascriptInterface
-        fun openWindow(tiddlerTitle: String): String {
-            Log.d(TAG, "openWindow called: $tiddlerTitle")
-            return try {
-                val newIntent = Intent(this@WikiActivity, WikiActivity::class.java).apply {
-                    putExtra(EXTRA_WIKI_PATH, wikiPath)
-                    putExtra(EXTRA_WIKI_TITLE, this@WikiActivity.wikiTitle)
-                    putExtra(EXTRA_IS_FOLDER, isFolder)
-                    putExtra(EXTRA_TIDDLER_TITLE, tiddlerTitle)
-                    if (isFolder) {
-                        putExtra(EXTRA_WIKI_URL, intent.getStringExtra(EXTRA_WIKI_URL))
-                    }
-                    putExtra(EXTRA_BACKUPS_ENABLED, intent.getBooleanExtra(EXTRA_BACKUPS_ENABLED, true))
-                    putExtra(EXTRA_BACKUP_COUNT, intent.getIntExtra(EXTRA_BACKUP_COUNT, 20))
-                    // Don't use FLAG_ACTIVITY_NEW_TASK so back button returns to parent
-                    addFlags(Intent.FLAG_ACTIVITY_MULTIPLE_TASK)
-                }
-                startActivity(newIntent)
-                "{\"success\":true}"
-            } catch (e: Exception) {
-                Log.e(TAG, "Failed to open new window: ${e.message}")
                 "{\"success\":false,\"error\":\"${e.message?.replace("\"", "\\\"") ?: "Unknown"}\"}"
             }
         }
@@ -1499,9 +1467,6 @@ class WikiActivity : AppCompatActivity() {
             // Add JavaScript interface for opening URLs in external browser/apps
             addJavascriptInterface(ExternalWindowInterface(), "TiddlyDesktopExternal")
 
-            // Add JavaScript interface for opening tiddlers in new windows
-            addJavascriptInterface(OpenWindowInterface(), "TiddlyDesktopOpenWindow")
-
             // Add JavaScript interface for favicon extraction
             addJavascriptInterface(FaviconInterface(), "TiddlyDesktopFavicon")
         }
@@ -1510,6 +1475,15 @@ class WikiActivity : AppCompatActivity() {
         rootLayout = FrameLayout(this)
         rootLayout.addView(webView)
         setContentView(rootLayout)
+
+        // Register back navigation handler for modern Android (gesture nav / API 33+)
+        // onKeyDown(KEYCODE_BACK) is NOT called with gesture navigation on targetSdk >= 33,
+        // so we use OnBackPressedCallback. Keep onKeyDown too for physical back buttons.
+        onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
+            override fun handleOnBackPressed() {
+                handleBackNavigation()
+            }
+        })
 
         // Inject JavaScript to handle external attachments and saving
         // This transforms _canonical_uri paths to use the server's /_file/ endpoint
@@ -2532,21 +2506,169 @@ class WikiActivity : AppCompatActivity() {
         """.trimIndent()
 
         // Script to handle tm-open-window message (open tiddler in new window)
+        // On Android WebView, window.open() causes a full page reload, so we:
+        // 1. Monkey-patch dispatchEvent to intercept tm-open-window
+        // 2. Render the tiddler as a full-screen overlay in the same $tw context
+        //    (replicating what TW5's windows.js does but without window.open)
+        // 3. Track overlays in a stack so the back button can close them
+        // 4. Override window.open("","_blank") as safety net against page reload
         val openWindowScript = """
             (function() {
                 if (typeof ${'$'}tw === 'undefined' || !${'$'}tw.rootWidget) {
                     setTimeout(arguments.callee, 100);
                     return;
                 }
-                ${'$'}tw.rootWidget.addEventListener('tm-open-window', function(event) {
-                    var tiddler = event.param || '';
-                    console.log('[TiddlyDesktop] tm-open-window received:', tiddler);
-                    if (tiddler && window.TiddlyDesktopOpenWindow) {
-                        window.TiddlyDesktopOpenWindow.openWindow(tiddler);
+
+                // Find dispatchEvent in the prototype chain of rootWidget
+                var proto = ${'$'}tw.rootWidget;
+                while (proto && !proto.hasOwnProperty('dispatchEvent')) {
+                    proto = Object.getPrototypeOf(proto);
+                }
+                if (!proto) {
+                    console.error('[TiddlyDesktop] Could not find dispatchEvent in prototype chain');
+                    return;
+                }
+
+                // Stack of open overlays (for back button)
+                window.__tdOpenWindowStack = [];
+
+                // Close the topmost overlay — called by Kotlin back handler
+                window.__tdCloseLastOpenWindow = function() {
+                    var entry = window.__tdOpenWindowStack[window.__tdOpenWindowStack.length - 1];
+                    if (entry && ${'$'}tw.windows && ${'$'}tw.windows[entry.windowID] && ${'$'}tw.windows[entry.windowID].__tdOverlay) {
+                        console.log('[TiddlyDesktop] Closing overlay:', entry.tiddler);
+                        ${'$'}tw.windows[entry.windowID].close();
+                        return true;
                     }
                     return false;
-                });
-                console.log('[TiddlyDesktop] tm-open-window handler installed');
+                };
+
+                var DEFAULT_TEMPLATE = '${'$'}:/core/templates/single.tiddler.window';
+
+                // Intercept tm-open-window at the dispatchEvent level
+                var originalDispatch = proto.dispatchEvent;
+                proto.dispatchEvent = function(event) {
+                    if (event && event.type === 'tm-open-window') {
+                        var title = event.param || event.tiddlerTitle || '';
+                        var paramObject = event.paramObject || {};
+                        var windowTitle = paramObject.windowTitle || title;
+                        var windowID = paramObject.windowID || title;
+                        var template = paramObject.template || DEFAULT_TEMPLATE;
+                        var variables = ${'$'}tw.utils.extend({}, paramObject, {
+                            currentTiddler: title,
+                            'tv-window-id': windowID
+                        });
+
+                        console.log('[TiddlyDesktop] tm-open-window intercepted:', title);
+                        if (!title) return true;
+
+                        // If this window is already open, just bring it to front
+                        if (${'$'}tw.windows && ${'$'}tw.windows[windowID] && ${'$'}tw.windows[windowID].__tdOverlay) {
+                            return true;
+                        }
+
+                        // Create full-screen overlay
+                        var overlay = document.createElement('div');
+                        overlay.className = 'tc-body tc-single-tiddler-window';
+                        overlay.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;z-index:10000;background:var(--background,white);overflow:auto;';
+
+                        // Render styles (same as TW5's windows.js)
+                        var styleWidgetNode = ${'$'}tw.wiki.makeTranscludeWidget('${'$'}:/core/ui/PageStylesheet', {
+                            document: ${'$'}tw.fakeDocument,
+                            variables: variables,
+                            importPageMacros: true
+                        });
+                        var styleContainer = ${'$'}tw.fakeDocument.createElement('style');
+                        styleWidgetNode.render(styleContainer, null);
+                        var styleElement = document.createElement('style');
+                        styleElement.innerHTML = styleContainer.textContent;
+                        overlay.appendChild(styleElement);
+
+                        // Render the tiddler using the template
+                        var parser = ${'$'}tw.wiki.parseTiddler(template);
+                        var widgetNode = ${'$'}tw.wiki.makeWidget(parser, {
+                            document: document,
+                            parentWidget: ${'$'}tw.rootWidget,
+                            variables: variables
+                        });
+                        var contentDiv = document.createElement('div');
+                        widgetNode.render(contentDiv, null);
+                        overlay.appendChild(contentDiv);
+
+                        // Set up refresh handler so the overlay stays in sync
+                        var refreshHandler = function(changes) {
+                            if (styleWidgetNode.refresh(changes, styleContainer, null)) {
+                                styleElement.innerHTML = styleContainer.textContent;
+                            }
+                            widgetNode.refresh(changes);
+                        };
+                        ${'$'}tw.wiki.addEventListener('change', refreshHandler);
+
+                        // Track in windows with a mock window object
+                        // saver-handler iterates windows and accesses win.document.body
+                        // tm-close-all-windows calls win.close() on each entry
+                        ${'$'}tw.windows = ${'$'}tw.windows || {};
+
+                        var stackEntry = {
+                            tiddler: title,
+                            windowID: windowID,
+                            overlay: overlay,
+                            refreshHandler: refreshHandler
+                        };
+
+                        var fakeWin = {
+                            __tdOverlay: true,
+                            document: {
+                                body: overlay,
+                                documentElement: overlay,
+                                createElement: function(tag) { return document.createElement(tag); },
+                                head: document.head
+                            },
+                            close: function() {
+                                ${'$'}tw.wiki.removeEventListener('change', stackEntry.refreshHandler);
+                                delete ${'$'}tw.windows[windowID];
+                                if (stackEntry.overlay.parentNode) stackEntry.overlay.parentNode.removeChild(stackEntry.overlay);
+                                var idx = window.__tdOpenWindowStack.indexOf(stackEntry);
+                                if (idx >= 0) window.__tdOpenWindowStack.splice(idx, 1);
+                            },
+                            focus: function() {},
+                            addEventListener: function() {},
+                            haveInitialisedWindow: true
+                        };
+                        ${'$'}tw.windows[windowID] = fakeWin;
+
+                        // Add to DOM
+                        document.body.appendChild(overlay);
+
+                        // Push to stack for back button
+                        window.__tdOpenWindowStack.push(stackEntry);
+
+                        return true;
+                    }
+
+                    // Also intercept tm-close-window to close overlays
+                    if (event && event.type === 'tm-close-window') {
+                        var closeID = (event.paramObject && event.paramObject.windowID) || event.param || '';
+                        if (closeID && ${'$'}tw.windows && ${'$'}tw.windows[closeID] && ${'$'}tw.windows[closeID].__tdOverlay) {
+                            ${'$'}tw.windows[closeID].close();
+                            return true;
+                        }
+                    }
+
+                    return originalDispatch.apply(this, arguments);
+                };
+
+                // Safety net: block window.open("","_blank") to prevent page reload
+                var originalOpen = window.open;
+                window.open = function(url, target, features) {
+                    if (url === '' && target === '_blank') {
+                        console.log('[TiddlyDesktop] window.open("","_blank") blocked');
+                        return null;
+                    }
+                    return originalOpen.apply(window, arguments);
+                };
+
+                console.log('[TiddlyDesktop] tm-open-window handler installed (overlay mode)');
             })();
         """.trimIndent()
 
@@ -3423,56 +3545,86 @@ class WikiActivity : AppCompatActivity() {
     private var pendingBackAction = false
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
-        // Handle back button - exit fullscreen first
-        if (keyCode == KeyEvent.KEYCODE_BACK && fullscreenView != null) {
-            fullscreenCallback?.onCustomViewHidden()
+        // Delegate back button to shared handler (for physical back button on older devices)
+        if (keyCode == KeyEvent.KEYCODE_BACK) {
+            handleBackNavigation()
             return true
+        }
+        return super.onKeyDown(keyCode, event)
+    }
+
+    /**
+     * Shared back navigation handler used by both OnBackPressedCallback (gesture nav)
+     * and onKeyDown (physical back button).
+     */
+    private fun handleBackNavigation() {
+        // Exit fullscreen first
+        if (fullscreenView != null) {
+            fullscreenCallback?.onCustomViewHidden()
+            return
         }
 
         // Handle back button for child windows (opened via tm-open-window)
-        // Just finish to return to parent window
-        if (keyCode == KeyEvent.KEYCODE_BACK && isChildWindow) {
+        if (isChildWindow) {
             Log.d(TAG, "Child window back pressed, returning to parent")
             finish()
-            return true
+            return
         }
 
-        // Handle back button for WebView navigation
-        if (keyCode == KeyEvent.KEYCODE_BACK) {
-            // For single-file wikis: Don't go back to old server URLs after reconnect
-            if (!isFolder && httpServer != null) {
-                val currentPort = httpServer!!.port
-
-                // Check if we can go back and if the back URL is from the same server
-                if (webView.canGoBack()) {
-                    val history = webView.copyBackForwardList()
-                    val currentIndex = history.currentIndex
-
-                    if (currentIndex > 0) {
-                        val backUrl = history.getItemAtIndex(currentIndex - 1).url
-                        // If back URL is from a different port (dead server), check for unsaved changes then close
-                        if (!backUrl.contains(":$currentPort/")) {
-                            Log.d(TAG, "Back would go to old server URL, checking for unsaved changes")
-                            checkUnsavedChangesAndClose()
-                            return true
-                        }
-                        // Same server, allow normal back navigation
-                        webView.goBack()
-                        return true
-                    }
+        // Check if there's a tiddler opened via tm-open-window to close.
+        // __tdCloseLastOpenWindow() pops the stack and closes the tiddler.
+        // The OnBackPressedCallback already consumed the event, so the activity
+        // won't close until we explicitly call finish().
+        webView.evaluateJavascript(
+            "window.__tdCloseLastOpenWindow ? window.__tdCloseLastOpenWindow() : false"
+        ) { result ->
+            runOnUiThread {
+                if (result == "true") {
+                    Log.d(TAG, "Back: closed tm-open-window tiddler")
+                } else {
+                    handleBackNavigationDefault()
                 }
-                // No history or at start, check for unsaved changes then close
-                checkUnsavedChangesAndClose()
-                return true
-            }
-
-            // For folder wikis: normal back behavior
-            if (webView.canGoBack()) {
-                webView.goBack()
-                return true
             }
         }
-        return super.onKeyDown(keyCode, event)
+    }
+
+    /**
+     * Default back navigation when there's no hash fragment.
+     * Handles WebView history and activity closing.
+     */
+    private fun handleBackNavigationDefault() {
+        // Handle WebView navigation
+        if (!isFolder && httpServer != null) {
+            // For single-file wikis: Don't go back to old server URLs after reconnect
+            val currentPort = httpServer!!.port
+
+            if (webView.canGoBack()) {
+                val history = webView.copyBackForwardList()
+                val currentIndex = history.currentIndex
+
+                if (currentIndex > 0) {
+                    val backUrl = history.getItemAtIndex(currentIndex - 1).url
+                    if (!backUrl.contains(":$currentPort/")) {
+                        Log.d(TAG, "Back would go to old server URL, checking for unsaved changes")
+                        checkUnsavedChangesAndClose()
+                        return
+                    }
+                    webView.goBack()
+                    return
+                }
+            }
+            checkUnsavedChangesAndClose()
+            return
+        }
+
+        // For folder wikis: normal back behavior
+        if (webView.canGoBack()) {
+            webView.goBack()
+            return
+        }
+
+        // Nothing to go back to — close the activity
+        finish()
     }
 
     /**

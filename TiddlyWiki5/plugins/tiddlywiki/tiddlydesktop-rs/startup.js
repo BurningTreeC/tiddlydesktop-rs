@@ -342,6 +342,10 @@ exports.startup = function(callback) {
 		var entries = getWikiListEntries();
 		entries = entries.filter(function(e) { return e.path !== path; });
 		saveWikiList(entries);
+		// Also remove from the Rust backend (updates widget data file)
+		invoke("remove_recent_file", { path: path }).catch(function(err) {
+			console.error("[TiddlyDesktop] Failed to remove from recent files:", err);
+		});
 	}
 
 	// Refresh the wiki list UI from the tiddler

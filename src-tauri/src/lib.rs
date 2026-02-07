@@ -810,7 +810,7 @@ pub fn extract_tiddlywiki_resources(app: &tauri::App) -> Result<PathBuf, String>
         .map_err(|e| format!("Failed to get app data dir: {}", e))?;
 
     // The tiddlywiki resources will be extracted to <app_data>/tiddlywiki/
-    // The node binary will be extracted to <app_data>/node-bin/node
+    // Note: Node binary is in jniLibs (not in the ZIP)
     let tw_dir = data_dir.join("tiddlywiki");
 
     // Check if already extracted by looking for a marker file
@@ -842,7 +842,7 @@ pub fn extract_tiddlywiki_resources(app: &tauri::App) -> Result<PathBuf, String>
             }
         };
 
-        // ZIP entries have paths like "tiddlywiki/..." and "node-bin/node"
+        // ZIP entries have paths like "tiddlywiki/..."
         // Extract directly to data_dir
         let outpath = data_dir.join(file.name());
 
@@ -857,28 +857,6 @@ pub fn extract_tiddlywiki_resources(app: &tauri::App) -> Result<PathBuf, String>
             if file.read_to_end(&mut contents).is_ok() {
                 if std::fs::write(&outpath, &contents).is_ok() {
                     extracted_count += 1;
-
-                    // Set executable permission on the node binary
-                    // Match any path ending with node-bin/node or containing node binary
-                    #[cfg(unix)]
-                    {
-                        let file_name = file.name();
-                        if file_name.ends_with("node-bin/node") || file_name.ends_with("/node") && file_name.contains("node-bin") {
-                            use std::os::unix::fs::PermissionsExt;
-                            eprintln!("[TiddlyDesktop] Found node binary in ZIP: {}", file_name);
-                            match std::fs::metadata(&outpath) {
-                                Ok(metadata) => {
-                                    let mut perms = metadata.permissions();
-                                    perms.set_mode(0o755);
-                                    match std::fs::set_permissions(&outpath, perms) {
-                                        Ok(()) => eprintln!("[TiddlyDesktop] Set executable permission on node binary: {:?}", outpath),
-                                        Err(e) => eprintln!("[TiddlyDesktop] Failed to set permissions on node binary: {}", e),
-                                    }
-                                }
-                                Err(e) => eprintln!("[TiddlyDesktop] Failed to get node binary metadata: {}", e),
-                            }
-                        }
-                    }
                 } else {
                     failed_count += 1;
                 }

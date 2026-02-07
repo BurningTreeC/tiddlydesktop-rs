@@ -1054,9 +1054,20 @@ class WikiActivity : AppCompatActivity() {
     /**
      * Enter immersive fullscreen mode (hide status bar and navigation bar).
      */
+    private var savedCutoutMode: Int = 0
+
     private fun enterImmersiveMode() {
         Log.d(TAG, "Entering immersive fullscreen mode")
+        // Allow content to draw in display cutout area (notch/punch-hole)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            val attrs = window.attributes
+            savedCutoutMode = attrs.layoutInDisplayCutoutMode
+            attrs.layoutInDisplayCutoutMode =
+                android.view.WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+            window.attributes = attrs
+        }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            window.setDecorFitsSystemWindows(false)
             window.insetsController?.let { controller ->
                 controller.hide(WindowInsets.Type.statusBars() or WindowInsets.Type.navigationBars())
                 controller.systemBarsBehavior = WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
@@ -1072,6 +1083,8 @@ class WikiActivity : AppCompatActivity() {
                 or View.SYSTEM_UI_FLAG_FULLSCREEN
             )
         }
+        // Ensure layout has no inset padding
+        rootLayout.setPadding(0, 0, 0, 0)
     }
 
     /**
@@ -1081,9 +1094,16 @@ class WikiActivity : AppCompatActivity() {
         Log.d(TAG, "Exiting immersive fullscreen mode")
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             window.insetsController?.show(WindowInsets.Type.statusBars() or WindowInsets.Type.navigationBars())
+            window.setDecorFitsSystemWindows(true)
         } else {
             @Suppress("DEPRECATION")
             window.decorView.systemUiVisibility = View.SYSTEM_UI_FLAG_VISIBLE
+        }
+        // Restore cutout mode
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            val attrs = window.attributes
+            attrs.layoutInDisplayCutoutMode = savedCutoutMode
+            window.attributes = attrs
         }
     }
 

@@ -94,8 +94,6 @@ webview2-com = { git = "https://github.com/BurningTreeC/webview2-rs", branch = "
 windows-implement = "0.60"
 windows-core = "0.61"
 image = { version = "0.25", default-features = false, features = ["png"] }
-# WRY for direct WebView2 composition controller access in drag-drop code
-wry = { git = "https://github.com/BurningTreeC/wry", branch = "main" }
 
 # Patch webview2-com/webview2-com-sys to use our fork with DragStarting API
 # This ensures WRY and our code use the same ICoreWebView2 types

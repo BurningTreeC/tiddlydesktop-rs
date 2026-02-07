@@ -2595,12 +2595,23 @@ class WikiActivity : AppCompatActivity() {
                             return true;
                         }
 
-                        // Create full-screen overlay
-                        var overlay = document.createElement('div');
-                        overlay.className = 'tc-body tc-single-tiddler-window';
-                        overlay.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;z-index:10000;background:var(--background,white);overflow:auto;';
+                        // Use an iframe to create a separate document — exactly like
+                        // windows.js uses window.open() to get a real <body> element.
+                        // This ensures CSS selectors like "html body.tc-body.tc-single-tiddler-window"
+                        // match correctly and PageStylesheet applies all styles naturally.
+                        var iframe = document.createElement('iframe');
+                        iframe.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;z-index:10000;border:none;';
+                        document.body.appendChild(iframe);
 
-                        // Render styles (same as TW5's windows.js)
+                        var srcWindow = iframe.contentWindow;
+                        var srcDocument = iframe.contentDocument;
+
+                        // Initialise the document (same as windows.js)
+                        srcDocument.write("<!DOCTYPE html><head></head><body class='tc-body tc-single-tiddler-window'></body></html>");
+                        srcDocument.close();
+                        srcDocument.title = windowTitle;
+
+                        // Set up the styles (same as windows.js)
                         var styleWidgetNode = ${'$'}tw.wiki.makeTranscludeWidget('${'$'}:/core/ui/PageStylesheet', {
                             document: ${'$'}tw.fakeDocument,
                             variables: variables,
@@ -2608,22 +2619,20 @@ class WikiActivity : AppCompatActivity() {
                         });
                         var styleContainer = ${'$'}tw.fakeDocument.createElement('style');
                         styleWidgetNode.render(styleContainer, null);
-                        var styleElement = document.createElement('style');
+                        var styleElement = srcDocument.createElement('style');
                         styleElement.innerHTML = styleContainer.textContent;
-                        overlay.appendChild(styleElement);
+                        srcDocument.head.insertBefore(styleElement, srcDocument.head.firstChild);
 
-                        // Render the tiddler using the template
+                        // Render the tiddler using the template (same as windows.js)
                         var parser = ${'$'}tw.wiki.parseTiddler(template);
                         var widgetNode = ${'$'}tw.wiki.makeWidget(parser, {
-                            document: document,
+                            document: srcDocument,
                             parentWidget: ${'$'}tw.rootWidget,
                             variables: variables
                         });
-                        var contentDiv = document.createElement('div');
-                        widgetNode.render(contentDiv, null);
-                        overlay.appendChild(contentDiv);
+                        widgetNode.render(srcDocument.body, srcDocument.body.firstChild);
 
-                        // Set up refresh handler so the overlay stays in sync
+                        // Set up refresh handler so the iframe stays in sync
                         var refreshHandler = function(changes) {
                             if (styleWidgetNode.refresh(changes, styleContainer, null)) {
                                 styleElement.innerHTML = styleContainer.textContent;
@@ -2632,30 +2641,32 @@ class WikiActivity : AppCompatActivity() {
                         };
                         ${'$'}tw.wiki.addEventListener('change', refreshHandler);
 
-                        // Track in windows with a mock window object
-                        // saver-handler iterates windows and accesses win.document.body
-                        // tm-close-all-windows calls win.close() on each entry
+                        // Listen for keyboard shortcuts (same as windows.js)
+                        ${'$'}tw.utils.addEventListeners(srcDocument, [{
+                            name: 'keydown',
+                            handlerObject: ${'$'}tw.keyboardManager,
+                            handlerMethod: 'handleKeydownEvent'
+                        }]);
+                        srcDocument.documentElement.addEventListener('click', ${'$'}tw.popup, true);
+
+                        // Track in ${'$'}tw.windows (same as windows.js)
                         ${'$'}tw.windows = ${'$'}tw.windows || {};
 
                         var stackEntry = {
                             tiddler: title,
                             windowID: windowID,
-                            overlay: overlay,
+                            iframe: iframe,
                             refreshHandler: refreshHandler
                         };
 
+                        // Create window-like object that windows.js consumers expect
                         var fakeWin = {
                             __tdOverlay: true,
-                            document: {
-                                body: overlay,
-                                documentElement: overlay,
-                                createElement: function(tag) { return document.createElement(tag); },
-                                head: document.head
-                            },
+                            document: srcDocument,
                             close: function() {
                                 ${'$'}tw.wiki.removeEventListener('change', stackEntry.refreshHandler);
                                 delete ${'$'}tw.windows[windowID];
-                                if (stackEntry.overlay.parentNode) stackEntry.overlay.parentNode.removeChild(stackEntry.overlay);
+                                if (stackEntry.iframe.parentNode) stackEntry.iframe.parentNode.removeChild(stackEntry.iframe);
                                 var idx = window.__tdOpenWindowStack.indexOf(stackEntry);
                                 if (idx >= 0) window.__tdOpenWindowStack.splice(idx, 1);
                             },
@@ -2664,9 +2675,6 @@ class WikiActivity : AppCompatActivity() {
                             haveInitialisedWindow: true
                         };
                         ${'$'}tw.windows[windowID] = fakeWin;
-
-                        // Add to DOM
-                        document.body.appendChild(overlay);
 
                         // Push to stack for back button
                         window.__tdOpenWindowStack.push(stackEntry);

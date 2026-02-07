@@ -58,7 +58,7 @@
       "minimumSystemVersion": "10.13"
     },
     "android": {
-      "versionCode": 3
+      "versionCode": 4
     },
     "fileAssociations": [
       {

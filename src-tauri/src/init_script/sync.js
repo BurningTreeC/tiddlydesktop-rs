@@ -34,6 +34,14 @@
             // Store references to opened tiddler windows (by windowID)
             window.__tiddlyDesktopWindows = window.__tiddlyDesktopWindows || {};
 
+            // Remove TiddlyWiki's built-in tm-open-window/close/close-all handlers
+            // (from core/modules/startup/windows.js) which use window.open() — that
+            // doesn't work in Tauri webviews and causes "Cannot read properties of
+            // undefined (reading 'document')" errors.
+            $tw.rootWidget.eventListeners['tm-open-window'] = [];
+            $tw.rootWidget.eventListeners['tm-close-window'] = [];
+            $tw.rootWidget.eventListeners['tm-close-all-windows'] = [];
+
             // tm-open-window handler - opens tiddler in new window (same process, shares $tw.wiki)
             $tw.rootWidget.addEventListener('tm-open-window', function(event) {
                 var title = event.param || event.tiddlerTitle;

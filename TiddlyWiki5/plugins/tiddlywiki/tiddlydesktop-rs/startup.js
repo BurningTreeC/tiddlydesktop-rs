@@ -180,6 +180,11 @@ exports.startup = function(callback) {
 		// tm-open-window handler (for opened wikis only, not landing page)
 		// Opens tiddlers in new windows using Tauri
 		// ========================================
+		// Remove TiddlyWiki's built-in handlers (from core windows.js) which use
+		// window.open() — that doesn't work in Tauri webviews.
+		$tw.rootWidget.eventListeners["tm-open-window"] = [];
+		$tw.rootWidget.eventListeners["tm-close-window"] = [];
+		$tw.rootWidget.eventListeners["tm-close-all-windows"] = [];
 		$tw.rootWidget.addEventListener("tm-open-window", function(event) {
 			var title = event.param || event.tiddlerTitle;
 			var paramObject = event.paramObject || {};

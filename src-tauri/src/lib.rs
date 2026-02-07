@@ -3646,6 +3646,27 @@ async fn init_wiki_folder(app: tauri::AppHandle, path: String, edition: String, 
 
 
 
+/// Strip tiddlyweb and filesystem plugins from a tiddlywiki.info file.
+/// These plugins are designed for client-server folder wikis and cause problems
+/// in standalone single-file wikis.
+fn strip_server_plugins_from_info(info_path: &std::path::Path) -> Result<(), String> {
+    let content = std::fs::read_to_string(info_path)
+        .map_err(|e| format!("Failed to read tiddlywiki.info: {}", e))?;
+    let mut info: serde_json::Value = serde_json::from_str(&content)
+        .map_err(|e| format!("Failed to parse tiddlywiki.info: {}", e))?;
+    if let Some(arr) = info.get_mut("plugins").and_then(|v| v.as_array_mut()) {
+        arr.retain(|p| {
+            let name = p.as_str().unwrap_or("");
+            name != "tiddlywiki/tiddlyweb" && name != "tiddlywiki/filesystem"
+        });
+    }
+    let updated = serde_json::to_string_pretty(&info)
+        .map_err(|e| format!("Failed to serialize tiddlywiki.info: {}", e))?;
+    std::fs::write(info_path, updated)
+        .map_err(|e| format!("Failed to write tiddlywiki.info: {}", e))?;
+    Ok(())
+}
+
 /// Create a single-file wiki with the specified edition and plugins
 #[cfg(not(target_os = "android"))]
 #[tauri::command]
@@ -3733,6 +3754,12 @@ async fn create_wiki_file(app: tauri::AppHandle, path: String, edition: String, 
             std::fs::write(&info_path, updated_content)
                 .map_err(|e| format!("Failed to write tiddlywiki.info: {}", e))?;
         }
+    }
+
+    // Strip server-only plugins that don't work in single-file wikis
+    let info_path = temp_dir.join("tiddlywiki.info");
+    if info_path.exists() {
+        strip_server_plugins_from_info(&info_path)?;
     }
 
     // Get the output filename

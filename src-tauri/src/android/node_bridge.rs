@@ -558,6 +558,27 @@ pub fn run_tiddlywiki_command(args: &[&str]) -> Result<String, String> {
     }
 }
 
+/// Strip tiddlyweb and filesystem plugins from a tiddlywiki.info file.
+/// These plugins are designed for client-server folder wikis and cause problems
+/// in standalone single-file wikis.
+fn strip_server_plugins_from_info(info_path: &std::path::Path) -> Result<(), String> {
+    let content = std::fs::read_to_string(info_path)
+        .map_err(|e| format!("Failed to read tiddlywiki.info: {}", e))?;
+    let mut info: serde_json::Value = serde_json::from_str(&content)
+        .map_err(|e| format!("Failed to parse tiddlywiki.info: {}", e))?;
+    if let Some(arr) = info.get_mut("plugins").and_then(|v| v.as_array_mut()) {
+        arr.retain(|p| {
+            let name = p.as_str().unwrap_or("");
+            name != "tiddlywiki/tiddlyweb" && name != "tiddlywiki/filesystem"
+        });
+    }
+    let updated = serde_json::to_string_pretty(&info)
+        .map_err(|e| format!("Failed to serialize tiddlywiki.info: {}", e))?;
+    std::fs::write(info_path, updated)
+        .map_err(|e| format!("Failed to write tiddlywiki.info: {}", e))?;
+    Ok(())
+}
+
 /// Build a single-file wiki from an edition.
 ///
 /// # Arguments
@@ -585,58 +606,52 @@ pub fn build_wiki_file(
     std::fs::create_dir_all(&output_dir)
         .map_err(|e| format!("Failed to create output directory: {}", e))?;
 
-    // If plugins are specified, we need to create a temporary wiki folder,
-    // modify tiddlywiki.info to include the plugins, then build
-    let edition_path = if !plugins.is_empty() {
-        // Create a temp edition folder based on the original edition
-        let temp_edition = temp_dir.join("edition");
-        let original_edition = tw_dir.join("editions").join(edition);
+    // Always copy the edition to a temp dir so we can modify tiddlywiki.info
+    // (add user-selected plugins and strip server-only plugins)
+    let temp_edition = temp_dir.join("edition");
+    let original_edition = tw_dir.join("editions").join(edition);
+    copy_dir_recursive(&original_edition, &temp_edition)?;
 
-        // Copy the edition folder
-        copy_dir_recursive(&original_edition, &temp_edition)?;
+    // Add user-selected plugins to tiddlywiki.info
+    let info_path = temp_edition.join("tiddlywiki.info");
+    if !plugins.is_empty() && info_path.exists() {
+        let info_content = std::fs::read_to_string(&info_path)
+            .map_err(|e| format!("Failed to read tiddlywiki.info: {}", e))?;
 
-        // Modify tiddlywiki.info to add plugins
-        let info_path = temp_edition.join("tiddlywiki.info");
-        if info_path.exists() {
-            let info_content = std::fs::read_to_string(&info_path)
-                .map_err(|e| format!("Failed to read tiddlywiki.info: {}", e))?;
+        if let Ok(mut info) = serde_json::from_str::<serde_json::Value>(&info_content) {
+            let plugins_array = info.get_mut("plugins")
+                .and_then(|v| v.as_array_mut());
 
-            if let Ok(mut info) = serde_json::from_str::<serde_json::Value>(&info_content) {
-                // Get or create plugins array
-                let plugins_array = info.get_mut("plugins")
-                    .and_then(|v| v.as_array_mut());
-
-                if let Some(arr) = plugins_array {
-                    // Add new plugins
-                    for plugin in plugins {
-                        let plugin_path = format!("tiddlywiki/{}", plugin);
-                        let plugin_value = serde_json::Value::String(plugin_path.clone());
-                        if !arr.contains(&plugin_value) {
-                            arr.push(plugin_value);
-                            eprintln!("[NodeBridge]   Added plugin: {}", plugin_path);
-                        }
+            if let Some(arr) = plugins_array {
+                for plugin in plugins {
+                    let plugin_path = format!("tiddlywiki/{}", plugin);
+                    let plugin_value = serde_json::Value::String(plugin_path.clone());
+                    if !arr.contains(&plugin_value) {
+                        arr.push(plugin_value);
+                        eprintln!("[NodeBridge]   Added plugin: {}", plugin_path);
                     }
-                } else {
-                    // Create plugins array
-                    let plugin_values: Vec<serde_json::Value> = plugins.iter()
-                        .map(|p| serde_json::Value::String(format!("tiddlywiki/{}", p)))
-                        .collect();
-                    info["plugins"] = serde_json::Value::Array(plugin_values);
-                    eprintln!("[NodeBridge]   Created plugins array with {} plugins", plugins.len());
                 }
-
-                // Write back modified tiddlywiki.info
-                let modified_info = serde_json::to_string_pretty(&info)
-                    .map_err(|e| format!("Failed to serialize tiddlywiki.info: {}", e))?;
-                std::fs::write(&info_path, modified_info)
-                    .map_err(|e| format!("Failed to write tiddlywiki.info: {}", e))?;
+            } else {
+                let plugin_values: Vec<serde_json::Value> = plugins.iter()
+                    .map(|p| serde_json::Value::String(format!("tiddlywiki/{}", p)))
+                    .collect();
+                info["plugins"] = serde_json::Value::Array(plugin_values);
+                eprintln!("[NodeBridge]   Created plugins array with {} plugins", plugins.len());
             }
-        }
 
-        temp_edition.to_string_lossy().to_string()
-    } else {
-        format!("editions/{}", edition)
-    };
+            let modified_info = serde_json::to_string_pretty(&info)
+                .map_err(|e| format!("Failed to serialize tiddlywiki.info: {}", e))?;
+            std::fs::write(&info_path, modified_info)
+                .map_err(|e| format!("Failed to write tiddlywiki.info: {}", e))?;
+        }
+    }
+
+    // Strip server-only plugins that don't work in single-file wikis
+    if info_path.exists() {
+        strip_server_plugins_from_info(&info_path)?;
+    }
+
+    let edition_path = temp_edition.to_string_lossy().to_string();
 
     let output_dir_str = output_dir.to_string_lossy();
 

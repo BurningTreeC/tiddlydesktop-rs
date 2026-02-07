@@ -370,7 +370,9 @@
                 $tw.rootWidget.addEventListener(eventType, function(event) {
                     extraFn();
                     // Call the original handler and preserve its return value
-                    if (existing) {
+                    // In TW < 5.3.7 existing is a function; in 5.3.7+ it's an array
+                    // (addEventListener appends, so originals are still called by TW)
+                    if (typeof existing === 'function') {
                         return existing(event);
                     }
                     return true; // Allow propagation if no existing handler

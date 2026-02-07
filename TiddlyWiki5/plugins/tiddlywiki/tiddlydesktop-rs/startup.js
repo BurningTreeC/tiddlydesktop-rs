@@ -330,6 +330,10 @@ exports.startup = function(callback) {
 			if (existingEntry.backup_count !== undefined) {
 				entry.backup_count = existingEntry.backup_count;
 			}
+			// Preserve favicon if the new entry doesn't have one
+			if (!entry.favicon && existingEntry.favicon) {
+				entry.favicon = existingEntry.favicon;
+			}
 		}
 		// Remove if already exists
 		entries = entries.filter(function(e) { return e.path !== entry.path; });
@@ -1217,6 +1221,90 @@ exports.startup = function(callback) {
 
 	// Initial load of wiki list from tiddler
 	refreshWikiList();
+
+	// On Android, merge favicons from disk files into wiki list entries.
+	// WikiActivity saves favicons to files in the :wiki process, but can't send
+	// Tauri events to the main process. So we load them via get_recent_files
+	// (which reads favicon files on Android) and merge into the wiki list tiddler.
+	function mergeFaviconsFromDisk() {
+		if (!isAndroid) return;
+		invoke("get_recent_files").then(function(rustEntries) {
+			if (!rustEntries || !rustEntries.length) return;
+			var faviconMap = {};
+			rustEntries.forEach(function(e) {
+				if (e.favicon) {
+					faviconMap[e.path] = e.favicon;
+				}
+			});
+			var entries = getWikiListEntries();
+			var updated = false;
+			entries.forEach(function(entry, index) {
+				if (!entry.favicon && faviconMap[entry.path]) {
+					entry.favicon = faviconMap[entry.path];
+					var tempTitle = "$:/temp/tiddlydesktop-rs/wikis/" + index;
+					$tw.wiki.setText(tempTitle, "favicon", null, entry.favicon);
+					updated = true;
+				}
+			});
+			if (updated) {
+				saveWikiList(entries);
+				console.log("[TiddlyDesktop] Merged favicons from disk files");
+			}
+		}).catch(function(err) {
+			console.log("[TiddlyDesktop] Failed to load favicons from Rust:", err);
+		});
+	}
+	mergeFaviconsFromDisk();
+
+	// Re-merge favicons when returning to the landing page (e.g., after closing a wiki).
+	// WikiActivity extracts favicons in the :wiki process and saves them to disk,
+	// so we need to re-check when the user comes back.
+	if (isAndroid) {
+		document.addEventListener("visibilitychange", function() {
+			if (document.visibilityState === "visible") {
+				mergeFaviconsFromDisk();
+			}
+		});
+	}
+
+	// Check if the home screen widget requested opening a wiki.
+	// This happens when the user taps a wiki in the widget while the app is closed.
+	// MainActivity writes a pending file, and we consume it here.
+	if (isAndroid) {
+		invoke("get_pending_widget_wiki").then(function(pendingWiki) {
+			if (pendingWiki && pendingWiki.path) {
+				console.log("[TiddlyDesktop] Opening wiki from widget: " + pendingWiki.path);
+				var path = pendingWiki.path;
+				var isFolder = !!pendingWiki.is_folder;
+
+				// Look up backup settings from the wiki list
+				var entries = getWikiListEntries();
+				var entry = null;
+				for (var i = 0; i < entries.length; i++) {
+					if (entries[i].path === path) {
+						entry = entries[i];
+						break;
+					}
+				}
+
+				var command = isFolder ? "open_wiki_folder" : "open_wiki_window";
+				var params = { path: path };
+				if (!isFolder && entry) {
+					params.backupsEnabled = entry.backups_enabled !== false;
+					params.backupCount = entry.backup_count !== undefined ? entry.backup_count : null;
+				}
+
+				invoke(command, params).then(function(resultEntry) {
+					addToWikiList(resultEntry);
+					refreshWikiList();
+				}).catch(function(err) {
+					console.error("[TiddlyDesktop] Failed to open wiki from widget:", err);
+				});
+			}
+		}).catch(function(err) {
+			console.log("[TiddlyDesktop] No pending widget wiki:", err);
+		});
+	}
 
 	// Check for application updates
 	invoke("check_for_updates").then(function(result) {

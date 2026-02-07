@@ -3110,11 +3110,7 @@ async fn open_wiki_folder(app: tauri::AppHandle, path: String) -> Result<WikiEnt
 
     eprintln!("[TiddlyDesktop] Node.js server started at: {}", server_url);
 
-    // Start foreground service to keep wiki processes alive
-    match android::wiki_activity::start_foreground_service() {
-        Ok(()) => eprintln!("[TiddlyDesktop] Foreground service started successfully"),
-        Err(e) => eprintln!("[TiddlyDesktop] Warning: Failed to start foreground service: {} (wiki will still open)", e),
-    }
+    // Foreground service is now started from WikiActivity.onCreate() (same :wiki process)
 
     // Launch WikiActivity with the Node.js server URL
     android::wiki_activity::launch_wiki_activity(
@@ -3617,8 +3613,7 @@ async fn init_wiki_folder(app: tauri::AppHandle, path: String, edition: String, 
         .map_err(|e| format!("Failed to start wiki server: {}. Make sure Node.js is available.", e))?;
     eprintln!("[TiddlyDesktop] Node.js server started at: {}", server_url);
 
-    // Start foreground service to keep wiki processes alive
-    let _ = android::wiki_activity::start_foreground_service();
+    // Foreground service is now started from WikiActivity.onCreate() (same :wiki process)
 
     // Launch WikiActivity with the Node.js server URL
     android::wiki_activity::launch_wiki_activity(
@@ -4799,12 +4794,7 @@ async fn open_wiki_window(
     eprintln!("[TiddlyDesktop] Opening single-file wiki: {}", filename);
     eprintln!("[TiddlyDesktop] WikiActivity will start its own HTTP server in :wiki process");
 
-    // Start foreground service to keep wiki processes alive
-    // Note: This may fail on Android 13+ if notification permission not granted, but we continue anyway
-    match android::wiki_activity::start_foreground_service() {
-        Ok(()) => eprintln!("[TiddlyDesktop] Foreground service started successfully"),
-        Err(e) => eprintln!("[TiddlyDesktop] Warning: Failed to start foreground service: {} (wiki will still open)", e),
-    }
+    // Foreground service is now started from WikiActivity.onCreate() (same :wiki process)
 
     // Get backup settings - use provided values or defaults
     let use_backups = backups_enabled.unwrap_or(true); // Default: enabled
@@ -4836,6 +4826,29 @@ async fn open_wiki_window(
     let _ = wiki_storage::add_to_recent_files(&app, entry.clone());
 
     Ok(entry)
+}
+
+/// Check for a pending wiki open request from the home screen widget.
+/// Returns the wiki info if pending, or null if none.
+/// The pending file is consumed (deleted) after reading.
+#[cfg(target_os = "android")]
+#[tauri::command]
+fn get_pending_widget_wiki(app: tauri::AppHandle) -> Option<serde_json::Value> {
+    let files_dir = app.path().app_data_dir().ok()?.join("files");
+    let pending_file = files_dir.join("pending_widget_wiki.json");
+    if !pending_file.exists() {
+        return None;
+    }
+    let content = std::fs::read_to_string(&pending_file).ok()?;
+    let _ = std::fs::remove_file(&pending_file);
+    eprintln!("[TiddlyDesktop] Consumed pending widget wiki: {}", content);
+    serde_json::from_str(&content).ok()
+}
+
+#[cfg(not(target_os = "android"))]
+#[tauri::command]
+fn get_pending_widget_wiki(_app: tauri::AppHandle) -> Option<serde_json::Value> {
+    None
 }
 
 /// Open a tiddler from a wiki in a new window (single-tiddler view)
@@ -7843,7 +7856,8 @@ pub fn run() {
             android_pick_folder_for_wiki_creation,
             android_set_system_bar_colors,
             android_copy_attachment,
-            android_save_attachment
+            android_save_attachment,
+            get_pending_widget_wiki
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

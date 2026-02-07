@@ -773,11 +773,22 @@ pub fn start_wiki_server(folder_path: &str, port: u16) -> Result<String, String>
     cmd.arg("host=127.0.0.1");
     cmd.current_dir(&tw_dir);
     cmd.stdout(Stdio::null());
-    cmd.stderr(Stdio::null());
+    cmd.stderr(Stdio::piped());
 
     // Spawn as a background process
-    let _child = cmd.spawn()
+    let mut child = cmd.spawn()
         .map_err(|e| format!("Failed to start TiddlyWiki server: {}", e))?;
+
+    // Forward Node.js stderr to logcat in a background thread
+    if let Some(stderr) = child.stderr.take() {
+        std::thread::spawn(move || {
+            use std::io::{BufRead, BufReader};
+            let reader = BufReader::new(stderr);
+            for line in reader.lines().flatten() {
+                eprintln!("[NodeJS] {}", line);
+            }
+        });
+    }
 
     let url = format!("http://127.0.0.1:{}", port);
 
@@ -996,6 +1007,15 @@ pub fn start_saf_wiki_server(saf_uri: &str) -> Result<(String, String), String> 
     // Copy wiki from SAF to local
     let local_path = copy_saf_wiki_to_local(saf_uri)?;
 
+    // Prepare tiddlywiki.info for Android: add server plugins, resolve includeWikis paths
+    let info_path = std::path::PathBuf::from(&local_path).join("tiddlywiki.info");
+    if info_path.exists() {
+        match prepare_info_for_android(&info_path) {
+            Ok(()) => eprintln!("[NodeBridge] Prepared tiddlywiki.info for Android"),
+            Err(e) => eprintln!("[NodeBridge] Warning: Failed to prepare tiddlywiki.info: {}", e),
+        }
+    }
+
     // Track the mapping from wiki_path to local_path for cleanup
     {
         let mut paths = WIKI_LOCAL_PATHS.lock().unwrap();
@@ -1056,6 +1076,15 @@ pub fn render_folder_wiki_html(saf_uri: &str) -> Result<String, String> {
     // Copy wiki from SAF to local temporarily
     let local_path = copy_saf_wiki_to_local(saf_uri)?;
 
+    // Prepare tiddlywiki.info: resolve includeWikis paths, add server plugins
+    let info_path = std::path::PathBuf::from(&local_path).join("tiddlywiki.info");
+    if info_path.exists() {
+        match prepare_info_for_android(&info_path) {
+            Ok(()) => eprintln!("[NodeBridge] Prepared tiddlywiki.info for rendering"),
+            Err(e) => eprintln!("[NodeBridge] Warning: Failed to prepare tiddlywiki.info: {}", e),
+        }
+    }
+
     // Create temp output directory
     let temp_output = std::env::temp_dir().join(format!("tw-render-{}", std::process::id()));
     std::fs::create_dir_all(&temp_output)
@@ -1112,10 +1141,18 @@ pub fn render_folder_wiki_html(saf_uri: &str) -> Result<String, String> {
     Ok(html_content)
 }
 
-/// Add tiddlyweb and filesystem plugins to tiddlywiki.info for proper folder wiki operation.
-/// These plugins are required for the TiddlyWiki server to handle saving and file operations.
-fn add_server_plugins_to_info(info_path: &std::path::Path) -> Result<(), String> {
+/// Prepare tiddlywiki.info for running on Android:
+/// 1. Add tiddlyweb and filesystem plugins (required for client-server mode)
+/// 2. Create symlinks so relative includeWikis paths resolve to bundled editions
+/// 3. Create symlinks for config.default-tiddler-location if it points outside the wiki folder
+///
+/// The tiddlywiki.info file is NOT modified for includeWikis/config paths — we keep the
+/// original relative paths and make them resolve by placing symlinks at the expected locations.
+fn prepare_info_for_android(info_path: &std::path::Path) -> Result<(), String> {
     use std::io::{Read, Write};
+
+    let tw_dir = get_tiddlywiki_dir()?;
+    let editions_dir = tw_dir.join("editions");
 
     // Read the existing tiddlywiki.info
     let mut file = std::fs::File::open(info_path)
@@ -1129,39 +1166,131 @@ fn add_server_plugins_to_info(info_path: &std::path::Path) -> Result<(), String>
     let mut info: serde_json::Value = serde_json::from_str(&content)
         .map_err(|e| format!("Failed to parse tiddlywiki.info: {}", e))?;
 
-    // Ensure plugins array exists
-    if !info.get("plugins").is_some() {
+    let mut modified = false;
+
+    // --- 1. Ensure server plugins are present ---
+    if info.get("plugins").is_none() {
         info["plugins"] = serde_json::json!([]);
     }
-
-    // Get the plugins array
     let plugins = info["plugins"].as_array_mut()
         .ok_or_else(|| "plugins is not an array".to_string())?;
 
-    // Required server plugins
-    let required_plugins = [
-        "tiddlywiki/tiddlyweb",
-        "tiddlywiki/filesystem",
-    ];
-
-    // Add each required plugin if not already present
-    for plugin in &required_plugins {
+    for plugin in &["tiddlywiki/tiddlyweb", "tiddlywiki/filesystem"] {
         let plugin_str = serde_json::Value::String(plugin.to_string());
         if !plugins.contains(&plugin_str) {
             plugins.push(plugin_str);
             eprintln!("[NodeBridge] Added plugin: {}", plugin);
+            modified = true;
         }
     }
 
-    // Write back
-    let updated_content = serde_json::to_string_pretty(&info)
-        .map_err(|e| format!("Failed to serialize tiddlywiki.info: {}", e))?;
-    let mut file = std::fs::File::create(info_path)
-        .map_err(|e| format!("Failed to create tiddlywiki.info: {}", e))?;
-    file.write_all(updated_content.as_bytes())
-        .map_err(|e| format!("Failed to write tiddlywiki.info: {}", e))?;
+    // --- 2. Create symlinks for includeWikis relative paths ---
+    let wiki_dir = info_path.parent()
+        .ok_or_else(|| "Cannot get wiki directory".to_string())?;
+
+    if let Some(include_wikis) = info.get("includeWikis") {
+        if let Some(arr) = include_wikis.as_array() {
+            for entry in arr.iter() {
+                let rel_path = if let Some(s) = entry.as_str() {
+                    s.to_string()
+                } else if let Some(p) = entry.get("path").and_then(|v| v.as_str()) {
+                    p.to_string()
+                } else {
+                    continue;
+                };
+
+                create_edition_symlink(&rel_path, wiki_dir, &editions_dir);
+            }
+        }
+    }
+
+    // --- 3. Create symlink for config.default-tiddler-location ---
+    if let Some(config) = info.get("config") {
+        if let Some(loc) = config.get("default-tiddler-location").and_then(|v| v.as_str()) {
+            if loc.starts_with("../") || loc.starts_with("..\\") {
+                create_edition_symlink(loc, wiki_dir, &editions_dir);
+            }
+        }
+    }
+
+    // Only write back if we added plugins (don't touch includeWikis/config paths)
+    if modified {
+        let updated_content = serde_json::to_string_pretty(&info)
+            .map_err(|e| format!("Failed to serialize tiddlywiki.info: {}", e))?;
+        let mut file = std::fs::File::create(info_path)
+            .map_err(|e| format!("Failed to create tiddlywiki.info: {}", e))?;
+        file.write_all(updated_content.as_bytes())
+            .map_err(|e| format!("Failed to write tiddlywiki.info: {}", e))?;
+    }
 
     Ok(())
+}
+
+/// Create a symlink so that a relative path from a wiki resolves to a bundled edition.
+///
+/// For example, if `rel_path` is `"../tw5.com"` and the wiki is at
+/// `/data/.../wiki-mirrors/{hash}/`, this creates a symlink at
+/// `/data/.../wiki-mirrors/tw5.com` → `{app_data_dir}/tiddlywiki/editions/tw5.com`
+///
+/// For paths like `"../tw5.com/tiddlers"`, we symlink the top-level directory `"tw5.com"`.
+fn create_edition_symlink(
+    rel_path: &str,
+    wiki_dir: &std::path::Path,
+    editions_dir: &std::path::Path,
+) {
+    // Check if the relative path already resolves (e.g. sibling wiki exists)
+    let resolved = wiki_dir.join(rel_path);
+    if resolved.exists() {
+        eprintln!("[NodeBridge] includeWiki '{}' already resolves to {:?}", rel_path, resolved);
+        return;
+    }
+
+    // Strip leading "../" to get the edition name
+    // "../tw5.com" → "tw5.com", "../tw5.com/tiddlers" → "tw5.com/tiddlers"
+    let stripped = rel_path.trim_start_matches("../").trim_start_matches("..\\");
+
+    // Get the top-level directory name (e.g. "tw5.com" from "tw5.com/tiddlers")
+    let top_dir = stripped.split('/').next().unwrap_or(stripped);
+    let top_dir = top_dir.split('\\').next().unwrap_or(top_dir);
+
+    // Check if the edition exists in the bundled editions
+    let edition_path = editions_dir.join(top_dir);
+    if !edition_path.exists() {
+        eprintln!("[NodeBridge] Warning: bundled edition '{}' not found at {:?}", top_dir, edition_path);
+        return;
+    }
+
+    // The symlink target: where the relative path resolves from wiki_dir
+    // For "../tw5.com", this is wiki_dir/../tw5.com = wiki_dir.parent()/tw5.com
+    let link_path = if let Some(parent) = wiki_dir.parent() {
+        parent.join(top_dir)
+    } else {
+        eprintln!("[NodeBridge] Warning: cannot get parent of wiki dir for symlink");
+        return;
+    };
+
+    // Remove existing symlink if it points to the wrong place
+    if link_path.exists() || link_path.symlink_metadata().is_ok() {
+        if let Ok(target) = std::fs::read_link(&link_path) {
+            if target == edition_path {
+                eprintln!("[NodeBridge] Symlink already correct: {:?} → {:?}", link_path, edition_path);
+                return;
+            }
+        }
+        let _ = std::fs::remove_file(&link_path);
+        let _ = std::fs::remove_dir_all(&link_path);
+    }
+
+    // Create symlink
+    match std::os::unix::fs::symlink(&edition_path, &link_path) {
+        Ok(()) => eprintln!("[NodeBridge] Created symlink: {:?} → {:?}", link_path, edition_path),
+        Err(e) => eprintln!("[NodeBridge] Failed to create symlink {:?} → {:?}: {}", link_path, edition_path, e),
+    }
+}
+
+/// Legacy wrapper — calls prepare_info_for_android
+fn add_server_plugins_to_info(info_path: &std::path::Path) -> Result<(), String> {
+    prepare_info_for_android(info_path)
 }
 
 /// Convert a single-file wiki to a folder wiki.
@@ -1254,6 +1383,15 @@ pub fn convert_folder_to_file(source_saf_uri: &str, dest_saf_uri: &str) -> Resul
 
     // Copy the folder wiki from SAF to local
     let local_path = copy_saf_wiki_to_local(source_saf_uri)?;
+
+    // Prepare tiddlywiki.info: resolve includeWikis paths so rendering works
+    let info_path = std::path::PathBuf::from(&local_path).join("tiddlywiki.info");
+    if info_path.exists() {
+        match prepare_info_for_android(&info_path) {
+            Ok(()) => eprintln!("[NodeBridge] Prepared tiddlywiki.info for conversion"),
+            Err(e) => eprintln!("[NodeBridge] Warning: Failed to prepare tiddlywiki.info: {}", e),
+        }
+    }
 
     // Create temp output directory
     let temp_output = std::env::temp_dir().join(format!("tw-convert-out-{}", std::process::id()));

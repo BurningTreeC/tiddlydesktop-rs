@@ -564,8 +564,8 @@ class WikiActivity : AppCompatActivity() {
                     faviconsDir.mkdirs()
                 }
 
-                // Generate filename based on wiki path hash
-                val pathHash = wikiPath?.hashCode()?.let { Math.abs(it).toString() } ?: "unknown"
+                // Generate filename based on MD5 hash of wiki path (collision-proof)
+                val pathHash = md5Hash(wikiPath ?: "unknown")
                 val extension = when {
                     mimeType.contains("png") -> "png"
                     mimeType.contains("jpeg") || mimeType.contains("jpg") -> "jpg"
@@ -573,13 +573,26 @@ class WikiActivity : AppCompatActivity() {
                     mimeType.contains("svg") -> "svg"
                     else -> "ico"
                 }
+
+                // Clean up old favicon files for this wiki (different extensions)
+                val allExtensions = listOf("png", "jpg", "gif", "svg", "ico")
+                for (ext in allExtensions) {
+                    if (ext != extension) {
+                        val oldFile = File(faviconsDir, "$pathHash.$ext")
+                        if (oldFile.exists()) {
+                            oldFile.delete()
+                            Log.d(TAG, "Deleted old favicon: ${oldFile.name}")
+                        }
+                    }
+                }
+
                 val faviconFile = File(faviconsDir, "$pathHash.$extension")
 
                 // Decode base64 and save
                 val imageData = android.util.Base64.decode(base64Data, android.util.Base64.DEFAULT)
                 faviconFile.writeBytes(imageData)
 
-                Log.d(TAG, "Saved favicon to: ${faviconFile.absolutePath}")
+                Log.d(TAG, "Saved favicon to: ${faviconFile.absolutePath} for wiki: $wikiPath")
 
                 // Update recent_wikis.json with favicon path
                 updateRecentWikisWithFavicon(applicationContext, wikiPath ?: "", faviconFile.absolutePath)
@@ -589,6 +602,82 @@ class WikiActivity : AppCompatActivity() {
                 Log.e(TAG, "Failed to save favicon: ${e.message}")
                 "{\"success\":false,\"error\":\"${e.message?.replace("\"", "\\\"") ?: "Unknown"}\"}"
             }
+        }
+
+        /**
+         * Look for favicon in the local wiki-mirrors copy (folder wikis).
+         * TiddlyWiki stores $:/favicon.ico as tiddlers/$__favicon.ico on disk.
+         */
+        @JavascriptInterface
+        fun extractFaviconFromLocalCopy(): String {
+            if (!isFolder || wikiPath.isNullOrEmpty()) {
+                return "{\"success\":false,\"error\":\"Not a folder wiki\"}"
+            }
+            return try {
+                // Use filesDir.parentFile to match Tauri's app_data_dir() on Android
+                val dataDir = applicationContext.filesDir.parentFile
+                    ?: return "{\"success\":false,\"error\":\"Cannot get data dir\"}"
+                val uriHash = md5Hash(wikiPath!!)
+                val mirrorsDir = File(dataDir, "wiki-mirrors/$uriHash/tiddlers")
+                Log.d(TAG, "Looking for favicon in: ${mirrorsDir.absolutePath}")
+
+                if (!mirrorsDir.exists()) {
+                    return "{\"success\":false,\"error\":\"No local mirror found\"}"
+                }
+
+                // Look for $__favicon.ico (TW5 stores $:/favicon.ico as $__favicon.ico)
+                val candidates = listOf("\$__favicon.ico")
+                var faviconFile: File? = null
+                for (name in candidates) {
+                    val f = File(mirrorsDir, name)
+                    if (f.exists() && f.length() > 0) {
+                        faviconFile = f
+                        break
+                    }
+                }
+
+                // Also check for files with .meta companion (binary tiddler pattern)
+                if (faviconFile == null) {
+                    val files = mirrorsDir.listFiles() ?: emptyArray()
+                    for (f in files) {
+                        if (f.name.contains("favicon", ignoreCase = true) && !f.name.endsWith(".meta")) {
+                            faviconFile = f
+                            break
+                        }
+                    }
+                }
+
+                if (faviconFile == null) {
+                    return "{\"success\":false,\"error\":\"No favicon file found in tiddlers/\"}"
+                }
+
+                Log.d(TAG, "Found local favicon: ${faviconFile.absolutePath} (${faviconFile.length()} bytes)")
+
+                // Determine MIME type from .meta file or extension
+                val metaFile = File(faviconFile.absolutePath + ".meta")
+                var mimeType = "image/x-icon"
+                if (metaFile.exists()) {
+                    val metaText = metaFile.readText()
+                    val typeMatch = Regex("type:\\s*(.+)").find(metaText)
+                    if (typeMatch != null) {
+                        mimeType = typeMatch.groupValues[1].trim()
+                    }
+                }
+
+                // Read and base64-encode the file, then save via saveFavicon
+                val imageData = faviconFile.readBytes()
+                val base64Data = android.util.Base64.encodeToString(imageData, android.util.Base64.NO_WRAP)
+                saveFavicon(base64Data, mimeType)
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to extract favicon from local copy: ${e.message}")
+                "{\"success\":false,\"error\":\"${e.message?.replace("\"", "\\\"") ?: "Unknown"}\"}"
+            }
+        }
+
+        private fun md5Hash(input: String): String {
+            val md = java.security.MessageDigest.getInstance("MD5")
+            val digest = md.digest(input.toByteArray())
+            return digest.joinToString("") { "%02x".format(it) }
         }
     }
 
@@ -1269,6 +1358,16 @@ class WikiActivity : AppCompatActivity() {
         val backupCount = intent.getIntExtra(EXTRA_BACKUP_COUNT, 20)  // Default: 20 backups
 
         Log.d(TAG, "WikiActivity onCreate - path: $wikiPath, title: $wikiTitle, isFolder: $isFolder, folderUrl: $folderServerUrl, backupsEnabled: $backupsEnabled, backupCount: $backupCount")
+
+        // Start foreground service from WikiActivity (runs in :wiki process, same as the service).
+        // This is more reliable than the cross-process JNI call from the main process,
+        // because SharedPreferences used for the active wiki count are not multi-process safe.
+        try {
+            WikiServerService.startService(applicationContext)
+            Log.d(TAG, "Started foreground service from WikiActivity")
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to start foreground service: ${e.message}")
+        }
 
         if (wikiPath.isNullOrEmpty()) {
             Log.e(TAG, "No wiki path provided!")
@@ -2722,36 +2821,81 @@ class WikiActivity : AppCompatActivity() {
                 }
                 window.__faviconExtracted = true;
 
-                // Try to get favicon tiddler
-                var faviconTiddler = ${'$'}tw.wiki.getTiddler('${'$'}:/favicon.ico');
-                if (!faviconTiddler) {
-                    console.log('[TiddlyDesktop] No favicon tiddler found');
-                    return;
+                function saveFaviconData(base64Data, mimeType) {
+                    if (!base64Data || !window.TiddlyDesktopFavicon) return;
+                    // Remove any data URL prefix if present
+                    if (base64Data.indexOf('base64,') !== -1) {
+                        base64Data = base64Data.split('base64,')[1];
+                    }
+                    // Clean up whitespace
+                    base64Data = base64Data.replace(/\s/g, '');
+                    if (base64Data) {
+                        console.log('[TiddlyDesktop] Extracting favicon, type:', mimeType, 'length:', base64Data.length);
+                        var result = window.TiddlyDesktopFavicon.saveFavicon(base64Data, mimeType);
+                        console.log('[TiddlyDesktop] Favicon save result:', result);
+                    }
                 }
 
-                var faviconText = faviconTiddler.fields.text || '';
-                var faviconType = faviconTiddler.fields.type || 'image/x-icon';
+                // Detect client-server mode (folder wikis use TW syncer)
+                var isClientServer = !!${'$'}tw.syncer;
 
-                if (!faviconText) {
-                    console.log('[TiddlyDesktop] Favicon tiddler has no content');
-                    return;
+                // In client-server mode, always use HTTP fetch because:
+                // 1. Binary tiddlers are "skinny" (no text loaded in browser)
+                // 2. The server merges tiddlers from includeWikis, so only it has the real favicon
+                // 3. getTiddler would return the shadow (default) favicon, not the actual one
+                if (!isClientServer) {
+                    // Single-file wikis: get favicon from tiddler store (all data is in-memory)
+                    var faviconTiddler = ${'$'}tw.wiki.getTiddler('${'$'}:/favicon.ico');
+                    if (faviconTiddler) {
+                        var faviconText = faviconTiddler.fields.text || '';
+                        var faviconType = faviconTiddler.fields.type || 'image/x-icon';
+
+                        if (faviconText) {
+                            saveFaviconData(faviconText, faviconType);
+                            return;
+                        }
+                    }
                 }
 
-                // The favicon is typically stored as base64 data
-                // Remove any data URL prefix if present
-                var base64Data = faviconText;
-                if (base64Data.indexOf('base64,') !== -1) {
-                    base64Data = base64Data.split('base64,')[1];
+                // Fetch /favicon.ico from server (folder wikis in client-server mode,
+                // or single-file wikis where tiddler text was empty)
+                console.log('[TiddlyDesktop] Fetching favicon via HTTP' + (isClientServer ? ' (client-server mode)' : ''));
+                function tryLocalFaviconFallback() {
+                    if (window.TiddlyDesktopFavicon && window.TiddlyDesktopFavicon.extractFaviconFromLocalCopy) {
+                        console.log('[TiddlyDesktop] Trying local wiki-mirrors copy');
+                        var result = window.TiddlyDesktopFavicon.extractFaviconFromLocalCopy();
+                        console.log('[TiddlyDesktop] Local favicon result:', result);
+                    }
                 }
 
-                // Clean up whitespace that might be in the base64 data
-                base64Data = base64Data.replace(/\s/g, '');
-
-                if (base64Data && window.TiddlyDesktopFavicon) {
-                    console.log('[TiddlyDesktop] Extracting favicon, type:', faviconType, 'length:', base64Data.length);
-                    var result = window.TiddlyDesktopFavicon.saveFavicon(base64Data, faviconType);
-                    console.log('[TiddlyDesktop] Favicon save result:', result);
-                }
+                fetch(window.location.origin + '/favicon.ico')
+                    .then(function(response) {
+                        if (!response.ok) throw new Error('HTTP ' + response.status);
+                        var contentType = response.headers.get('content-type') || 'image/x-icon';
+                        return response.blob().then(function(blob) {
+                            // TW server returns 200 with empty body when no favicon tiddler exists
+                            if (blob.size === 0) throw new Error('Empty response');
+                            return { blob: blob, type: contentType };
+                        });
+                    })
+                    .then(function(result) {
+                        var reader = new FileReader();
+                        reader.onload = function() {
+                            // reader.result is a data URL like "data:image/x-icon;base64,..."
+                            var data = reader.result;
+                            if (data && data.indexOf('base64,') !== -1 && data.split('base64,')[1]) {
+                                saveFaviconData(data, result.type);
+                            } else {
+                                console.log('[TiddlyDesktop] HTTP favicon data empty after decode');
+                                tryLocalFaviconFallback();
+                            }
+                        };
+                        reader.readAsDataURL(result.blob);
+                    })
+                    .catch(function(err) {
+                        console.log('[TiddlyDesktop] HTTP favicon fetch failed:', err.message);
+                        tryLocalFaviconFallback();
+                    });
             })();
         """.trimIndent()
 
@@ -3539,32 +3683,43 @@ class WikiActivity : AppCompatActivity() {
 
             override fun onPageFinished(view: WebView, url: String) {
                 super.onPageFinished(view, url)
-                // Inject the external attachment handler
-                view.evaluateJavascript(externalAttachmentScript, null)
-                // Inject the saver for single-file wikis
-                if (saverScript.isNotEmpty()) {
-                    view.evaluateJavascript(saverScript, null)
+                // Guard against duplicate onPageFinished calls (common for HTTP-served wikis).
+                // Check+set a JS flag atomically; only inject scripts on first call.
+                view.evaluateJavascript(
+                    "(function(){if(window.__tdScriptsInjected){return 'yes'}window.__tdScriptsInjected=true;return 'no'})()"
+                ) { result ->
+                    if (result?.contains("yes") == true) {
+                        Log.d(TAG, "Scripts already injected, skipping duplicate onPageFinished")
+                        return@evaluateJavascript
+                    }
+                    Log.d(TAG, "Injecting scripts for: $url")
+                    // Inject the external attachment handler
+                    view.evaluateJavascript(externalAttachmentScript, null)
+                    // Inject the saver for single-file wikis
+                    if (saverScript.isNotEmpty()) {
+                        view.evaluateJavascript(saverScript, null)
+                    }
+                    // Inject the palette monitoring script
+                    view.evaluateJavascript(paletteScript, null)
+                    // Inject the fullscreen toggle handler
+                    view.evaluateJavascript(fullscreenScript, null)
+                    // Inject the clipboard handler
+                    view.evaluateJavascript(clipboardScript, null)
+                    // Inject the print handler
+                    view.evaluateJavascript(printScript, null)
+                    // Inject the external window handler (open URLs in external browser)
+                    view.evaluateJavascript(externalWindowScript, null)
+                    // Inject the open window handler (open tiddler in new window)
+                    view.evaluateJavascript(openWindowScript, null)
+                    // Inject the favicon extraction handler
+                    view.evaluateJavascript(faviconScript, null)
+                    // Inject the export/download handler
+                    view.evaluateJavascript(exportScript, null)
+                    // Inject server health check for single-file wikis
+                    injectServerHealthCheck()
+                    // Inject inline PDF.js and Plyr enhancement
+                    view.evaluateJavascript(inlineMediaScript, null)
                 }
-                // Inject the palette monitoring script
-                view.evaluateJavascript(paletteScript, null)
-                // Inject the fullscreen toggle handler
-                view.evaluateJavascript(fullscreenScript, null)
-                // Inject the clipboard handler
-                view.evaluateJavascript(clipboardScript, null)
-                // Inject the print handler
-                view.evaluateJavascript(printScript, null)
-                // Inject the external window handler (open URLs in external browser)
-                view.evaluateJavascript(externalWindowScript, null)
-                // Inject the open window handler (open tiddler in new window)
-                view.evaluateJavascript(openWindowScript, null)
-                // Inject the favicon extraction handler
-                view.evaluateJavascript(faviconScript, null)
-                // Inject the export/download handler
-                view.evaluateJavascript(exportScript, null)
-                // Inject server health check for single-file wikis
-                injectServerHealthCheck()
-                // Inject inline PDF.js and Plyr enhancement
-                view.evaluateJavascript(inlineMediaScript, null)
             }
         }
 

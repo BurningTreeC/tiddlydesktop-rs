@@ -8,6 +8,8 @@ import android.os.Bundle
 import android.util.Log
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
+import org.json.JSONObject
+import java.io.File
 
 class MainActivity : TauriActivity() {
 
@@ -64,7 +66,8 @@ class MainActivity : TauriActivity() {
     /**
      * Handle intents from the home screen widget.
      * If the wiki is already open, bring it to foreground.
-     * Otherwise, launch a new WikiActivity.
+     * Otherwise, write a pending file so the Tauri frontend can open the wiki
+     * through the proper Rust commands (which start servers, etc.).
      */
     private fun handleWidgetIntent(intent: Intent) {
         val wikiPath = intent.getStringExtra("open_wiki_path")
@@ -78,9 +81,24 @@ class MainActivity : TauriActivity() {
             if (WikiActivity.bringWikiToFront(this, wikiPath)) {
                 Log.d(TAG, "Wiki already open, brought to foreground")
             } else {
-                // Wiki is not open, launch new activity
-                Log.d(TAG, "Wiki not open, launching new activity")
-                launchNewWikiActivity(wikiPath, wikiTitle, isFolder)
+                // Write pending wiki info to a file that the Tauri frontend will read.
+                // We can't launch WikiActivity directly because:
+                // - Folder wikis need a Node.js server URL (started by Rust)
+                // - Single-file wikis need Rust to set up the entry properly
+                // The frontend startup.js checks for this file and opens the wiki.
+                Log.d(TAG, "Writing pending wiki open file for frontend")
+                try {
+                    val pendingFile = File(filesDir, "pending_widget_wiki.json")
+                    val json = JSONObject().apply {
+                        put("path", wikiPath)
+                        put("title", wikiTitle ?: "TiddlyWiki")
+                        put("is_folder", isFolder)
+                    }
+                    pendingFile.writeText(json.toString())
+                    Log.d(TAG, "Wrote pending wiki to: ${pendingFile.absolutePath}")
+                } catch (e: Exception) {
+                    Log.e(TAG, "Failed to write pending wiki file: ${e.message}")
+                }
             }
 
             // Clear the extras so we don't reopen on rotation
@@ -88,14 +106,5 @@ class MainActivity : TauriActivity() {
             intent.removeExtra("open_wiki_title")
             intent.removeExtra("open_wiki_is_folder")
         }
-    }
-
-    private fun launchNewWikiActivity(wikiPath: String, wikiTitle: String?, isFolder: Boolean) {
-        val wikiIntent = Intent(this, WikiActivity::class.java).apply {
-            putExtra(WikiActivity.EXTRA_WIKI_PATH, wikiPath)
-            putExtra(WikiActivity.EXTRA_WIKI_TITLE, wikiTitle ?: "TiddlyWiki")
-            putExtra(WikiActivity.EXTRA_IS_FOLDER, isFolder)
-        }
-        startActivity(wikiIntent)
     }
 }

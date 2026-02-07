@@ -146,6 +146,23 @@ pub fn document_exists(uri: &str) -> bool {
 
 /// Check if a URI points to a directory.
 pub fn is_directory(uri: &str) -> bool {
+    // Tree URIs (content://.../tree/...) are directories by definition
+    // They come from ACTION_OPEN_DOCUMENT_TREE and always represent folders.
+    // Check the raw URI string before parsing, since tree URIs may not work
+    // with MIME type queries.
+    let raw_uri = if uri.trim().starts_with('{') {
+        serde_json::from_str::<serde_json::Value>(uri)
+            .ok()
+            .and_then(|json| json.get("uri").and_then(|v| v.as_str()).map(|s| s.to_string()))
+            .unwrap_or_default()
+    } else {
+        uri.to_string()
+    };
+    if raw_uri.contains("/tree/") {
+        eprintln!("[SAF] is_directory: tree URI detected, returning true");
+        return true;
+    }
+
     let app = match get_app() {
         Ok(app) => app,
         Err(_) => return false,
@@ -641,12 +658,20 @@ pub fn reveal_in_file_manager(path_json: &str) -> Result<(), String> {
         path_json.to_string()
     };
 
-    eprintln!("[SAF] reveal_in_file_manager: opening folder_uri={}", folder_uri);
+    // Tree URIs (content://.../tree/...) can't be opened with ACTION_VIEW.
+    // Convert to document URIs (content://.../document/...) which file managers handle.
+    let open_uri = if folder_uri.contains("/tree/") && !folder_uri.contains("/document/") {
+        folder_uri.replacen("/tree/", "/document/", 1)
+    } else {
+        folder_uri
+    };
+
+    eprintln!("[SAF] reveal_in_file_manager: opening uri={}", open_uri);
 
     // Use the opener plugin to open the URI
     let app = get_app()?;
     app.opener()
-        .open_url(&folder_uri, None::<&str>)
+        .open_url(&open_uri, None::<&str>)
         .map_err(|e| format!("Failed to open file manager: {:?}", e))
 }
 

@@ -212,7 +212,59 @@ pub fn js_log(message: String) {
 /// Get recent files list
 #[tauri::command]
 pub fn get_recent_files(app: tauri::AppHandle) -> Vec<WikiEntry> {
-    load_recent_files_from_disk(&app)
+    let mut entries = load_recent_files_from_disk(&app);
+
+    // On Android, load favicons from files saved by WikiActivity for entries missing data URIs
+    #[cfg(target_os = "android")]
+    {
+        let files_dir = app.path().app_data_dir().ok().map(|d| d.join("files"));
+        if let Some(files_dir) = files_dir {
+            let favicons_dir = files_dir.join("favicons");
+            if favicons_dir.exists() {
+                let mut updated = false;
+                for entry in entries.iter_mut() {
+                    if entry.favicon.is_none() {
+                        // Look for favicon file using MD5 hash (matching WikiActivity.saveFavicon)
+                        let path_hash = format!("{:x}", md5::compute(entry.path.as_bytes()));
+                        let mut favicon_file = ["png", "jpg", "gif", "svg", "ico"]
+                            .iter()
+                            .map(|ext| (favicons_dir.join(format!("{}.{}", path_hash, ext)), *ext))
+                            .find(|(p, _)| p.exists());
+                        // Fallback: check for old hashCode-based filenames
+                        if favicon_file.is_none() {
+                            let old_hash = java_string_hash_code(&entry.path).unsigned_abs();
+                            favicon_file = ["png", "jpg", "gif", "svg", "ico"]
+                                .iter()
+                                .map(|ext| (favicons_dir.join(format!("{}.{}", old_hash, ext)), *ext))
+                                .find(|(p, _)| p.exists());
+                        }
+                        if let Some((path, ext)) = favicon_file {
+                            if let Ok(data) = std::fs::read(&path) {
+                                use base64::Engine;
+                                let b64 = base64::engine::general_purpose::STANDARD
+                                    .encode(&data);
+                                let mime = match ext {
+                                    "png" => "image/png",
+                                    "jpg" => "image/jpeg",
+                                    "gif" => "image/gif",
+                                    "svg" => "image/svg+xml",
+                                    _ => "image/x-icon",
+                                };
+                                entry.favicon = Some(format!("data:{};base64,{}", mime, b64));
+                                updated = true;
+                            }
+                        }
+                    }
+                }
+                // Persist any newly loaded favicons so we don't re-read files every time
+                if updated {
+                    let _ = save_recent_files_to_disk(&app, &entries);
+                }
+            }
+        }
+    }
+
+    entries
 }
 
 /// Remove a wiki from the recent files list
@@ -566,17 +618,35 @@ fn sync_to_android_widget(app: &tauri::AppHandle, entries: &[WikiEntry]) {
         .unwrap_or(0);
 
     for (i, entry) in entries.iter().take(10).enumerate() {
-        // Derive favicon file path using Java's String.hashCode() to match
+        // Derive favicon file path using MD5 hash of wiki path to match
         // WikiActivity.FaviconInterface.saveFavicon() which uses:
-        //   Math.abs(wikiPath.hashCode()).toString()
-        let path_hash = java_string_hash_code(&entry.path).unsigned_abs();
+        //   md5Hash(wikiPath)
+        let path_hash = format!("{:x}", md5::compute(entry.path.as_bytes()));
 
         // Check for existing favicon files with any extension
-        let favicon_path = ["png", "jpg", "gif", "svg", "ico"]
+        let mut favicon_path = ["png", "jpg", "gif", "svg", "ico"]
             .iter()
             .map(|ext| favicons_dir.join(format!("{}.{}", path_hash, ext)))
             .find(|p| p.exists())
             .map(|p| p.to_string_lossy().to_string());
+
+        // Fallback: check for old hashCode-based filenames and migrate them
+        if favicon_path.is_none() {
+            let old_hash = java_string_hash_code(&entry.path).unsigned_abs();
+            if let Some((old_path, ext)) = ["png", "jpg", "gif", "svg", "ico"]
+                .iter()
+                .map(|ext| (favicons_dir.join(format!("{}.{}", old_hash, ext)), *ext))
+                .find(|(p, _)| p.exists())
+            {
+                let new_path = favicons_dir.join(format!("{}.{}", path_hash, ext));
+                if std::fs::rename(&old_path, &new_path).is_ok() {
+                    eprintln!("[TiddlyDesktop] Migrated favicon: {:?} -> {:?}", old_path, new_path);
+                    favicon_path = Some(new_path.to_string_lossy().to_string());
+                } else {
+                    favicon_path = Some(old_path.to_string_lossy().to_string());
+                }
+            }
+        }
 
         let mut obj = serde_json::json!({
             "path": entry.path,

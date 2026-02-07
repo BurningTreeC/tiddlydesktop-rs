@@ -67,6 +67,9 @@ class WikiHttpServer(
     private var backupDirectory: DocumentFile? = null
     private var backupDirectoryChecked = false
 
+    // Background executor for non-critical tasks (backups, cleanup)
+    private val backgroundExecutor: ExecutorService = Executors.newSingleThreadExecutor()
+
     /**
      * Get the wiki filename stem (without .html extension).
      */
@@ -291,6 +294,7 @@ class WikiHttpServer(
             Log.e(TAG, "Error closing server socket: ${e.message}")
         }
         executor?.shutdownNow()
+        backgroundExecutor.shutdown()
         serverSocket = null
         executor = null
     }
@@ -320,6 +324,7 @@ class WikiHttpServer(
     private fun handleConnection(socket: Socket) {
         try {
             socket.use { s ->
+                s.soTimeout = 30000  // 30 second read timeout
                 val rawInput = s.getInputStream()
                 val output = BufferedOutputStream(s.getOutputStream())
 
@@ -438,43 +443,60 @@ class WikiHttpServer(
 
     /**
      * Handle PUT / - save the wiki content.
+     *
+     * Optimized for large wikis:
+     * - Streams body directly to SAF output (no full in-memory buffering)
+     * - Sends 200 response immediately after writing
+     * - Creates backup in background thread after responding
+     * - Handles missing Content-Length by reading until EOF
      */
     private fun handlePutWiki(input: InputStream, output: OutputStream, headers: Map<String, String>) {
         try {
-            val contentLength = headers["content-length"]?.toIntOrNull() ?: 0
-            if (contentLength == 0) {
-                sendError(output, 400, "Content-Length required")
-                return
-            }
+            val contentLength = headers["content-length"]?.toLongOrNull() ?: -1L
+            val startTime = System.currentTimeMillis()
 
-            Log.d(TAG, "Reading wiki body: $contentLength bytes expected")
+            Log.d(TAG, "PUT wiki: Content-Length=$contentLength")
 
-            // Read the body as raw bytes
-            val buffer = ByteArray(contentLength)
-            var totalRead = 0
-            while (totalRead < contentLength) {
-                val read = input.read(buffer, totalRead, contentLength - totalRead)
-                if (read == -1) break
-                totalRead += read
-            }
-
-            Log.d(TAG, "Read $totalRead bytes")
-
-            // Convert to string (wiki is UTF-8 encoded HTML)
-            val content = String(buffer, 0, totalRead, Charsets.UTF_8)
-
-            Log.d(TAG, "Saving wiki: ${content.length} characters")
-
-            // Create backup before writing (if enabled and available)
-            createBackup()
-
-            // Write to the wiki file via SAF
+            // Stream body directly to SAF file via chunked copy
+            var totalWritten = 0L
             context.contentResolver.openOutputStream(wikiUri, "wt")?.use { os ->
-                os.write(content.toByteArray(Charsets.UTF_8))
+                val buf = ByteArray(65536)  // 64KB chunks
+                if (contentLength > 0) {
+                    // Known length: read exactly contentLength bytes
+                    var remaining = contentLength
+                    while (remaining > 0) {
+                        val toRead = minOf(buf.size.toLong(), remaining).toInt()
+                        val read = input.read(buf, 0, toRead)
+                        if (read == -1) break
+                        os.write(buf, 0, read)
+                        totalWritten += read
+                        remaining -= read
+                    }
+                } else {
+                    // Unknown length: read until EOF
+                    while (true) {
+                        val read = input.read(buf)
+                        if (read == -1) break
+                        os.write(buf, 0, read)
+                        totalWritten += read
+                    }
+                }
             } ?: throw IOException("Failed to open wiki for writing")
 
+            val elapsed = System.currentTimeMillis() - startTime
+            Log.d(TAG, "Wiki saved: $totalWritten bytes in ${elapsed}ms")
+
+            // Send response immediately — don't make the client wait for backup
             sendResponse(output, 200, "OK", "text/plain", "Saved".toByteArray())
-            Log.d(TAG, "Wiki saved successfully")
+
+            // Create backup in background (non-blocking, non-critical)
+            backgroundExecutor.submit {
+                try {
+                    createBackup()
+                } catch (e: Exception) {
+                    Log.e(TAG, "Background backup failed: ${e.message}", e)
+                }
+            }
         } catch (e: Exception) {
             Log.e(TAG, "Error saving wiki: ${e.message}", e)
             sendError(output, 500, "Internal Server Error: ${e.message}")

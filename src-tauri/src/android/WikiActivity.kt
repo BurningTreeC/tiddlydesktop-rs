@@ -2207,24 +2207,32 @@ class WikiActivity : AppCompatActivity() {
                 }
 
                 TiddlyDesktopSaver.prototype.save = function(text, method, callback) {
-                    console.log('[TiddlyDesktop Saver] Saving ' + text.length + ' bytes via ' + method + '...');
+                    var contentLength = new Blob([text]).size;
+                    console.log('[TiddlyDesktop Saver] Saving ' + text.length + ' chars (' + contentLength + ' bytes) via ' + method + '...');
 
                     var xhr = new XMLHttpRequest();
+                    xhr.timeout = 60000;
                     xhr.open('PUT', '$wikiUrl', true);
                     xhr.setRequestHeader('Content-Type', 'text/html;charset=UTF-8');
 
                     xhr.onload = function() {
                         if (xhr.status === 200) {
-                            console.log('[TiddlyDesktop Saver] Save successful');
+                            console.log('[TiddlyDesktop Saver] Save successful (' + contentLength + ' bytes)');
                             callback(null);
                         } else {
-                            console.error('[TiddlyDesktop Saver] Save failed: ' + xhr.status + ' ' + xhr.statusText);
-                            callback('Save failed: ' + xhr.status + ' ' + xhr.statusText);
+                            var msg = 'Save failed: HTTP ' + xhr.status + ' ' + xhr.statusText + ' — ' + xhr.responseText;
+                            console.error('[TiddlyDesktop Saver] ' + msg);
+                            callback(msg);
                         }
                     };
 
+                    xhr.ontimeout = function() {
+                        console.error('[TiddlyDesktop Saver] Save timed out after 60s (' + contentLength + ' bytes)');
+                        callback('Save timed out after 60 seconds');
+                    };
+
                     xhr.onerror = function() {
-                        console.error('[TiddlyDesktop Saver] Network error');
+                        console.error('[TiddlyDesktop Saver] Network error saving ' + contentLength + ' bytes');
                         callback('Network error during save');
                     };
 

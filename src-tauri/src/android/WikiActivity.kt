@@ -2618,13 +2618,13 @@ class WikiActivity : AppCompatActivity() {
                     var contentLength = new Blob([text]).size;
                     console.log('[TiddlyDesktop Saver] Saving ' + text.length + ' chars (' + contentLength + ' bytes) via ' + method + '...');
 
+                    var cloudSaverNames = ['github', 'gitlab', 'Gitea', 'upload'];
                     function chainCloudSavers() {
                         if (!${'$'}tw || !${'$'}tw.saverHandler) return;
                         var savers = ${'$'}tw.saverHandler.savers;
                         for (var i = savers.length - 1; i >= 0; i--) {
                             var saver = savers[i];
-                            if (saver === self) continue;
-                            if (saver.info.priority >= self.info.priority) continue;
+                            if (cloudSaverNames.indexOf(saver.info.name) === -1) continue;
                             if (saver.info.capabilities.indexOf(method) === -1) continue;
                             (function(s) {
                                 try {

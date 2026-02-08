@@ -6088,41 +6088,6 @@ window.__SAVE_URL__ = "{save_url}";
     function initializeTiddlyDesktop() {{
 
     // Define the saver module globally so TiddlyWiki can find it during boot
-    // Check if user wants to use a different saver (GitHub, GitLab, Gitea, etc.)
-    function shouldUseLocalSaver(wikiOrHandler) {{
-        // TiddlyWiki's initSavers() passes SaverHandler (which has .wiki), not wiki directly
-        var wiki = (wikiOrHandler && wikiOrHandler.wiki && typeof wikiOrHandler.wiki.getTiddlerText === 'function')
-            ? wikiOrHandler.wiki : wikiOrHandler;
-        if (!wiki || typeof wiki.getTiddlerText !== 'function') {{
-            return true; // Default to local saver if wiki not available yet
-        }}
-        // Check if local saving is explicitly disabled
-        var localSaverEnabled = wiki.getTiddlerText('$:/config/TiddlyDesktop/LocalSaver', 'yes');
-        if (localSaverEnabled === 'no') {{
-            return false;
-        }}
-        // Check if GitHub saver is configured (username + repo = user wants to use it)
-        // Token is stored in localStorage, but if username/repo are set, user intends to use GitHub
-        var githubUser = wiki.getTiddlerText('$:/GitHub/Username', '');
-        var githubRepo = wiki.getTiddlerText('$:/GitHub/Repo', '');
-        if (githubUser && githubRepo) {{
-            return false; // Let GitHub saver handle it
-        }}
-        // Check if GitLab saver is configured
-        var gitlabUser = wiki.getTiddlerText('$:/GitLab/Username', '');
-        var gitlabRepo = wiki.getTiddlerText('$:/GitLab/Repo', '');
-        if (gitlabUser && gitlabRepo) {{
-            return false; // Let GitLab saver handle it
-        }}
-        // Check if Gitea saver is configured
-        var giteaUser = wiki.getTiddlerText('$:/Gitea/Username', '');
-        var giteaRepo = wiki.getTiddlerText('$:/Gitea/Repo', '');
-        if (giteaUser && giteaRepo) {{
-            return false; // Let Gitea saver handle it
-        }}
-        return true;
-    }}
-
     window.$TiddlyDesktopSaver = {{
         info: {{
             name: 'tiddlydesktop',
@@ -6130,8 +6095,7 @@ window.__SAVE_URL__ = "{save_url}";
             capabilities: ['save', 'autosave']
         }},
         canSave: function(wiki) {{
-            try {{ return shouldUseLocalSaver(wiki); }}
-            catch(e) {{ console.error('TiddlyDesktop saver canSave error:', e); return true; }}
+            return true;
         }},
         create: function(wiki) {{
             return {{
@@ -6141,12 +6105,37 @@ window.__SAVE_URL__ = "{save_url}";
                     priority: 5000,
                     capabilities: ['save', 'autosave']
                 }},
-                canSave: function(wiki) {{
-                    try {{ return shouldUseLocalSaver(wiki); }}
-                    catch(e) {{ console.error('TiddlyDesktop saver canSave error:', e); return true; }}
-                }},
                 save: function(text, method, callback) {{
+                    var self = this;
                     var wikiPath = window.__WIKI_PATH__;
+
+                    // After a successful local save, trigger any configured cloud savers
+                    // (GitHub, GitLab, Gitea, Tiddlyhost) as best-effort background operations
+                    function chainCloudSavers() {{
+                        if (!$tw || !$tw.saverHandler) return;
+                        var savers = $tw.saverHandler.savers;
+                        for (var i = savers.length - 1; i >= 0; i--) {{
+                            var saver = savers[i];
+                            if (saver === self) continue;
+                            if (saver.info.priority >= self.info.priority) continue;
+                            if (saver.info.capabilities.indexOf(method) === -1) continue;
+                            (function(s) {{
+                                try {{
+                                    if (s.save(text, method, function(err) {{
+                                        if (err) {{
+                                            console.warn('[TiddlyDesktop] Cloud saver \'' + s.info.name + '\' failed: ' + err);
+                                        }} else {{
+                                            console.log('[TiddlyDesktop] Cloud saver \'' + s.info.name + '\' succeeded');
+                                        }}
+                                    }})) {{
+                                        console.log('[TiddlyDesktop] Triggered cloud saver: ' + s.info.name);
+                                    }}
+                                }} catch(e) {{
+                                    console.warn('[TiddlyDesktop] Cloud saver \'' + s.info.name + '\' threw: ' + e);
+                                }}
+                            }})(saver);
+                        }}
+                    }}
 
                     // Try Tauri IPC first (works reliably on all platforms)
                     if(window.__TAURI__ && window.__TAURI__.core && window.__TAURI__.core.invoke) {{
@@ -6155,6 +6144,7 @@ window.__SAVE_URL__ = "{save_url}";
                             content: text
                         }}).then(function() {{
                             callback(null);
+                            chainCloudSavers();
                         }}).catch(function(err) {{
                             // IPC failed, try fetch as fallback
                             saveViaFetch(text, callback);
@@ -6171,6 +6161,7 @@ window.__SAVE_URL__ = "{save_url}";
                         }}).then(function(response) {{
                             if(response.ok) {{
                                 cb(null);
+                                chainCloudSavers();
                             }} else {{
                                 response.text().then(function(errText) {{
                                     cb('Save failed (HTTP ' + response.status + '): ' + (errText || response.statusText));

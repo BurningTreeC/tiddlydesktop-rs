@@ -29,6 +29,42 @@ exports.startup = function(callback) {
 	// Detect if running on Android
 	var isAndroid = /android/i.test(navigator.userAgent);
 
+	// Convert Android SAF content:// URIs to human-readable paths for display.
+	// Handles both plain URIs and JSON-wrapped URIs ({"uri":"content://..."}).
+	// On desktop, returns the path unchanged.
+	function getDisplayPath(pathStr) {
+		if (!pathStr) return "";
+		// Extract URI from JSON if needed
+		var uri = pathStr;
+		if (pathStr.charAt(0) === '{') {
+			try {
+				var parsed = JSON.parse(pathStr);
+				uri = parsed.uri || pathStr;
+			} catch(e) {}
+		}
+		if (!uri.startsWith("content://")) {
+			return uri;
+		}
+		try {
+			var decoded = decodeURIComponent(uri);
+			// document/storage:path (single file) — storage can be primary, home, SD card ID, etc.
+			var docMatch = decoded.match(/\/document\/[^/:]+:(.+)$/);
+			if (docMatch) return docMatch[1];
+			// tree/.../document/storage:path (file inside tree)
+			var treeDocMatch = decoded.match(/\/tree\/[^/]+\/document\/[^/:]+:(.+)$/);
+			if (treeDocMatch) return treeDocMatch[1];
+			// tree/storage:path (folder)
+			var treeMatch = decoded.match(/\/tree\/[^/:]+:(.+)$/);
+			if (treeMatch) return treeMatch[1];
+			// Downloads provider
+			if (decoded.indexOf("downloads") !== -1) {
+				var dlMatch = decoded.match(/\/document\/(.+)$/);
+				if (dlMatch) return "Downloads/" + dlMatch[1];
+			}
+		} catch(e) {}
+		return uri.length > 50 ? "..." + uri.substring(uri.length - 40) : uri;
+	}
+
 	// Check if this is the main wiki
 	var isMainWiki = window.__IS_MAIN_WIKI__ === true;
 
@@ -116,13 +152,35 @@ exports.startup = function(callback) {
 			return fallback;
 		}
 
+		// Resolve any CSS color to #rrggbb or rgba(r,g,b,a) using a canvas context
+		var _colorCtx = null;
+		function resolveCssColor(color, fallback) {
+			try {
+				if (!_colorCtx) _colorCtx = document.createElement("canvas").getContext("2d");
+				_colorCtx.fillStyle = "#000";
+				_colorCtx.fillStyle = color;
+				var resolved = _colorCtx.fillStyle;
+				if (resolved === "#000000" && color.trim().toLowerCase() !== "#000000" && color.trim().toLowerCase() !== "#000" && color.trim().toLowerCase() !== "black") {
+					return fallback || color;
+				}
+				return resolved;
+			} catch (e) {
+				return fallback || color;
+			}
+		}
+
+		// Dark mode fallback colors (used when palette has no color defined)
+		var _isDarkMode = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
+		var _defaultBg = _isDarkMode ? "#333333" : "#ffffff";
+		var _defaultFg = _isDarkMode ? "#cccccc" : "#333333";
+
 		// Function to update system bar colors
 		function updateSystemBarColors() {
 			// Use page-background for status bar, tiddler-background for nav bar
-			var statusBarColor = getColour("page-background", "#ffffff");
-			var navBarColor = getColour("tiddler-background", statusBarColor);
+			var statusBarColor = resolveCssColor(getColour("page-background", _defaultBg), _defaultBg);
+			var navBarColor = resolveCssColor(getColour("tiddler-background", statusBarColor), statusBarColor);
 			// Get foreground color to determine if icons should be light or dark
-			var foregroundColor = getColour("foreground", "#333333");
+			var foregroundColor = resolveCssColor(getColour("foreground", _defaultFg), _defaultFg);
 
 			invoke("android_set_system_bar_colors", {
 				statusBarColor: statusBarColor,
@@ -391,6 +449,7 @@ exports.startup = function(callback) {
 				is_folder: entry.is_folder ? "true" : "false",
 				backups_enabled: entry.backups_enabled ? "true" : "false",
 				backup_dir: entry.backup_dir || "",
+				backup_dir_display: entry.backup_dir ? getDisplayPath(entry.backup_dir) : "",
 				backup_count: entry.backup_count !== undefined ? String(entry.backup_count) : "",
 				group: entry.group || "",
 				needs_reauth: "checking", // Will be updated by permission check on Android
@@ -561,6 +620,7 @@ exports.startup = function(callback) {
 	function showFileCreator(filePath) {
 		// Store the file path for later use
 		$tw.wiki.setText("$:/temp/tiddlydesktop-rs/init-file-path", "text", null, filePath);
+		$tw.wiki.setText("$:/temp/tiddlydesktop-rs/init-file-path-display", "text", null, getDisplayPath(filePath));
 		$tw.wiki.setText("$:/temp/tiddlydesktop-rs/selected-edition", "text", null, "empty");
 		$tw.wiki.setText("$:/temp/tiddlydesktop-rs/selected-plugins", "text", null, "");
 		$tw.wiki.setText("$:/temp/tiddlydesktop-rs/create-mode", "text", null, "file");
@@ -906,6 +966,7 @@ exports.startup = function(callback) {
 									// Directly update the temp tiddler field for immediate UI update
 									var tempTitle = "$:/temp/tiddlydesktop-rs/wikis/" + i;
 									$tw.wiki.setText(tempTitle, "backup_dir", null, folder);
+									$tw.wiki.setText(tempTitle, "backup_dir_display", null, getDisplayPath(folder));
 									break;
 								}
 							}
@@ -938,6 +999,7 @@ exports.startup = function(callback) {
 								// Directly update the temp tiddler field for immediate UI update
 								var tempTitle = "$:/temp/tiddlydesktop-rs/wikis/" + i;
 								$tw.wiki.setText(tempTitle, "backup_dir", null, folder);
+								$tw.wiki.setText(tempTitle, "backup_dir_display", null, getDisplayPath(folder));
 								break;
 							}
 						}
@@ -966,6 +1028,7 @@ exports.startup = function(callback) {
 						// Directly update the temp tiddler field for immediate UI update
 						var tempTitle = "$:/temp/tiddlydesktop-rs/wikis/" + i;
 						$tw.wiki.setText(tempTitle, "backup_dir", null, "");
+						$tw.wiki.setText(tempTitle, "backup_dir_display", null, "");
 						break;
 					}
 				}

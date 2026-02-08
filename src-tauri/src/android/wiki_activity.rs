@@ -462,8 +462,38 @@ fn get_current_activity<'a>(env: &mut jni::JNIEnv<'a>) -> Result<jni::objects::J
     Ok(activity)
 }
 
-/// Parse a hex color string (e.g., "#FFFFFF" or "FFFFFF") to an Android color int.
+/// Parse an rgb/rgba CSS color string into (r, g, b, a) components.
+/// Returns None if the string is not an rgb/rgba format.
+fn parse_rgb_components(color: &str) -> Option<(u8, u8, u8, u8)> {
+    let trimmed = color.trim();
+    if !trimmed.starts_with("rgb") {
+        return None;
+    }
+    // Extract the part inside parentheses
+    let inner = trimmed.split('(').nth(1)?.trim_end_matches(')');
+    let parts: Vec<&str> = inner.split(',').collect();
+    if parts.len() < 3 {
+        return None;
+    }
+    let r = parts[0].trim().parse::<u8>().ok()?;
+    let g = parts[1].trim().parse::<u8>().ok()?;
+    let b = parts[2].trim().parse::<u8>().ok()?;
+    let a = if parts.len() >= 4 {
+        (parts[3].trim().parse::<f32>().ok()?.clamp(0.0, 1.0) * 255.0) as u8
+    } else {
+        255
+    };
+    Some((r, g, b, a))
+}
+
+/// Parse a CSS color string (hex or rgb/rgba) to an Android color int (ARGB).
 fn parse_color_to_int(color: &str) -> Result<i32, String> {
+    // Try rgb/rgba first
+    if let Some((r, g, b, a)) = parse_rgb_components(color) {
+        return Ok(((a as u32) << 24 | (r as u32) << 16 | (g as u32) << 8 | (b as u32)) as i32);
+    }
+
+    // Fall back to hex parsing
     let hex = color.trim_start_matches('#');
 
     if hex.len() != 6 && hex.len() != 8 {
@@ -484,17 +514,22 @@ fn parse_color_to_int(color: &str) -> Result<i32, String> {
 
 /// Determine if a color is light (for setting light/dark status bar icons).
 fn is_light_color(color: &str) -> bool {
+    // Try rgb/rgba first
+    if let Some((r, g, b, _)) = parse_rgb_components(color) {
+        let luminance = (0.299 * r as f32 + 0.587 * g as f32 + 0.114 * b as f32) / 255.0;
+        return luminance > 0.5;
+    }
+
+    // Fall back to hex parsing
     let hex = color.trim_start_matches('#');
     if hex.len() < 6 {
         return false;
     }
 
-    // Parse RGB components
     let r = u8::from_str_radix(&hex[0..2], 16).unwrap_or(0) as f32;
     let g = u8::from_str_radix(&hex[2..4], 16).unwrap_or(0) as f32;
     let b = u8::from_str_radix(&hex[4..6], 16).unwrap_or(0) as f32;
 
-    // Calculate relative luminance
     let luminance = (0.299 * r + 0.587 * g + 0.114 * b) / 255.0;
     luminance > 0.5
 }

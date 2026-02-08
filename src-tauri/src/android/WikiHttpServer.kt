@@ -1,6 +1,8 @@
 package com.burningtreec.tiddlydesktop_rs
 
 import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.net.Uri
 import android.util.Base64
 import android.util.Log
@@ -530,6 +532,12 @@ class WikiHttpServer(
 
             val contentType = guessMimeType(decodedPath)
 
+            // Convert unsupported image formats to JPEG for WebView display
+            if (needsImageConversion(contentType)) {
+                streamConvertedImage(output, uri)
+                return
+            }
+
             // Get file size
             val fileSize = getFileSize(uri)
             if (fileSize < 0) {
@@ -593,6 +601,47 @@ class WikiHttpServer(
     }
 
     /**
+     * Check if an image content type needs conversion for WebView display.
+     * WebView supports JPEG, PNG, GIF, WebP, BMP, SVG, ICO natively.
+     * Formats like HEIC, HEIF, TIFF, and AVIF can be decoded by Android's
+     * BitmapFactory but not rendered by WebView.
+     */
+    private fun needsImageConversion(contentType: String): Boolean {
+        val ct = contentType.lowercase()
+        return ct == "image/heic" || ct == "image/heif" ||
+               ct == "image/tiff" || ct == "image/avif"
+    }
+
+    /**
+     * Decode an image from a URI using BitmapFactory and serve it as JPEG.
+     * Used for image formats that WebView cannot render natively (HEIC, TIFF, AVIF, etc.).
+     */
+    private fun streamConvertedImage(output: OutputStream, uri: Uri) {
+        val bitmap = context.contentResolver.openInputStream(uri)?.use { input ->
+            BitmapFactory.decodeStream(input)
+        } ?: throw IOException("Failed to decode image")
+
+        val jpegBytes = ByteArrayOutputStream().use { baos ->
+            bitmap.compress(Bitmap.CompressFormat.JPEG, 90, baos)
+            bitmap.recycle()
+            baos.toByteArray()
+        }
+
+        val headers = listOf(
+            "HTTP/1.1 200 OK",
+            "Content-Type: image/jpeg",
+            "Content-Length: ${jpegBytes.size}",
+            "Access-Control-Allow-Origin: *",
+            "Connection: close",
+            "",
+            ""
+        ).joinToString("\r\n")
+        output.write(headers.toByteArray())
+        output.write(jpegBytes)
+        output.flush()
+    }
+
+    /**
      * Handle HTTP Range request for partial content (video seeking).
      */
     private fun handleRangeRequest(output: OutputStream, uri: Uri, contentType: String, fileSize: Long, rangeHeader: String) {
@@ -638,26 +687,23 @@ class WikiHttpServer(
         ).joinToString("\r\n")
         output.write(headers.toByteArray())
 
-        // Stream the requested range in chunks
+        // Stream the requested range in chunks using ParcelFileDescriptor for O(1) seeking
         val buffer = ByteArray(65536)
-        context.contentResolver.openInputStream(uri)?.use { input ->
-            // Skip to start position
-            var skipped = 0L
-            while (skipped < start) {
-                val toSkip = minOf(buffer.size.toLong(), start - skipped)
-                val actuallySkipped = input.skip(toSkip)
-                if (actuallySkipped <= 0) break
-                skipped += actuallySkipped
-            }
+        context.contentResolver.openFileDescriptor(uri, "r")?.use { pfd ->
+            val fis = java.io.FileInputStream(pfd.fileDescriptor)
+            fis.use { input ->
+                // Seek directly to start position (O(1) via file channel)
+                input.channel.position(start)
 
-            // Read and send the requested range
-            var remaining = contentLength
-            while (remaining > 0) {
-                val toRead = minOf(buffer.size.toLong(), remaining).toInt()
-                val bytesRead = input.read(buffer, 0, toRead)
-                if (bytesRead == -1) break
-                output.write(buffer, 0, bytesRead)
-                remaining -= bytesRead
+                // Read and send the requested range
+                var remaining = contentLength
+                while (remaining > 0) {
+                    val toRead = minOf(buffer.size.toLong(), remaining).toInt()
+                    val bytesRead = input.read(buffer, 0, toRead)
+                    if (bytesRead == -1) break
+                    output.write(buffer, 0, bytesRead)
+                    remaining -= bytesRead
+                }
             }
         }
         output.flush()
@@ -705,6 +751,12 @@ class WikiHttpServer(
 
             val contentType = currentDoc.type ?: guessMimeType(relativePath)
             val uri = currentDoc.uri
+
+            // Convert unsupported image formats to JPEG for WebView display
+            if (needsImageConversion(contentType)) {
+                streamConvertedImage(output, uri)
+                return
+            }
 
             // Get file size
             val fileSize = getFileSize(uri)

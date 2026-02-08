@@ -1,7 +1,7 @@
 title: $:/plugins/tiddlywiki/tiddlydesktop-rs/WikiList
 
 \define render-wiki-item()
-<$let path={{!!path}} displayPath={{!!display_path}} filename={{!!filename}} favicon={{!!favicon}} isFolder={{!!is_folder}} backupsEnabled={{!!backups_enabled}} backupDir={{!!backup_dir}} backupCount={{!!backup_count}} wikiGroup={{!!group}} needsReauth={{!!needs_reauth}}>
+<$let path={{!!path}} displayPath={{!!display_path}} filename={{!!filename}} favicon={{!!favicon}} isFolder={{!!is_folder}} backupsEnabled={{!!backups_enabled}} backupDir={{!!backup_dir}} backupDirDisplay={{!!backup_dir_display}} backupCount={{!!backup_count}} wikiGroup={{!!group}} needsReauth={{!!needs_reauth}}>
 <div class={{{ [<needsReauth>match[yes]then[td-wikilist-item td-needs-reauth]else[td-wikilist-item]] }}}>
 <div class="td-wikilist-thumbnail">
 <$button class="tc-btn-invisible">
@@ -120,7 +120,7 @@ title: $:/plugins/tiddlywiki/tiddlydesktop-rs/WikiList
 <div class="td-wiki-backup-dir">
 <span class="td-backup-dir-label"><<td-lingo Labels/BackupFolder>></span>
 <$list filter="[<backupDir>!is[blank]]" variable="ignore">
-<span class="td-backup-dir-path" title=<<backupDir>>><$text text=<<backupDir>>/></span>
+<span class="td-backup-dir-path" title=<<backupDir>>><$text text={{{ [<backupDirDisplay>!is[blank]then<backupDirDisplay>else<backupDir>] }}}/></span>
 <$button class="tc-btn-invisible td-button td-button-backup-dir" tooltip=<<td-lingo Tooltips/ChangeBackupDir>>>
 <$action-sendmessage $message="tm-tiddlydesktop-rs-set-backup-dir" path=<<path>>/>
 <<td-lingo Buttons/Change>>

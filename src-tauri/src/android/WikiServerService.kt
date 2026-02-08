@@ -62,8 +62,10 @@ class WikiServerService : Service() {
                 setActiveCount(context, count)
                 Log.d(TAG, "Wiki started, count: $count")
 
-                if (count == 1) {
-                    // First wiki - start the foreground service
+                // Always start the foreground service if not already running.
+                // startForeground() is idempotent, and this handles stale counts
+                // from previously killed processes (OOM, crash, force-stop).
+                if (!isRunning) {
                     val intent = Intent(context, WikiServerService::class.java)
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                         context.startForegroundService(intent)
@@ -135,6 +137,12 @@ class WikiServerService : Service() {
         Log.d(TAG, "Service onStartCommand")
 
         isRunning = true
+
+        // Fix stale count from previously killed process
+        if (getActiveCount(this) <= 0) {
+            setActiveCount(this, 1)
+            Log.d(TAG, "Reset stale active count to 1")
+        }
 
         try {
             // Create and show notification

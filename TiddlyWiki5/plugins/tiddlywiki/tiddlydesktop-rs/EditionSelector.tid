@@ -27,7 +27,7 @@ tags: $:/tags/PageTemplate
 <$reveal state="$:/temp/tiddlydesktop-rs/create-mode" type="match" text="file">
 <h2><<td-lingo EditionSelector/CreateFile>></h2>
 <div class="td-modal-subtitle">
-<<td-lingo Labels/SaveTo>> <strong>{{$:/temp/tiddlydesktop-rs/init-file-path}}</strong>
+<<td-lingo Labels/SaveTo>> <strong>{{$:/temp/tiddlydesktop-rs/init-file-path-display}}</strong>
 </div>
 </$reveal>
 <$reveal state="$:/temp/tiddlydesktop-rs/create-mode" type="nomatch" text="file">

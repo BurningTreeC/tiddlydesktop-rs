@@ -32,12 +32,18 @@ import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.ActivityResultLauncher
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import androidx.documentfile.provider.DocumentFile
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
+import java.io.IOException
 import java.net.URLDecoder
 import java.net.URLEncoder
+import java.util.concurrent.ConcurrentHashMap
 
 /**
  * Activity for opening individual wiki files in separate app instances.
@@ -245,13 +251,6 @@ class WikiActivity : AppCompatActivity() {
                 // Write to file
                 recentWikisFile.writeText(newWikis.toString(2))
                 Log.d(TAG, "Updated recent_wikis.json with: $wikiTitle")
-
-                // Request widget update
-                try {
-                    RecentWikisWidgetProvider.requestUpdate(context)
-                } catch (e: Exception) {
-                    Log.w(TAG, "Could not request widget update: ${e.message}")
-                }
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to update recent_wikis.json: ${e.message}")
             }
@@ -286,13 +285,6 @@ class WikiActivity : AppCompatActivity() {
                 if (updated) {
                     recentWikisFile.writeText(existingWikis.toString(2))
                     Log.d(TAG, "Updated favicon path for wiki: $wikiPath")
-
-                    // Request widget update to show the new favicon
-                    try {
-                        RecentWikisWidgetProvider.requestUpdate(context)
-                    } catch (e: Exception) {
-                        Log.w(TAG, "Could not request widget update: ${e.message}")
-                    }
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to update favicon in recent_wikis.json: ${e.message}")
@@ -448,6 +440,30 @@ class WikiActivity : AppCompatActivity() {
         fun isFullscreen(): Boolean {
             return isImmersiveFullscreen
         }
+
+        /**
+         * Exit video fullscreen (onShowCustomView/onHideCustomView).
+         * Called from the exitFullscreen stub when Plyr or other players
+         * request exiting fullscreen via the Fullscreen API.
+         */
+        @JavascriptInterface
+        fun exitVideoFullscreen() {
+            Log.d(TAG, "exitVideoFullscreen called from JavaScript")
+            runOnUiThread {
+                if (fullscreenView != null) {
+                    fullscreenCallback?.onCustomViewHidden()
+                }
+            }
+        }
+
+        /**
+         * Get the current attachment server URL.
+         * Used by JavaScript to dynamically resolve attachment URLs after server restart.
+         */
+        @JavascriptInterface
+        fun getAttachmentServerUrl(): String {
+            return if (httpServer != null) "http://127.0.0.1:${httpServer!!.port}" else ""
+        }
     }
 
     /**
@@ -510,6 +526,7 @@ class WikiActivity : AppCompatActivity() {
         fun print() {
             Log.d(TAG, "print() called")
             runOnUiThread {
+                exitFullscreenIfNeeded()
                 try {
                     val printManager = getSystemService(Context.PRINT_SERVICE) as android.print.PrintManager
                     val jobName = "${wikiTitle ?: "TiddlyWiki"} - ${System.currentTimeMillis()}"
@@ -804,52 +821,47 @@ class WikiActivity : AppCompatActivity() {
                 // Sanitize filename
                 val safeName = suggestedFilename.replace("/", "_").replace("\\", "_")
 
-                // Helper to compare file contents byte-by-byte
-                fun filesAreIdentical(uri1: Uri, uri2: Uri): Boolean {
-                    try {
-                        contentResolver.openInputStream(uri1)?.use { stream1 ->
-                            contentResolver.openInputStream(uri2)?.use { stream2 ->
-                                val buffer1 = ByteArray(8192)
-                                val buffer2 = ByteArray(8192)
-                                while (true) {
-                                    val read1 = stream1.read(buffer1)
-                                    val read2 = stream2.read(buffer2)
-                                    if (read1 != read2) return false
-                                    if (read1 == -1) return true
-                                    if (!buffer1.copyOf(read1).contentEquals(buffer2.copyOf(read2))) return false
-                                }
-                            }
-                        }
-                        return false
-                    } catch (e: Exception) {
-                        Log.w(TAG, "Error comparing files: ${e.message}")
-                        return false
-                    }
+                // Helper to get file size from URI
+                fun getFileSize(uri: Uri): Long {
+                    return try {
+                        contentResolver.openAssetFileDescriptor(uri, "r")?.use { it.length } ?: -1L
+                    } catch (e: Exception) { -1L }
                 }
 
-                // Check for existing file and generate unique name (or reuse if identical)
+                // Helper to check if source and existing file are likely the same
+                // by comparing file sizes (fast, avoids reading entire file contents).
+                // If sizes can't be determined (both -1), assume match when the file
+                // already exists with the same name — avoids copying a file onto itself.
+                fun filesMatchBySize(uri1: Uri, uri2: Uri): Boolean {
+                    val size1 = getFileSize(uri1)
+                    val size2 = getFileSize(uri2)
+                    if (size1 > 0 && size1 == size2) return true
+                    if (size1 < 0 && size2 < 0) return true  // Both unknown, assume same
+                    return false
+                }
+
+                // Check for existing file and generate unique name (or reuse if same size)
                 var finalName = safeName
                 var existingFile = attachmentsDir.findFile(safeName)
                 if (existingFile != null) {
-                    // Check if content is identical - if so, reuse existing file
-                    if (filesAreIdentical(sourceUri, existingFile.uri)) {
+                    // If file exists with same name and same size, reuse it
+                    if (filesMatchBySize(sourceUri, existingFile.uri)) {
                         val relativePath = "./attachments/$safeName"
-                        Log.d(TAG, "Attachment already exists with identical content: $relativePath")
+                        Log.d(TAG, "Attachment already exists with matching size: $relativePath")
                         val escapedPath = relativePath.replace("\\", "\\\\").replace("\"", "\\\"")
                         return "{\"success\":true,\"path\":\"$escapedPath\",\"reused\":true}"
                     }
 
-                    // Different content, find unique name
+                    // Different size, find unique name
                     val baseName = safeName.substringBeforeLast(".")
                     val ext = safeName.substringAfterLast(".", "")
                     var counter = 1
                     do {
                         finalName = if (ext.isNotEmpty()) "${baseName}-$counter.$ext" else "${baseName}-$counter"
                         existingFile = attachmentsDir.findFile(finalName)
-                        // Also check if this numbered version has identical content
-                        if (existingFile != null && filesAreIdentical(sourceUri, existingFile.uri)) {
+                        if (existingFile != null && filesMatchBySize(sourceUri, existingFile.uri)) {
                             val relativePath = "./attachments/$finalName"
-                            Log.d(TAG, "Attachment already exists with identical content: $relativePath")
+                            Log.d(TAG, "Attachment already exists with matching size: $relativePath")
                             val escapedPath = relativePath.replace("\\", "\\\\").replace("\"", "\\\"")
                             return "{\"success\":true,\"path\":\"$escapedPath\",\"reused\":true}"
                         }
@@ -864,20 +876,34 @@ class WikiActivity : AppCompatActivity() {
                     return "{\"success\":false,\"error\":\"Failed to create attachment file\"}"
                 }
 
-                // Copy content
-                contentResolver.openInputStream(sourceUri)?.use { input ->
-                    contentResolver.openOutputStream(targetFile.uri)?.use { output ->
-                        input.copyTo(output)
-                    }
-                } ?: run {
-                    targetFile.delete()
-                    Log.e(TAG, "Failed to read source file")
-                    return "{\"success\":false,\"error\":\"Failed to read source file\"}"
-                }
-
                 val relativePath = "./attachments/$finalName"
-                Log.d(TAG, "Attachment copied successfully: $relativePath")
 
+                // Register pending copy so shouldInterceptRequest serves from source URI
+                // while the background copy is in progress
+                pendingFileCopies[relativePath] = sourceUri
+                addPendingCopyRecord(relativePath)
+
+                // Copy content in background thread — returns immediately so wiki can save
+                val targetUri = targetFile.uri
+                Thread {
+                    try {
+                        contentResolver.openInputStream(sourceUri)?.use { input ->
+                            contentResolver.openOutputStream(targetUri)?.use { output ->
+                                input.copyTo(output)
+                            }
+                        } ?: throw IOException("Failed to open streams for copy")
+                        Log.d(TAG, "Background attachment copy complete: $relativePath")
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Background attachment copy failed: ${e.message}", e)
+                        // Delete the partial/empty target file
+                        try { targetFile.delete() } catch (_: Exception) {}
+                    } finally {
+                        pendingFileCopies.remove(relativePath)
+                        removePendingCopyRecord(relativePath)
+                    }
+                }.start()
+
+                Log.d(TAG, "Attachment copy started in background: $relativePath")
                 val escapedPath = relativePath.replace("\\", "\\\\").replace("\"", "\\\"")
                 "{\"success\":true,\"path\":\"$escapedPath\"}"
             } catch (e: Exception) {
@@ -953,6 +979,7 @@ class WikiActivity : AppCompatActivity() {
 
                 // Launch the create document intent on the UI thread
                 runOnUiThread {
+                    exitFullscreenIfNeeded()
                     try {
                         val intent = Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
                             addCategory(Intent.CATEGORY_OPENABLE)
@@ -982,6 +1009,7 @@ class WikiActivity : AppCompatActivity() {
             pendingExportCallback = callbackId
 
             runOnUiThread {
+                exitFullscreenIfNeeded()
                 try {
                     val intent = Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
                         addCategory(Intent.CATEGORY_OPENABLE)
@@ -1024,11 +1052,18 @@ class WikiActivity : AppCompatActivity() {
     // Map of filename -> content:// URI for files picked via file chooser
     private val pendingFileUris = mutableMapOf<String, String>()
 
+    // Wiki document URI (for single-file wikis: the wiki file itself)
+    private var wikiUri: Uri? = null
+
     // Tree URI for folder access
     private var treeUri: Uri? = null
 
     // Pending attachment copy operation (waiting for folder access)
     private var pendingAttachmentCopy: Triple<String, String, String>? = null  // sourceUri, filename, mimeType
+
+    // Map of relativePath -> sourceUri for files being copied in background.
+    // shouldInterceptRequest serves from the source URI while the copy is in progress.
+    private val pendingFileCopies = ConcurrentHashMap<String, Uri>()
 
     // Launcher for requesting folder access for attachments
     private lateinit var attachmentFolderLauncher: ActivityResultLauncher<Intent>
@@ -1060,8 +1095,8 @@ class WikiActivity : AppCompatActivity() {
      */
     private fun updateSystemBarColors(statusBarColorHex: String, navBarColorHex: String, foregroundColorHex: String? = null) {
         try {
-            val statusColor = Color.parseColor(statusBarColorHex)
-            val navColor = Color.parseColor(navBarColorHex)
+            val statusColor = parseCssColor(statusBarColorHex)
+            val navColor = parseCssColor(navBarColorHex)
 
             window.statusBarColor = statusColor
             window.navigationBarColor = navColor
@@ -1126,6 +1161,27 @@ class WikiActivity : AppCompatActivity() {
     }
 
     /**
+     * Parse a CSS color string (hex, rgb(), rgba()) into an Android Color int.
+     * Falls back to Color.parseColor() for hex and named colors.
+     */
+    private fun parseCssColor(css: String): Int {
+        val trimmed = css.trim()
+        val rgbaMatch = Regex("""^rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*(?:,\s*([\d.]+)\s*)?\)$""").matchEntire(trimmed)
+        if (rgbaMatch != null) {
+            val r = rgbaMatch.groupValues[1].toInt().coerceIn(0, 255)
+            val g = rgbaMatch.groupValues[2].toInt().coerceIn(0, 255)
+            val b = rgbaMatch.groupValues[3].toInt().coerceIn(0, 255)
+            val a = if (rgbaMatch.groupValues[4].isNotEmpty()) {
+                (rgbaMatch.groupValues[4].toFloat().coerceIn(0f, 1f) * 255).toInt()
+            } else {
+                255
+            }
+            return Color.argb(a, r, g, b)
+        }
+        return Color.parseColor(trimmed)
+    }
+
+    /**
      * Calculate relative luminance of a color (0.0 = dark, 1.0 = light).
      */
     private fun calculateLuminance(color: Int): Double {
@@ -1140,14 +1196,132 @@ class WikiActivity : AppCompatActivity() {
         return 0.2126 * rLinear + 0.7152 * gLinear + 0.0722 * bLinear
     }
 
+    // ========== Pending file copy persistence ==========
+    // Tracks background attachment copies so partial files can be cleaned up if the app is killed.
+
+    private fun getPendingCopiesFile(): File {
+        val hash = wikiPath?.hashCode()?.toLong()?.and(0xFFFFFFFFL)?.let { String.format("%08x", it) } ?: "default"
+        return File(filesDir, "pending_copies_$hash.json")
+    }
+
+    private fun addPendingCopyRecord(relativePath: String) {
+        try {
+            val file = getPendingCopiesFile()
+            val paths = loadPendingCopyRecords().toMutableSet()
+            paths.add(relativePath)
+            file.writeText(JSONArray(paths.toList()).toString())
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to save pending copy record: ${e.message}")
+        }
+    }
+
+    private fun removePendingCopyRecord(relativePath: String) {
+        try {
+            val file = getPendingCopiesFile()
+            val paths = loadPendingCopyRecords().toMutableSet()
+            paths.remove(relativePath)
+            if (paths.isEmpty()) {
+                file.delete()
+            } else {
+                file.writeText(JSONArray(paths.toList()).toString())
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to remove pending copy record: ${e.message}")
+        }
+    }
+
+    private fun loadPendingCopyRecords(): Set<String> {
+        return try {
+            val file = getPendingCopiesFile()
+            if (file.exists()) {
+                val arr = JSONArray(file.readText())
+                (0 until arr.length()).map { arr.getString(it) }.toSet()
+            } else {
+                emptySet()
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to load pending copy records: ${e.message}")
+            emptySet()
+        }
+    }
+
     /**
-     * Enter immersive fullscreen mode (hide status bar and navigation bar).
+     * Clean up partial attachment files left by background copies that were interrupted
+     * (e.g., app killed by OOM, crash, or force-stop during copy).
+     * Runs on a background thread since DocumentFile operations involve SAF I/O.
      */
+    private fun cleanupPartialCopies() {
+        val staleEntries = loadPendingCopyRecords()
+        if (staleEntries.isEmpty()) return
+
+        Log.d(TAG, "Found ${staleEntries.size} stale pending copies, cleaning up on background thread")
+
+        Thread {
+            val parentDoc = if (treeUri != null) DocumentFile.fromTreeUri(this, treeUri!!) else null
+            if (parentDoc == null) {
+                Log.w(TAG, "No tree URI for cleanup - clearing stale records")
+                getPendingCopiesFile().delete()
+                return@Thread
+            }
+
+            for (relativePath in staleEntries) {
+                try {
+                    val pathParts = relativePath.removePrefix("./").split("/")
+                    var doc: DocumentFile? = parentDoc
+                    for (part in pathParts) {
+                        if (part.isEmpty() || part == ".") continue
+                        doc = doc?.findFile(part)
+                        if (doc == null) break
+                    }
+                    if (doc != null && doc.exists()) {
+                        doc.delete()
+                        Log.d(TAG, "Deleted partial copy: $relativePath")
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "Failed to delete partial copy $relativePath: ${e.message}")
+                }
+            }
+
+            getPendingCopiesFile().delete()
+            Log.d(TAG, "Partial copy cleanup complete")
+        }.start()
+    }
+
+    /**
+     * Exit immersive fullscreen if currently active.
+     * Call before launching external UI (file chooser, print, export).
+     */
+    private fun exitFullscreenIfNeeded() {
+        if (isImmersiveFullscreen) {
+            isImmersiveFullscreen = false
+            exitImmersiveMode()
+        }
+    }
+
+    /**
+     * "Fullscreen" — hide the status bar and extend content into its space.
+     * The navigation bar is kept visible to avoid consuming drag gestures.
+     *
+     * Previously, Android 14's InsetsController was hiding both bars even when
+     * only statusBars() was requested. The root cause was TiddlyWiki's built-in
+     * tm-full-screen handler (rootwidget.js) calling requestFullscreen() — the
+     * Browser Fullscreen API — which triggers WebView's native immersive mode.
+     * With requestFullscreen() now blocked in the injected JS, hiding only the
+     * status bar via WindowInsetsControllerCompat works correctly.
+     */
+    private var savedStatusBarColor: Int = 0
     private var savedCutoutMode: Int = 0
 
+    @Suppress("DEPRECATION")
     private fun enterImmersiveMode() {
-        Log.d(TAG, "Entering immersive fullscreen mode")
-        // Allow content to draw in display cutout area (notch/punch-hole)
+        Log.d(TAG, "Entering fullscreen — hiding status bar, keeping nav bar")
+        // Go edge-to-edge so content can extend into the status bar / notch area
+        WindowCompat.setDecorFitsSystemWindows(window, false)
+        val insetsController = WindowInsetsControllerCompat(window, window.decorView)
+        insetsController.hide(WindowInsetsCompat.Type.statusBars())
+        insetsController.systemBarsBehavior =
+            WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        // Draw into cutout/notch area
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
             val attrs = window.attributes
             savedCutoutMode = attrs.layoutInDisplayCutoutMode
@@ -1155,45 +1329,35 @@ class WikiActivity : AppCompatActivity() {
                 android.view.WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
             window.attributes = attrs
         }
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            window.setDecorFitsSystemWindows(false)
-            window.insetsController?.let { controller ->
-                controller.hide(WindowInsets.Type.statusBars() or WindowInsets.Type.navigationBars())
-                controller.systemBarsBehavior = WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
-            }
-        } else {
-            @Suppress("DEPRECATION")
-            window.decorView.systemUiVisibility = (
-                View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
-                or View.SYSTEM_UI_FLAG_LAYOUT_STABLE
-                or View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
-                or View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
-                or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
-                or View.SYSTEM_UI_FLAG_FULLSCREEN
-            )
+        // Pad only the bottom for the nav bar — no top padding so content
+        // fills the freed status bar / notch area
+        ViewCompat.setOnApplyWindowInsetsListener(rootLayout) { view, insets ->
+            val navBars = insets.getInsets(WindowInsetsCompat.Type.navigationBars())
+            view.setPadding(0, 0, 0, navBars.bottom)
+            WindowInsetsCompat.CONSUMED
         }
-        // Ensure layout has no inset padding
-        rootLayout.setPadding(0, 0, 0, 0)
+        rootLayout.requestApplyInsets()
     }
 
     /**
-     * Exit immersive fullscreen mode (show status bar and navigation bar).
+     * Exit fullscreen — restore the status bar.
      */
+    @Suppress("DEPRECATION")
     private fun exitImmersiveMode() {
-        Log.d(TAG, "Exiting immersive fullscreen mode")
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            window.insetsController?.show(WindowInsets.Type.statusBars() or WindowInsets.Type.navigationBars())
-            window.setDecorFitsSystemWindows(true)
-        } else {
-            @Suppress("DEPRECATION")
-            window.decorView.systemUiVisibility = View.SYSTEM_UI_FLAG_VISIBLE
-        }
+        Log.d(TAG, "Exiting fullscreen — restoring status bar")
+        val insetsController = WindowInsetsControllerCompat(window, window.decorView)
+        insetsController.show(WindowInsetsCompat.Type.statusBars())
+        // Restore normal system window fitting
+        WindowCompat.setDecorFitsSystemWindows(window, true)
         // Restore cutout mode
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
             val attrs = window.attributes
             attrs.layoutInDisplayCutoutMode = savedCutoutMode
             window.attributes = attrs
         }
+        // Remove custom insets handling, let system manage padding
+        ViewCompat.setOnApplyWindowInsetsListener(rootLayout, null)
+        rootLayout.setPadding(0, 0, 0, 0)
     }
 
     @SuppressLint("SetJavaScriptEnabled")
@@ -1376,15 +1540,19 @@ class WikiActivity : AppCompatActivity() {
         }
 
         // Parse the wiki path to get URIs (needed for attachment saving)
-        val (wikiUri, parsedTreeUri) = try {
+        val (parsedWikiUri, parsedTreeUri) = try {
             parseWikiPath(wikiPath!!)
         } catch (e: Exception) {
             Log.e(TAG, "Failed to parse wiki path: ${e.message}")
             finish()
             return
         }
+        wikiUri = parsedWikiUri
         treeUri = parsedTreeUri
         Log.d(TAG, "Parsed wiki path: wikiUri=$wikiUri, treeUri=$treeUri")
+
+        // Clean up any partial attachment files from interrupted background copies
+        cleanupPartialCopies()
 
         // Determine the wiki URL based on wiki type
         var wikiUrl: String
@@ -1402,7 +1570,7 @@ class WikiActivity : AppCompatActivity() {
 
             // Also start an HTTP server for serving attachments (Node.js server doesn't have /_relative/ endpoint)
             if (wikiUri != null && parsedTreeUri != null) {
-                httpServer = WikiHttpServer(this, wikiUri, parsedTreeUri, true, null, false, 0)  // No backups for folder wikis
+                httpServer = WikiHttpServer(this, wikiUri!!, parsedTreeUri, true, null, false, 0)  // No backups for folder wikis
                 attachmentServerUrl = try {
                     httpServer!!.start()                } catch (e: Exception) {
                     Log.e(TAG, "Failed to start attachment server: ${e.message}")
@@ -1423,7 +1591,7 @@ class WikiActivity : AppCompatActivity() {
             }
 
             // Start local HTTP server in this process (independent of Tauri/landing page)
-            httpServer = WikiHttpServer(this, wikiUri, parsedTreeUri, false, null, backupsEnabled, backupCount)
+            httpServer = WikiHttpServer(this, wikiUri!!, parsedTreeUri, false, null, backupsEnabled, backupCount)
             wikiUrl = try {
                 httpServer!!.start()            } catch (e: Exception) {
                 Log.e(TAG, "Failed to start HTTP server: ${e.message}")
@@ -1491,6 +1659,9 @@ class WikiActivity : AppCompatActivity() {
                     filePathCallback: ValueCallback<Array<Uri>>?,
                     fileChooserParams: FileChooserParams?
                 ): Boolean {
+                    // Exit fullscreen before showing file chooser
+                    exitFullscreenIfNeeded()
+
                     // Cancel any pending callback
                     this@WikiActivity.filePathCallback?.onReceiveValue(null)
                     this@WikiActivity.filePathCallback = filePathCallback
@@ -1763,12 +1934,25 @@ class WikiActivity : AppCompatActivity() {
                 // Use MutationObserver to transform src attributes at render time
                 // This preserves the original _canonical_uri (relative path) in the tiddler
                 // while displaying images via the local attachment server
+
+                // Get the attachment base URL dynamically.
+                // For single-file wikis: use location.origin (always the current server).
+                // For folder wikis: use the Kotlin attachment server URL via JS interface.
+                // Using dynamic resolution means URLs survive server restarts.
+                function getAttachmentBaseUrl() {
+                    if (window.__IS_FOLDER_WIKI__) {
+                        return window.TiddlyDesktopServer.getAttachmentServerUrl();
+                    }
+                    return location.origin;
+                }
+
                 function transformUrl(url) {
                     if (!url) return url;
                     // data: and blob: URLs should never be transformed
                     if (url.startsWith('data:') || url.startsWith('blob:')) {
                         return url;
                     }
+                    var baseUrl = getAttachmentBaseUrl();
                     // For folder wikis: transform Node.js server URLs to use Kotlin attachment server
                     // This is needed because Node.js TiddlyWiki server may not support range requests
                     // for video seeking/thumbnail generation
@@ -1778,7 +1962,7 @@ class WikiActivity : AppCompatActivity() {
                             // Extract the path after the server URL (e.g., /files/video.mp4 -> files/video.mp4)
                             var path = url.substring(serverBase.length + 1);
                             // Transform to attachment server's /_relative/ endpoint
-                            return window.__TD_ATTACHMENT_SERVER_URL__ + '/_relative/' + encodeURIComponent(path);
+                            return baseUrl + '/_relative/' + encodeURIComponent(path);
                         }
                     }
                     // Already transformed or external URL (https:// or http:// from different origin)
@@ -1788,10 +1972,10 @@ class WikiActivity : AppCompatActivity() {
                     // Absolute paths or content:// URIs -> /_file/ endpoint
                     if (url.startsWith('/') || url.startsWith('content://') || url.startsWith('file://')) {
                         var encoded = btoa(url).replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
-                        return window.__TD_ATTACHMENT_SERVER_URL__ + '/_file/' + encoded;
+                        return baseUrl + '/_file/' + encoded;
                     }
                     // Relative paths -> /_relative/ endpoint
-                    return window.__TD_ATTACHMENT_SERVER_URL__ + '/_relative/' + encodeURIComponent(url);
+                    return baseUrl + '/_relative/' + encodeURIComponent(url);
                 }
 
                 // Helper: check if a URL should be transformed
@@ -1881,6 +2065,13 @@ class WikiActivity : AppCompatActivity() {
                     }
 
                     ${'$'}tw.hooks.addHook("th-importing-file", function(info) {
+                        // Guard against invokeHook chaining: if a previous hook returned
+                        // a non-object (e.g., false), info won't have the expected properties.
+                        // Pass through the value unchanged so chaining continues correctly.
+                        if (!info || typeof info !== 'object' || !info.file) {
+                            return info;
+                        }
+
                         var file = info.file;
                         var filename = file.name;
                         var type = info.type;
@@ -1910,7 +2101,7 @@ class WikiActivity : AppCompatActivity() {
                         // If there's a deserializer, let TiddlyWiki handle it
                         if (hasDeserializer) {
                             console.log('[TiddlyDesktop] Deserializer found for type ' + type + ', letting TiddlyWiki handle import');
-                            return false;
+                            return info;
                         }
 
                         // Check if external attachments are enabled
@@ -1928,7 +2119,7 @@ class WikiActivity : AppCompatActivity() {
                         // Only handle binary files when external attachments enabled
                         if (!externalEnabled || !isBinaryType) {
                             console.log('[TiddlyDesktop] Letting TiddlyWiki handle import (external=' + externalEnabled + ', binary=' + info.isBinary + ', isBinaryType=' + isBinaryType + ')');
-                            return false; // Let TiddlyWiki handle it normally
+                            return info; // Let TiddlyWiki handle it normally
                         }
 
                         console.log('[TiddlyDesktop] Intercepting binary import for external attachment: ' + filename);
@@ -1937,7 +2128,7 @@ class WikiActivity : AppCompatActivity() {
                         if (typeof window.TiddlyDesktopAttachments === 'undefined' ||
                             typeof window.TiddlyDesktopAttachments.getFileUri !== 'function') {
                             console.log('[TiddlyDesktop] Attachment interface not available, letting TiddlyWiki handle');
-                            return false;
+                            return info;
                         }
 
                         try {
@@ -2007,10 +2198,10 @@ class WikiActivity : AppCompatActivity() {
                             }
 
                             console.log('[TiddlyDesktop] Letting TiddlyWiki embed the file');
-                            return false; // Let TiddlyWiki handle it (embed)
+                            return info; // Let TiddlyWiki handle it (embed)
                         } catch (e) {
-                            console.error('[TiddlyDesktop] Error handling import:', e);
-                            return false; // Let TiddlyWiki handle it
+                            console.error('[TiddlyDesktop] Error handling import:', e && e.message ? e.message : String(e));
+                            return info; // Let TiddlyWiki handle it
                         }
                     });
 
@@ -2288,10 +2479,107 @@ class WikiActivity : AppCompatActivity() {
                 }
                 installBracketStripping();
 
+                // ========== Extra Media Type Support ==========
+                // Register file types and parsers for formats not in TiddlyWiki core.
+                // File type registration enables import recognition; parser registration
+                // enables rendering as <audio>/<video> elements.
+                function registerExtraMediaTypes() {
+                    // Audio types missing from core
+                    ${'$'}tw.utils.registerFileType("audio/wav","base64",[".wav",".wave"]);
+                    ${'$'}tw.utils.registerFileType("audio/flac","base64",".flac");
+                    ${'$'}tw.utils.registerFileType("audio/aac","base64",".aac");
+                    ${'$'}tw.utils.registerFileType("audio/webm","base64",".weba");
+                    ${'$'}tw.utils.registerFileType("audio/opus","base64",".opus");
+                    ${'$'}tw.utils.registerFileType("audio/aiff","base64",[".aiff",".aif"]);
+                    // Video types missing from core
+                    ${'$'}tw.utils.registerFileType("video/quicktime","base64",".mov");
+                    ${'$'}tw.utils.registerFileType("video/x-matroska","base64",".mkv");
+                    ${'$'}tw.utils.registerFileType("video/3gpp","base64",".3gp");
+
+                    // Audio parser for types not covered by core's audioparser.js
+                    var ExtraAudioParser = function(type,text,options) {
+                        var element = {
+                            type: "element",
+                            tag: "audio",
+                            attributes: {
+                                controls: {type: "string", value: "controls"},
+                                preload: {type: "string", value: "auto"},
+                                style: {type: "string", value: "width: 100%; object-fit: contain"}
+                            }
+                        };
+                        if(options._canonical_uri) {
+                            element.attributes.src = {type: "string", value: options._canonical_uri};
+                        } else if(text) {
+                            element.attributes.src = {type: "string", value: "data:" + type + ";base64," + text};
+                        }
+                        this.tree = [element];
+                        this.source = text;
+                        this.type = type;
+                    };
+
+                    // Video parser for types not covered by core's videoparser.js
+                    var ExtraVideoParser = function(type,text,options) {
+                        var element = {
+                            type: "element",
+                            tag: "video",
+                            attributes: {
+                                controls: {type: "string", value: "controls"},
+                                style: {type: "string", value: "width: 100%; object-fit: contain"}
+                            }
+                        };
+                        if(options._canonical_uri) {
+                            element.attributes.src = {type: "string", value: options._canonical_uri};
+                        } else if(text) {
+                            element.attributes.src = {type: "string", value: "data:" + type + ";base64," + text};
+                        }
+                        this.tree = [element];
+                        this.source = text;
+                        this.type = type;
+                    };
+
+                    // Register parsers directly (initParsers() already ran at startup)
+                    var audioTypes = ["audio/wav","audio/wave","audio/x-wav","audio/flac",
+                                      "audio/aac","audio/webm","audio/opus","audio/aiff","audio/x-aiff"];
+                    var videoTypes = ["video/quicktime","video/x-matroska","video/3gpp"];
+
+                    audioTypes.forEach(function(t) {
+                        if(!${'$'}tw.Wiki.parsers[t]) {
+                            ${'$'}tw.Wiki.parsers[t] = ExtraAudioParser;
+                        }
+                    });
+                    videoTypes.forEach(function(t) {
+                        if(!${'$'}tw.Wiki.parsers[t]) {
+                            ${'$'}tw.Wiki.parsers[t] = ExtraVideoParser;
+                        }
+                    });
+
+                    console.log('[TiddlyDesktop] Extra media types registered');
+                }
+
                 // Initialize - add UI tiddlers then register as plugin
                 // Capture dirty state before any modifications
                 var originalNumChanges = ${'$'}tw.saverHandler ? ${'$'}tw.saverHandler.numChanges : 0;
 
+                registerExtraMediaTypes();
+                // Refresh any tiddlers with newly-registered media types.
+                // Parsers were registered after TW's initial render (onPageFinished),
+                // so tiddlers with these types may have failed to render.
+                (function() {
+                    var changedTiddlers = {};
+                    ${'$'}tw.wiki.each(function(tiddler, title) {
+                        var type = tiddler.fields.type;
+                        if (type && ${'$'}tw.Wiki.parsers[type] &&
+                            (type.startsWith("audio/") || type.startsWith("video/"))) {
+                            ${'$'}tw.wiki.clearCache(title);
+                            changedTiddlers[title] = {modified: true};
+                        }
+                    });
+                    var keys = Object.keys(changedTiddlers);
+                    if (keys.length > 0) {
+                        console.log('[TiddlyDesktop] Refreshing ' + keys.length + ' media tiddlers');
+                        ${'$'}tw.rootWidget.refresh(changedTiddlers);
+                    }
+                })();
                 injectSettingsUI();
                 injectSessionAuthUI();
                 registerPlugin();  // Register all shadow tiddlers as a plugin
@@ -2326,8 +2614,35 @@ class WikiActivity : AppCompatActivity() {
                 }
 
                 TiddlyDesktopSaver.prototype.save = function(text, method, callback) {
+                    var self = this;
                     var contentLength = new Blob([text]).size;
                     console.log('[TiddlyDesktop Saver] Saving ' + text.length + ' chars (' + contentLength + ' bytes) via ' + method + '...');
+
+                    function chainCloudSavers() {
+                        if (!${'$'}tw || !${'$'}tw.saverHandler) return;
+                        var savers = ${'$'}tw.saverHandler.savers;
+                        for (var i = savers.length - 1; i >= 0; i--) {
+                            var saver = savers[i];
+                            if (saver === self) continue;
+                            if (saver.info.priority >= self.info.priority) continue;
+                            if (saver.info.capabilities.indexOf(method) === -1) continue;
+                            (function(s) {
+                                try {
+                                    if (s.save(text, method, function(err) {
+                                        if (err) {
+                                            console.warn('[TiddlyDesktop] Cloud saver \'' + s.info.name + '\' failed: ' + err);
+                                        } else {
+                                            console.log('[TiddlyDesktop] Cloud saver \'' + s.info.name + '\' succeeded');
+                                        }
+                                    })) {
+                                        console.log('[TiddlyDesktop] Triggered cloud saver: ' + s.info.name);
+                                    }
+                                } catch(e) {
+                                    console.warn('[TiddlyDesktop] Cloud saver \'' + s.info.name + '\' threw: ' + e);
+                                }
+                            })(saver);
+                        }
+                    }
 
                     var xhr = new XMLHttpRequest();
                     xhr.timeout = 60000;
@@ -2338,6 +2653,7 @@ class WikiActivity : AppCompatActivity() {
                         if (xhr.status === 200) {
                             console.log('[TiddlyDesktop Saver] Save successful (' + contentLength + ' bytes)');
                             callback(null);
+                            chainCloudSavers();
                         } else {
                             var msg = 'Save failed: HTTP ' + xhr.status + ' ' + xhr.statusText + ' — ' + xhr.responseText;
                             console.error('[TiddlyDesktop Saver] ' + msg);
@@ -2443,11 +2759,34 @@ class WikiActivity : AppCompatActivity() {
                     return fallback;
                 }
 
+                // Resolve any CSS color to #rrggbb or rgba(r,g,b,a) using a canvas context
+                var _colorCtx = null;
+                function resolveCssColor(color, fallback) {
+                    try {
+                        if (!_colorCtx) _colorCtx = document.createElement('canvas').getContext('2d');
+                        _colorCtx.fillStyle = '#000';
+                        _colorCtx.fillStyle = color;
+                        var resolved = _colorCtx.fillStyle;
+                        // fillStyle stays '#000000' if the color was invalid
+                        if (resolved === '#000000' && color.trim().toLowerCase() !== '#000000' && color.trim().toLowerCase() !== '#000' && color.trim().toLowerCase() !== 'black') {
+                            return fallback || color;
+                        }
+                        return resolved;
+                    } catch (e) {
+                        return fallback || color;
+                    }
+                }
+
+                // Dark mode fallback colors (used when palette has no color defined)
+                var _isDarkMode = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+                var _defaultBg = _isDarkMode ? '#333333' : '#ffffff';
+                var _defaultFg = _isDarkMode ? '#cccccc' : '#333333';
+
                 // Function to update system bar colors via native bridge
                 function updateSystemBarColors() {
-                    var statusBarColor = getColour('page-background', '#ffffff');
-                    var navBarColor = getColour('tiddler-background', statusBarColor);
-                    var foregroundColor = getColour('foreground', '#333333');
+                    var statusBarColor = resolveCssColor(getColour('page-background', _defaultBg), _defaultBg);
+                    var navBarColor = resolveCssColor(getColour('tiddler-background', statusBarColor), statusBarColor);
+                    var foregroundColor = resolveCssColor(getColour('foreground', _defaultFg), _defaultFg);
 
                     if (window.TiddlyDesktopAndroid && window.TiddlyDesktopAndroid.setSystemBarColors) {
                         window.TiddlyDesktopAndroid.setSystemBarColors(statusBarColor, navBarColor, foregroundColor);
@@ -2497,16 +2836,59 @@ class WikiActivity : AppCompatActivity() {
             })();
         """.trimIndent()
 
-        // Script to handle tm-full-screen message for toggling immersive fullscreen
+        // Script to handle tm-full-screen message for toggling fullscreen (status bar hide)
         val fullscreenScript = """
             (function() {
+                // Stub the Fullscreen API on document.documentElement to prevent
+                // TiddlyWiki's built-in tm-full-screen handler (rootwidget.js) from
+                // calling requestFullscreen(), which triggers WebView's native
+                // immersive mode — hiding both bars and breaking drag & drop.
+                // Video fullscreen (onShowCustomView) uses a separate mechanism.
+                var docEl = document.documentElement;
+                if (docEl.requestFullscreen) {
+                    docEl.requestFullscreen = function() {
+                        console.log('[TiddlyDesktop] requestFullscreen blocked (handled natively)');
+                        return Promise.resolve();
+                    };
+                }
+                if (docEl.webkitRequestFullscreen) {
+                    docEl.webkitRequestFullscreen = function() {
+                        console.log('[TiddlyDesktop] webkitRequestFullscreen blocked (handled natively)');
+                    };
+                }
+                // Stub exitFullscreen to exit video fullscreen (Plyr etc.) via Kotlin,
+                // while also preventing TiddlyWiki's toggle logic from erroring
+                if (document.exitFullscreen) {
+                    document.exitFullscreen = function() {
+                        console.log('[TiddlyDesktop] exitFullscreen — delegating to native');
+                        if (window.TiddlyDesktopServer && window.TiddlyDesktopServer.exitVideoFullscreen) {
+                            window.TiddlyDesktopServer.exitVideoFullscreen();
+                        }
+                        return Promise.resolve();
+                    };
+                }
+                if (document.webkitExitFullscreen) {
+                    document.webkitExitFullscreen = function() {
+                        console.log('[TiddlyDesktop] webkitExitFullscreen — delegating to native');
+                        if (window.TiddlyDesktopServer && window.TiddlyDesktopServer.exitVideoFullscreen) {
+                            window.TiddlyDesktopServer.exitVideoFullscreen();
+                        }
+                    };
+                }
+
                 // Wait for TiddlyWiki to fully load (including after decryption for encrypted wikis)
                 if (typeof ${'$'}tw === 'undefined' || !${'$'}tw.rootWidget) {
                     setTimeout(arguments.callee, 100);
                     return;
                 }
 
-                // tm-full-screen handler - toggle immersive fullscreen mode
+                // Remove TiddlyWiki's built-in tm-full-screen handlers (from rootwidget.js)
+                // which call requestFullscreen(). We handle fullscreen natively.
+                if (${'$'}tw.rootWidget.eventListeners && ${'$'}tw.rootWidget.eventListeners['tm-full-screen']) {
+                    ${'$'}tw.rootWidget.eventListeners['tm-full-screen'] = [];
+                }
+
+                // tm-full-screen handler - toggle status bar visibility
                 ${'$'}tw.rootWidget.addEventListener('tm-full-screen', function(event) {
                     console.log('[TiddlyDesktop] tm-full-screen received');
                     try {
@@ -2527,7 +2909,7 @@ class WikiActivity : AppCompatActivity() {
                     return false;
                 });
 
-                console.log('[TiddlyDesktop] tm-full-screen handler installed');
+                console.log('[TiddlyDesktop] tm-full-screen handler installed (requestFullscreen blocked)');
             })();
         """.trimIndent()
 
@@ -2968,6 +3350,8 @@ class WikiActivity : AppCompatActivity() {
                         'webp': 'image/webp',
                         'bmp': 'image/bmp',
                         'ico': 'image/x-icon',
+                        'heic': 'image/heic',
+                        'heif': 'image/heif',
                         // Audio
                         'mp3': 'audio/mpeg',
                         'm4a': 'audio/mp4',
@@ -3288,8 +3672,6 @@ class WikiActivity : AppCompatActivity() {
                     video.muted = true;
                     video.playsInline = true;
                     video.preload = 'metadata';
-                    // Set crossOrigin for CORS-enabled servers (needed for canvas capture)
-                    video.crossOrigin = 'anonymous';
 
                     var thumbs = [];
                     var duration = 0;
@@ -3435,7 +3817,6 @@ class WikiActivity : AppCompatActivity() {
                     video.muted = true;
                     video.playsInline = true;
                     video.preload = 'metadata';
-                    video.crossOrigin = 'anonymous';
                     var done = false;
                     var timeoutId = null;
 
@@ -3475,8 +3856,9 @@ class WikiActivity : AppCompatActivity() {
                         }
                     };
 
-                    video.onerror = function(e) {
-                        console.warn('[TD-Plyr] Could not load video for poster:', e);
+                    video.onerror = function() {
+                        var err = video.error;
+                        console.warn('[TD-Plyr] Could not load video for poster: code=' + (err ? err.code : '?') + ' ' + (err ? err.message : ''));
                         finish(null);
                     };
 
@@ -3522,7 +3904,7 @@ class WikiActivity : AppCompatActivity() {
 
                                 console.log('[TD-Plyr] Enhanced video:', videoSrc || '(no src)', vttUrl ? '(with thumbnails)' : '');
                             } catch(err) {
-                                console.error('[TD-Plyr] Error:', err);
+                                console.error('[TD-Plyr] Error:', err && err.message ? err.message : JSON.stringify(err));
                                 // Show video anyway if Plyr fails
                                 el.classList.remove('td-plyr-pending');
                             }
@@ -3666,6 +4048,31 @@ class WikiActivity : AppCompatActivity() {
                 val url = request.url
                 val path = url.path ?: return super.shouldInterceptRequest(view, request)
 
+                // Serve attachment files directly, bypassing HTTP server.
+                // EXCEPT: Range requests must go through the HTTP server because
+                // WebView's shouldInterceptRequest doesn't properly support 206
+                // Partial Content responses for media seeking (Chrome retries endlessly).
+                val hasRangeHeader = request.requestHeaders?.let {
+                    it.containsKey("Range") || it.containsKey("range")
+                } ?: false
+
+                if (path.startsWith("/_file/")) {
+                    if (hasRangeHeader) {
+                        Log.d(TAG, "Letting Range request fall through to HTTP server: $url")
+                        return super.shouldInterceptRequest(view, request)
+                    }
+                    Log.d(TAG, "Intercepting /_file/ request: $url")
+                    return serveFileRequest(path, request.requestHeaders)
+                }
+                if (path.startsWith("/_relative/")) {
+                    if (hasRangeHeader) {
+                        Log.d(TAG, "Letting Range request fall through to HTTP server: $url")
+                        return super.shouldInterceptRequest(view, request)
+                    }
+                    Log.d(TAG, "Intercepting /_relative/ request: $url")
+                    return serveRelativeRequest(path, request.requestHeaders)
+                }
+
                 // Serve bundled library assets from /_td/ prefix
                 if (path.startsWith("/_td/")) {
                     Log.d(TAG, "Intercepting /_td/ request: $url")
@@ -3676,6 +4083,23 @@ class WikiActivity : AppCompatActivity() {
                         Log.e(TAG, "Failed to serve /_td/ asset: ${path.removePrefix("/_td/")}")
                     }
                     return response
+                }
+
+                // Fallback: serve unknown paths as relative files from the wiki folder.
+                // This handles _canonical_uri relative paths (e.g. ./attachments/video.mp4)
+                // that the browser resolves to /attachments/video.mp4 before the URL-transform
+                // MutationObserver has had a chance to rewrite them to /_relative/... URLs.
+                // Skip range requests — let them go to the HTTP server for proper 206 support.
+                if (!hasRangeHeader && (treeUri != null || wikiUri != null) && !path.startsWith("/_") && path != "/" &&
+                    !path.startsWith("/recipes/") && !path.startsWith("/bags/") &&
+                    !path.startsWith("/status")) {
+                    val relativePath = "./" + path.trimStart('/')
+                    val encodedPath = "/_relative/" + java.net.URLEncoder.encode(relativePath, "UTF-8")
+                    val response = serveRelativeRequest(encodedPath, request.requestHeaders)
+                    if (response != null) {
+                        Log.d(TAG, "Served relative fallback: $path -> $relativePath")
+                        return response
+                    }
                 }
 
                 return super.shouldInterceptRequest(view, request)
@@ -3723,9 +4147,16 @@ class WikiActivity : AppCompatActivity() {
             }
         }
 
-        // Set initial default system bar colors (light background with dark icons for visibility)
-        // This ensures proper contrast before JavaScript sets the palette colors
-        updateSystemBarColors("#ffffff", "#ffffff", null)
+        // Set initial system bar colors based on system dark mode setting.
+        // These are fallback colors shown before JavaScript sets the palette colors.
+        val isDarkMode = (resources.configuration.uiMode and
+            android.content.res.Configuration.UI_MODE_NIGHT_MASK) ==
+            android.content.res.Configuration.UI_MODE_NIGHT_YES
+        if (isDarkMode) {
+            updateSystemBarColors("#333333", "#333333", null)
+        } else {
+            updateSystemBarColors("#ffffff", "#ffffff", null)
+        }
 
         // Load the wiki URL
         Log.d(TAG, "Loading wiki URL: $wikiUrl")
@@ -3749,7 +4180,14 @@ class WikiActivity : AppCompatActivity() {
      * and onKeyDown (physical back button).
      */
     private fun handleBackNavigation() {
-        // Exit fullscreen first
+        // Exit immersive fullscreen first (app fullscreen via tm-full-screen)
+        if (isImmersiveFullscreen) {
+            isImmersiveFullscreen = false
+            exitImmersiveMode()
+            return
+        }
+
+        // Exit video fullscreen
         if (fullscreenView != null) {
             fullscreenCallback?.onCustomViewHidden()
             return
@@ -4321,6 +4759,259 @@ class WikiActivity : AppCompatActivity() {
      * Serve a bundled asset from the td/ directory in Android assets.
      * Used for PDF.js and Plyr library files accessed via /_td/ URL prefix.
      */
+    /**
+     * Serve /_file/{base64path} requests directly via WebView interception.
+     * Bypasses the HTTP server for better reliability and performance.
+     */
+    private fun serveFileRequest(path: String, requestHeaders: Map<String, String>): WebResourceResponse? {
+        return try {
+            val encoded = path.removePrefix("/_file/")
+            // Decode base64url (- -> +, _ -> /)
+            val base64 = encoded.replace('-', '+').replace('_', '/')
+            val padded = when (base64.length % 4) {
+                2 -> "$base64=="
+                3 -> "$base64="
+                else -> base64
+            }
+            val decodedPath = String(Base64.decode(padded, Base64.DEFAULT))
+            Log.d(TAG, "Intercepting file request: $decodedPath")
+
+            val uri = when {
+                decodedPath.startsWith("content://") -> Uri.parse(decodedPath)
+                decodedPath.startsWith("file://") -> Uri.parse(decodedPath)
+                else -> Uri.fromFile(File(decodedPath))
+            }
+
+            val mimeType = guessMimeTypeForIntercept(decodedPath)
+
+            // Convert unsupported image formats to JPEG
+            if (mimeType == "image/heic" || mimeType == "image/heif" ||
+                mimeType == "image/tiff" || mimeType == "image/avif") {
+                return serveConvertedImage(uri)
+            }
+
+            serveUriWithRangeSupport(uri, mimeType, requestHeaders)
+        } catch (e: Exception) {
+            Log.e(TAG, "Error serving file request: ${e.message}", e)
+            null
+        }
+    }
+
+    /**
+     * Serve /_relative/{relativePath} requests directly via WebView interception.
+     * Bypasses the HTTP server for better reliability and performance.
+     */
+    private fun serveRelativeRequest(path: String, requestHeaders: Map<String, String>): WebResourceResponse? {
+        return try {
+            val relativePath = URLDecoder.decode(path.removePrefix("/_relative/"), "UTF-8")
+            Log.d(TAG, "Intercepting relative request: $relativePath")
+
+            // Check if this file is being copied in the background.
+            // Serve from the original source URI while the copy is in progress.
+            val normalizedPath = if (relativePath.startsWith("./")) relativePath else "./$relativePath"
+            val sourceUri = pendingFileCopies[normalizedPath]
+            if (sourceUri != null) {
+                Log.d(TAG, "Serving from source URI (copy in progress): $relativePath")
+                val mimeType = contentResolver.getType(sourceUri) ?: guessMimeTypeForIntercept(relativePath)
+                return serveUriWithRangeSupport(sourceUri, mimeType, requestHeaders)
+            }
+
+            val parentDoc = if (treeUri != null) {
+                DocumentFile.fromTreeUri(this, treeUri!!)
+            } else if (wikiUri != null) {
+                // Fall back to parent of single document URI (single-file wikis without tree access)
+                DocumentFile.fromSingleUri(this, wikiUri!!)?.parentFile
+            } else {
+                null
+            }
+
+            if (parentDoc == null) {
+                Log.e(TAG, "No tree URI or wiki URI for relative file: $relativePath")
+                return null
+            }
+
+            // Navigate the path
+            val pathParts = relativePath.split("/")
+            var currentDoc: DocumentFile? = parentDoc
+            for (part in pathParts) {
+                if (part.isEmpty() || part == ".") continue
+                if (part == "..") {
+                    currentDoc = currentDoc?.parentFile
+                } else {
+                    currentDoc = currentDoc?.findFile(part)
+                }
+                if (currentDoc == null) break
+            }
+
+            if (currentDoc == null || !currentDoc.exists()) {
+                Log.e(TAG, "Relative file not found: $relativePath")
+                return null
+            }
+
+            val mimeType = currentDoc.type ?: guessMimeTypeForIntercept(relativePath)
+            val uri = currentDoc.uri
+
+            // Convert unsupported image formats to JPEG
+            if (mimeType == "image/heic" || mimeType == "image/heif" ||
+                mimeType == "image/tiff" || mimeType == "image/avif") {
+                return serveConvertedImage(uri)
+            }
+
+            serveUriWithRangeSupport(uri, mimeType, requestHeaders)
+        } catch (e: Exception) {
+            Log.e(TAG, "Error serving relative request: ${e.message}", e)
+            null
+        }
+    }
+
+    /**
+     * Serve a file URI with HTTP Range request support.
+     * Uses ParcelFileDescriptor for O(1) seeking instead of InputStream.skip() which is O(n).
+     * Returns a 206 Partial Content response for Range requests (needed for video seeking),
+     * or a 200 OK response with Content-Length and Accept-Ranges headers for full requests.
+     */
+    private fun serveUriWithRangeSupport(uri: Uri, mimeType: String, requestHeaders: Map<String, String>): WebResourceResponse? {
+        // Get file size for Range support
+        val fileSize = try {
+            contentResolver.openAssetFileDescriptor(uri, "r")?.use { it.length } ?: -1L
+        } catch (e: Exception) { -1L }
+
+        val rangeHeader = requestHeaders["Range"] ?: requestHeaders["range"]
+
+        if (rangeHeader != null && rangeHeader.startsWith("bytes=") && fileSize > 0) {
+            // Handle Range request for video/audio seeking
+            val rangeSpec = rangeHeader.removePrefix("bytes=")
+            val rangeParts = rangeSpec.split("-")
+            val start = rangeParts[0].toLongOrNull() ?: 0L
+            val end = if (rangeParts.size > 1 && rangeParts[1].isNotEmpty()) {
+                rangeParts[1].toLongOrNull() ?: (fileSize - 1)
+            } else {
+                fileSize - 1
+            }
+
+            if (start >= fileSize || start > end) {
+                return WebResourceResponse(mimeType, null, 416, "Range Not Satisfiable",
+                    mapOf("Content-Range" to "bytes */$fileSize"), null)
+            }
+
+            val contentLength = end - start + 1
+
+            // Use ParcelFileDescriptor for O(1) seeking via file channel
+            val pfd = contentResolver.openFileDescriptor(uri, "r") ?: return null
+            val fis = java.io.FileInputStream(pfd.fileDescriptor)
+            fis.channel.position(start)
+
+            // Wrap in a limiting stream that also closes the ParcelFileDescriptor
+            val limitedStream = LimitedInputStream(fis, contentLength, pfd)
+
+            val headers = mapOf(
+                "Content-Type" to mimeType,
+                "Content-Length" to contentLength.toString(),
+                "Content-Range" to "bytes $start-$end/$fileSize",
+                "Accept-Ranges" to "bytes",
+                "Access-Control-Allow-Origin" to "*"
+            )
+
+            Log.d(TAG, "Range response: bytes $start-$end/$fileSize ($contentLength bytes)")
+            return WebResourceResponse(mimeType, null, 206, "Partial Content", headers, limitedStream)
+        }
+
+        // Full response with Content-Length and Accept-Ranges
+        val inputStream = contentResolver.openInputStream(uri) ?: return null
+        val headers = mutableMapOf(
+            "Accept-Ranges" to "bytes",
+            "Access-Control-Allow-Origin" to "*"
+        )
+        if (fileSize > 0) {
+            headers["Content-Length"] = fileSize.toString()
+        }
+
+        return WebResourceResponse(mimeType, null, 200, "OK", headers, inputStream)
+    }
+
+    /**
+     * InputStream wrapper that limits reads to a specified number of bytes.
+     * Used for serving HTTP Range responses. Optionally closes a ParcelFileDescriptor on close.
+     */
+    private class LimitedInputStream(
+        private val wrapped: java.io.InputStream,
+        private var remaining: Long,
+        private val pfd: android.os.ParcelFileDescriptor? = null
+    ) : java.io.InputStream() {
+        override fun read(): Int {
+            if (remaining <= 0) return -1
+            val b = wrapped.read()
+            if (b >= 0) remaining--
+            return b
+        }
+        override fun read(b: ByteArray, off: Int, len: Int): Int {
+            if (remaining <= 0) return -1
+            val toRead = minOf(len.toLong(), remaining).toInt()
+            val n = wrapped.read(b, off, toRead)
+            if (n > 0) remaining -= n
+            return n
+        }
+        override fun close() {
+            wrapped.close()
+            pfd?.close()
+        }
+    }
+
+    /**
+     * Convert an unsupported image format to JPEG and return as WebResourceResponse.
+     */
+    private fun serveConvertedImage(uri: Uri): WebResourceResponse? {
+        return try {
+            val bitmap = contentResolver.openInputStream(uri)?.use { input ->
+                android.graphics.BitmapFactory.decodeStream(input)
+            } ?: return null
+
+            val baos = java.io.ByteArrayOutputStream()
+            bitmap.compress(android.graphics.Bitmap.CompressFormat.JPEG, 90, baos)
+            bitmap.recycle()
+
+            WebResourceResponse("image/jpeg", null, java.io.ByteArrayInputStream(baos.toByteArray()))
+        } catch (e: Exception) {
+            Log.e(TAG, "Error converting image: ${e.message}", e)
+            null
+        }
+    }
+
+    /**
+     * Guess MIME type from file path extension.
+     */
+    private fun guessMimeTypeForIntercept(path: String): String {
+        val ext = path.substringAfterLast('.', "").lowercase()
+        return when (ext) {
+            "html", "htm" -> "text/html"
+            "css" -> "text/css"
+            "js" -> "application/javascript"
+            "json" -> "application/json"
+            "txt" -> "text/plain"
+            "png" -> "image/png"
+            "jpg", "jpeg" -> "image/jpeg"
+            "gif" -> "image/gif"
+            "svg" -> "image/svg+xml"
+            "webp" -> "image/webp"
+            "ico" -> "image/x-icon"
+            "bmp" -> "image/bmp"
+            "tiff", "tif" -> "image/tiff"
+            "heic", "heif" -> "image/heic"
+            "avif" -> "image/avif"
+            "mp3" -> "audio/mpeg"
+            "m4a" -> "audio/mp4"
+            "ogg", "oga" -> "audio/ogg"
+            "wav" -> "audio/wav"
+            "flac" -> "audio/flac"
+            "mp4", "m4v" -> "video/mp4"
+            "webm" -> "video/webm"
+            "ogv" -> "video/ogg"
+            "mov" -> "video/quicktime"
+            "pdf" -> "application/pdf"
+            else -> MimeTypeMap.getSingleton().getMimeTypeFromExtension(ext) ?: "application/octet-stream"
+        }
+    }
+
     private fun serveTdAsset(assetPath: String): WebResourceResponse? {
         return try {
             val inputStream = assets.open("td/$assetPath")

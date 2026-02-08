@@ -619,6 +619,7 @@
         // Windows-specific: track pending native file drop waiting for tauri://drag-drop
         var pendingWindowsFileDrop = null;
         var isWindows = navigator.platform.indexOf('Win') !== -1 || navigator.userAgent.indexOf('Windows') !== -1;
+        var isMacOS = navigator.platform.indexOf('Mac') !== -1 || navigator.userAgent.indexOf('Macintosh') !== -1;
 
         window.__pendingExternalFiles = window.__pendingExternalFiles || {};
 
@@ -1492,6 +1493,15 @@
 
         document.addEventListener("dragover", function(event) {
             if (event.__tiddlyDesktopSynthetic) return;
+            // macOS: accept file-only drops even when contentDragActive is not set.
+            // File-only drags skip contentDragActive (dragenter returns early for hasFiles && !hasContent),
+            // but we still need preventDefault to tell the browser we accept the drop.
+            if (isMacOS && !contentDragActive && !nativeDragActive && !isDragging &&
+                event.dataTransfer && event.dataTransfer.types &&
+                Array.prototype.indexOf.call(event.dataTransfer.types, 'Files') !== -1) {
+                event.preventDefault();
+                return;
+            }
             if (!contentDragActive || nativeDragActive || isDragging) return;
             if (typeof $tw !== "undefined" && $tw.dragInProgress) return;
 
@@ -1550,6 +1560,14 @@
                 ? document.elementFromPoint(event.clientX, event.clientY)
                 : null;
             if ((target && isEditableElement(target)) || event.__tdEditableDrop) return;
+
+            // macOS: always prevent default to stop the browser from navigating to dropped files.
+            // On macOS WKWebView, td-drag-motion fires asynchronously after native HTML5 drop events,
+            // so nativeDragActive may still be false when the drop event fires for file-only drops.
+            if (isMacOS) {
+                event.preventDefault();
+                event.stopPropagation();
+            }
 
             if (nativeDragActive) {
                 event.preventDefault();

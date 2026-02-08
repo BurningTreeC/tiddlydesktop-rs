@@ -322,6 +322,10 @@ class WikiActivity : AppCompatActivity() {
     private var pendingExportContent: ByteArray? = null
     private var pendingExportCallback: String? = null
 
+    // Auth overlay WebView for session auth login
+    private var authOverlayContainer: FrameLayout? = null
+    private var authWebView: WebView? = null
+
     /**
      * JavaScript interface for receiving palette color updates from TiddlyWiki.
      */
@@ -473,16 +477,25 @@ class WikiActivity : AppCompatActivity() {
     inner class ClipboardInterface {
         /**
          * Copy text to the system clipboard.
+         * Must run on the UI thread — setPrimaryClip silently fails on the JavaBridge thread
+         * on some Android versions.
          * Returns JSON with success status.
          */
         @JavascriptInterface
         fun copyText(text: String): String {
             Log.d(TAG, "copyText called: ${text.take(50)}...")
             return try {
-                val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                val clip = ClipData.newPlainText("TiddlyWiki", text)
-                clipboard.setPrimaryClip(clip)
-                Log.d(TAG, "Text copied to clipboard: ${text.length} chars")
+                // Post to UI thread — ClipboardManager requires it on some devices
+                runOnUiThread {
+                    try {
+                        val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                        val clip = ClipData.newPlainText("TiddlyWiki", text)
+                        clipboard.setPrimaryClip(clip)
+                        Log.d(TAG, "Text copied to clipboard on UI thread: ${text.length} chars")
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Failed to copy to clipboard on UI thread: ${e.message}")
+                    }
+                }
                 "{\"success\":true}"
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to copy to clipboard: ${e.message}")
@@ -559,6 +572,93 @@ class WikiActivity : AppCompatActivity() {
                 "{\"success\":false,\"error\":\"${e.message?.replace("\"", "\\\"") ?: "Unknown"}\"}"
             }
         }
+
+        @JavascriptInterface
+        fun openAuthUrl(url: String): String {
+            Log.d(TAG, "openAuthUrl called: $url")
+            return try {
+                runOnUiThread {
+                    showAuthOverlay(url)
+                }
+                "{\"success\":true}"
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to open auth URL: ${e.message}")
+                "{\"success\":false,\"error\":\"${e.message?.replace("\"", "\\\"") ?: "Unknown"}\"}"
+            }
+        }
+    }
+
+    @SuppressLint("SetJavaScriptEnabled")
+    private fun showAuthOverlay(url: String) {
+        // Remove existing overlay if any
+        dismissAuthOverlay()
+
+        val container = FrameLayout(this)
+        container.setBackgroundColor(Color.WHITE)
+
+        // Close button bar at top
+        val closeBar = FrameLayout(this).apply {
+            setBackgroundColor(0xFF424242.toInt())
+            val density = resources.displayMetrics.density
+            val barHeight = (48 * density).toInt()
+            layoutParams = FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT, barHeight
+            )
+        }
+
+        val closeButton = android.widget.TextView(this).apply {
+            text = "\u2715  Close"
+            setTextColor(Color.WHITE)
+            textSize = 16f
+            val density = resources.displayMetrics.density
+            setPadding((16 * density).toInt(), (12 * density).toInt(), (16 * density).toInt(), (12 * density).toInt())
+            setOnClickListener { dismissAuthOverlay() }
+        }
+        closeBar.addView(closeButton)
+        container.addView(closeBar)
+
+        // WebView for auth
+        val density = resources.displayMetrics.density
+        val barHeight = (48 * density).toInt()
+        val wv = WebView(this).apply {
+            layoutParams = FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT
+            ).apply {
+                topMargin = barHeight
+            }
+            settings.javaScriptEnabled = true
+            settings.domStorageEnabled = true
+            @Suppress("DEPRECATION")
+            settings.databaseEnabled = true
+            settings.userAgentString = settings.userAgentString?.replace("; wv", "")
+            webViewClient = WebViewClient()
+            webChromeClient = WebChromeClient()
+        }
+        container.addView(wv)
+
+        rootLayout.addView(container, FrameLayout.LayoutParams(
+            FrameLayout.LayoutParams.MATCH_PARENT,
+            FrameLayout.LayoutParams.MATCH_PARENT
+        ))
+
+        authOverlayContainer = container
+        authWebView = wv
+        wv.loadUrl(url)
+        Log.d(TAG, "Auth overlay shown for: $url")
+    }
+
+    private fun dismissAuthOverlay() {
+        authWebView?.let { wv ->
+            wv.stopLoading()
+            wv.destroy()
+        }
+        authWebView = null
+        authOverlayContainer?.let { container ->
+            rootLayout.removeView(container)
+        }
+        authOverlayContainer = null
+        Log.d(TAG, "Auth overlay dismissed")
     }
 
     /**
@@ -2211,8 +2311,6 @@ class WikiActivity : AppCompatActivity() {
                 }
 
                 // ========== Session Auth Configuration - matches Desktop ==========
-                var CONFIG_AUTH_URLS = SESSION_AUTH_PREFIX + "urls";
-
                 // Load auth URLs from localStorage
                 function loadAuthUrls() {
                     try {
@@ -2237,28 +2335,38 @@ class WikiActivity : AppCompatActivity() {
                     }
                 }
 
-                function refreshUrlList() {
-                    // Count from pluginTiddlers (before shadow registration)
-                    var count = Object.keys(pluginTiddlers).filter(function(title) {
-                        return title.indexOf(SESSION_AUTH_PREFIX + "url/") === 0;
-                    }).length;
-                    addPluginTiddler({
-                        title: CONFIG_AUTH_URLS,
-                        text: String(count)
+                function rebuildUrlTiddlers() {
+                    var titles = [];
+                    ${'$'}tw.wiki.each(function(tiddler, title) {
+                        if (title.indexOf(SESSION_AUTH_PREFIX + "url/") === 0) {
+                            titles.push(title);
+                        }
                     });
-                    updatePlugin();
-                }
-
-                function injectSessionAuthUI() {
-                    // Load and inject auth URL tiddlers as shadows
+                    titles.forEach(function(title) {
+                        ${'$'}tw.wiki.deleteTiddler(title);
+                    });
                     var authUrls = loadAuthUrls();
                     authUrls.forEach(function(entry, index) {
-                        addPluginTiddler({
+                        ${'$'}tw.wiki.addTiddler(new ${'$'}tw.Tiddler({
                             title: SESSION_AUTH_PREFIX + "url/" + index,
                             name: entry.name,
                             url: entry.url,
                             text: ""
-                        });
+                        }));
+                    });
+                }
+
+                function injectSessionAuthUI() {
+                    // Load and inject auth URL tiddlers as real tiddlers (not shadow)
+                    // Real tiddlers are visible to filter operators and trigger proper refresh
+                    var authUrls = loadAuthUrls();
+                    authUrls.forEach(function(entry, index) {
+                        ${'$'}tw.wiki.addTiddler(new ${'$'}tw.Tiddler({
+                            title: SESSION_AUTH_PREFIX + "url/" + index,
+                            name: entry.name,
+                            url: entry.url,
+                            text: ""
+                        }));
                     });
 
                     var tabText = "Authenticate with external services to access protected resources (like SharePoint profile images).\n\n" +
@@ -2329,20 +2437,18 @@ class WikiActivity : AppCompatActivity() {
                         authUrls.push({ name: name, url: url });
                         saveAuthUrls(authUrls);
 
-                        // Add shadow tiddler for UI
+                        // Add real tiddler for UI (triggers proper widget refresh)
                         var index = authUrls.length - 1;
-                        addPluginTiddler({
+                        ${'$'}tw.wiki.addTiddler(new ${'$'}tw.Tiddler({
                             title: SESSION_AUTH_PREFIX + "url/" + index,
                             name: name,
                             url: url,
                             text: ""
-                        });
+                        }));
 
                         // Clear input fields (these are real tiddlers created by edit-text widget)
                         ${'$'}tw.wiki.deleteTiddler(SESSION_AUTH_PREFIX + "new-name");
                         ${'$'}tw.wiki.deleteTiddler(SESSION_AUTH_PREFIX + "new-url");
-
-                        refreshUrlList();
                     });
 
                     // Message handler: remove auth URL
@@ -2357,9 +2463,8 @@ class WikiActivity : AppCompatActivity() {
                                 authUrls = authUrls.filter(function(entry) { return entry.url !== urlToRemove; });
                                 saveAuthUrls(authUrls);
 
-                                // Remove shadow tiddler
-                                removePluginTiddler(tiddlerTitle);
-                                refreshUrlList();
+                                // Rebuild URL tiddlers from localStorage
+                                rebuildUrlTiddlers();
                             }
                         }
                     });
@@ -2370,8 +2475,8 @@ class WikiActivity : AppCompatActivity() {
                         if (tiddlerTitle) {
                             var tiddler = ${'$'}tw.wiki.getTiddler(tiddlerTitle);
                             if (tiddler && tiddler.fields.url) {
-                                // Open in system browser
-                                window.open(tiddler.fields.url, '_blank');
+                                // Open in overlay WebView (same cookie store for auth)
+                                TiddlyDesktopExternal.openAuthUrl(tiddler.fields.url);
                             }
                         }
                     });
@@ -2400,7 +2505,6 @@ class WikiActivity : AppCompatActivity() {
                         }
                     });
 
-                    refreshUrlList();
                     console.log('[TiddlyDesktop] Session auth UI injected');
                 }
 
@@ -2586,6 +2690,73 @@ class WikiActivity : AppCompatActivity() {
                 injectSessionAuthUI();
                 registerPlugin();  // Register all shadow tiddlers as a plugin
                 installImportHook();
+
+                // Override clipboard for Android — document.execCommand("copy") doesn't work in WebView.
+                // Replace the tm-copy-to-clipboard handler with one that:
+                //   1. Uses native Android clipboard (via JavascriptInterface)
+                //   2. When event.param is empty (src variable was empty at render time),
+                //      walks up the widget tree to find the TranscludeWidget that provides
+                //      the 'src' parameter and re-evaluates its filter/variable at click time.
+                if (${'$'}tw.rootWidget.eventListeners && ${'$'}tw.rootWidget.eventListeners['tm-copy-to-clipboard']) {
+                    ${'$'}tw.rootWidget.eventListeners['tm-copy-to-clipboard'] = [];
+                }
+                ${'$'}tw.rootWidget.addEventListener('tm-copy-to-clipboard', function(event) {
+                    var text = event.param || '';
+                    // If param is empty, re-evaluate the src from ancestor TranscludeWidgets' parse trees.
+                    // The src can be a variable (<<var>>) that resolves to empty in the widget tree
+                    // even though the underlying filter/reference has data at click time.
+                    if (!text && event.widget) {
+                        var w = event.widget;
+                        while (w) {
+                            if (w.parseTreeNode && w.parseTreeNode.attributes && w.parseTreeNode.attributes.src) {
+                                var attr = w.parseTreeNode.attributes.src;
+                                try {
+                                    if (attr.type === 'filtered') {
+                                        var result = ${'$'}tw.wiki.filterTiddlers(attr.filter, w);
+                                        if (result && result[0]) { text = result[0]; break; }
+                                    } else if (attr.type === 'macro') {
+                                        var info = w.getVariableInfo(attr.value.name, {params: attr.value.params});
+                                        if (info && info.text) { text = info.text; break; }
+                                    } else if (attr.type === 'indirect') {
+                                        var val = ${'$'}tw.wiki.getTextReference(attr.textReference, '', w.getVariable('currentTiddler'));
+                                        if (val) { text = val; break; }
+                                    } else if (attr.type === 'string' && attr.value) {
+                                        text = attr.value; break;
+                                    } else if (attr.type === 'substituted') {
+                                        var val = ${'$'}tw.wiki.getSubstitutedText(attr.rawValue, w);
+                                        if (val) { text = val; break; }
+                                    }
+                                } catch(e) {}
+                            }
+                            w = w.parentWidget;
+                        }
+                    }
+                    var opts = {
+                        successNotification: (event.paramObject && event.paramObject.successNotification) || '${'$'}:/language/Notifications/CopiedToClipboard/Succeeded',
+                        failureNotification: (event.paramObject && event.paramObject.failureNotification) || '${'$'}:/language/Notifications/CopiedToClipboard/Failed'
+                    };
+                    if (text && window.TiddlyDesktopClipboard) {
+                        TiddlyDesktopClipboard.copyText(text);
+                        ${'$'}tw.notifier.display(opts.successNotification);
+                    } else {
+                        ${'$'}tw.notifier.display(opts.failureNotification);
+                    }
+                });
+                // Also override ${'$'}tw.utils.copyToClipboard for direct programmatic calls
+                ${'$'}tw.utils.copyToClipboard = function(text, options) {
+                    options = options || {};
+                    text = text || '';
+                    if (text && window.TiddlyDesktopClipboard) {
+                        TiddlyDesktopClipboard.copyText(text);
+                        if (!options.doNotNotify && ${'$'}tw.notifier) {
+                            ${'$'}tw.notifier.display(options.successNotification || '${'$'}:/language/Notifications/CopiedToClipboard/Succeeded');
+                        }
+                    } else {
+                        if (!options.doNotNotify && ${'$'}tw.notifier) {
+                            ${'$'}tw.notifier.display(options.failureNotification || '${'$'}:/language/Notifications/CopiedToClipboard/Failed');
+                        }
+                    }
+                };
 
                 // Restore dirty state after event loop completes - plugin injection should not mark wiki as modified
                 // Using setTimeout(0) ensures all synchronous change events have propagated
@@ -2912,57 +3083,6 @@ class WikiActivity : AppCompatActivity() {
                 });
 
                 console.log('[TiddlyDesktop] tm-full-screen handler installed (requestFullscreen blocked)');
-            })();
-        """.trimIndent()
-
-        // Script to handle clipboard operations (tm-copy-to-clipboard)
-        val clipboardScript = """
-            (function() {
-                // Wait for TiddlyWiki to fully load (including after decryption for encrypted wikis)
-                if (typeof ${'$'}tw === 'undefined' || !${'$'}tw.rootWidget) {
-                    setTimeout(arguments.callee, 100);
-                    return;
-                }
-
-                // tm-copy-to-clipboard handler - use native clipboard API
-                ${'$'}tw.rootWidget.addEventListener('tm-copy-to-clipboard', function(event) {
-                    var text = event.param || '';
-                    console.log('[TiddlyDesktop] tm-copy-to-clipboard received: ' + text.substring(0, 50) + '...');
-
-                    try {
-                        if (window.TiddlyDesktopClipboard && window.TiddlyDesktopClipboard.copyText) {
-                            var resultJson = window.TiddlyDesktopClipboard.copyText(text);
-                            var result = JSON.parse(resultJson);
-                            if (result.success) {
-                                console.log('[TiddlyDesktop] Text copied to clipboard');
-                                // Show notification if TiddlyWiki's notify is available
-                                if (${'$'}tw.notifier && ${'$'}tw.notifier.display) {
-                                    ${'$'}tw.notifier.display("${'$'}:/core/images/copy-clipboard");
-                                }
-                            } else {
-                                console.error('[TiddlyDesktop] Failed to copy to clipboard:', result.error);
-                            }
-                        } else {
-                            console.warn('[TiddlyDesktop] Clipboard interface not available, using fallback');
-                            // Fallback to navigator.clipboard if available
-                            if (navigator.clipboard && navigator.clipboard.writeText) {
-                                navigator.clipboard.writeText(text).then(function() {
-                                    console.log('[TiddlyDesktop] Copied via navigator.clipboard');
-                                    if (${'$'}tw.notifier && ${'$'}tw.notifier.display) {
-                                        ${'$'}tw.notifier.display("${'$'}:/core/images/copy-clipboard");
-                                    }
-                                }).catch(function(err) {
-                                    console.error('[TiddlyDesktop] navigator.clipboard.writeText failed:', err);
-                                });
-                            }
-                        }
-                    } catch (e) {
-                        console.error('[TiddlyDesktop] Error copying to clipboard:', e);
-                    }
-                    return false;
-                });
-
-                console.log('[TiddlyDesktop] tm-copy-to-clipboard handler installed');
             })();
         """.trimIndent()
 
@@ -4315,8 +4435,7 @@ class WikiActivity : AppCompatActivity() {
                     view.evaluateJavascript(paletteScript, null)
                     // Inject the fullscreen toggle handler
                     view.evaluateJavascript(fullscreenScript, null)
-                    // Inject the clipboard handler
-                    view.evaluateJavascript(clipboardScript, null)
+                    // Clipboard override is now in the main settings script (settingsScript)
                     // Inject the print handler
                     view.evaluateJavascript(printScript, null)
                     // Inject the external window handler (open URLs in external browser)
@@ -4368,6 +4487,17 @@ class WikiActivity : AppCompatActivity() {
      * and onKeyDown (physical back button).
      */
     private fun handleBackNavigation() {
+        // Dismiss auth overlay if showing
+        if (authOverlayContainer != null) {
+            // If the auth WebView can go back, navigate back within it
+            if (authWebView?.canGoBack() == true) {
+                authWebView?.goBack()
+            } else {
+                dismissAuthOverlay()
+            }
+            return
+        }
+
         // Exit immersive fullscreen first (app fullscreen via tm-full-screen)
         if (isImmersiveFullscreen) {
             isImmersiveFullscreen = false
@@ -4881,6 +5011,9 @@ class WikiActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         Log.d(TAG, "Wiki closed: path=$wikiPath, isFolder=$isFolder")
+
+        // Clean up auth overlay if present
+        dismissAuthOverlay()
 
         // Notify foreground service that wiki is closed
         WikiServerService.wikiClosed(applicationContext)

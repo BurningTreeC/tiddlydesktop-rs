@@ -9,6 +9,7 @@ import android.os.IBinder
 import android.os.Looper
 import android.util.Log
 import androidx.core.app.NotificationCompat
+import java.util.concurrent.atomic.AtomicInteger
 
 /**
  * Foreground Service to keep the wiki servers alive when the app is in background.
@@ -28,29 +29,11 @@ class WikiServerService : Service() {
         private const val CHANNEL_NAME = "Wiki Server"
         private const val NOTIFICATION_CHECK_INTERVAL = 2000L  // Check every 2 seconds
 
-        // SharedPreferences for cross-process wiki count
-        private const val PREFS_NAME = "wiki_server_prefs"
-        private const val KEY_ACTIVE_COUNT = "active_wiki_count"
+        // In-memory count — WikiActivity and WikiServerService share the :wiki process,
+        // so AtomicInteger is sufficient and avoids stale SharedPreferences after process kills.
+        private val activeCount = AtomicInteger(0)
 
         private var isRunning = false
-
-        /**
-         * Get the current active wiki count from SharedPreferences.
-         * Works across processes.
-         */
-        private fun getActiveCount(context: Context): Int {
-            val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-            return prefs.getInt(KEY_ACTIVE_COUNT, 0)
-        }
-
-        /**
-         * Set the active wiki count in SharedPreferences.
-         * Works across processes.
-         */
-        private fun setActiveCount(context: Context, count: Int) {
-            val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-            prefs.edit().putInt(KEY_ACTIVE_COUNT, count).apply()
-        }
 
         /**
          * Start the foreground service (call when a wiki server starts)
@@ -58,13 +41,9 @@ class WikiServerService : Service() {
         @JvmStatic
         fun startService(context: Context) {
             try {
-                val count = getActiveCount(context) + 1
-                setActiveCount(context, count)
+                val count = activeCount.incrementAndGet()
                 Log.d(TAG, "Wiki started, count: $count")
 
-                // Always start the foreground service if not already running.
-                // startForeground() is idempotent, and this handles stale counts
-                // from previously killed processes (OOM, crash, force-stop).
                 if (!isRunning) {
                     val intent = Intent(context, WikiServerService::class.java)
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -75,7 +54,6 @@ class WikiServerService : Service() {
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to start foreground service: ${e.message}", e)
-                // Don't crash - just log the error
             }
         }
 
@@ -84,8 +62,8 @@ class WikiServerService : Service() {
          */
         @JvmStatic
         fun wikiClosed(context: Context) {
-            val count = maxOf(0, getActiveCount(context) - 1)
-            setActiveCount(context, count)
+            val count = activeCount.decrementAndGet().coerceAtLeast(0)
+            if (count == 0) activeCount.set(0)  // clamp
             Log.d(TAG, "Wiki closed, count: $count")
 
             if (count == 0) {
@@ -99,7 +77,7 @@ class WikiServerService : Service() {
          */
         @JvmStatic
         fun stopService(context: Context) {
-            setActiveCount(context, 0)
+            activeCount.set(0)
             val intent = Intent(context, WikiServerService::class.java)
             context.stopService(intent)
         }
@@ -114,13 +92,13 @@ class WikiServerService : Service() {
          * Get the current active wiki count
          */
         @JvmStatic
-        fun getActiveWikiCount(context: Context): Int = getActiveCount(context)
+        fun getActiveWikiCount(): Int = activeCount.get()
     }
 
     private val handler = Handler(Looper.getMainLooper())
     private val notificationChecker = object : Runnable {
         override fun run() {
-            if (isRunning && getActiveCount(this@WikiServerService) > 0) {
+            if (isRunning && activeCount.get() > 0) {
                 ensureNotificationVisible()
                 handler.postDelayed(this, NOTIFICATION_CHECK_INTERVAL)
             }
@@ -134,30 +112,28 @@ class WikiServerService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        Log.d(TAG, "Service onStartCommand")
+        Log.d(TAG, "Service onStartCommand, activeCount=${activeCount.get()}")
+
+        // If no wikis are active (e.g. spurious restart), stop immediately
+        if (activeCount.get() <= 0) {
+            Log.d(TAG, "No active wikis, stopping service")
+            stopSelf()
+            return START_NOT_STICKY
+        }
 
         isRunning = true
 
-        // Fix stale count from previously killed process
-        if (getActiveCount(this) <= 0) {
-            setActiveCount(this, 1)
-            Log.d(TAG, "Reset stale active count to 1")
-        }
-
         try {
-            // Create and show notification
             showNotification()
-            // Start periodic check to ensure notification stays visible
             handler.removeCallbacks(notificationChecker)
             handler.postDelayed(notificationChecker, NOTIFICATION_CHECK_INTERVAL)
             Log.d(TAG, "Foreground service started successfully")
         } catch (e: Exception) {
             Log.e(TAG, "Failed to start foreground: ${e.message}", e)
-            // If we can't start foreground, stop the service
             stopSelf()
         }
 
-        return START_STICKY
+        return START_NOT_STICKY
     }
 
     private fun ensureNotificationVisible() {
@@ -165,7 +141,7 @@ class WikiServerService : Service() {
         val activeNotifications = notificationManager.activeNotifications
         val hasOurNotification = activeNotifications.any { it.id == NOTIFICATION_ID }
 
-        if (!hasOurNotification && getActiveCount(this) > 0) {
+        if (!hasOurNotification && activeCount.get() > 0) {
             Log.d(TAG, "Notification was dismissed, re-showing")
             showNotification()
         }

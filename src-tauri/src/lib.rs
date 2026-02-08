@@ -6066,6 +6066,21 @@ window.__SAVE_URL__ = "{save_url}";
     }}
     window.__TD_PROTOCOL_SCRIPT_LOADED__ = true;
 
+    // Close child tiddler windows (opened via tm-open-window) on refresh or close.
+    // Only applies to wiki windows (which have __WIKI_PATH__), not the landing page.
+    window.addEventListener('beforeunload', function() {{
+        if (!window.__WIKI_PATH__ || !window.__tiddlyDesktopWindows) return;
+        var windows = window.__tiddlyDesktopWindows;
+        var keys = Object.keys(windows);
+        for (var i = 0; i < keys.length; i++) {{
+            var info = windows[keys[i]];
+            if (info && info.label) {{
+                window.__TAURI__.core.invoke('close_window_by_label', {{ label: info.label }}).catch(function() {{}});
+            }}
+        }}
+        window.__tiddlyDesktopWindows = {{}};
+    }});
+
     var SAVE_URL = "{save_url_inner}";
 
     // Check if this is an encrypted wiki

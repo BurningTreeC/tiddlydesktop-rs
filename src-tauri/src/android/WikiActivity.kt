@@ -2055,6 +2055,8 @@ class WikiActivity : AppCompatActivity() {
                     });
                 });
                 observer.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['src', 'data'] });
+                // Expose for tm-open-window overlays (iframe has its own document)
+                window.__tdTransformElement = transformElement;
                 console.log('[TiddlyDesktop] URL transform observer installed');
 
                 // ========== Import Hook (th-importing-file) - matches Desktop ==========
@@ -3160,6 +3162,182 @@ class WikiActivity : AppCompatActivity() {
                         // Push to stack for back button
                         window.__tdOpenWindowStack.push(stackEntry);
 
+                        // Transform _canonical_uri URLs in the overlay iframe
+                        if (window.__tdTransformElement) {
+                            srcDocument.querySelectorAll('img, video, audio, source, object, embed, iframe').forEach(window.__tdTransformElement);
+                            new MutationObserver(function(muts) {
+                                muts.forEach(function(m) {
+                                    m.addedNodes.forEach(function(n) {
+                                        if (n.nodeType === 1) {
+                                            window.__tdTransformElement(n);
+                                            if (n.querySelectorAll) n.querySelectorAll('img, video, audio, source, object, embed, iframe').forEach(window.__tdTransformElement);
+                                        }
+                                    });
+                                    if (m.type === 'attributes' && (m.attributeName === 'src' || m.attributeName === 'data')) {
+                                        window.__tdTransformElement(m.target);
+                                    }
+                                });
+                            }).observe(srcDocument.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['src', 'data'] });
+                        }
+
+                        // Inject media enhancement (Plyr + PDF.js) into the overlay iframe
+                        (function(iDoc, iWin) {
+                            var TD = '/_td/';
+                            // Plyr CSS
+                            var plyrCss = iDoc.createElement('link');
+                            plyrCss.rel = 'stylesheet'; plyrCss.href = TD + 'plyr/dist/plyr.css';
+                            iDoc.head.appendChild(plyrCss);
+                            // Hide raw videos until Plyr loads
+                            var hideStyle = iDoc.createElement('style');
+                            hideStyle.textContent = 'video:not(.plyr__video-wrapper video){opacity:0!important;max-height:0!important;overflow:hidden!important}.plyr video{opacity:1!important;max-height:none!important;overflow:visible!important}';
+                            iDoc.head.appendChild(hideStyle);
+                            // PDF viewer styles
+                            var pdfStyle = iDoc.createElement('style');
+                            pdfStyle.textContent = '.td-pdf-btn{background:#555;color:#fff;border:none;border-radius:3px;padding:4px 10px;font-size:14px;cursor:pointer;min-width:32px}.td-pdf-btn:active{background:#777}.td-pdf-page-wrap{display:flex;justify-content:center;padding:8px 0}.td-pdf-page-wrap canvas{background:#fff;box-shadow:0 2px 8px rgba(0,0,0,.3);display:block;max-width:none}';
+                            iDoc.head.appendChild(pdfStyle);
+
+                            function extractPoster(videoSrc, cb) {
+                                var v = document.createElement('video');
+                                v.muted = true; v.playsInline = true; v.preload = 'metadata';
+                                var done = false, tid = null;
+                                function fin(r) { if (done) return; done = true; if (tid) clearTimeout(tid); v.src = ''; cb(r); }
+                                tid = setTimeout(function() { fin(null); }, 5000);
+                                v.onloadeddata = function() { v.currentTime = Math.min(0.5, v.duration * 0.1); };
+                                v.onseeked = function() {
+                                    try {
+                                        var c = document.createElement('canvas');
+                                        c.width = v.videoWidth || 320; c.height = v.videoHeight || 180;
+                                        c.getContext('2d').drawImage(v, 0, 0, c.width, c.height);
+                                        fin(c.toDataURL('image/jpeg', 0.8));
+                                    } catch(e) { fin(null); }
+                                };
+                                v.onerror = function() { fin(null); };
+                                v.src = videoSrc; v.load();
+                            }
+
+                            var plyrOpts = {
+                                controls: ['play-large','play','progress','current-time','duration','mute','volume','settings','fullscreen'],
+                                settings: ['speed'],
+                                speed: { selected: 1, options: [0.5, 0.75, 1, 1.25, 1.5, 2] },
+                                iconUrl: TD + 'plyr/dist/plyr.svg',
+                                blankVideo: ''
+                            };
+
+                            function enhanceVideo(el) {
+                                if (el.__tdPlyrDone || typeof iWin.Plyr === 'undefined') return;
+                                el.__tdPlyrDone = true;
+                                setTimeout(function() {
+                                    var src = el.src || (el.querySelector('source') ? el.querySelector('source').src : null);
+                                    if (src) {
+                                        extractPoster(src, function(posterUrl) {
+                                            if (posterUrl && !el.hasAttribute('poster')) el.setAttribute('poster', posterUrl);
+                                            try { new iWin.Plyr(el, plyrOpts); } catch(e) { console.warn('[TD-Plyr] overlay error:', e); }
+                                        });
+                                    } else {
+                                        try { new iWin.Plyr(el, plyrOpts); } catch(e) { console.warn('[TD-Plyr] overlay error:', e); }
+                                    }
+                                }, 50);
+                            }
+
+                            function getPdfSrc(el) {
+                                var tag = el.tagName.toLowerCase();
+                                var src = el.getAttribute('src') || el.getAttribute('data') || '';
+                                if (tag === 'object') src = el.getAttribute('data') || src;
+                                if (!src) return null;
+                                if (src.toLowerCase().indexOf('.pdf') === -1 &&
+                                    (el.getAttribute('type') || '').toLowerCase() !== 'application/pdf') return null;
+                                return src;
+                            }
+
+                            function replacePdfElement(el) {
+                                if (el.__tdPdfDone) return;
+                                el.__tdPdfDone = true;
+                                var src = getPdfSrc(el);
+                                if (!src || typeof iWin.pdfjsLib === 'undefined') { el.__tdPdfDone = false; return; }
+                                var container = iDoc.createElement('div');
+                                container.style.cssText = 'width:100%;max-width:100%;overflow:auto;background:#525659;padding:8px 0;border-radius:4px;position:relative';
+                                var toolbar = iDoc.createElement('div');
+                                toolbar.style.cssText = 'display:flex;align-items:center;justify-content:center;gap:8px;padding:6px 8px;background:#333;color:#fff;font:13px sans-serif;border-radius:4px 4px 0 0;flex-wrap:wrap;position:sticky;top:0;z-index:10';
+                                toolbar.innerHTML = '<button class="td-pdf-btn" data-action="prev">&#9664;</button><span class="td-pdf-pageinfo">- / -</span><button class="td-pdf-btn" data-action="next">&#9654;</button><span style="margin:0 4px">|</span><button class="td-pdf-btn" data-action="zoomout">&#8722;</button><button class="td-pdf-btn" data-action="fitwidth">Fit</button><button class="td-pdf-btn" data-action="zoomin">&#43;</button>';
+                                container.appendChild(toolbar);
+                                var pagesWrap = iDoc.createElement('div');
+                                pagesWrap.style.cssText = 'max-height:80vh;overflow-y:auto;-webkit-overflow-scrolling:touch';
+                                container.appendChild(pagesWrap);
+                                el.parentNode.replaceChild(container, el);
+                                var scale = 1.5, pdfDoc = null, pageCanvases = [];
+                                var pageInfo = toolbar.querySelector('.td-pdf-pageinfo');
+                                function renderPage(num, canvas) {
+                                    pdfDoc.getPage(num).then(function(page) {
+                                        var vp = page.getViewport({ scale: scale });
+                                        canvas.width = vp.width; canvas.height = vp.height;
+                                        page.render({ canvasContext: canvas.getContext('2d'), viewport: vp });
+                                    });
+                                }
+                                function renderAll() { pageCanvases.forEach(function(c, i) { renderPage(i + 1, c); }); }
+                                function fitWidth() {
+                                    if (!pdfDoc) return;
+                                    pdfDoc.getPage(1).then(function(page) {
+                                        var vp = page.getViewport({ scale: 1 });
+                                        scale = Math.max(0.5, Math.min(5, (pagesWrap.clientWidth - 16) / vp.width));
+                                        renderAll();
+                                    });
+                                }
+                                iWin.pdfjsLib.getDocument({ url: src, cMapUrl: TD + 'pdfjs/cmaps/', cMapPacked: true }).promise.then(function(pdf) {
+                                    pdfDoc = pdf;
+                                    pageInfo.textContent = pdf.numPages + ' page' + (pdf.numPages !== 1 ? 's' : '');
+                                    for (var p = 1; p <= pdf.numPages; p++) {
+                                        var wrap = iDoc.createElement('div');
+                                        wrap.className = 'td-pdf-page-wrap';
+                                        var canvas = iDoc.createElement('canvas');
+                                        wrap.appendChild(canvas); pagesWrap.appendChild(wrap);
+                                        pageCanvases.push(canvas);
+                                    }
+                                    fitWidth();
+                                }).catch(function(err) {
+                                    pagesWrap.innerHTML = '<p style="color:#f88;padding:20px;text-align:center">Failed to load PDF: ' + err.message + '</p>';
+                                });
+                                toolbar.addEventListener('click', function(e) {
+                                    var btn = e.target.closest('[data-action]');
+                                    if (!btn) return;
+                                    var a = btn.getAttribute('data-action');
+                                    if (a === 'zoomin') { scale = Math.min(scale * 1.25, 5); renderAll(); }
+                                    else if (a === 'zoomout') { scale = Math.max(scale / 1.25, 0.5); renderAll(); }
+                                    else if (a === 'fitwidth') fitWidth();
+                                    else if (a === 'prev') pagesWrap.scrollBy(0, -pagesWrap.clientHeight * 0.8);
+                                    else if (a === 'next') pagesWrap.scrollBy(0, pagesWrap.clientHeight * 0.8);
+                                });
+                            }
+
+                            function scanAll() {
+                                if (typeof iWin.Plyr !== 'undefined') iDoc.querySelectorAll('video').forEach(enhanceVideo);
+                                if (typeof iWin.pdfjsLib !== 'undefined') iDoc.querySelectorAll('embed, object, iframe').forEach(function(el) { if (getPdfSrc(el)) replacePdfElement(el); });
+                            }
+
+                            // Load Plyr JS
+                            var plyrJs = iDoc.createElement('script');
+                            plyrJs.src = TD + 'plyr/dist/plyr.min.js';
+                            plyrJs.onload = function() { scanAll(); };
+                            iDoc.head.appendChild(plyrJs);
+
+                            // Load PDF.js
+                            var pdfJs = iDoc.createElement('script');
+                            pdfJs.src = TD + 'pdfjs/build/pdf.min.js';
+                            pdfJs.onload = function() {
+                                if (iWin.pdfjsLib) {
+                                    iWin.pdfjsLib.GlobalWorkerOptions.workerSrc = TD + 'pdfjs/build/pdf.worker.min.js';
+                                    scanAll();
+                                }
+                            };
+                            iDoc.head.appendChild(pdfJs);
+
+                            // Watch for dynamically added elements
+                            new MutationObserver(function(muts) {
+                                var needScan = false;
+                                muts.forEach(function(m) { m.addedNodes.forEach(function(n) { if (n.nodeType === 1) needScan = true; }); });
+                                if (needScan) scanAll();
+                            }).observe(iDoc.body, { childList: true, subtree: true });
+                        })(srcDocument, srcWindow);
+
                         return true;
                     }
 
@@ -3659,14 +3837,6 @@ class WikiActivity : AppCompatActivity() {
                 var THUMB_INTERVAL = 5; // seconds between thumbnails
                 var MAX_THUMBS = 60; // max thumbnails to generate
 
-                // Add CSS to hide native video controls until Plyr is ready
-                if (!document.querySelector('#td-plyr-hide-styles')) {
-                    var style = document.createElement('style');
-                    style.id = 'td-plyr-hide-styles';
-                    style.textContent = 'video.td-plyr-pending{visibility:hidden;position:absolute;width:1px;height:1px;overflow:hidden;}';
-                    document.head.appendChild(style);
-                }
-
                 function generateThumbnails(videoSrc, callback) {
                     var video = document.createElement('video');
                     video.muted = true;
@@ -3877,9 +4047,6 @@ class WikiActivity : AppCompatActivity() {
                         return;
                     }
 
-                    // Hide the native video immediately to prevent flash
-                    el.classList.add('td-plyr-pending');
-
                     // Small delay to let URL-transform complete
                     setTimeout(function() {
                         var videoSrc = el.src || (el.querySelector('source') ? el.querySelector('source').src : null);
@@ -3899,14 +4066,9 @@ class WikiActivity : AppCompatActivity() {
                                 }
                                 var player = new Plyr(el, opts);
 
-                                // Show the video once Plyr is ready
-                                el.classList.remove('td-plyr-pending');
-
                                 console.log('[TD-Plyr] Enhanced video:', videoSrc || '(no src)', vttUrl ? '(with thumbnails)' : '');
                             } catch(err) {
                                 console.error('[TD-Plyr] Error:', err && err.message ? err.message : JSON.stringify(err));
-                                // Show video anyway if Plyr fails
-                                el.classList.remove('td-plyr-pending');
                             }
                         }
 
@@ -4019,16 +4181,29 @@ class WikiActivity : AppCompatActivity() {
                         scanAll();
                         return;
                     }
+                    // CSS and JS may already be preloaded by onPageStarted
                     if (!document.querySelector('link[href*="plyr.css"]')) {
                         loadCSS(TD_BASE + 'plyr/dist/plyr.css');
                     }
-                    loadScript(TD_BASE + 'plyr/dist/plyr.min.js', function() {
-                        if (typeof Plyr !== 'undefined') {
-                            plyrLoaded = true;
-                            console.log('[TD-Plyr] Plyr loaded');
-                            scanAll();
-                        }
-                    });
+                    if (document.querySelector('script[src*="plyr.min.js"]')) {
+                        // Already preloaded — wait for it to finish loading
+                        var check = setInterval(function() {
+                            if (typeof Plyr !== 'undefined') {
+                                clearInterval(check);
+                                plyrLoaded = true;
+                                console.log('[TD-Plyr] Plyr loaded (preloaded)');
+                                scanAll();
+                            }
+                        }, 20);
+                    } else {
+                        loadScript(TD_BASE + 'plyr/dist/plyr.min.js', function() {
+                            if (typeof Plyr !== 'undefined') {
+                                plyrLoaded = true;
+                                console.log('[TD-Plyr] Plyr loaded');
+                                scanAll();
+                            }
+                        });
+                    }
                 }
 
                 loadPdfJs();
@@ -4041,6 +4216,19 @@ class WikiActivity : AppCompatActivity() {
         // Add a WebViewClient that injects the script after page load
         webView.webViewClient = object : WebViewClient() {
             override fun shouldOverrideUrlLoading(view: WebView, url: String): Boolean {
+                val uri = Uri.parse(url)
+                val scheme = uri.scheme ?: return false
+                // Allow wiki server URLs to load in the WebView
+                if (scheme == "http" && uri.host == "127.0.0.1") return false
+                // Open external http/https URLs in the system browser
+                if (scheme == "http" || scheme == "https") {
+                    try {
+                        startActivity(Intent(Intent.ACTION_VIEW, uri))
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Failed to open external URL: ${e.message}")
+                    }
+                    return true
+                }
                 return false
             }
 

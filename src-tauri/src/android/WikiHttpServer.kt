@@ -420,7 +420,7 @@ class WikiHttpServer(
      */
     private fun handleGetWiki(output: OutputStream) {
         try {
-            val content = if (isFolder && folderHtmlPath != null) {
+            var content = if (isFolder && folderHtmlPath != null) {
                 // Folder wiki: serve pre-rendered HTML from temp file
                 val file = File(folderHtmlPath)
                 if (file.exists()) {
@@ -433,6 +433,14 @@ class WikiHttpServer(
                 context.contentResolver.openInputStream(wikiUri)?.use {
                     it.bufferedReader().readText()
                 } ?: throw IOException("Failed to read wiki")
+            }
+
+            // Inject Plyr CSS/JS and video-hiding style into <head> so they load
+            // as part of the page itself, eliminating the flash of native video controls.
+            val plyrInjection = """<style id="td-plyr-hide-styles">video:not(.plyr__video-wrapper video){opacity:0!important;max-height:0!important;overflow:hidden!important;}.plyr video{opacity:1!important;max-height:none!important;overflow:visible!important;}</style><link rel="stylesheet" href="/_td/plyr/dist/plyr.css"><script src="/_td/plyr/dist/plyr.min.js"></script>"""
+            val headIdx = content.indexOf("<head>", ignoreCase = true)
+            if (headIdx >= 0) {
+                content = content.substring(0, headIdx + 6) + plyrInjection + content.substring(headIdx + 6)
             }
 
             val bytes = content.toByteArray(Charsets.UTF_8)

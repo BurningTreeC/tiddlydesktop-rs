@@ -633,7 +633,7 @@ use tauri::{
 // Menu and tray are only available on desktop platforms
 #[cfg(not(target_os = "android"))]
 use tauri::{
-    menu::{MenuBuilder, MenuItemBuilder},
+    menu::{Menu, MenuBuilder, MenuItemBuilder, PredefinedMenuItem, Submenu},
     tray::TrayIconBuilder,
 };
 
@@ -6584,7 +6584,7 @@ fn setup_system_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>>
     let _tray = TrayIconBuilder::new()
         .icon(Image::from_bytes(include_bytes!("../icons/32x32.png"))?)
         .menu(&menu)
-        .tooltip("TiddlyDesktop")
+        .tooltip("TiddlyDesktopRS")
         .on_menu_event(|app, event| {
             match event.id().as_ref() {
                 "show_window" => {
@@ -7627,6 +7627,36 @@ pub fn run() {
         .with_platform_plugins()
         .plugin(drag_drop::init_plugin())
         .setup(|app| {
+            // Replace default menu bar with minimal one on macOS (keeps essential shortcuts)
+            #[cfg(target_os = "macos")]
+            {
+                let handle = app.handle();
+                let app_menu = Submenu::with_items(handle, "TiddlyDesktopRS", true, &[
+                    &PredefinedMenuItem::about(handle, Some("About TiddlyDesktopRS"), None)?,
+                    &PredefinedMenuItem::separator(handle)?,
+                    &PredefinedMenuItem::hide(handle, None)?,
+                    &PredefinedMenuItem::hide_others(handle, None)?,
+                    &PredefinedMenuItem::show_all(handle, None)?,
+                    &PredefinedMenuItem::separator(handle)?,
+                    &PredefinedMenuItem::quit(handle, None)?,
+                ])?;
+                let edit_menu = Submenu::with_items(handle, "Edit", true, &[
+                    &PredefinedMenuItem::undo(handle, None)?,
+                    &PredefinedMenuItem::redo(handle, None)?,
+                    &PredefinedMenuItem::separator(handle)?,
+                    &PredefinedMenuItem::cut(handle, None)?,
+                    &PredefinedMenuItem::copy(handle, None)?,
+                    &PredefinedMenuItem::paste(handle, None)?,
+                    &PredefinedMenuItem::select_all(handle, None)?,
+                ])?;
+                let window_menu = Submenu::with_items(handle, "Window", true, &[
+                    &PredefinedMenuItem::minimize(handle, None)?,
+                    &PredefinedMenuItem::close_window(handle, None)?,
+                ])?;
+                let menu = Menu::with_items(handle, &[&app_menu, &edit_menu, &window_menu])?;
+                app.set_menu(menu)?;
+            }
+
             // Store global AppHandle for IPC callbacks
             let _ = GLOBAL_APP_HANDLE.set(app.handle().clone());
 

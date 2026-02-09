@@ -6,7 +6,9 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
+import android.graphics.Bitmap
 import android.graphics.Color
+import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -789,6 +791,221 @@ class WikiActivity : AppCompatActivity() {
                 Log.e(TAG, "Failed to extract favicon from local copy: ${e.message}")
                 "{\"success\":false,\"error\":\"${e.message?.replace("\"", "\\\"") ?: "Unknown"}\"}"
             }
+        }
+
+        private fun md5Hash(input: String): String {
+            val md = java.security.MessageDigest.getInstance("MD5")
+            val digest = md.digest(input.toByteArray())
+            return digest.joinToString("") { "%02x".format(it) }
+        }
+    }
+
+    /**
+     * JavaScript interface for video poster frame extraction.
+     * Uses native MediaMetadataRetriever for fast, direct file access.
+     * Caches results to disk so posters survive wiki reopens.
+     */
+    inner class PosterInterface {
+        /**
+         * Extract a poster frame from a video given its relative path (e.g. "./attachments/video.mp4").
+         * Returns a data:image/jpeg;base64,... URL, or empty string on failure.
+         * Results are cached to disk.
+         */
+        @JavascriptInterface
+        fun getPoster(relativePath: String): String {
+            return try {
+                val postersDir = File(applicationContext.filesDir, "posters")
+                if (!postersDir.exists()) postersDir.mkdirs()
+
+                val pathHash = md5Hash(relativePath)
+                val cacheFile = File(postersDir, "$pathHash.jpg")
+
+                // Check disk cache
+                if (cacheFile.exists() && cacheFile.length() > 0) {
+                    val bytes = cacheFile.readBytes()
+                    val b64 = Base64.encodeToString(bytes, Base64.NO_WRAP)
+                    Log.d(TAG, "Poster cache hit: $relativePath")
+                    return "data:image/jpeg;base64,$b64"
+                }
+
+                // Resolve the relative path to a content URI
+                val uri = resolveRelativePath(relativePath) ?: run {
+                    Log.w(TAG, "Poster: could not resolve path: $relativePath")
+                    return ""
+                }
+
+                // Extract frame using MediaMetadataRetriever
+                val retriever = MediaMetadataRetriever()
+                try {
+                    contentResolver.openFileDescriptor(uri, "r")?.use { pfd ->
+                        retriever.setDataSource(pfd.fileDescriptor)
+                    } ?: run {
+                        Log.w(TAG, "Poster: could not open file: $relativePath")
+                        return ""
+                    }
+
+                    // Get frame at 500ms (or first available frame)
+                    val bitmap = retriever.getFrameAtTime(
+                        500_000L, // 500ms in microseconds
+                        MediaMetadataRetriever.OPTION_CLOSEST_SYNC
+                    ) ?: retriever.getFrameAtTime(0L) ?: run {
+                        Log.w(TAG, "Poster: no frame extracted: $relativePath")
+                        return ""
+                    }
+
+                    // Compress to JPEG
+                    val baos = java.io.ByteArrayOutputStream()
+                    bitmap.compress(Bitmap.CompressFormat.JPEG, 80, baos)
+                    bitmap.recycle()
+                    val jpegBytes = baos.toByteArray()
+
+                    // Cache to disk
+                    cacheFile.writeBytes(jpegBytes)
+
+                    val b64 = Base64.encodeToString(jpegBytes, Base64.NO_WRAP)
+                    Log.d(TAG, "Poster extracted: $relativePath (${jpegBytes.size} bytes)")
+                    "data:image/jpeg;base64,$b64"
+                } finally {
+                    retriever.release()
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Poster extraction failed: $relativePath: ${e.message}")
+                ""
+            }
+        }
+
+        /**
+         * Generate thumbnail sprite + VTT for a video.
+         * Returns VTT text with embedded sprite data URL, or empty string on failure.
+         * Results are cached to disk.
+         */
+        @JavascriptInterface
+        fun getThumbnails(relativePath: String): String {
+            return try {
+                val thumbsDir = File(applicationContext.filesDir, "posters")
+                if (!thumbsDir.exists()) thumbsDir.mkdirs()
+
+                val pathHash = md5Hash(relativePath)
+                val cacheFile = File(thumbsDir, "${pathHash}_vtt.txt")
+
+                // Check disk cache
+                if (cacheFile.exists() && cacheFile.length() > 0) {
+                    Log.d(TAG, "Thumbnail VTT cache hit: $relativePath")
+                    return cacheFile.readText()
+                }
+
+                val uri = resolveRelativePath(relativePath) ?: run {
+                    Log.w(TAG, "Thumbnails: could not resolve path: $relativePath")
+                    return ""
+                }
+
+                val retriever = MediaMetadataRetriever()
+                try {
+                    contentResolver.openFileDescriptor(uri, "r")?.use { pfd ->
+                        retriever.setDataSource(pfd.fileDescriptor)
+                    } ?: return ""
+
+                    val durationStr = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION) ?: return ""
+                    val durationMs = durationStr.toLongOrNull() ?: return ""
+                    val durationSec = durationMs / 1000.0
+                    if (durationSec < 2.0) return ""
+
+                    val thumbWidth = 160
+                    val thumbHeight = 90
+                    val maxThumbs = 60
+                    val interval = maxOf(5.0, durationSec / maxThumbs)
+
+                    // Calculate timestamps
+                    val timestamps = mutableListOf<Double>()
+                    var t = 0.0
+                    while (t < durationSec) {
+                        timestamps.add(t)
+                        t += interval
+                    }
+                    if (timestamps.isEmpty()) return ""
+
+                    Log.d(TAG, "Generating ${timestamps.size} thumbnails for ${durationSec.toInt()}s video: $relativePath")
+
+                    // Extract frames and create sprite sheet
+                    val spriteWidth = thumbWidth * timestamps.size
+                    val sprite = Bitmap.createBitmap(spriteWidth, thumbHeight, Bitmap.Config.RGB_565)
+                    val canvas = android.graphics.Canvas(sprite)
+
+                    for ((i, ts) in timestamps.withIndex()) {
+                        val frame = retriever.getFrameAtTime(
+                            (ts * 1_000_000).toLong(),
+                            MediaMetadataRetriever.OPTION_CLOSEST_SYNC
+                        )
+                        if (frame != null) {
+                            val scaled = Bitmap.createScaledBitmap(frame, thumbWidth, thumbHeight, true)
+                            canvas.drawBitmap(scaled, (i * thumbWidth).toFloat(), 0f, null)
+                            if (scaled !== frame) scaled.recycle()
+                            frame.recycle()
+                        }
+                    }
+
+                    // Encode sprite as JPEG
+                    val baos = java.io.ByteArrayOutputStream()
+                    sprite.compress(Bitmap.CompressFormat.JPEG, 70, baos)
+                    sprite.recycle()
+                    val spriteB64 = Base64.encodeToString(baos.toByteArray(), Base64.NO_WRAP)
+                    val spriteUrl = "data:image/jpeg;base64,$spriteB64"
+
+                    // Generate VTT
+                    val vtt = StringBuilder("WEBVTT\n\n")
+                    for (i in timestamps.indices) {
+                        val startTime = timestamps[i]
+                        val endTime = if (i + 1 < timestamps.size) timestamps[i + 1] else durationSec
+                        vtt.append(formatVttTime(startTime))
+                        vtt.append(" --> ")
+                        vtt.append(formatVttTime(endTime))
+                        vtt.append("\n")
+                        vtt.append(spriteUrl)
+                        vtt.append("#xywh=${i * thumbWidth},0,$thumbWidth,$thumbHeight\n\n")
+                    }
+
+                    val vttText = vtt.toString()
+                    cacheFile.writeText(vttText)
+                    Log.d(TAG, "Thumbnails generated: $relativePath (${timestamps.size} frames)")
+                    vttText
+                } finally {
+                    retriever.release()
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Thumbnail generation failed: $relativePath: ${e.message}")
+                ""
+            }
+        }
+
+        private fun formatVttTime(seconds: Double): String {
+            val h = (seconds / 3600).toInt()
+            val m = ((seconds % 3600) / 60).toInt()
+            val s = (seconds % 60).toInt()
+            val ms = ((seconds % 1) * 1000).toInt()
+            return "%02d:%02d:%02d.%03d".format(h, m, s, ms)
+        }
+
+        private fun resolveRelativePath(relativePath: String): Uri? {
+            val parentDoc = if (treeUri != null) {
+                DocumentFile.fromTreeUri(this@WikiActivity, treeUri!!)
+            } else if (wikiUri != null) {
+                DocumentFile.fromSingleUri(this@WikiActivity, wikiUri!!)?.parentFile
+            } else {
+                null
+            } ?: return null
+
+            val pathParts = relativePath.split("/")
+            var currentDoc: DocumentFile? = parentDoc
+            for (part in pathParts) {
+                if (part.isEmpty() || part == ".") continue
+                if (part == "..") {
+                    currentDoc = currentDoc?.parentFile
+                } else {
+                    currentDoc = currentDoc?.findFile(part)
+                }
+                if (currentDoc == null) return null
+            }
+            return if (currentDoc != null && currentDoc.exists()) currentDoc.uri else null
         }
 
         private fun md5Hash(input: String): String {
@@ -1737,6 +1954,8 @@ class WikiActivity : AppCompatActivity() {
                 displayZoomControls = false
                 loadWithOverviewMode = true
                 useWideViewPort = true
+                @Suppress("DEPRECATION")
+                mediaPlaybackRequiresUserGesture = false
             }
 
             // Custom WebChromeClient to handle file chooser and fullscreen video
@@ -1859,6 +2078,9 @@ class WikiActivity : AppCompatActivity() {
 
             // Add JavaScript interface for favicon extraction
             addJavascriptInterface(FaviconInterface(), "TiddlyDesktopFavicon")
+
+            // Add JavaScript interface for video poster extraction
+            addJavascriptInterface(PosterInterface(), "TiddlyDesktopPoster")
         }
 
         // Use FrameLayout wrapper for fullscreen video support
@@ -3316,25 +3538,6 @@ class WikiActivity : AppCompatActivity() {
                             pdfStyle.textContent = '.td-pdf-btn{background:#555;color:#fff;border:none;border-radius:3px;padding:4px 10px;font-size:14px;cursor:pointer;min-width:32px}.td-pdf-btn:active{background:#777}.td-pdf-page-wrap{display:flex;justify-content:center;padding:8px 0}.td-pdf-page-wrap canvas{background:#fff;box-shadow:0 2px 8px rgba(0,0,0,.3);display:block;max-width:none}';
                             iDoc.head.appendChild(pdfStyle);
 
-                            function extractPoster(videoSrc, cb) {
-                                var v = document.createElement('video');
-                                v.muted = true; v.playsInline = true; v.preload = 'metadata';
-                                var done = false, tid = null;
-                                function fin(r) { if (done) return; done = true; if (tid) clearTimeout(tid); v.src = ''; cb(r); }
-                                tid = setTimeout(function() { fin(null); }, 5000);
-                                v.onloadeddata = function() { v.currentTime = Math.min(0.5, v.duration * 0.1); };
-                                v.onseeked = function() {
-                                    try {
-                                        var c = document.createElement('canvas');
-                                        c.width = v.videoWidth || 320; c.height = v.videoHeight || 180;
-                                        c.getContext('2d').drawImage(v, 0, 0, c.width, c.height);
-                                        fin(c.toDataURL('image/jpeg', 0.8));
-                                    } catch(e) { fin(null); }
-                                };
-                                v.onerror = function() { fin(null); };
-                                v.src = videoSrc; v.load();
-                            }
-
                             var plyrOpts = {
                                 controls: ['play-large','play','progress','current-time','duration','mute','volume','settings','fullscreen'],
                                 settings: ['speed'],
@@ -3343,18 +3546,38 @@ class WikiActivity : AppCompatActivity() {
                                 blankVideo: ''
                             };
 
+                            function applyPoster(el, posterUrl) {
+                                el.setAttribute('poster', posterUrl);
+                                var plyrContainer = el.closest('.plyr');
+                                if (plyrContainer) {
+                                    var posterDiv = plyrContainer.querySelector('.plyr__poster');
+                                    if (posterDiv) {
+                                        posterDiv.style.backgroundImage = 'url(' + posterUrl + ')';
+                                        posterDiv.removeAttribute('hidden');
+                                    }
+                                }
+                                if (el.plyr) el.plyr.poster = posterUrl;
+                            }
+
                             function enhanceVideo(el) {
                                 if (el.__tdPlyrDone || typeof iWin.Plyr === 'undefined') return;
                                 el.__tdPlyrDone = true;
                                 setTimeout(function() {
                                     var src = el.src || (el.querySelector('source') ? el.querySelector('source').src : null);
-                                    if (src) {
-                                        extractPoster(src, function(posterUrl) {
-                                            if (posterUrl && !el.hasAttribute('poster')) el.setAttribute('poster', posterUrl);
-                                            try { new iWin.Plyr(el, plyrOpts); } catch(e) { console.warn('[TD-Plyr] overlay error:', e); }
-                                        });
-                                    } else {
-                                        try { new iWin.Plyr(el, plyrOpts); } catch(e) { console.warn('[TD-Plyr] overlay error:', e); }
+                                    el.setAttribute('preload', 'none');
+                                    try { new iWin.Plyr(el, plyrOpts); } catch(e) { console.warn('[TD-Plyr] overlay error:', e); }
+                                    if (src && typeof TiddlyDesktopPoster !== 'undefined') {
+                                        try {
+                                            var url = new URL(src);
+                                            var relPath = decodeURIComponent(url.pathname).replace(/^\/_relative\//, '');
+                                            var posterUrl = TiddlyDesktopPoster.getPoster(relPath);
+                                            if (posterUrl) applyPoster(el, posterUrl);
+                                            var vttText = TiddlyDesktopPoster.getThumbnails(relPath);
+                                            if (vttText && el.plyr) {
+                                                var vttBlob = new Blob([vttText], { type: 'text/vtt' });
+                                                el.plyr.config.previewThumbnails = { enabled: true, src: URL.createObjectURL(vttBlob) };
+                                            }
+                                        } catch(e) { console.warn('[TD-Plyr] overlay poster/thumbnails failed:', e.message); }
                                     }
                                 }, 50);
                             }
@@ -3951,209 +4174,39 @@ class WikiActivity : AppCompatActivity() {
                     });
                 }
 
-                // ---- Plyr video enhancement with thumbnail generation ----
-                var THUMB_WIDTH = 160;
-                var THUMB_HEIGHT = 90;
-                var THUMB_INTERVAL = 5; // seconds between thumbnails
-                var MAX_THUMBS = 60; // max thumbnails to generate
-
-                function generateThumbnails(videoSrc, callback) {
-                    var video = document.createElement('video');
-                    video.muted = true;
-                    video.playsInline = true;
-                    video.preload = 'metadata';
-
-                    var thumbs = [];
-                    var duration = 0;
-                    var currentIndex = 0;
-                    var timestamps = [];
-                    var timeoutId = null;
-                    var done = false;
-
-                    function finish(result) {
-                        if (done) return;
-                        done = true;
-                        if (timeoutId) clearTimeout(timeoutId);
-                        video.src = ''; // Stop loading
-                        callback(result);
-                    }
-
-                    // Timeout after 10 seconds
-                    timeoutId = setTimeout(function() {
-                        console.warn('[TD-Plyr] Thumbnail generation timed out');
-                        finish(null);
-                    }, 10000);
-
-                    video.onloadedmetadata = function() {
-                        duration = video.duration;
-                        if (!duration || !isFinite(duration) || duration < 2) {
-                            console.log('[TD-Plyr] Video too short or invalid duration:', duration);
-                            finish(null);
-                            return;
-                        }
-
-                        // Calculate timestamps
-                        var interval = Math.max(THUMB_INTERVAL, duration / MAX_THUMBS);
-                        for (var t = 0; t < duration; t += interval) {
-                            timestamps.push(t);
-                        }
-                        if (timestamps.length === 0) {
-                            finish(null);
-                            return;
-                        }
-
-                        console.log('[TD-Plyr] Generating ' + timestamps.length + ' thumbnails for ' + duration.toFixed(1) + 's video');
-                        captureNext();
-                    };
-
-                    video.onerror = function(e) {
-                        console.warn('[TD-Plyr] Could not load video for thumbnails:', e);
-                        finish(null);
-                    };
-
-                    function captureNext() {
-                        if (done) return;
-                        if (currentIndex >= timestamps.length) {
-                            createSpriteAndVtt();
-                            return;
-                        }
-                        video.currentTime = timestamps[currentIndex];
-                    }
-
-                    video.onseeked = function() {
-                        if (done) return;
-                        try {
-                            var canvas = document.createElement('canvas');
-                            canvas.width = THUMB_WIDTH;
-                            canvas.height = THUMB_HEIGHT;
-                            var ctx = canvas.getContext('2d');
-                            ctx.drawImage(video, 0, 0, THUMB_WIDTH, THUMB_HEIGHT);
-                            thumbs.push({
-                                time: timestamps[currentIndex],
-                                data: canvas.toDataURL('image/jpeg', 0.6)
-                            });
-                        } catch(e) {
-                            console.warn('[TD-Plyr] Could not capture frame at ' + timestamps[currentIndex] + 's:', e.message);
-                        }
-                        currentIndex++;
-                        captureNext();
-                    };
-
-                    function createSpriteAndVtt() {
-                        if (thumbs.length === 0) {
-                            finish(null);
-                            return;
-                        }
-
-                        // Create sprite sheet (horizontal strip)
-                        var spriteCanvas = document.createElement('canvas');
-                        spriteCanvas.width = THUMB_WIDTH * thumbs.length;
-                        spriteCanvas.height = THUMB_HEIGHT;
-                        var spriteCtx = spriteCanvas.getContext('2d');
-
-                        var loadedCount = 0;
-                        thumbs.forEach(function(thumb, i) {
-                            var img = new Image();
-                            img.onload = function() {
-                                spriteCtx.drawImage(img, i * THUMB_WIDTH, 0);
-                                loadedCount++;
-                                if (loadedCount === thumbs.length) finalize();
-                            };
-                            img.onerror = function() {
-                                loadedCount++;
-                                if (loadedCount === thumbs.length) finalize();
-                            };
-                            img.src = thumb.data;
-                        });
-
-                        function finalize() {
-                            var spriteUrl = spriteCanvas.toDataURL('image/jpeg', 0.7);
-
-                            // Generate VTT content
-                            var vtt = 'WEBVTT\n\n';
-                            for (var i = 0; i < thumbs.length; i++) {
-                                var startTime = thumbs[i].time;
-                                var endTime = (i + 1 < thumbs.length) ? thumbs[i + 1].time : duration;
-                                vtt += formatVttTime(startTime) + ' --> ' + formatVttTime(endTime) + '\n';
-                                vtt += spriteUrl + '#xywh=' + (i * THUMB_WIDTH) + ',0,' + THUMB_WIDTH + ',' + THUMB_HEIGHT + '\n\n';
-                            }
-
-                            var vttBlob = new Blob([vtt], { type: 'text/vtt' });
-                            var vttUrl = URL.createObjectURL(vttBlob);
-
-                            console.log('[TD-Plyr] Generated thumbnail sprite with ' + thumbs.length + ' frames');
-                            finish(vttUrl);
+                // ---- Plyr video enhancement ----
+                function applyPoster(el, posterUrl) {
+                    // Set on the video element
+                    el.setAttribute('poster', posterUrl);
+                    // Update Plyr's poster overlay directly
+                    var plyrContainer = el.closest('.plyr');
+                    if (plyrContainer) {
+                        var posterDiv = plyrContainer.querySelector('.plyr__poster');
+                        if (posterDiv) {
+                            posterDiv.style.backgroundImage = 'url(' + posterUrl + ')';
+                            posterDiv.removeAttribute('hidden');
                         }
                     }
-
-                    function formatVttTime(seconds) {
-                        var h = Math.floor(seconds / 3600);
-                        var m = Math.floor((seconds % 3600) / 60);
-                        var s = Math.floor(seconds % 60);
-                        var ms = Math.floor((seconds % 1) * 1000);
-                        return String(h).padStart(2, '0') + ':' +
-                               String(m).padStart(2, '0') + ':' +
-                               String(s).padStart(2, '0') + '.' +
-                               String(ms).padStart(3, '0');
-                    }
-
-                    video.src = videoSrc;
-                    video.load();
+                    if (el.plyr) el.plyr.poster = posterUrl;
+                    console.log('[TD-Plyr] Applied poster');
                 }
 
-                // ---- Extract poster frame from video ----
-                function extractPosterFrame(videoSrc, callback) {
-                    var video = document.createElement('video');
-                    video.muted = true;
-                    video.playsInline = true;
-                    video.preload = 'metadata';
-                    var done = false;
-                    var timeoutId = null;
-
-                    function finish(result) {
-                        if (done) return;
-                        done = true;
-                        if (timeoutId) clearTimeout(timeoutId);
-                        video.src = '';
-                        callback(result);
+                // Queue for sequential video processing (poster + thumbnails)
+                var videoQueue = [];
+                var videoQueueRunning = false;
+                function enqueueVideoWork(work) {
+                    videoQueue.push(work);
+                    if (!videoQueueRunning) {
+                        // Delay first drain to let page finish initial resource loading
+                        videoQueueRunning = true;
+                        setTimeout(drainVideoQueue, 2000);
                     }
-
-                    // Timeout after 5 seconds
-                    timeoutId = setTimeout(function() {
-                        console.warn('[TD-Plyr] Poster extraction timed out');
-                        finish(null);
-                    }, 5000);
-
-                    video.onloadeddata = function() {
-                        // Seek to 0.5s or 10% of duration, whichever is smaller
-                        var seekTime = Math.min(0.5, video.duration * 0.1);
-                        video.currentTime = seekTime;
-                    };
-
-                    video.onseeked = function() {
-                        try {
-                            var canvas = document.createElement('canvas');
-                            canvas.width = video.videoWidth || 320;
-                            canvas.height = video.videoHeight || 180;
-                            var ctx = canvas.getContext('2d');
-                            ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-                            var posterUrl = canvas.toDataURL('image/jpeg', 0.8);
-                            console.log('[TD-Plyr] Extracted poster frame: ' + canvas.width + 'x' + canvas.height);
-                            finish(posterUrl);
-                        } catch(e) {
-                            console.warn('[TD-Plyr] Could not extract poster frame:', e.message);
-                            finish(null);
-                        }
-                    };
-
-                    video.onerror = function() {
-                        var err = video.error;
-                        console.warn('[TD-Plyr] Could not load video for poster: code=' + (err ? err.code : '?') + ' ' + (err ? err.message : ''));
-                        finish(null);
-                    };
-
-                    video.src = videoSrc;
-                    video.load();
+                }
+                function drainVideoQueue() {
+                    if (videoQueue.length === 0) { videoQueueRunning = false; return; }
+                    videoQueueRunning = true;
+                    var task = videoQueue.shift();
+                    task(function() { drainVideoQueue(); });
                 }
 
                 function enhanceVideo(el) {
@@ -4192,31 +4245,45 @@ class WikiActivity : AppCompatActivity() {
                             }
                         }
 
+                        // Prevent Plyr from preloading video data
+                        el.setAttribute('preload', 'none');
+
+                        // Initialize Plyr immediately
+                        initPlyr(null);
+
+                        // Queue poster extraction (native) + thumbnail generation
                         if (videoSrc) {
-                            // Extract poster frame first, then init Plyr
-                            extractPosterFrame(videoSrc, function(posterUrl) {
-                                if (posterUrl && !el.hasAttribute('poster')) {
-                                    el.setAttribute('poster', posterUrl);
-                                    console.log('[TD-Plyr] Set poster attribute');
-                                }
+                            enqueueVideoWork(function(done) {
+                                try {
+                                    var url = new URL(videoSrc);
+                                    var pathPart = decodeURIComponent(url.pathname);
+                                    var relPath = pathPart.replace(/^\/_relative\//, '');
 
-                                // Initialize Plyr after poster is set
-                                initPlyr(null);
+                                    if (typeof TiddlyDesktopPoster !== 'undefined') {
+                                        // Extract poster via native MediaMetadataRetriever
+                                        var posterUrl = TiddlyDesktopPoster.getPoster(relPath);
+                                        if (posterUrl) {
+                                            applyPoster(el, posterUrl);
+                                        }
 
-                                // Generate thumbnails in background and update Plyr
-                                generateThumbnails(videoSrc, function(vttUrl) {
-                                    if (vttUrl && el.plyr) {
-                                        try {
-                                            el.plyr.config.previewThumbnails = { enabled: true, src: vttUrl };
-                                            console.log('[TD-Plyr] Added thumbnails to player');
-                                        } catch(e) {
-                                            console.warn('[TD-Plyr] Could not add thumbnails:', e);
+                                        // Generate thumbnails natively
+                                        var vttText = TiddlyDesktopPoster.getThumbnails(relPath);
+                                        if (vttText && el.plyr) {
+                                            var vttBlob = new Blob([vttText], { type: 'text/vtt' });
+                                            var vttUrl = URL.createObjectURL(vttBlob);
+                                            try {
+                                                el.plyr.config.previewThumbnails = { enabled: true, src: vttUrl };
+                                                console.log('[TD-Plyr] Added thumbnails to player');
+                                            } catch(e) {
+                                                console.warn('[TD-Plyr] Could not add thumbnails:', e);
+                                            }
                                         }
                                     }
-                                });
+                                } catch(e) {
+                                    console.warn('[TD-Plyr] Native poster/thumbnails failed:', e.message);
+                                }
+                                done();
                             });
-                        } else {
-                            initPlyr(null);
                         }
                     }, 50);
                 }

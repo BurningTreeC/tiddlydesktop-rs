@@ -14,6 +14,17 @@
     "core:window:allow-close",
     "core:event:default",
     "opener:default",
+    {
+      "identifier": "opener:allow-open-url",
+      "allow": [
+        { "url": "mailto:*" },
+        { "url": "tel:*" },
+        { "url": "sms:*" },
+        { "url": "geo:*" },
+        { "url": "https://*" },
+        { "url": "http://*" }
+      ]
+    },
     "dialog:default",
     "dialog:allow-open",
     "dialog:allow-save",

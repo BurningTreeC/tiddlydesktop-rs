@@ -48,7 +48,9 @@
             console.log("[TiddlyDesktop] Save hook installed");
         }
 
-        // Cleanup: Delete any accidentally-saved tiddlers from previous versions
+        // Cleanup: Silently remove any accidentally-saved tiddlers from previous versions.
+        // Temporarily suppresses enqueueTiddlerEvent so deleteTiddler() won't fire
+        // change events or increment changeCount (which would mark the wiki dirty).
         if (!window.__tdCleanupDone) {
             window.__tdCleanupDone = true;
             var cleanupPrefixes = [
@@ -57,6 +59,8 @@
                 "$:/plugins/tiddlydesktop-rs/"
             ];
             var deletedCount = 0;
+            var origEnqueue = $tw.wiki.enqueueTiddlerEvent;
+            $tw.wiki.enqueueTiddlerEvent = function() {};
             cleanupPrefixes.forEach(function(prefix) {
                 $tw.wiki.filterTiddlers("[prefix[" + prefix + "]]").forEach(function(title) {
                     if ($tw.wiki.tiddlerExists(title) && !$tw.wiki.isShadowTiddler(title)) {
@@ -65,6 +69,7 @@
                     }
                 });
             });
+            $tw.wiki.enqueueTiddlerEvent = origEnqueue;
             if (deletedCount > 0) {
                 console.log("[TiddlyDesktop] Cleaned up " + deletedCount + " accidentally-saved tiddlers");
             }
@@ -82,6 +87,9 @@
         }
 
         function registerPlugin() {
+            // Capture dirty state - plugin registration should not mark wiki as modified
+            var origNumChanges = $tw.saverHandler ? $tw.saverHandler.numChanges : 0;
+
             // Build plugin content
             var pluginContent = { tiddlers: {} };
             Object.keys(TD.pluginTiddlers).forEach(function(title) {
@@ -106,6 +114,14 @@
 
             // Trigger UI refresh
             $tw.rootWidget.refresh({});
+
+            // Restore dirty state after event loop completes - plugin injection should not mark wiki as modified
+            setTimeout(function() {
+                if ($tw.saverHandler) {
+                    $tw.saverHandler.numChanges = origNumChanges;
+                    $tw.saverHandler.updateDirtyStatus();
+                }
+            }, 0);
 
             console.log("[TiddlyDesktop] Plugin registered with " + Object.keys(TD.pluginTiddlers).length + " shadow tiddlers");
         }
@@ -148,8 +164,6 @@
         }
 
         function injectConfigTiddlers(config) {
-            var originalNumChanges = $tw.saverHandler ? $tw.saverHandler.numChanges : 0;
-
             if (config.auth_urls) {
                 config.auth_urls.forEach(function(entry, index) {
                     addPluginTiddler({
@@ -199,15 +213,8 @@
                 text: tabText
             });
 
-            // Register plugin with all tiddlers
+            // Register plugin with all tiddlers (dirty state guard is inside registerPlugin)
             registerPlugin();
-
-            setTimeout(function() {
-                if ($tw.saverHandler) {
-                    $tw.saverHandler.numChanges = originalNumChanges;
-                    $tw.saverHandler.updateDirtyStatus();
-                }
-            }, 0);
 
             console.log("[TiddlyDesktop] Session Authentication settings UI ready");
         }

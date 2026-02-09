@@ -204,7 +204,7 @@ tags: $:/tags/Stylesheet
 	cursor: pointer;
 }
 
-.td-wikilist-thumbnail .td-file-icon {
+.td-wikilist-thumbnail .tc-image-button {
 	width: 48px;
 	height: 48px;
 }
@@ -843,11 +843,6 @@ body {
 	font-size: 14px;
 }
 
-/* Folder icon */
-.td-folder-icon {
-	width: 48px;
-	height: 48px;
-}
 
 /* Toolbar right section */
 .td-toolbar-right {
@@ -1207,7 +1202,7 @@ body {
 		margin-bottom: 8px;
 	}
 
-	.td-wikilist-thumbnail .td-file-icon,
+	.td-wikilist-thumbnail .tc-image-button,
 	.td-wikilist-thumbnail .td-favicon {
 		width: 36px;
 		height: 36px;
@@ -1280,7 +1275,7 @@ body {
 		margin-right: 8px;
 	}
 
-	.td-wikilist-thumbnail .td-file-icon,
+	.td-wikilist-thumbnail .tc-image-button,
 	.td-wikilist-thumbnail .td-favicon {
 		width: 32px;
 		height: 32px;

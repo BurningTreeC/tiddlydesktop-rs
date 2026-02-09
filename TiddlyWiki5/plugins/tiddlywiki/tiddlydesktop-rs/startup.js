@@ -1302,7 +1302,7 @@ exports.startup = function(callback) {
 			var entries = getWikiListEntries();
 			var updated = false;
 			entries.forEach(function(entry, index) {
-				if (!entry.favicon && faviconMap[entry.path]) {
+				if (faviconMap[entry.path] && entry.favicon !== faviconMap[entry.path]) {
 					entry.favicon = faviconMap[entry.path];
 					var tempTitle = "$:/temp/tiddlydesktop-rs/wikis/" + index;
 					$tw.wiki.setText(tempTitle, "favicon", null, entry.favicon);

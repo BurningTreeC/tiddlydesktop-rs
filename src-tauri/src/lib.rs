@@ -591,6 +591,9 @@ mod clipboard;
 /// Utility functions
 mod utils;
 
+#[cfg(target_os = "linux")]
+mod media_server;
+
 /// Wiki storage and recent files management
 mod wiki_storage;
 
@@ -1287,8 +1290,14 @@ async fn set_headerbar_colors(
                                 #td-headerbar .title {{
                                     color: {};
                                 }}
+                                #td-headerbar button.titlebutton {{
+                                    border-radius: 50%;
+                                    min-width: 24px;
+                                    min-height: 24px;
+                                    padding: 4px;
+                                }}
                                 #td-headerbar button.titlebutton:hover {{
-                                    background: alpha({}, 0.15);
+                                    background-color: alpha({}, 0.15);
                                 }}
                                 "#,
                                 background, foreground, foreground, foreground
@@ -1679,6 +1688,169 @@ async fn download_file(
         }
         None => Err("Save cancelled".to_string()),
     }
+}
+
+/// Extract a video poster frame using ffmpeg (desktop only)
+/// Returns a data:image/jpeg;base64 URI, or None if ffmpeg is unavailable
+/// Results are cached in {data_dir}/poster_cache/{md5}.jpg
+#[cfg(not(target_os = "android"))]
+#[tauri::command]
+async fn extract_video_poster(app: tauri::AppHandle, path: String) -> Result<Option<String>, String> {
+    use md5;
+    use std::process::Command;
+
+    // Security: validate path
+    let path_buf = PathBuf::from(&path);
+    if drag_drop::sanitize::validate_file_path(&path).is_none() {
+        return Err("Invalid path".into());
+    }
+    let canonical = dunce::canonicalize(&path_buf).map_err(|e| format!("File not found: {}", e))?;
+    if !drag_drop::sanitize::is_user_accessible_path(&canonical) {
+        return Err("Access denied".into());
+    }
+
+    // Cache directory
+    let data_dir = get_data_dir(&app).ok_or("No data directory")?;
+    let cache_dir = data_dir.join("poster_cache");
+    let _ = std::fs::create_dir_all(&cache_dir);
+
+    let hash = format!("{:x}", md5::compute(path.as_bytes()));
+    let cache_path = cache_dir.join(format!("{}.jpg", hash));
+
+    // Return cached poster if it exists
+    if cache_path.exists() {
+        match tokio::fs::read(&cache_path).await {
+            Ok(data) => {
+                let b64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &data);
+                return Ok(Some(format!("data:image/jpeg;base64,{}", b64)));
+            }
+            Err(_) => {} // Fall through to regenerate
+        }
+    }
+
+    // Find ffmpeg binary
+    let ffmpeg = find_ffmpeg();
+    let ffmpeg = match ffmpeg {
+        Some(f) => f,
+        None => return Ok(None), // ffmpeg not available - not an error
+    };
+
+    // Extract poster: frame at 0.5s, scaled to 480px width, quality 8
+    let cache_path_str = cache_path.to_string_lossy().to_string();
+    let result = tokio::task::spawn_blocking(move || {
+        Command::new(&ffmpeg)
+            .args([
+                "-ss", "0.5",
+                "-i", &path,
+                "-vframes", "1",
+                "-vf", "scale=480:-1",
+                "-q:v", "8",
+                "-f", "image2",
+                "-y",
+                &cache_path_str,
+            ])
+            .output()
+    }).await.map_err(|e| format!("Task error: {}", e))?;
+
+    match result {
+        Ok(output) => {
+            if output.status.success() && cache_path.exists() {
+                match tokio::fs::read(&cache_path).await {
+                    Ok(data) => {
+                        let b64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &data);
+                        Ok(Some(format!("data:image/jpeg;base64,{}", b64)))
+                    }
+                    Err(e) => Err(format!("Failed to read poster: {}", e)),
+                }
+            } else {
+                Ok(None) // ffmpeg failed - probably not a video file
+            }
+        }
+        Err(e) => {
+            eprintln!("[TiddlyDesktop] ffmpeg error: {}", e);
+            Ok(None)
+        }
+    }
+}
+
+/// Stub for Android — poster extraction is handled natively in WikiActivity.kt
+#[cfg(target_os = "android")]
+#[tauri::command]
+async fn extract_video_poster(_app: tauri::AppHandle, _path: String) -> Result<Option<String>, String> {
+    Ok(None)
+}
+
+/// Linux media server state — held in Tauri managed state.
+/// Contains the localhost HTTP server that serves token-registered media files.
+#[cfg(target_os = "linux")]
+struct MediaServerState {
+    server: media_server::MediaServer,
+}
+
+/// Register a media file with the localhost HTTP server and return its URL.
+/// Only registered files can be served — this is the per-file allowlist mechanism.
+/// The wiki's JavaScript calls this for each video/audio element it encounters.
+#[cfg(target_os = "linux")]
+#[tauri::command]
+fn register_media_url(
+    state: tauri::State<'_, MediaServerState>,
+    path: String,
+) -> Result<String, String> {
+    // Validate path (same checks as tdasset:// protocol handler)
+    if drag_drop::sanitize::validate_file_path(&path).is_none() {
+        return Err("Invalid path".into());
+    }
+
+    let path_buf = PathBuf::from(&path);
+    let canonical = dunce::canonicalize(&path_buf)
+        .map_err(|e| format!("File not found: {}", e))?;
+
+    if !drag_drop::sanitize::is_user_accessible_path(&canonical) {
+        return Err("Access denied".into());
+    }
+
+    let token = state.server.register(canonical);
+    Ok(format!("http://127.0.0.1:{}/media/{}", state.server.port(), token))
+}
+
+/// Stub for non-Linux platforms — media uses tdasset:// directly there.
+#[cfg(not(target_os = "linux"))]
+#[tauri::command]
+fn register_media_url() -> Result<String, String> {
+    Err("Not available on this platform".into())
+}
+
+/// Find ffmpeg binary, checking common locations
+#[cfg(not(target_os = "android"))]
+fn find_ffmpeg() -> Option<String> {
+    // Try PATH first
+    if let Ok(output) = std::process::Command::new("ffmpeg").arg("-version").output() {
+        if output.status.success() {
+            return Some("ffmpeg".into());
+        }
+    }
+
+    // macOS: check Homebrew locations
+    #[cfg(target_os = "macos")]
+    {
+        for path in &["/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg"] {
+            if PathBuf::from(path).exists() {
+                return Some(path.to_string());
+            }
+        }
+    }
+
+    // Linux: check common paths
+    #[cfg(target_os = "linux")]
+    {
+        for path in &["/usr/bin/ffmpeg", "/usr/local/bin/ffmpeg"] {
+            if PathBuf::from(path).exists() {
+                return Some(path.to_string());
+            }
+        }
+    }
+
+    None
 }
 
 /// Check if a path is a directory (used for file drop handling)
@@ -3493,7 +3665,7 @@ async fn init_wiki_folder(app: tauri::AppHandle, path: String, edition: String, 
 /// Copies edition files via SAF to create a new wiki folder structure
 #[cfg(target_os = "android")]
 #[tauri::command]
-async fn init_wiki_folder(app: tauri::AppHandle, path: String, edition: String, _plugins: Vec<String>) -> Result<WikiEntry, String> {
+async fn init_wiki_folder(app: tauri::AppHandle, path: String, edition: String, plugins: Vec<String>) -> Result<WikiEntry, String> {
     use tauri::Manager;
 
     eprintln!("[TiddlyDesktop] Initializing wiki folder on Android:");
@@ -3528,12 +3700,20 @@ async fn init_wiki_folder(app: tauri::AppHandle, path: String, edition: String, 
 
     // Ensure plugins array exists and add required server plugins
     if let Some(obj) = info.as_object_mut() {
-        let plugins = obj.entry("plugins").or_insert(serde_json::json!([]));
-        if let Some(plugins_array) = plugins.as_array_mut() {
+        let plugins_entry = obj.entry("plugins").or_insert(serde_json::json!([]));
+        if let Some(plugins_array) = plugins_entry.as_array_mut() {
             // Add tiddlyweb and filesystem plugins if not already present
             let required_plugins = ["tiddlywiki/tiddlyweb", "tiddlywiki/filesystem"];
             for plugin in required_plugins {
                 let plugin_value = serde_json::Value::String(plugin.to_string());
+                if !plugins_array.contains(&plugin_value) {
+                    plugins_array.push(plugin_value);
+                }
+            }
+            // Add user-selected plugins
+            for plugin in &plugins {
+                let plugin_path = format!("tiddlywiki/{}", plugin);
+                let plugin_value = serde_json::Value::String(plugin_path);
                 if !plugins_array.contains(&plugin_value) {
                     plugins_array.push(plugin_value);
                 }
@@ -3547,7 +3727,7 @@ async fn init_wiki_folder(app: tauri::AppHandle, path: String, edition: String, 
     // Create tiddlywiki.info in the target folder
     let tiddlywiki_info_uri = android::saf::create_file(&path, "tiddlywiki.info", Some("application/json"))?;
     android::saf::write_document_string(&tiddlywiki_info_uri, &modified_info)?;
-    eprintln!("  Created tiddlywiki.info with server plugins");
+    eprintln!("  Created tiddlywiki.info with server plugins and {} user plugins", plugins.len());
 
     // Create tiddlers directory
     let tiddlers_uri = android::saf::find_or_create_subdirectory(&path, "tiddlers")?;
@@ -5525,12 +5705,162 @@ fn parse_query_string(query: Option<&str>) -> std::collections::HashMap<String, 
     params
 }
 
-/// Handle tdasset:// protocol requests for serving static assets with path validation
+/// Build a 416 Range Not Satisfiable response
+fn build_416_response(file_size: u64) -> Response<Vec<u8>> {
+    Response::builder()
+        .status(416)
+        .header("Content-Range", format!("bytes */{}", file_size))
+        .header("Access-Control-Allow-Origin", "*")
+        .body(Vec::new())
+        .unwrap()
+}
+
+/// Maximum bytes to serve per range response for media streaming.
+/// Caps each chunk to prevent loading entire large files into memory.
+/// WebKitGTK's URI scheme responses use MemoryInputStream (in-memory buffer),
+/// so we must keep response sizes bounded for smooth media playback.
+const STREAM_MAX_CHUNK: u64 = 2 * 1024 * 1024; // 2 MB
+
+/// Serve a file with HTTP Range request support for media streaming.
+/// Returns 200 for full file, 206 for partial content, or 416 for invalid ranges.
+fn serve_file_with_range_support(
+    path: &std::path::Path,
+    mime_type: &str,
+    headers: &tauri::http::HeaderMap,
+) -> Response<Vec<u8>> {
+    use std::io::{Read, Seek, SeekFrom};
+
+    let mut file = match std::fs::File::open(path) {
+        Ok(f) => f,
+        Err(e) => {
+            return Response::builder()
+                .status(404)
+                .header("Access-Control-Allow-Origin", "*")
+                .body(format!("File not found: {}", e).as_bytes().to_vec())
+                .unwrap();
+        }
+    };
+
+    let file_size = match file.metadata() {
+        Ok(m) => m.len(),
+        Err(e) => {
+            return Response::builder()
+                .status(500)
+                .header("Access-Control-Allow-Origin", "*")
+                .body(format!("Cannot read file metadata: {}", e).as_bytes().to_vec())
+                .unwrap();
+        }
+    };
+
+    // Check for Range header
+    let range_header = headers.get("range").and_then(|v| v.to_str().ok());
+
+    if let Some(range_str) = range_header {
+        // Parse "bytes=start-end", "bytes=start-", or "bytes=-suffix"
+        let range_str = range_str.trim();
+        if !range_str.starts_with("bytes=") {
+            return build_416_response(file_size);
+        }
+        let range_spec = &range_str[6..];
+
+        // Only handle single range (not multipart)
+        if range_spec.contains(',') {
+            return build_416_response(file_size);
+        }
+
+        let (start, mut end) = if let Some(suffix) = range_spec.strip_prefix('-') {
+            // bytes=-suffix (last N bytes)
+            let suffix_len: u64 = match suffix.parse() {
+                Ok(n) if n > 0 => n,
+                _ => return build_416_response(file_size),
+            };
+            let start = file_size.saturating_sub(suffix_len);
+            (start, file_size - 1)
+        } else if let Some((start_str, end_str)) = range_spec.split_once('-') {
+            let start: u64 = match start_str.parse() {
+                Ok(n) => n,
+                _ => return build_416_response(file_size),
+            };
+            if start >= file_size {
+                return build_416_response(file_size);
+            }
+            let end = if end_str.is_empty() {
+                file_size - 1
+            } else {
+                match end_str.parse::<u64>() {
+                    Ok(n) => n.min(file_size - 1),
+                    _ => return build_416_response(file_size),
+                }
+            };
+            if end < start {
+                return build_416_response(file_size);
+            }
+            (start, end)
+        } else {
+            return build_416_response(file_size);
+        };
+
+        // Cap chunk size to avoid loading huge ranges into memory
+        let max_end = start + STREAM_MAX_CHUNK - 1;
+        if end > max_end {
+            end = max_end.min(file_size - 1);
+        }
+
+        let length = end - start + 1;
+        if file.seek(SeekFrom::Start(start)).is_err() {
+            return build_416_response(file_size);
+        }
+        let mut buf = vec![0u8; length as usize];
+        if let Err(e) = file.read_exact(&mut buf) {
+            return Response::builder()
+                .status(500)
+                .header("Access-Control-Allow-Origin", "*")
+                .body(format!("Read error: {}", e).as_bytes().to_vec())
+                .unwrap();
+        }
+
+        Response::builder()
+            .status(206)
+            .header("Content-Type", mime_type)
+            .header("Content-Length", length.to_string())
+            .header("Content-Range", format!("bytes {}-{}/{}", start, end, file_size))
+            .header("Accept-Ranges", "bytes")
+            .header("Access-Control-Allow-Origin", "*")
+            // Prevent WebKitGTK from caching partial responses — media players
+            // need fresh range requests to stream subsequent chunks
+            .header("Cache-Control", "no-cache, no-store, must-revalidate")
+            .header("Pragma", "no-cache")
+            .body(buf)
+            .unwrap()
+    } else {
+        // No Range header — serve full file
+        let mut buf = Vec::with_capacity(file_size as usize);
+        if let Err(e) = file.read_to_end(&mut buf) {
+            return Response::builder()
+                .status(500)
+                .header("Access-Control-Allow-Origin", "*")
+                .body(format!("Read error: {}", e).as_bytes().to_vec())
+                .unwrap();
+        }
+
+        Response::builder()
+            .status(200)
+            .header("Content-Type", mime_type)
+            .header("Content-Length", file_size.to_string())
+            .header("Accept-Ranges", "bytes")
+            .header("Access-Control-Allow-Origin", "*")
+            .body(buf)
+            .unwrap()
+    }
+}
+
+/// Handle tdasset:// protocol requests for serving static assets with path validation.
 /// This provides a secure alternative to the built-in asset:// protocol by validating
 /// that requested files are within user-accessible directories.
-fn tdasset_protocol_handler(_app: &tauri::AppHandle, request: Request<Vec<u8>>) -> Response<Vec<u8>> {
+/// Called from register_asynchronous_uri_scheme_protocol on a background thread
+/// to avoid blocking the main thread during file I/O (critical for media streaming).
+fn tdasset_protocol_handler(request: Request<Vec<u8>>) -> Response<Vec<u8>> {
     let uri = request.uri();
-
     // The path comes URL-encoded from convertFileSrc, decode it
     let raw_path = uri.path();
     let decoded_path = urlencoding::decode(raw_path)
@@ -5574,15 +5904,112 @@ fn tdasset_protocol_handler(_app: &tauri::AppHandle, request: Request<Vec<u8>>) 
                     .unwrap();
             }
 
-            // Serve the file (uses fs_abstraction for Android SAF support)
-            match fs_abstraction::read_asset_file(&canonical) {
-                Ok(content) => {
-                    let mime_type = utils::get_mime_type(&canonical);
+            // Serve the file with range request support for media playback
+            let mime_type = utils::get_mime_type(&canonical);
+            serve_file_with_range_support(&canonical, mime_type, request.headers())
+        }
+        Err(e) => {
+            Response::builder()
+                .status(404)
+                .header("Access-Control-Allow-Origin", "*")
+                .body(format!("File not found: {}", e).as_bytes().to_vec())
+                .unwrap()
+        }
+    }
+}
+
+/// Handle tdlib:// protocol requests - serves bundled library assets (Plyr, PDF.js)
+/// Separate from tdasset:// which validates user-accessible paths only
+#[cfg(not(target_os = "android"))]
+fn tdlib_protocol_handler(app: &tauri::AppHandle, request: Request<Vec<u8>>) -> Response<Vec<u8>> {
+    let uri = request.uri();
+    let raw_path = uri.path();
+    let decoded_path = urlencoding::decode(raw_path)
+        .map(|s| s.into_owned())
+        .unwrap_or_else(|_| raw_path.to_string());
+    let path = decoded_path.trim_start_matches('/');
+
+    // Security: reject path traversal
+    if path.contains("..") || path.contains('\\') {
+        return Response::builder()
+            .status(403)
+            .header("Access-Control-Allow-Origin", "*")
+            .body("Access denied: invalid path".as_bytes().to_vec())
+            .unwrap();
+    }
+
+    let resource_dir = match get_resource_dir_path(app) {
+        Some(d) => d,
+        None => {
+            return Response::builder()
+                .status(500)
+                .header("Access-Control-Allow-Origin", "*")
+                .body("Resource directory not found".as_bytes().to_vec())
+                .unwrap();
+        }
+    };
+
+    // Try multiple paths: bundled structure, tarball structure, and dev-mode fallback
+    let bundled_path = resource_dir.join("resources").join("tdlib").join(path);
+    let tarball_path = resource_dir.join("tdlib").join(path);
+    // Dev-mode: resolve relative to executable (src-tauri/target/debug/ → src-tauri/resources/tdlib/)
+    let dev_path = std::env::current_exe().ok()
+        .and_then(|exe| exe.parent().map(|d| d.join("..").join("..").join("resources").join("tdlib").join(path)))
+        .unwrap_or_else(|| PathBuf::from("src-tauri").join("resources").join("tdlib").join(path));
+
+    let file_path = if bundled_path.exists() {
+        bundled_path
+    } else if tarball_path.exists() {
+        tarball_path
+    } else if dev_path.exists() {
+        dev_path
+    } else {
+        return Response::builder()
+            .status(404)
+            .header("Access-Control-Allow-Origin", "*")
+            .body(format!("File not found: {}", path).as_bytes().to_vec())
+            .unwrap();
+    };
+
+    // Verify canonical path is within a tdlib dir (security check)
+    let tdlib_dir = file_path.parent().and_then(|p| {
+        // Walk up to find the "tdlib" ancestor
+        let mut current = p;
+        loop {
+            if current.file_name().map(|n| n == "tdlib").unwrap_or(false) {
+                return Some(current.to_path_buf());
+            }
+            current = current.parent()?;
+        }
+    });
+    let tdlib_dir = match tdlib_dir {
+        Some(d) => d,
+        None => {
+            return Response::builder()
+                .status(403)
+                .header("Access-Control-Allow-Origin", "*")
+                .body("Access denied: not in tdlib directory".as_bytes().to_vec())
+                .unwrap();
+        }
+    };
+    match (dunce::canonicalize(&file_path), dunce::canonicalize(&tdlib_dir)) {
+        (Ok(canonical_file), Ok(canonical_base)) => {
+            if !canonical_file.starts_with(&canonical_base) {
+                return Response::builder()
+                    .status(403)
+                    .header("Access-Control-Allow-Origin", "*")
+                    .body("Access denied: path outside tdlib directory".as_bytes().to_vec())
+                    .unwrap();
+            }
+
+            match std::fs::read(&canonical_file) {
+                Ok(data) => {
+                    let mime_type = utils::get_mime_type(&canonical_file);
                     Response::builder()
                         .status(200)
                         .header("Content-Type", mime_type)
                         .header("Access-Control-Allow-Origin", "*")
-                        .body(content)
+                        .body(data)
                         .unwrap()
                 }
                 Err(e) => {
@@ -5594,11 +6021,11 @@ fn tdasset_protocol_handler(_app: &tauri::AppHandle, request: Request<Vec<u8>>) 
                 }
             }
         }
-        Err(e) => {
+        _ => {
             Response::builder()
                 .status(404)
                 .header("Access-Control-Allow-Origin", "*")
-                .body(format!("File not found: {}", e).as_bytes().to_vec())
+                .body("File not found".as_bytes().to_vec())
                 .unwrap()
         }
     }
@@ -5936,25 +6363,9 @@ fn wiki_protocol_handler(app: &tauri::AppHandle, request: Request<Vec<u8>>) -> R
                             .unwrap();
                     };
 
-                    // Serve the file (uses fs_abstraction for Android SAF support)
-                    match fs_abstraction::read_file(&resolved_path) {
-                        Ok(content) => {
-                            let mime_type = utils::get_mime_type(&resolved_path);
-                            return Response::builder()
-                                .status(200)
-                                .header("Content-Type", mime_type)
-                                .header("Access-Control-Allow-Origin", "*")
-                                .body(content)
-                                .unwrap();
-                        }
-                        Err(e) => {
-                            return Response::builder()
-                                .status(404)
-                                .header("Access-Control-Allow-Origin", "*")
-                                .body(format!("File not found: {} ({})", resolved_path.display(), e).as_bytes().to_vec())
-                                .unwrap();
-                        }
-                    }
+                    // Serve the file with range request support for media playback
+                    let mime_type = utils::get_mime_type(&resolved_path);
+                    return serve_file_with_range_support(&resolved_path, mime_type, request.headers());
                 }
             }
         }
@@ -6048,8 +6459,12 @@ fn wiki_protocol_handler(app: &tauri::AppHandle, request: Request<Vec<u8>>) -> R
                 String::new()
             };
 
+            // Plyr CSS/JS are injected inline via the initialization script
+            // (WebKitGTK doesn't load CSS or scripts from custom URI schemes)
+            let plyr_injection = "";
+
             let script_injection = format!(
-                r##"{single_tiddler_preload}
+                r##"{plyr_injection}{single_tiddler_preload}
 <script>
 window.__SAVE_URL__ = "{save_url}";
 {single_tiddler_js}
@@ -6438,6 +6853,7 @@ window.__SAVE_URL__ = "{save_url}";
     // External attachments support is provided by the initialization script (get_dialog_init_script)
 }})();
 </script>"##,
+                plyr_injection = plyr_injection,
                 single_tiddler_preload = single_tiddler_preload,
                 save_url = save_url,
                 single_tiddler_js = single_tiddler_js,
@@ -6790,10 +7206,10 @@ fn run_wiki_mode(args: WikiModeArgs) {
     let tiddler_title_for_state = tiddler_title.clone();
     let startup_tiddler_for_state = startup_tiddler.clone();
 
-    tauri::Builder::default()
+    let builder = tauri::Builder::default()
         .with_platform_plugins()
-        .plugin(drag_drop::init_plugin())
-        .setup(move |app| {
+        .plugin(drag_drop::init_plugin());
+    let builder = builder.setup(move |app| {
             // Store state for this wiki process
             let wiki_path_clone = wiki_path.clone();
             let path_key_clone = path_key.clone();
@@ -6805,6 +7221,19 @@ fn run_wiki_mode(args: WikiModeArgs) {
                 tiddler_title: tiddler_title_for_state.clone(),
                 ipc_client: ipc_client_for_state.clone(),
             });
+
+            // Linux: Start localhost HTTP media server for GStreamer playback
+            #[cfg(target_os = "linux")]
+            {
+                match media_server::MediaServer::start() {
+                    Ok(server) => {
+                        app.manage(MediaServerState { server });
+                    }
+                    Err(e) => {
+                        eprintln!("[TiddlyDesktop] Failed to start media server: {}", e);
+                    }
+                }
+            }
 
             // Also need minimal AppState for commands that expect it
             // Load run_command allowed wikis from disk
@@ -6994,10 +7423,20 @@ fn run_wiki_mode(args: WikiModeArgs) {
         .register_uri_scheme_protocol("wikifile", |ctx, request| {
             wiki_protocol_handler(ctx.app_handle(), request)
         })
-        .register_uri_scheme_protocol("tdasset", |ctx, request| {
-            tdasset_protocol_handler(ctx.app_handle(), request)
-        })
-        .plugin(tauri_plugin_opener::init())
+        .register_asynchronous_uri_scheme_protocol("tdasset", |_ctx, request, responder| {
+            // Spawn a thread for file I/O to avoid blocking the main thread.
+            // This is critical for media streaming — GStreamer/WebKitGTK needs
+            // non-blocking range responses for video/audio playback.
+            std::thread::spawn(move || {
+                responder.respond(tdasset_protocol_handler(request));
+            });
+        });
+        // tdlib:// protocol is desktop-only (Android serves libraries via WikiHttpServer /_td/)
+        #[cfg(not(target_os = "android"))]
+        let builder = builder.register_uri_scheme_protocol("tdlib", |ctx, request| {
+            tdlib_protocol_handler(ctx.app_handle(), request)
+        });
+        let builder = builder.plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .invoke_handler(tauri::generate_handler![
@@ -7055,7 +7494,9 @@ fn run_wiki_mode(args: WikiModeArgs) {
             ipc_request_sync,
             ipc_send_sync_state,
             ipc_update_favicon,
-            show_find_in_page
+            show_find_in_page,
+            extract_video_poster,
+            register_media_url
         ])
         .build(tauri::generate_context!())
         .expect("error while building wiki-mode application")
@@ -7280,6 +7721,19 @@ fn run_wiki_folder_mode(args: WikiFolderModeArgs) {
                 saf_wiki_mappings: Mutex::new(HashMap::new()),
             });
 
+            // Linux: Start localhost HTTP media server for GStreamer playback
+            #[cfg(target_os = "linux")]
+            {
+                match media_server::MediaServer::start() {
+                    Ok(server) => {
+                        app.manage(MediaServerState { server });
+                    }
+                    Err(e) => {
+                        eprintln!("[TiddlyDesktop] Failed to start media server: {}", e);
+                    }
+                }
+            }
+
             // Start IPC listener for focus requests
             let client_guard = ipc_client_for_state.lock().unwrap();
             if let Some(ref client) = *client_guard {
@@ -7330,6 +7784,9 @@ fn run_wiki_folder_mode(args: WikiFolderModeArgs) {
                 }
             }
         })
+        .register_uri_scheme_protocol("tdlib", |ctx, request| {
+            tdlib_protocol_handler(ctx.app_handle(), request)
+        })
         .invoke_handler(tauri::generate_handler![
             load_wiki,
             save_wiki,
@@ -7351,6 +7808,7 @@ fn run_wiki_folder_mode(args: WikiFolderModeArgs) {
             clipboard::get_clipboard_content,
             clipboard::set_clipboard_content,
             show_find_in_page,
+            extract_video_poster,
             // Drag-drop commands
             start_native_drag,
             prepare_native_drag,
@@ -7363,6 +7821,7 @@ fn run_wiki_folder_mode(args: WikiFolderModeArgs) {
             ungrab_seat_for_focus,
             set_over_droppable,
             set_internal_drag_type,
+            register_media_url,
         ])
         .build(tauri::generate_context!())
         .expect("error while building wiki-folder-mode application")
@@ -7513,6 +7972,10 @@ fn read_registry_string(hkey: windows::Win32::System::Registry::HKEY, path: &str
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Linux: Disable overlay scrollbars so scrollbars are always visible
+    #[cfg(target_os = "linux")]
+    std::env::set_var("GTK_OVERLAY_SCROLLING", "0");
+
     // Windows: Check WebView2 version at startup
     #[cfg(target_os = "windows")]
     check_webview2_version();
@@ -7623,10 +8086,10 @@ pub fn run() {
         eprintln!("[TiddlyDesktop]   TIDDLYDESKTOP_DISABLE_GPU=1 tiddlydesktop-rs  (disables all GPU acceleration)");
     }
 
-    tauri::Builder::default()
+    let builder = tauri::Builder::default()
         .with_platform_plugins()
-        .plugin(drag_drop::init_plugin())
-        .setup(|app| {
+        .plugin(drag_drop::init_plugin());
+    let builder = builder.setup(|app| {
             // Replace default menu bar with minimal one on macOS (keeps essential shortcuts)
             #[cfg(target_os = "macos")]
             {
@@ -7681,6 +8144,19 @@ pub fn run() {
                 folder_wiki_paths: Mutex::new(HashMap::new()),
                 saf_wiki_mappings: Mutex::new(HashMap::new()),
             });
+
+            // Linux: Start localhost HTTP media server for GStreamer playback
+            #[cfg(target_os = "linux")]
+            {
+                match media_server::MediaServer::start() {
+                    Ok(server) => {
+                        app.manage(MediaServerState { server });
+                    }
+                    Err(e) => {
+                        eprintln!("[TiddlyDesktop] Failed to start media server: {}", e);
+                    }
+                }
+            }
 
             // Create a unique key for the main wiki path
             let path_key = utils::base64_url_encode(&main_wiki_path.to_string_lossy());
@@ -7825,10 +8301,17 @@ pub fn run() {
         .register_uri_scheme_protocol("wikifile", |ctx, request| {
             wiki_protocol_handler(ctx.app_handle(), request)
         })
-        .register_uri_scheme_protocol("tdasset", |ctx, request| {
-            tdasset_protocol_handler(ctx.app_handle(), request)
-        })
-        .plugin(tauri_plugin_opener::init())
+        .register_asynchronous_uri_scheme_protocol("tdasset", |_ctx, request, responder| {
+            std::thread::spawn(move || {
+                responder.respond(tdasset_protocol_handler(request));
+            });
+        });
+        // tdlib:// protocol is desktop-only (Android serves libraries via WikiHttpServer /_td/)
+        #[cfg(not(target_os = "android"))]
+        let builder = builder.register_uri_scheme_protocol("tdlib", |ctx, request| {
+            tdlib_protocol_handler(ctx.app_handle(), request)
+        });
+        let builder = builder.plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .invoke_handler(tauri::generate_handler![
@@ -7920,7 +8403,9 @@ pub fn run() {
             android_set_system_bar_colors,
             android_copy_attachment,
             android_save_attachment,
-            get_pending_widget_wiki
+            get_pending_widget_wiki,
+            extract_video_poster,
+            register_media_url
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

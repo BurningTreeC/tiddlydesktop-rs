@@ -321,96 +321,124 @@ class WikiHttpServer(
     }
 
     /**
-     * Handle an incoming HTTP connection.
+     * Handle an incoming HTTP connection with keep-alive support.
+     * Media routes (/_file/, /_relative/) benefit from connection reuse during
+     * video seeking — avoids TCP reconnection overhead on every seek operation.
      */
     private fun handleConnection(socket: Socket) {
         try {
             socket.use { s ->
+                // TCP_NODELAY: send headers immediately, don't wait for Nagle's algorithm.
+                // Critical for low-latency range responses during video seeking.
+                s.tcpNoDelay = true
                 s.soTimeout = 30000  // 30 second read timeout
-                val rawInput = s.getInputStream()
-                val output = BufferedOutputStream(s.getOutputStream())
+                val input = BufferedInputStream(s.getInputStream(), 8192)
+                val output = BufferedOutputStream(s.getOutputStream(), 262144)
 
-                // Read headers manually to avoid BufferedReader consuming body data
-                val headerBytes = ByteArrayOutputStream()
-                var prev = 0
-                var curr = 0
-                var headersComplete = false
+                var keepAlive = true
+                while (keepAlive) {
+                    // Read headers using buffered input (much faster than byte-by-byte)
+                    val headerString = readHttpHeaders(input) ?: break
+                    val headerLines = headerString.split("\r\n")
 
-                // Read until we see \r\n\r\n (end of headers)
-                while (!headersComplete) {
-                    curr = rawInput.read()
-                    if (curr == -1) break
-                    headerBytes.write(curr)
+                    if (headerLines.isEmpty()) {
+                        sendError(output, 400, "Bad Request")
+                        break
+                    }
 
-                    // Check for \r\n\r\n
-                    if (curr == '\n'.code && prev == '\r'.code) {
-                        val bytes = headerBytes.toByteArray()
-                        if (bytes.size >= 4 &&
-                            bytes[bytes.size - 4] == '\r'.code.toByte() &&
-                            bytes[bytes.size - 3] == '\n'.code.toByte() &&
-                            bytes[bytes.size - 2] == '\r'.code.toByte() &&
-                            bytes[bytes.size - 1] == '\n'.code.toByte()) {
-                            headersComplete = true
+                    // Parse request line
+                    val requestLine = headerLines[0]
+                    val parts = requestLine.split(" ")
+                    if (parts.size < 2) {
+                        sendError(output, 400, "Bad Request")
+                        break
+                    }
+
+                    val method = parts[0]
+                    val path = parts[1]
+                    val httpVersion = if (parts.size >= 3) parts[2] else "HTTP/1.0"
+
+                    // Parse headers
+                    val headers = mutableMapOf<String, String>()
+                    for (i in 1 until headerLines.size) {
+                        val line = headerLines[i]
+                        if (line.isEmpty()) continue
+                        val colonIndex = line.indexOf(':')
+                        if (colonIndex > 0) {
+                            val key = line.substring(0, colonIndex).trim().lowercase()
+                            val value = line.substring(colonIndex + 1).trim()
+                            headers[key] = value
                         }
                     }
-                    prev = curr
-                }
 
-                val headerString = headerBytes.toString(Charsets.UTF_8.name())
-                val headerLines = headerString.split("\r\n")
+                    // Determine keep-alive: HTTP/1.1 defaults to keep-alive
+                    val connHeader = headers["connection"]?.lowercase() ?: ""
+                    keepAlive = if (httpVersion.contains("1.1")) {
+                        !connHeader.contains("close")
+                    } else {
+                        connHeader.contains("keep-alive")
+                    }
 
-                if (headerLines.isEmpty()) {
-                    sendError(output, 400, "Bad Request")
-                    return
-                }
+                    // Media routes support keep-alive; other routes close after response
+                    val isMediaRoute = path.startsWith("/_file/") || path.startsWith("/_relative/") || path.startsWith("/_td/")
+                    if (!isMediaRoute) keepAlive = false
 
-                // Parse request line
-                val requestLine = headerLines[0]
-                Log.d(TAG, "Request: $requestLine")
+                    when {
+                        method == "GET" && path == "/" -> handleGetWiki(output)
+                        method == "HEAD" && path == "/" -> handleHead(output)
+                        method == "PUT" && path == "/" -> handlePutWiki(input, output, headers)
+                        method == "GET" && path.startsWith("/_file/") -> handleGetFile(output, path, headers, keepAlive)
+                        method == "GET" && path.startsWith("/_relative/") -> handleGetRelative(output, path, headers, keepAlive)
+                        method == "POST" && path == "/_save-attachment" -> handleSaveAttachment(input, output, headers)
+                        method == "OPTIONS" -> handleOptions(output)
+                        // TiddlyWeb protocol for folder wikis
+                        method == "GET" && path == "/status" -> handleStatus(output)
+                        method == "GET" && path == "/recipes/default/tiddlers.json" -> handleGetAllTiddlers(output)
+                        method == "GET" && path.startsWith("/recipes/default/tiddlers/") -> handleGetTiddler(output, path)
+                        method == "PUT" && path.startsWith("/recipes/default/tiddlers/") -> handlePutTiddler(input, output, headers, path)
+                        method == "DELETE" && path.startsWith("/recipes/default/tiddlers/") -> handleDeleteTiddler(output, path)
+                        method == "GET" && path.startsWith("/bags/default/tiddlers/") -> handleGetTiddler(output, path.replace("/bags/", "/recipes/"))
+                        else -> sendError(output, 404, "Not Found")
+                    }
 
-                val parts = requestLine.split(" ")
-                if (parts.size < 2) {
-                    sendError(output, 400, "Bad Request")
-                    return
-                }
-
-                val method = parts[0]
-                val path = parts[1]
-
-                // Parse headers
-                val headers = mutableMapOf<String, String>()
-                for (i in 1 until headerLines.size) {
-                    val line = headerLines[i]
-                    if (line.isEmpty()) continue
-                    val colonIndex = line.indexOf(':')
-                    if (colonIndex > 0) {
-                        val key = line.substring(0, colonIndex).trim().lowercase()
-                        val value = line.substring(colonIndex + 1).trim()
-                        headers[key] = value
+                    // Set idle timeout for next request on keep-alive connections
+                    if (keepAlive) {
+                        s.soTimeout = 60000  // 60 second idle timeout
                     }
                 }
-
-                when {
-                    method == "GET" && path == "/" -> handleGetWiki(output)
-                    method == "HEAD" && path == "/" -> handleHead(output)
-                    method == "PUT" && path == "/" -> handlePutWiki(rawInput, output, headers)
-                    method == "GET" && path.startsWith("/_file/") -> handleGetFile(output, path, headers)
-                    method == "GET" && path.startsWith("/_relative/") -> handleGetRelative(output, path, headers)
-                    method == "POST" && path == "/_save-attachment" -> handleSaveAttachment(rawInput, output, headers)
-                    method == "OPTIONS" -> handleOptions(output)
-                    // TiddlyWeb protocol for folder wikis
-                    method == "GET" && path == "/status" -> handleStatus(output)
-                    method == "GET" && path == "/recipes/default/tiddlers.json" -> handleGetAllTiddlers(output)
-                    method == "GET" && path.startsWith("/recipes/default/tiddlers/") -> handleGetTiddler(output, path)
-                    method == "PUT" && path.startsWith("/recipes/default/tiddlers/") -> handlePutTiddler(rawInput, output, headers, path)
-                    method == "DELETE" && path.startsWith("/recipes/default/tiddlers/") -> handleDeleteTiddler(output, path)
-                    method == "GET" && path.startsWith("/bags/default/tiddlers/") -> handleGetTiddler(output, path.replace("/bags/", "/recipes/"))
-                    else -> sendError(output, 404, "Not Found")
-                }
             }
+        } catch (e: java.net.SocketTimeoutException) {
+            // Keep-alive idle timeout — normal, connection closes silently
+        } catch (e: java.net.SocketException) {
+            // Connection reset by peer — normal during video seeking
         } catch (e: Exception) {
             Log.e(TAG, "Error handling connection: ${e.message}", e)
         }
+    }
+
+    /**
+     * Read HTTP headers from a buffered input stream.
+     * Returns the header string (up to and including the blank line),
+     * or null if the connection was closed.
+     * Uses mark/reset to efficiently detect the \r\n\r\n boundary
+     * without consuming body data.
+     */
+    private fun readHttpHeaders(input: BufferedInputStream): String? {
+        val buf = ByteArrayOutputStream(2048)
+        // State machine to detect \r\n\r\n
+        var state = 0  // 0=normal, 1=\r, 2=\r\n, 3=\r\n\r
+        while (true) {
+            val b = input.read()
+            if (b == -1) return null  // Connection closed
+            buf.write(b)
+            state = when {
+                b == '\r'.code && (state == 0 || state == 2) -> state + 1
+                b == '\n'.code && state == 1 -> 2
+                b == '\n'.code && state == 3 -> break  // Found \r\n\r\n
+                else -> 0
+            }
+        }
+        return buf.toString(Charsets.UTF_8.name())
     }
 
     /**
@@ -437,7 +465,7 @@ class WikiHttpServer(
 
             // Inject Plyr CSS/JS and video-hiding style into <head> so they load
             // as part of the page itself, eliminating the flash of native video controls.
-            val plyrInjection = """<style id="td-plyr-hide-styles">video:not(.plyr__video-wrapper video){opacity:0!important;max-height:0!important;overflow:hidden!important;}.plyr video{opacity:1!important;max-height:none!important;overflow:visible!important;}</style><link rel="stylesheet" href="/_td/plyr/dist/plyr.css"><script src="/_td/plyr/dist/plyr.min.js"></script>"""
+            val plyrInjection = """<style id="td-plyr-hide-styles">video:not(.plyr__video-wrapper video){opacity:0!important;max-height:0!important;overflow:hidden!important;}audio{max-width:100%;box-sizing:border-box;}.plyr{width:100%;height:100%;}.plyr__video-wrapper{width:100%!important;height:100%!important;padding-bottom:0!important;background:#000;}.plyr video{opacity:1!important;width:100%!important;height:100%!important;object-fit:contain!important;}.plyr--compact .plyr__control--overlaid{padding:10px!important;}.plyr--compact .plyr__control--overlaid svg{width:18px!important;height:18px!important;}.plyr--compact .plyr__time--duration,.plyr--compact [data-plyr="settings"],.plyr--compact .plyr__volume{display:none!important;}.plyr--compact .plyr__controls{padding:2px 5px!important;}.plyr--compact .plyr__control{padding:3px!important;}.plyr--compact .plyr__control svg{width:14px!important;height:14px!important;}.plyr--compact .plyr__progress__container{margin-left:4px!important;}.plyr--tiny .plyr__time,.plyr--tiny [data-plyr="fullscreen"]{display:none!important;}.plyr--tiny .plyr__control--overlaid{padding:6px!important;}.plyr--tiny .plyr__control--overlaid svg{width:14px!important;height:14px!important;}.plyr--tiny .plyr__control svg{width:12px!important;height:12px!important;}</style><link rel="stylesheet" href="/_td/plyr/dist/plyr.css"><script src="/_td/plyr/dist/plyr.min.js"></script>"""
             val headIdx = content.indexOf("<head>", ignoreCase = true)
             if (headIdx >= 0) {
                 content = content.substring(0, headIdx + 6) + plyrInjection + content.substring(headIdx + 6)
@@ -517,7 +545,7 @@ class WikiHttpServer(
      * Handle GET /_file/{base64_path} - serve external attachment by absolute path.
      * Supports streaming and HTTP Range requests for large files (videos).
      */
-    private fun handleGetFile(output: OutputStream, path: String, headers: Map<String, String> = emptyMap()) {
+    private fun handleGetFile(output: OutputStream, path: String, headers: Map<String, String> = emptyMap(), keepAlive: Boolean = false) {
         try {
             val encoded = path.removePrefix("/_file/")
             // Decode base64url (- -> +, _ -> /)
@@ -552,14 +580,16 @@ class WikiHttpServer(
                 throw IOException("Cannot determine file size")
             }
 
+            val connValue = if (keepAlive) "keep-alive" else "close"
+
             // Parse Range header if present
             val rangeHeader = headers["range"]
             if (rangeHeader != null && rangeHeader.startsWith("bytes=")) {
                 // Handle range request for video seeking
-                handleRangeRequest(output, uri, contentType, fileSize, rangeHeader)
+                handleRangeRequest(output, uri, contentType, fileSize, rangeHeader, connValue)
             } else {
                 // Stream the entire file
-                streamFile(output, uri, contentType, fileSize)
+                streamFile(output, uri, contentType, fileSize, connValue)
             }
         } catch (e: Exception) {
             Log.e(TAG, "Error serving file: ${e.message}", e)
@@ -584,21 +614,21 @@ class WikiHttpServer(
     /**
      * Stream a file to the output in chunks.
      */
-    private fun streamFile(output: OutputStream, uri: Uri, contentType: String, fileSize: Long) {
+    private fun streamFile(output: OutputStream, uri: Uri, contentType: String, fileSize: Long, connection: String = "close") {
         val headers = listOf(
             "HTTP/1.1 200 OK",
             "Content-Type: $contentType",
             "Content-Length: $fileSize",
             "Accept-Ranges: bytes",
             "Access-Control-Allow-Origin: *",
-            "Connection: close",
+            "Connection: $connection",
             "",
             ""
         ).joinToString("\r\n")
         output.write(headers.toByteArray())
 
-        // Stream in 64KB chunks
-        val buffer = ByteArray(65536)
+        // Stream in 256KB chunks
+        val buffer = ByteArray(262144)
         context.contentResolver.openInputStream(uri)?.use { input ->
             var bytesRead: Int
             while (input.read(buffer).also { bytesRead = it } != -1) {
@@ -652,7 +682,7 @@ class WikiHttpServer(
     /**
      * Handle HTTP Range request for partial content (video seeking).
      */
-    private fun handleRangeRequest(output: OutputStream, uri: Uri, contentType: String, fileSize: Long, rangeHeader: String) {
+    private fun handleRangeRequest(output: OutputStream, uri: Uri, contentType: String, fileSize: Long, rangeHeader: String, connection: String = "close") {
         // Parse "bytes=start-end" or "bytes=start-"
         val rangeSpec = rangeHeader.removePrefix("bytes=")
         val rangeParts = rangeSpec.split("-")
@@ -670,7 +700,7 @@ class WikiHttpServer(
                 "HTTP/1.1 416 Range Not Satisfiable",
                 "Content-Range: bytes */$fileSize",
                 "Access-Control-Allow-Origin: *",
-                "Connection: close",
+                "Connection: $connection",
                 "",
                 ""
             ).joinToString("\r\n")
@@ -680,7 +710,6 @@ class WikiHttpServer(
         }
 
         val contentLength = end - start + 1
-        Log.d(TAG, "Range request: bytes $start-$end/$fileSize (sending $contentLength bytes)")
 
         val headers = listOf(
             "HTTP/1.1 206 Partial Content",
@@ -689,14 +718,14 @@ class WikiHttpServer(
             "Content-Range: bytes $start-$end/$fileSize",
             "Accept-Ranges: bytes",
             "Access-Control-Allow-Origin: *",
-            "Connection: close",
+            "Connection: $connection",
             "",
             ""
         ).joinToString("\r\n")
         output.write(headers.toByteArray())
 
-        // Stream the requested range in chunks using ParcelFileDescriptor for O(1) seeking
-        val buffer = ByteArray(65536)
+        // Stream the requested range in 256KB chunks using ParcelFileDescriptor for O(1) seeking
+        val buffer = ByteArray(262144)
         context.contentResolver.openFileDescriptor(uri, "r")?.use { pfd ->
             val fis = java.io.FileInputStream(pfd.fileDescriptor)
             fis.use { input ->
@@ -721,7 +750,7 @@ class WikiHttpServer(
      * Handle GET /_relative/{path} - serve file relative to wiki location.
      * Supports streaming and HTTP Range requests for large files (videos).
      */
-    private fun handleGetRelative(output: OutputStream, path: String, headers: Map<String, String> = emptyMap()) {
+    private fun handleGetRelative(output: OutputStream, path: String, headers: Map<String, String> = emptyMap(), keepAlive: Boolean = false) {
         try {
             val relativePath = URLDecoder.decode(path.removePrefix("/_relative/"), "UTF-8")
             Log.d(TAG, "Serving relative file: $relativePath")
@@ -772,14 +801,16 @@ class WikiHttpServer(
                 throw IOException("Cannot determine file size")
             }
 
+            val connValue = if (keepAlive) "keep-alive" else "close"
+
             // Parse Range header if present
             val rangeHeader = headers["range"]
             if (rangeHeader != null && rangeHeader.startsWith("bytes=")) {
                 // Handle range request for video seeking
-                handleRangeRequest(output, uri, contentType, fileSize, rangeHeader)
+                handleRangeRequest(output, uri, contentType, fileSize, rangeHeader, connValue)
             } else {
                 // Stream the entire file
-                streamFile(output, uri, contentType, fileSize)
+                streamFile(output, uri, contentType, fileSize, connValue)
             }
         } catch (e: Exception) {
             Log.e(TAG, "Error serving relative file: ${e.message}", e)

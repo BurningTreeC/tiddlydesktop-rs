@@ -109,4 +109,46 @@
 
     setupCloseHandler();
 
+    // Intercept clicks on links with external protocols (mailto:, tel:, etc.)
+    // and external http/https URLs — open via the OS-assigned handler.
+    function setupExternalProtocolHandler() {
+        if (typeof window.__TAURI__ === 'undefined' || !window.__TAURI__.opener) {
+            setTimeout(setupExternalProtocolHandler, 100);
+            return;
+        }
+        // Protocols that should always stay in the WebView
+        var internalProtocols = {
+            'wikifile:': true, 'tdasset:': true, 'tdlib:': true,
+            'data:': true, 'blob:': true, 'javascript:': true, '': true
+        };
+        // Our wiki origins that should stay in the WebView
+        var ownOrigin = window.location.origin; // e.g. wikifile://localhost or http://127.0.0.1:port
+        document.addEventListener('click', function(e) {
+            var link = e.target.closest('a[href]');
+            if (!link) return;
+            var href = link.getAttribute('href');
+            if (!href) return;
+            // Parse protocol
+            var colonIdx = href.indexOf(':');
+            if (colonIdx < 1) return; // relative URL or no protocol
+            var protocol = href.substring(0, colonIdx + 1).toLowerCase();
+            if (internalProtocols[protocol]) return;
+            // http/https: open externally unless it's our own wiki server
+            if (protocol === 'http:' || protocol === 'https:') {
+                try {
+                    var url = new URL(href);
+                    if (url.origin === ownOrigin) return; // our wiki, stay in WebView
+                } catch(ex) { return; }
+            }
+            // External protocol or external website — open via system handler
+            e.preventDefault();
+            e.stopPropagation();
+            window.__TAURI__.opener.openUrl(href).catch(function(err) {
+                console.error('[TiddlyDesktop] Failed to open external URL:', err, href);
+            });
+        }, true); // capture phase to intercept before TiddlyWiki handlers
+        console.log('[TiddlyDesktop] External protocol handler installed');
+    }
+    setupExternalProtocolHandler();
+
 })(window.TiddlyDesktop = window.TiddlyDesktop || {});

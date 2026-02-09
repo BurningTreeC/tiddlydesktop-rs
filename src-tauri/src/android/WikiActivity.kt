@@ -685,12 +685,18 @@ class WikiActivity : AppCompatActivity() {
 
                 // Generate filename based on MD5 hash of wiki path (collision-proof)
                 val pathHash = md5Hash(wikiPath ?: "unknown")
-                val extension = when {
-                    mimeType.contains("png") -> "png"
-                    mimeType.contains("jpeg") || mimeType.contains("jpg") -> "jpg"
-                    mimeType.contains("gif") -> "gif"
-                    mimeType.contains("svg") -> "svg"
-                    else -> "ico"
+                val imageData = android.util.Base64.decode(base64Data, android.util.Base64.DEFAULT)
+
+                // Try to decode with BitmapFactory and re-save as PNG.
+                // This normalizes all formats (ICO, BMP, etc.) to PNG for
+                // consistent display on the landing page.
+                val bitmap = android.graphics.BitmapFactory.decodeByteArray(imageData, 0, imageData.size)
+                val extension = if (bitmap != null) {
+                    "png"  // Always save as PNG when decodable
+                } else if (mimeType.contains("svg")) {
+                    "svg"  // SVGs can't be decoded by BitmapFactory
+                } else {
+                    "ico"  // Fallback for truly undecodable formats
                 }
 
                 // Clean up old favicon files for this wiki (different extensions)
@@ -707,9 +713,14 @@ class WikiActivity : AppCompatActivity() {
 
                 val faviconFile = File(faviconsDir, "$pathHash.$extension")
 
-                // Decode base64 and save
-                val imageData = android.util.Base64.decode(base64Data, android.util.Base64.DEFAULT)
-                faviconFile.writeBytes(imageData)
+                // Save: re-encode as PNG if we decoded successfully, raw bytes otherwise
+                if (bitmap != null) {
+                    java.io.FileOutputStream(faviconFile).use { out ->
+                        bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, out)
+                    }
+                } else {
+                    faviconFile.writeBytes(imageData)
+                }
 
                 Log.d(TAG, "Saved favicon to: ${faviconFile.absolutePath} for wiki: $wikiPath")
 
@@ -1936,7 +1947,8 @@ class WikiActivity : AppCompatActivity() {
         // Update recent wikis list for home screen widget
         updateRecentWikis(applicationContext, wikiPath!!, wikiTitle, isFolder)
 
-        // Update the task title
+        // Set Recents task label (icon bitmap is ignored on API 28+)
+        @Suppress("DEPRECATION")
         setTaskDescription(ActivityManager.TaskDescription(wikiTitle))
 
         // Create and configure WebView
@@ -3531,7 +3543,7 @@ class WikiActivity : AppCompatActivity() {
                             iDoc.head.appendChild(plyrCss);
                             // Hide raw videos until Plyr loads
                             var hideStyle = iDoc.createElement('style');
-                            hideStyle.textContent = 'video:not(.plyr__video-wrapper video){opacity:0!important;max-height:0!important;overflow:hidden!important}.plyr video{opacity:1!important;max-height:none!important;overflow:visible!important}';
+                            hideStyle.textContent = 'video:not(.plyr__video-wrapper video){opacity:0!important;max-height:0!important;overflow:hidden!important}audio{max-width:100%;box-sizing:border-box;}.plyr{width:100%;height:100%;}.plyr__video-wrapper{width:100%!important;height:100%!important;padding-bottom:0!important;background:#000;}.plyr video{opacity:1!important;width:100%!important;height:100%!important;object-fit:contain!important;}.plyr--compact .plyr__control--overlaid{padding:10px!important;}.plyr--compact .plyr__control--overlaid svg{width:18px!important;height:18px!important;}.plyr--compact .plyr__time--duration,.plyr--compact [data-plyr="settings"],.plyr--compact .plyr__volume{display:none!important;}.plyr--compact .plyr__controls{padding:2px 5px!important;}.plyr--compact .plyr__control{padding:3px!important;}.plyr--compact .plyr__control svg{width:14px!important;height:14px!important;}.plyr--compact .plyr__progress__container{margin-left:4px!important;}.plyr--tiny .plyr__time,.plyr--tiny [data-plyr="fullscreen"]{display:none!important;}.plyr--tiny .plyr__control--overlaid{padding:6px!important;}.plyr--tiny .plyr__control--overlaid svg{width:14px!important;height:14px!important;}.plyr--tiny .plyr__control svg{width:12px!important;height:12px!important;}';
                             iDoc.head.appendChild(hideStyle);
                             // PDF viewer styles
                             var pdfStyle = iDoc.createElement('style');
@@ -3559,13 +3571,31 @@ class WikiActivity : AppCompatActivity() {
                                 if (el.plyr) el.plyr.poster = posterUrl;
                             }
 
+                            function fitPlyrToParent(video) {
+                                var plyrEl = video.closest('.plyr');
+                                if (!plyrEl) return;
+                                plyrEl.classList.remove('plyr--compact', 'plyr--tiny');
+                                var w = plyrEl.clientWidth, h = plyrEl.clientHeight;
+                                if (w < 350 || h < 250) plyrEl.classList.add('plyr--compact');
+                                if (w < 200 || h < 150) plyrEl.classList.add('plyr--tiny');
+                            }
+
                             function enhanceVideo(el) {
                                 if (el.__tdPlyrDone || typeof iWin.Plyr === 'undefined') return;
                                 el.__tdPlyrDone = true;
                                 setTimeout(function() {
                                     var src = el.src || (el.querySelector('source') ? el.querySelector('source').src : null);
                                     el.setAttribute('preload', 'none');
-                                    try { new iWin.Plyr(el, plyrOpts); } catch(e) { console.warn('[TD-Plyr] overlay error:', e); }
+                                    try {
+                                        new iWin.Plyr(el, plyrOpts);
+                                        if (el.videoWidth && el.videoHeight) {
+                                            requestAnimationFrame(function() { fitPlyrToParent(el); });
+                                        } else {
+                                            el.addEventListener('loadedmetadata', function() {
+                                                requestAnimationFrame(function() { fitPlyrToParent(el); });
+                                            }, { once: true });
+                                        }
+                                    } catch(e) { console.warn('[TD-Plyr] overlay error:', e); }
                                     if (src && typeof TiddlyDesktopPoster !== 'undefined') {
                                         try {
                                             var url = new URL(src);
@@ -3732,11 +3762,8 @@ class WikiActivity : AppCompatActivity() {
                     }
                     // Clean up whitespace
                     base64Data = base64Data.replace(/\s/g, '');
-                    if (base64Data) {
-                        console.log('[TiddlyDesktop] Extracting favicon, type:', mimeType, 'length:', base64Data.length);
-                        var result = window.TiddlyDesktopFavicon.saveFavicon(base64Data, mimeType);
-                        console.log('[TiddlyDesktop] Favicon save result:', result);
-                    }
+                    if (!base64Data) return;
+                    window.TiddlyDesktopFavicon.saveFavicon(base64Data, mimeType || 'image/x-icon');
                 }
 
                 // Detect client-server mode (folder wikis use TW syncer)
@@ -3799,6 +3826,48 @@ class WikiActivity : AppCompatActivity() {
                         console.log('[TiddlyDesktop] HTTP favicon fetch failed:', err.message);
                         tryLocalFaviconFallback();
                     });
+
+                // Watch for changes to $/favicon.ico and re-extract
+                (function watchFaviconChanges() {
+                    if (typeof ${'$'}tw === 'undefined' || !${'$'}tw.wiki || !${'$'}tw.wiki.addEventListener) {
+                        setTimeout(watchFaviconChanges, 200);
+                        return;
+                    }
+                    ${'$'}tw.wiki.addEventListener('change', function(changes) {
+                        if (!changes['${'$'}:/favicon.ico']) return;
+                        console.log('[TiddlyDesktop] Favicon tiddler changed, re-extracting');
+                        var isClientServer = !!${'$'}tw.syncer;
+                        if (!isClientServer) {
+                            var t = ${'$'}tw.wiki.getTiddler('${'$'}:/favicon.ico');
+                            if (t && t.fields.text) {
+                                saveFaviconData(t.fields.text, t.fields.type || 'image/x-icon');
+                            }
+                        } else {
+                            fetch(window.location.origin + '/favicon.ico')
+                                .then(function(response) {
+                                    if (!response.ok) throw new Error('HTTP ' + response.status);
+                                    var contentType = response.headers.get('content-type') || 'image/x-icon';
+                                    return response.blob().then(function(blob) {
+                                        if (blob.size === 0) throw new Error('Empty response');
+                                        return { blob: blob, type: contentType };
+                                    });
+                                })
+                                .then(function(result) {
+                                    var reader = new FileReader();
+                                    reader.onload = function() {
+                                        var data = reader.result;
+                                        if (data && data.indexOf('base64,') !== -1 && data.split('base64,')[1]) {
+                                            saveFaviconData(data, result.type);
+                                        }
+                                    };
+                                    reader.readAsDataURL(result.blob);
+                                })
+                                .catch(function(err) {
+                                    console.log('[TiddlyDesktop] Favicon re-fetch failed:', err.message);
+                                });
+                        }
+                    });
+                })();
             })();
         """.trimIndent()
 
@@ -4209,6 +4278,15 @@ class WikiActivity : AppCompatActivity() {
                     task(function() { drainVideoQueue(); });
                 }
 
+                function fitPlyrToParent(video) {
+                    var plyrEl = video.closest('.plyr');
+                    if (!plyrEl) return;
+                    plyrEl.classList.remove('plyr--compact', 'plyr--tiny');
+                    var w = plyrEl.clientWidth, h = plyrEl.clientHeight;
+                    if (w < 350 || h < 250) plyrEl.classList.add('plyr--compact');
+                    if (w < 200 || h < 150) plyrEl.classList.add('plyr--tiny');
+                }
+
                 function enhanceVideo(el) {
                     if (el.__tdPlyrDone) return;
                     el.__tdPlyrDone = true;
@@ -4238,6 +4316,15 @@ class WikiActivity : AppCompatActivity() {
                                     opts.previewThumbnails = { enabled: true, src: vttUrl };
                                 }
                                 var player = new Plyr(el, opts);
+
+                                // Fit within parent constraints
+                                if (el.videoWidth && el.videoHeight) {
+                                    requestAnimationFrame(function() { fitPlyrToParent(el); });
+                                } else {
+                                    el.addEventListener('loadedmetadata', function() {
+                                        requestAnimationFrame(function() { fitPlyrToParent(el); });
+                                    }, { once: true });
+                                }
 
                                 console.log('[TD-Plyr] Enhanced video:', videoSrc || '(no src)', vttUrl ? '(with thumbnails)' : '');
                             } catch(err) {
@@ -4402,21 +4489,32 @@ class WikiActivity : AppCompatActivity() {
 
         // Add a WebViewClient that injects the script after page load
         webView.webViewClient = object : WebViewClient() {
-            override fun shouldOverrideUrlLoading(view: WebView, url: String): Boolean {
+            private fun handleUrl(url: String): Boolean {
                 val uri = Uri.parse(url)
-                val scheme = uri.scheme ?: return false
+                val scheme = uri.scheme?.lowercase() ?: return false
                 // Allow wiki server URLs to load in the WebView
                 if (scheme == "http" && uri.host == "127.0.0.1") return false
-                // Open external http/https URLs in the system browser
-                if (scheme == "http" || scheme == "https") {
-                    try {
-                        startActivity(Intent(Intent.ACTION_VIEW, uri))
-                    } catch (e: Exception) {
-                        Log.e(TAG, "Failed to open external URL: ${e.message}")
-                    }
-                    return true
+                // Internal schemes that should stay in the WebView
+                if (scheme == "data" || scheme == "blob" || scheme == "javascript") return false
+                // All other URLs (http, https, mailto, tel, sms, geo, etc.)
+                // open via the OS-assigned handler
+                Log.d(TAG, "Opening external URL: $url (scheme=$scheme)")
+                try {
+                    val intent = Intent(Intent.ACTION_VIEW, uri)
+                    intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    startActivity(intent)
+                } catch (e: Exception) {
+                    Log.e(TAG, "Failed to open external URL: ${e.message}")
                 }
-                return false
+                return true
+            }
+
+            override fun shouldOverrideUrlLoading(view: WebView, url: String): Boolean {
+                return handleUrl(url)
+            }
+
+            override fun shouldOverrideUrlLoading(view: WebView, request: android.webkit.WebResourceRequest): Boolean {
+                return handleUrl(request.url.toString())
             }
 
             override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse? {

@@ -1553,6 +1553,16 @@
         document.addEventListener("drop", function(event) {
             if (window.__tiddlyDesktopDragData || (typeof $tw !== "undefined" && $tw.dragInProgress)) return;
             if (event.__tiddlyDesktopSynthetic) return;
+
+            // macOS safety net: ALWAYS prevent native file drops from navigating the webview,
+            // even if early returns below would otherwise skip our preventDefault.
+            // With the Rust-side fix, native drop events shouldn't fire for file drops,
+            // but this ensures navigation is blocked regardless.
+            if (isMacOS && event.dataTransfer && event.dataTransfer.types &&
+                Array.prototype.indexOf.call(event.dataTransfer.types, "Files") !== -1) {
+                event.preventDefault();
+            }
+
             if (isDragging) return;
 
             // Skip for editable elements - let native handling work
@@ -2153,8 +2163,6 @@
                 return;
             }
 
-            var originalNumChanges = $tw.saverHandler.numChanges || 0;
-
             // Add tiddlers to plugin
             addPluginTiddler({
                 title: CONFIG_ENABLE,
@@ -2180,15 +2188,10 @@
                       "<$checkbox tiddler=\"" + CONFIG_ABS_NONDESC + "\" field=\"text\" checked=\"yes\" unchecked=\"no\" default=\"no\"> Use absolute paths for files outside wiki folder</$checkbox>"
             });
 
-            // Register plugin (function provided by session_auth.js)
+            // Register plugin (dirty state guard is inside registerPlugin)
             if (TD.registerPlugin) {
                 TD.registerPlugin();
             }
-
-            setTimeout(function() {
-                $tw.saverHandler.numChanges = originalNumChanges;
-                $tw.saverHandler.updateDirtyStatus();
-            }, 0);
 
             $tw.wiki.addEventListener("change", function(changes) {
                 if (changes[CONFIG_ENABLE] || changes[CONFIG_ABS_DESC] || changes[CONFIG_ABS_NONDESC]) {

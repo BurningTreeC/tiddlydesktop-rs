@@ -11,10 +11,10 @@ title: $:/plugins/tiddlywiki/tiddlydesktop-rs/WikiList
 </$list>
 <$list filter="[<favicon>is[blank]]" variable="ignore">
 <$list filter="[<isFolder>match[true]]" variable="ignore">
-{{$:/plugins/tiddlywiki/tiddlydesktop-rs/images/folder-icon}}
+{{$:/core/images/folder}}
 </$list>
 <$list filter="[<isFolder>!match[true]]" variable="ignore">
-{{$:/plugins/tiddlywiki/tiddlydesktop-rs/images/file-icon}}
+{{$:/core/images/file}}
 </$list>
 </$list>
 </$button>
@@ -221,7 +221,7 @@ title: $:/plugins/tiddlywiki/tiddlydesktop-rs/WikiList
 <$reveal state=<<collapsedState>> type="nomatch" text="yes" tag="span">
 {{$:/core/images/down-arrow}}
 </$reveal>
-<span class="td-group-name"><$text text=<<groupName>>/></span>
+<span class="td-group-name"><<td-lingo Labels/Ungrouped>></span>
 <span class="td-group-count">(<$text text=<<groupCount>>/>)</span>
 </$button>
 </div>

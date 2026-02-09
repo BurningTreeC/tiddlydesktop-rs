@@ -156,32 +156,75 @@
             console.log('[TiddlyDesktop] copyToClipboard override installed');
 
             // Media interceptor for filesystem paths
-            // Uses tdasset:// protocol which has proper path validation on the Rust side
+            // Images use tdasset:// (validated custom protocol).
+            // On Linux, video/audio use localhost HTTP server (GStreamer can't play custom URI schemes).
+            // On Windows/macOS, video/audio also use tdasset:// (their media engines handle it fine).
             function setupMediaInterceptor() {
-                // Convert a filesystem path to a tdasset:// URL
-                // This uses our validated protocol instead of the permissive asset:// protocol
                 function convertToTdassetUrl(path) {
-                    // URL-encode the path for safe URL inclusion
-                    // The Rust handler will decode and validate it
                     return 'tdasset://localhost/' + encodeURIComponent(path);
+                }
+
+                // Media elements that need HTTP URLs on Linux (GStreamer)
+                var mediaElements = { 'VIDEO': true, 'AUDIO': true, 'SOURCE': true };
+
+                function isMediaElement(element) {
+                    return mediaElements[element.tagName] || false;
+                }
+
+                // Per-file token map: HTTP URL -> filesystem path (for resolveVideoPath in media.js)
+                TD.mediaTokenPaths = {};
+
+                // Register a media file with the localhost HTTP server (Linux only).
+                // Returns the HTTP URL via callback. On non-Linux, falls back to tdasset://.
+                function registerMediaUrl(element, resolvedPath) {
+                    // Mark element as pending to prevent re-processing
+                    element.__tdMediaPending = true;
+                    invoke('register_media_url', { path: resolvedPath })
+                        .then(function(httpUrl) {
+                            // Store token -> path mapping for poster extraction
+                            TD.mediaTokenPaths[httpUrl] = resolvedPath;
+                            element.setAttribute('src', httpUrl);
+                            element.__tdMediaPending = false;
+                        })
+                        .catch(function(err) {
+                            // Fallback to tdasset:// if media server unavailable
+                            console.warn('[TiddlyDesktop] Media server fallback for:', resolvedPath, err);
+                            element.setAttribute('src', convertToTdassetUrl(resolvedPath));
+                            element.__tdMediaPending = false;
+                        });
                 }
 
                 function convertElementSrc(element) {
                     var src = element.getAttribute('src');
                     if (!src) return;
 
-                    // Skip if already using a protocol or data URL
-                    if (src.startsWith('tdasset://') || src.startsWith('asset://') || src.startsWith('data:') ||
+                    // Skip if already processed or pending async registration
+                    if (element.__tdMediaPending) return;
+
+                    // Skip if already using a validated protocol or data URL
+                    if (src.startsWith('tdasset://') ||
+                        src.startsWith('asset://') || src.startsWith('data:') ||
                         src.startsWith('http://') || src.startsWith('https://') ||
-                        src.startsWith('blob:') || src.startsWith('wikifile://')) {
+                        src.startsWith('blob:') || src.startsWith('tdlib:')) {
                         return;
                     }
 
-                    var resolvedPath = resolveFilesystemPath(src);
+                    // wikifile:// URLs: extract the relative path and resolve
+                    var rawPath = src;
+                    if (src.startsWith('wikifile://')) {
+                        rawPath = src.replace(/^wikifile:\/\/localhost\//, '');
+                        if (!rawPath) return;
+                    }
+
+                    var resolvedPath = resolveFilesystemPath(rawPath);
                     if (resolvedPath) {
-                        // Use tdasset:// for proper path validation in Rust
-                        var tdassetUrl = convertToTdassetUrl(resolvedPath);
-                        element.setAttribute('src', tdassetUrl);
+                        if (isMediaElement(element) && window.__TD_MEDIA_SERVER__) {
+                            // Linux: register with localhost HTTP media server for GStreamer playback
+                            registerMediaUrl(element, resolvedPath);
+                        } else {
+                            // Windows/macOS: tdasset:// works for all media types
+                            element.setAttribute('src', convertToTdassetUrl(resolvedPath));
+                        }
                     }
                 }
 

@@ -542,12 +542,39 @@ extern "C" fn swizzled_perform_drag_operation(this: *mut AnyObject, _sel: Sel, d
                 let file_paths = extract_file_paths(&pasteboard);
 
                 if !file_paths.is_empty() {
-                    // External file drop - WRY patch stores paths via FFI
-                    // Let native WKWebView handling fire HTML5 drop events
-                    // JavaScript retrieves paths from FFI after native drop event fires
-                    eprintln!("[TiddlyDesktop] macOS: External file drop detected, delegating to WRY patch");
-                    // DON'T set handled = true - let WRY patch and native handling fire
-                    // handled remains false, so we call original handler below
+                    // External file drop - handle directly by emitting td-file-drop
+                    // (matching the Linux GTK pattern). Do NOT delegate to native
+                    // WKWebView handler — it would navigate the webview to the file URL.
+                    eprintln!("[TiddlyDesktop] macOS: External file drop detected, emitting td-file-drop with {} paths", file_paths.len());
+
+                    // Store paths for FFI interop (keeps tiddlydesktop_store_drop_paths working)
+                    if let Ok(mut guard) = EXTERNAL_DROP_PATHS.lock() {
+                        *guard = Some(file_paths.clone());
+                    }
+
+                    if let Ok(states) = DRAG_STATES.lock() {
+                        if let Some(state) = states.get(&label) {
+                            if let Ok(state) = state.lock() {
+                                let _ = state.window.emit(
+                                    "td-drag-drop-position",
+                                    serde_json::json!({
+                                        "x": x,
+                                        "y": y,
+                                        "screenCoords": false,
+                                        "targetWindow": label
+                                    }),
+                                );
+                                let _ = state.window.emit(
+                                    "td-file-drop",
+                                    serde_json::json!({
+                                        "paths": file_paths,
+                                        "targetWindow": label
+                                    }),
+                                );
+                            }
+                        }
+                    }
+                    handled = true;
                 } else if let Some(mut content) = extract_pasteboard_content(&pasteboard) {
                     // For cross-wiki drags from our app, propagate the is_text_selection_drag flag
                     // This allows JS to filter text/html for text-selection drags (Issue 3)

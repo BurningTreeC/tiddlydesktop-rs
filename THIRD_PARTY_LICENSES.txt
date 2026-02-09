@@ -1114,7 +1114,7 @@ Apache License
 
 Used by:
 - dunce 1.0.5 (https://gitlab.com/kornelski/dunce)
-- ryu 1.0.22 (https://github.com/dtolnay/ryu)
+- ryu 1.0.23 (https://github.com/dtolnay/ryu)
 - sync_wrapper 1.0.2 (https://github.com/Actyx/sync_wrapper)
 
 License text:
@@ -6284,7 +6284,7 @@ Used by:
 - webview2-com-macros 0.8.1 (https://github.com/wravery/webview2-rs)
 - webview2-com-sys 0.38.2 (https://github.com/wravery/webview2-rs)
 - webview2-com 0.38.2 (https://github.com/wravery/webview2-rs)
-- tiddlydesktop-rs 0.3.44
+- tiddlydesktop-rs 0.3.45
 - block2 0.6.2 (https://github.com/madsmtm/objc2)
 - brotli-decompressor 5.0.0 (https://github.com/dropbox/rust-brotli-decompressor)
 - cargo_toml 0.22.3 (https://gitlab.com/lib.rs/cargo_toml)
@@ -6731,7 +6731,7 @@ Used by:
 - thiserror 2.0.18 (https://github.com/dtolnay/thiserror)
 - typed-path 0.12.2 (https://github.com/chipsenkbeil/typed-path)
 - typeid 1.0.3 (https://github.com/dtolnay/typeid)
-- unicode-ident 1.0.22 (https://github.com/dtolnay/unicode-ident)
+- unicode-ident 1.0.23 (https://github.com/dtolnay/unicode-ident)
 - utf-8 0.7.6 (https://github.com/SimonSapin/rust-utf8)
 - wasi 0.11.1+wasi-snapshot-preview1 (https://github.com/bytecodealliance/wasi)
 - wasi 0.9.0+wasi-snapshot-preview1 (https://github.com/bytecodealliance/wasi)
@@ -6739,7 +6739,7 @@ Used by:
 - wit-bindgen 0.51.0 (https://github.com/bytecodealliance/wit-bindgen)
 - x11-dl 2.21.0 (https://github.com/AltF02/x11-rs.git)
 - x11 2.21.0 (https://github.com/AltF02/x11-rs.git)
-- zmij 1.0.19 (https://github.com/dtolnay/zmij)
+- zmij 1.0.20 (https://github.com/dtolnay/zmij)
 - zvariant_utils 3.3.0 (https://github.com/z-galaxy/zbus/)
 
 License text:
@@ -8928,7 +8928,7 @@ Exhibit B - "Incompatible With Secondary Licenses" Notice
 ## Unicode License v3
 
 Used by:
-- unicode-ident 1.0.22 (https://github.com/dtolnay/unicode-ident)
+- unicode-ident 1.0.23 (https://github.com/dtolnay/unicode-ident)
 
 License text:
 ```

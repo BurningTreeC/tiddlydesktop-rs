@@ -336,7 +336,7 @@ class WikiActivity : AppCompatActivity() {
         fun setSystemBarColors(statusBarColor: String, navBarColor: String, foregroundColor: String?) {
             Log.d(TAG, "setSystemBarColors called: status=$statusBarColor, nav=$navBarColor, fg=$foregroundColor")
             runOnUiThread {
-                updateSystemBarColors(statusBarColor, navBarColor, foregroundColor)
+                updateSystemBarColors(statusBarColor, navBarColor)
             }
         }
     }
@@ -544,7 +544,7 @@ class WikiActivity : AppCompatActivity() {
                 exitFullscreenIfNeeded()
                 try {
                     val printManager = getSystemService(Context.PRINT_SERVICE) as android.print.PrintManager
-                    val jobName = "${wikiTitle ?: "TiddlyWiki"} - ${System.currentTimeMillis()}"
+                    val jobName = "$wikiTitle - ${System.currentTimeMillis()}"
                     val printAdapter = webView.createPrintDocumentAdapter(jobName)
                     printManager.print(jobName, printAdapter, null)
                     Log.d(TAG, "Print job started: $jobName")
@@ -1088,7 +1088,6 @@ class WikiActivity : AppCompatActivity() {
                 val uri = Uri.parse(uriString)
                 var filename: String? = null
                 var size: Long = -1
-                var mimeType: String? = null
 
                 contentResolver.query(uri, null, null, null, null)?.use { cursor ->
                     if (cursor.moveToFirst()) {
@@ -1099,7 +1098,7 @@ class WikiActivity : AppCompatActivity() {
                     }
                 }
 
-                mimeType = contentResolver.getType(uri)
+                val mimeType = contentResolver.getType(uri)
 
                 val escapedFilename = filename?.replace("\\", "\\\\")?.replace("\"", "\\\"") ?: ""
                 val escapedMimeType = mimeType?.replace("\\", "\\\\")?.replace("\"", "\\\"") ?: ""
@@ -1421,7 +1420,8 @@ class WikiActivity : AppCompatActivity() {
      * Update the status bar and navigation bar colors.
      * Icon colors are determined by the background luminance to ensure contrast.
      */
-    private fun updateSystemBarColors(statusBarColorHex: String, navBarColorHex: String, foregroundColorHex: String? = null) {
+    @Suppress("DEPRECATION")
+    private fun updateSystemBarColors(statusBarColorHex: String, navBarColorHex: String) {
         try {
             val statusColor = parseCssColor(statusBarColorHex)
             val navColor = parseCssColor(navBarColorHex)
@@ -1786,13 +1786,13 @@ class WikiActivity : AppCompatActivity() {
                     // Retry pending attachment copy if any
                     pendingAttachmentCopy?.let { (sourceUri, filename, mimeType) ->
                         pendingAttachmentCopy = null
-                        val result = AttachmentInterface().copyToAttachments(sourceUri, filename, mimeType)
-                        Log.d(TAG, "Retry attachment copy result: $result")
+                        val copyResult = AttachmentInterface().copyToAttachments(sourceUri, filename, mimeType)
+                        Log.d(TAG, "Retry attachment copy result: $copyResult")
                         // Notify JavaScript of the result
                         runOnUiThread {
                             webView.evaluateJavascript("""
                                 if (window.__pendingAttachmentCallback) {
-                                    window.__pendingAttachmentCallback($result);
+                                    window.__pendingAttachmentCallback($copyResult);
                                     delete window.__pendingAttachmentCallback;
                                 }
                             """.trimIndent(), null)
@@ -1956,6 +1956,7 @@ class WikiActivity : AppCompatActivity() {
             settings.apply {
                 javaScriptEnabled = true
                 domStorageEnabled = true
+                @Suppress("DEPRECATION")
                 databaseEnabled = true
                 allowFileAccess = true
                 allowContentAccess = true
@@ -4509,6 +4510,7 @@ class WikiActivity : AppCompatActivity() {
                 return true
             }
 
+            @Deprecated("Deprecated in Java")
             override fun shouldOverrideUrlLoading(view: WebView, url: String): Boolean {
                 return handleUrl(url)
             }
@@ -4625,9 +4627,9 @@ class WikiActivity : AppCompatActivity() {
             android.content.res.Configuration.UI_MODE_NIGHT_MASK) ==
             android.content.res.Configuration.UI_MODE_NIGHT_YES
         if (isDarkMode) {
-            updateSystemBarColors("#333333", "#333333", null)
+            updateSystemBarColors("#333333", "#333333")
         } else {
-            updateSystemBarColors("#ffffff", "#ffffff", null)
+            updateSystemBarColors("#ffffff", "#ffffff")
         }
 
         // Load the wiki URL
@@ -4791,7 +4793,7 @@ class WikiActivity : AppCompatActivity() {
                                         return true;
                                     } catch(e) { return false; }
                                 })();
-                            """.trimIndent()) { saved ->
+                            """.trimIndent()) { _ ->
                                 finish()
                             }
                         }

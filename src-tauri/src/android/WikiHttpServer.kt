@@ -1120,11 +1120,6 @@ class WikiHttpServer(
             // Write to .tid file
             saveTiddler(title, tiddler)
 
-            // Return the saved tiddler with revision
-            val savedTiddler = tiddler.toMutableMap()
-            savedTiddler["revision"] = System.currentTimeMillis().toString()
-            val responseJson = tiddlerToJson(savedTiddler)
-
             sendResponse(output, 204, "No Content", "application/json", ByteArray(0))
         } catch (e: Exception) {
             Log.e(TAG, "Error putting tiddler: ${e.message}", e)

@@ -636,9 +636,11 @@ use tauri::{
 // Menu and tray are only available on desktop platforms
 #[cfg(not(target_os = "android"))]
 use tauri::{
-    menu::{Menu, MenuBuilder, MenuItemBuilder, PredefinedMenuItem, Submenu},
+    menu::{MenuBuilder, MenuItemBuilder},
     tray::TrayIconBuilder,
 };
+#[cfg(target_os = "macos")]
+use tauri::menu::{Menu, PredefinedMenuItem, Submenu};
 
 /// Helper trait to apply desktop-only window properties (title, size)
 /// On Android, these methods don't exist on WebviewWindowBuilder

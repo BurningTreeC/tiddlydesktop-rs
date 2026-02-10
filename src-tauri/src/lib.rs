@@ -134,6 +134,13 @@ fn setup_header_bar(window: &tauri::WebviewWindow) {
     use gtk::prelude::{BoxExt, ButtonExt, ContainerExt, EventBoxExt, GtkWindowExt, HeaderBarExt, LabelExt, OverlayExt, StyleContextExt, WidgetExt, WidgetExtManual};
     use gtk::glib;
 
+    // On X11, skip custom HeaderBar and use server-side decorations (WM titlebar).
+    // CSD resize borders depend on _GTK_FRAME_EXTENTS support which many X11 WMs lack,
+    // making windows unresizable. Wayland handles CSD natively so HeaderBar works fine.
+    if matches!(drag_drop::native_dnd::get_display_server(), drag_drop::native_dnd::DisplayServer::X11) {
+        return;
+    }
+
     if let Ok(gtk_window) = window.gtk_window() {
         let header_bar = gtk::HeaderBar::new();
         header_bar.set_show_close_button(false); // We'll add our own
@@ -1212,6 +1219,7 @@ async fn set_window_title(app: tauri::AppHandle, label: String, title: String) -
             use gtk::prelude::{BinExt, GtkWindowExt, HeaderBarExt, LabelExt};
             use gtk::glib::Cast;
 
+            let mut updated_header = false;
             if let Ok(gtk_window) = window.gtk_window() {
                 // Navigate: GtkWindow → HeaderBar → EventBox → Overlay → Label
                 if let Some(titlebar) = gtk_window.titlebar() {
@@ -1223,6 +1231,7 @@ async fn set_window_title(app: tauri::AppHandle, label: String, title: String) -
                                         if let Some(label) = overlay.child() {
                                             if let Some(title_label) = label.downcast_ref::<gtk::Label>() {
                                                 title_label.set_text(&title);
+                                                updated_header = true;
                                             }
                                         }
                                     }
@@ -1231,6 +1240,10 @@ async fn set_window_title(app: tauri::AppHandle, label: String, title: String) -
                         }
                     }
                 }
+            }
+            // Fallback: set WM title (used on X11 with server-side decorations)
+            if !updated_header {
+                let _ = window.set_title(&title);
             }
         }
 
@@ -5428,7 +5441,7 @@ async fn check_for_updates() -> Result<UpdateCheckResult, String> {
 
 /// Android version - separate from desktop versioning (must match build.gradle.kts versionName)
 #[cfg(target_os = "android")]
-const ANDROID_VERSION: &str = "0.0.3";
+const ANDROID_VERSION: &str = "0.0.4";
 
 /// Check for updates on Android via version file on GitHub, linking to Play Store
 #[cfg(target_os = "android")]
@@ -6646,151 +6659,8 @@ window.__SAVE_URL__ = "{save_url}";
 
     registerWithTiddlyWiki();
 
-    // Title sync - mirror document.title to native window titlebar (GtkHeaderBar on Linux)
-    // Uses MutationObserver on <title> element, like original TiddlyDesktop
-    // TiddlyWiki5's render.js updates document.title from $:/core/wiki/title template
-    (function() {{
-        var windowLabel = window.__WINDOW_LABEL__;
-        var lastTitle = '';
-
-        function syncTitle() {{
-            var title = document.title || '';
-
-            // Skip if title hasn't changed or is empty/generic
-            if (!title || title === lastTitle || title === 'Loading...') {{
-                return;
-            }}
-
-            lastTitle = title;
-
-            // Update native window titlebar (HeaderBar on Linux) via Tauri
-            if (window.__TAURI__ && window.__TAURI__.core) {{
-                window.__TAURI__.core.invoke('set_window_title', {{
-                    label: windowLabel,
-                    title: title
-                }}).catch(function(e) {{
-                    console.error('TiddlyDesktop: Failed to set window title:', e);
-                }});
-            }}
-        }}
-
-        // Set up MutationObserver on <title> element
-        function setupTitleObserver() {{
-            var titleElement = document.querySelector('title');
-            if (!titleElement) {{
-                // Title element not in DOM yet, retry
-                setTimeout(setupTitleObserver, 100);
-                return;
-            }}
-
-            // Initial sync
-            syncTitle();
-
-            // Observe changes to the title element (like original TiddlyDesktop)
-            var observer = new MutationObserver(function() {{
-                syncTitle();
-            }});
-
-            observer.observe(titleElement, {{
-                childList: true,      // Text node added/removed
-                characterData: true,  // Text content changes
-                subtree: true         // Descendants (the text node)
-            }});
-        }}
-
-        setupTitleObserver();
-    }})();
-
-    // Favicon sync - extract from $:/favicon.ico and update landing page
-    // Also watches for changes so favicon updates are reflected instantly
-    (function() {{
-        var wikiPath = window.__WIKI_PATH__;
-        var lastFavicon = '';
-
-        function sendFaviconUpdate(dataUri) {{
-            // Skip if favicon hasn't changed
-            if (dataUri === lastFavicon) {{
-                return;
-            }}
-            lastFavicon = dataUri;
-
-            // Send to Rust to update the wiki list entry and window icon
-            if (window.__TAURI__ && window.__TAURI__.core) {{
-                // Update window icon (titlebar/taskbar)
-                window.__TAURI__.core.invoke('set_window_icon', {{
-                    label: window.__WINDOW_LABEL__,
-                    faviconDataUri: dataUri
-                }}).catch(function(err) {{
-                    console.error('TiddlyDesktop: Failed to set window icon:', err);
-                }});
-
-                // Update wiki list entry favicon
-                // In main wiki mode (main process), use update_wiki_favicon directly
-                // In wiki mode (child process), use IPC to send to main process
-                if (window.__IS_MAIN_WIKI__) {{
-                    // Main process - direct command
-                    window.__TAURI__.core.invoke('update_wiki_favicon', {{
-                        path: wikiPath,
-                        favicon: dataUri
-                    }}).catch(function(err) {{
-                        console.error('TiddlyDesktop: Failed to update favicon:', err);
-                    }});
-                }} else {{
-                    // Wiki child process - use IPC
-                    window.__TAURI__.core.invoke('ipc_update_favicon', {{
-                        favicon: dataUri
-                    }}).catch(function(err) {{
-                        console.error('TiddlyDesktop: Failed to update favicon via IPC:', err);
-                    }});
-                }}
-            }}
-        }}
-
-        function extractAndUpdateFavicon() {{
-            if (typeof $tw === 'undefined' || !$tw.wiki) {{
-                return; // TiddlyWiki not ready
-            }}
-
-            // Get the favicon tiddler
-            var faviconTiddler = $tw.wiki.getTiddler('$:/favicon.ico');
-            if (!faviconTiddler || !faviconTiddler.fields.text) {{
-                return; // No favicon tiddler
-            }}
-
-            var text = faviconTiddler.fields.text;
-            var type = faviconTiddler.fields.type || 'image/x-icon';
-
-            // Build data URI
-            var dataUri;
-            if (text.startsWith('data:')) {{
-                dataUri = text; // Already a data URI
-            }} else {{
-                // Assume base64 encoded
-                dataUri = 'data:' + type + ';base64,' + text;
-            }}
-
-            sendFaviconUpdate(dataUri);
-        }}
-
-        function setupFaviconSync() {{
-            if (typeof $tw === 'undefined' || !$tw.wiki || !$tw.wiki.addEventListener) {{
-                setTimeout(setupFaviconSync, 100);
-                return;
-            }}
-
-            // Initial extraction
-            extractAndUpdateFavicon();
-
-            // Watch for changes to $:/favicon.ico
-            $tw.wiki.addEventListener('change', function(changes) {{
-                if (changes['$:/favicon.ico']) {{
-                    extractAndUpdateFavicon();
-                }}
-            }});
-        }}
-
-        setupFaviconSync();
-    }})();
+    // Title sync and favicon sync are handled by initialization_script
+    // (title_sync.js, favicon_sync.js) for all wiki windows
 
     // Single-tiddler window mode is now handled via preload tiddlers
     // The $:/layout tiddler is set before boot to use $:/TiddlyDesktop/SingleTiddlerLayout
@@ -7529,6 +7399,7 @@ fn run_wiki_folder_mode(args: WikiFolderModeArgs) {
         let candidates = [
             dir.join("resources").join("tiddlywiki").join("tiddlywiki.js"),
             dir.join("..").join("lib").join("tiddlydesktop-rs").join("resources").join("tiddlywiki").join("tiddlywiki.js"),
+            dir.join("..").join("lib").join("tiddlydesktop-rs").join("tiddlywiki").join("tiddlywiki.js"),
             dir.join("..").join("Resources").join("tiddlywiki").join("tiddlywiki.js"),
         ];
         candidates.into_iter().find(|p| p.exists())
@@ -7599,8 +7470,10 @@ fn run_wiki_folder_mode(args: WikiFolderModeArgs) {
     }
 
     let folder_path_for_state = folder_path.clone();
+    let folder_path_for_wiki_state = folder_path.clone();
     let folder_name_for_state = folder_name.clone();
     let ipc_client_for_state = ipc_client.clone();
+    let ipc_client_for_wiki_state = ipc_client.clone();
 
     // Create unique window label from folder name + path hash to avoid conflicts
     // when multiple folders have the same name in different locations
@@ -7689,6 +7562,15 @@ fn run_wiki_folder_mode(args: WikiFolderModeArgs) {
                 run_command_allowed_wikis: Mutex::new(run_command_allowed),
                 folder_wiki_paths: Mutex::new(HashMap::new()),
                 saf_wiki_mappings: Mutex::new(HashMap::new()),
+            });
+
+            // WikiModeState for IPC commands (favicon sync, etc.)
+            app.manage(WikiModeState {
+                wiki_path: folder_path_for_wiki_state.clone(),
+                path_key: String::new(),
+                is_tiddler_window: false,
+                tiddler_title: None,
+                ipc_client: ipc_client_for_wiki_state.clone(),
             });
 
             // Linux: Start localhost HTTP media server for GStreamer playback
@@ -7792,6 +7674,8 @@ fn run_wiki_folder_mode(args: WikiFolderModeArgs) {
             set_over_droppable,
             set_internal_drag_type,
             register_media_url,
+            // IPC commands for favicon sync
+            ipc_update_favicon,
         ])
         .build(tauri::generate_context!())
         .expect("error while building wiki-folder-mode application")

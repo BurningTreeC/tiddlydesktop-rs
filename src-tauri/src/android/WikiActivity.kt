@@ -1687,11 +1687,16 @@ class WikiActivity : AppCompatActivity() {
     // =========================================================================
     // Android 15+ (API 35+): Edge-to-edge is enforced. We use a persistent
     // insets listener and the native insetsController for status bar toggle.
-    // Cutout mode ALWAYS is set once at startup.
+    // Cutout mode ALWAYS is set only during fullscreen to fill the notch area.
     // =========================================================================
 
     private fun enterImmersiveModeModern() {
         Log.d(TAG, "enterImmersiveModeModern — hiding status bar, keeping nav bar")
+        val attrs = window.attributes
+        savedCutoutMode = attrs.layoutInDisplayCutoutMode
+        attrs.layoutInDisplayCutoutMode =
+            android.view.WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS
+        window.attributes = attrs
         window.insetsController?.hide(WindowInsets.Type.statusBars())
         rootLayout.requestApplyInsets()
     }
@@ -1699,6 +1704,9 @@ class WikiActivity : AppCompatActivity() {
     private fun exitImmersiveModeModern() {
         Log.d(TAG, "exitImmersiveModeModern — restoring status bar")
         window.insetsController?.show(WindowInsets.Type.statusBars())
+        val attrs = window.attributes
+        attrs.layoutInDisplayCutoutMode = savedCutoutMode
+        window.attributes = attrs
         rootLayout.requestApplyInsets()
     }
 
@@ -2126,8 +2134,7 @@ class WikiActivity : AppCompatActivity() {
         setContentView(rootLayout)
 
         // Android 15+ (API 35+): Edge-to-edge is enforced and setDecorFitsSystemWindows
-        // is ignored. We must handle insets ourselves with a persistent listener, and set
-        // cutout mode to ALWAYS so fullscreen content fills the notch area.
+        // is ignored. We must handle insets ourselves with a persistent listener.
         // Pre-Android 15: System manages insets via setDecorFitsSystemWindows — no setup needed.
         if (Build.VERSION.SDK_INT >= 35) {
             ViewCompat.setOnApplyWindowInsetsListener(rootLayout) { view, insets ->
@@ -2140,12 +2147,8 @@ class WikiActivity : AppCompatActivity() {
                 }
                 WindowInsetsCompat.CONSUMED
             }
-            rootLayout.requestApplyInsets()
-
-            val attrs = window.attributes
-            attrs.layoutInDisplayCutoutMode =
-                android.view.WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS
-            window.attributes = attrs
+            // Defer requestApplyInsets to after the view is fully attached to the window
+            rootLayout.post { rootLayout.requestApplyInsets() }
         }
 
         // Register back navigation handler for modern Android (gesture nav / API 33+)

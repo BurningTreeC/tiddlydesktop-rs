@@ -189,6 +189,7 @@ jobs:
             echo "No changes to commit"
           else
             git commit -m "Bump version to ${{ steps.bump.outputs.new_version }}"
+            git pull --rebase
             git push
           fi
 

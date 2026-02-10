@@ -7,8 +7,8 @@
 //! The abstraction is intentionally minimal - only the operations needed
 //! for TiddlyDesktop wiki file handling are included.
 
-// Allow dead code on Android since many functions are prepared for future integration
-#![cfg_attr(target_os = "android", allow(dead_code))]
+// Allow dead code since many functions are prepared for future integration
+#![allow(dead_code)]
 
 use std::path::Path;
 

@@ -644,6 +644,7 @@ use tauri::menu::{Menu, PredefinedMenuItem, Submenu};
 
 /// Helper trait to apply desktop-only window properties (title, size)
 /// On Android, these methods don't exist on WebviewWindowBuilder
+#[allow(dead_code)]
 trait DesktopWindowExt<'a> {
     fn with_title_if_desktop(self, title: &str) -> Self;
     fn with_inner_size_if_desktop(self, width: f64, height: f64) -> Self;
@@ -726,8 +727,10 @@ struct AppState {
     /// Wikis that have been approved for run_command (by normalized path)
     run_command_allowed_wikis: Mutex<std::collections::HashSet<String>>,
     /// Mapping of cached folder wiki paths to original folder paths (Android)
+    #[allow(dead_code)]
     folder_wiki_paths: Mutex<HashMap<String, String>>,
     /// Mapping of SAF URIs to local mirror paths (Android) for sync on close
+    #[allow(dead_code)]
     saf_wiki_mappings: Mutex<HashMap<String, String>>,
 }
 
@@ -7438,7 +7441,7 @@ fn run_wiki_mode(args: WikiModeArgs) {
         let builder = builder.register_uri_scheme_protocol("tdlib", |ctx, request| {
             tdlib_protocol_handler(ctx.app_handle(), request)
         });
-        let builder = builder.plugin(tauri_plugin_opener::init())
+        builder.plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .invoke_handler(tauri::generate_handler![
@@ -8313,7 +8316,7 @@ pub fn run() {
         let builder = builder.register_uri_scheme_protocol("tdlib", |ctx, request| {
             tdlib_protocol_handler(ctx.app_handle(), request)
         });
-        let builder = builder.plugin(tauri_plugin_opener::init())
+        builder.plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .invoke_handler(tauri::generate_handler![

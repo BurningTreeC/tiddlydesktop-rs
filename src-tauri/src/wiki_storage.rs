@@ -209,6 +209,7 @@ pub fn js_log(message: String) {
 /// Get recent files list
 #[tauri::command]
 pub fn get_recent_files(app: tauri::AppHandle) -> Vec<WikiEntry> {
+    #[allow(unused_mut)]
     let mut entries = load_recent_files_from_disk(&app);
 
     // On Android, load favicons from files saved by WikiActivity for entries missing data URIs

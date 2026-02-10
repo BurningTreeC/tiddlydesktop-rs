@@ -67,7 +67,10 @@ coverage/
 
 # Bundled binaries and resources (downloaded at build time)
 src-tauri/binaries/
-src-tauri/resources/
+src-tauri/resources/*
+# Custom/modified JS libraries must be tracked (Plyr 4 + PDF.js with local changes)
+!src-tauri/resources/tdlib/
+!src-tauri/resources/tdlib/**/dist/
 
 # Local JDK for Android builds
 .jdk/

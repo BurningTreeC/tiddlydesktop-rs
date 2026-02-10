@@ -1640,25 +1640,27 @@ class WikiActivity : AppCompatActivity() {
     private var savedStatusBarColor: Int = 0
     private var savedCutoutMode: Int = 0
 
+    // =========================================================================
+    // Pre-Android 15 (API < 35): Original fullscreen implementation.
+    // System manages insets via setDecorFitsSystemWindows. We only add an
+    // insets listener during fullscreen to pad for the nav bar.
+    // =========================================================================
+
     @Suppress("DEPRECATION")
-    private fun enterImmersiveMode() {
-        Log.d(TAG, "Entering fullscreen — hiding status bar, keeping nav bar")
-        // Go edge-to-edge so content can extend into the status bar / notch area
+    private fun enterImmersiveModeLegacy() {
+        Log.d(TAG, "enterImmersiveModeLegacy — hiding status bar, keeping nav bar")
         WindowCompat.setDecorFitsSystemWindows(window, false)
         val insetsController = WindowInsetsControllerCompat(window, window.decorView)
         insetsController.hide(WindowInsetsCompat.Type.statusBars())
         insetsController.systemBarsBehavior =
             WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
-        // Draw into cutout/notch area
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
             val attrs = window.attributes
             savedCutoutMode = attrs.layoutInDisplayCutoutMode
             attrs.layoutInDisplayCutoutMode =
-                android.view.WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+                android.view.WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS
             window.attributes = attrs
         }
-        // Pad only the bottom for the nav bar — no top padding so content
-        // fills the freed status bar / notch area
         ViewCompat.setOnApplyWindowInsetsListener(rootLayout) { view, insets ->
             val navBars = insets.getInsets(WindowInsetsCompat.Type.navigationBars())
             view.setPadding(0, 0, 0, navBars.bottom)
@@ -1667,25 +1669,47 @@ class WikiActivity : AppCompatActivity() {
         rootLayout.requestApplyInsets()
     }
 
-    /**
-     * Exit fullscreen — restore the status bar.
-     */
     @Suppress("DEPRECATION")
-    private fun exitImmersiveMode() {
-        Log.d(TAG, "Exiting fullscreen — restoring status bar")
+    private fun exitImmersiveModeLegacy() {
+        Log.d(TAG, "exitImmersiveModeLegacy — restoring status bar")
         val insetsController = WindowInsetsControllerCompat(window, window.decorView)
         insetsController.show(WindowInsetsCompat.Type.statusBars())
-        // Restore normal system window fitting
         WindowCompat.setDecorFitsSystemWindows(window, true)
-        // Restore cutout mode
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
             val attrs = window.attributes
             attrs.layoutInDisplayCutoutMode = savedCutoutMode
             window.attributes = attrs
         }
-        // Remove custom insets handling, let system manage padding
         ViewCompat.setOnApplyWindowInsetsListener(rootLayout, null)
         rootLayout.setPadding(0, 0, 0, 0)
+    }
+
+    // =========================================================================
+    // Android 15+ (API 35+): Edge-to-edge is enforced. We use a persistent
+    // insets listener and the native insetsController for status bar toggle.
+    // Cutout mode ALWAYS is set once at startup.
+    // =========================================================================
+
+    private fun enterImmersiveModeModern() {
+        Log.d(TAG, "enterImmersiveModeModern — hiding status bar, keeping nav bar")
+        window.insetsController?.hide(WindowInsets.Type.statusBars())
+        rootLayout.requestApplyInsets()
+    }
+
+    private fun exitImmersiveModeModern() {
+        Log.d(TAG, "exitImmersiveModeModern — restoring status bar")
+        window.insetsController?.show(WindowInsets.Type.statusBars())
+        rootLayout.requestApplyInsets()
+    }
+
+    private fun enterImmersiveMode() {
+        if (Build.VERSION.SDK_INT >= 35) enterImmersiveModeModern()
+        else enterImmersiveModeLegacy()
+    }
+
+    private fun exitImmersiveMode() {
+        if (Build.VERSION.SDK_INT >= 35) exitImmersiveModeModern()
+        else exitImmersiveModeLegacy()
     }
 
     @SuppressLint("SetJavaScriptEnabled")
@@ -2037,7 +2061,7 @@ class WikiActivity : AppCompatActivity() {
                         ViewGroup.LayoutParams.MATCH_PARENT
                     ))
                     webView.visibility = View.GONE
-                    // Immersive fullscreen
+                    // Immersive fullscreen — hide both status bar and nav bar for video
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
                         window.insetsController?.hide(android.view.WindowInsets.Type.systemBars())
                         window.insetsController?.systemBarsBehavior =
@@ -2100,6 +2124,29 @@ class WikiActivity : AppCompatActivity() {
         rootLayout = FrameLayout(this)
         rootLayout.addView(webView)
         setContentView(rootLayout)
+
+        // Android 15+ (API 35+): Edge-to-edge is enforced and setDecorFitsSystemWindows
+        // is ignored. We must handle insets ourselves with a persistent listener, and set
+        // cutout mode to ALWAYS so fullscreen content fills the notch area.
+        // Pre-Android 15: System manages insets via setDecorFitsSystemWindows — no setup needed.
+        if (Build.VERSION.SDK_INT >= 35) {
+            ViewCompat.setOnApplyWindowInsetsListener(rootLayout) { view, insets ->
+                if (isImmersiveFullscreen) {
+                    val navBars = insets.getInsets(WindowInsetsCompat.Type.navigationBars())
+                    view.setPadding(0, 0, 0, navBars.bottom)
+                } else {
+                    val systemBars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
+                    view.setPadding(systemBars.left, systemBars.top, systemBars.right, systemBars.bottom)
+                }
+                WindowInsetsCompat.CONSUMED
+            }
+            rootLayout.requestApplyInsets()
+
+            val attrs = window.attributes
+            attrs.layoutInDisplayCutoutMode =
+                android.view.WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS
+            window.attributes = attrs
+        }
 
         // Register back navigation handler for modern Android (gesture nav / API 33+)
         // onKeyDown(KEYCODE_BACK) is NOT called with gesture navigation on targetSdk >= 33,
@@ -2449,7 +2496,12 @@ class WikiActivity : AppCompatActivity() {
 
                         // If there's a deserializer, let TiddlyWiki handle it (import as tiddlers)
                         if (hasDeserializer) {
-                            console.log('[TiddlyDesktop] Deserializer found for type ' + type + (extType ? ' (ext: ' + extType + ')' : '') + ', letting TiddlyWiki handle import');
+                            // Update info.type so TiddlyWiki uses the correct deserializer
+                            // (Android ContentResolver often returns application/octet-stream)
+                            if (extType && extType !== type) {
+                                info.type = extType;
+                            }
+                            console.log('[TiddlyDesktop] Deserializer found for type ' + info.type + (extType ? ' (ext: ' + extType + ')' : '') + ', letting TiddlyWiki handle import');
                             return info;
                         }
 

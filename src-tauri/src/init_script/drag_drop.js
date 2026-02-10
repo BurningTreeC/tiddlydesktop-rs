@@ -1995,16 +1995,25 @@
                     }).catch(function() {});
                 }
 
+                // Resolve type from filename extension (getFileExtensionInfo expects ".json", not "application/json")
+                var extType = null;
+                if (filename && $tw.utils.getFileExtensionInfo) {
+                    var dotPos = filename.lastIndexOf('.');
+                    if (dotPos !== -1) {
+                        var extInfo = $tw.utils.getFileExtensionInfo(filename.substr(dotPos));
+                        if (extInfo) {
+                            extType = extInfo.type;
+                        }
+                    }
+                }
+
                 var hasDeserializer = false;
                 if ($tw.Wiki.tiddlerDeserializerModules) {
                     if ($tw.Wiki.tiddlerDeserializerModules[type]) {
                         hasDeserializer = true;
                     }
-                    if (!hasDeserializer && $tw.utils.getFileExtensionInfo) {
-                        var extInfo = $tw.utils.getFileExtensionInfo(type);
-                        if (extInfo && $tw.Wiki.tiddlerDeserializerModules[extInfo.type]) {
-                            hasDeserializer = true;
-                        }
+                    if (!hasDeserializer && extType && $tw.Wiki.tiddlerDeserializerModules[extType]) {
+                        hasDeserializer = true;
                     }
                     if (!hasDeserializer && $tw.config.contentTypeInfo && $tw.config.contentTypeInfo[type]) {
                         var deserializerType = $tw.config.contentTypeInfo[type].deserializerType;

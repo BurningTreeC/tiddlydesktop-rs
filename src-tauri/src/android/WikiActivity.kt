@@ -2416,28 +2416,40 @@ class WikiActivity : AppCompatActivity() {
                         console.log('[TiddlyDesktop] th-importing-file hook: filename=' + filename + ', type=' + type + ', isBinary=' + info.isBinary);
 
                         // Check if there's a deserializer for this file type
+                        // Also resolve the type from filename extension (Android ContentResolver
+                        // often returns application/octet-stream for .tid, .json, .csv, etc.)
                         var hasDeserializer = false;
+                        var extType = null;
+                        if (filename) {
+                            var dotPos = filename.lastIndexOf('.');
+                            if (dotPos !== -1) {
+                                var extInfo = ${'$'}tw.utils.getFileExtensionInfo ? ${'$'}tw.utils.getFileExtensionInfo(filename.substr(dotPos)) : null;
+                                if (extInfo) {
+                                    extType = extInfo.type;
+                                }
+                            }
+                        }
                         if (${'$'}tw.Wiki.tiddlerDeserializerModules) {
+                            // Check MIME type directly
                             if (${'$'}tw.Wiki.tiddlerDeserializerModules[type]) {
                                 hasDeserializer = true;
                             }
-                            if (!hasDeserializer && ${'$'}tw.utils.getFileExtensionInfo) {
-                                var extInfo = ${'$'}tw.utils.getFileExtensionInfo(type);
-                                if (extInfo && ${'$'}tw.Wiki.tiddlerDeserializerModules[extInfo.type]) {
-                                    hasDeserializer = true;
-                                }
+                            // Check extension-resolved type
+                            if (!hasDeserializer && extType && ${'$'}tw.Wiki.tiddlerDeserializerModules[extType]) {
+                                hasDeserializer = true;
                             }
-                            if (!hasDeserializer && ${'$'}tw.config.contentTypeInfo && ${'$'}tw.config.contentTypeInfo[type]) {
-                                var deserializerType = ${'$'}tw.config.contentTypeInfo[type].deserializerType;
-                                if (deserializerType && ${'$'}tw.Wiki.tiddlerDeserializerModules[deserializerType]) {
+                            // Check deserializerType from contentTypeInfo
+                            if (!hasDeserializer && ${'$'}tw.config.contentTypeInfo) {
+                                var cti = ${'$'}tw.config.contentTypeInfo[type] || (extType && ${'$'}tw.config.contentTypeInfo[extType]);
+                                if (cti && cti.deserializerType && ${'$'}tw.Wiki.tiddlerDeserializerModules[cti.deserializerType]) {
                                     hasDeserializer = true;
                                 }
                             }
                         }
 
-                        // If there's a deserializer, let TiddlyWiki handle it
+                        // If there's a deserializer, let TiddlyWiki handle it (import as tiddlers)
                         if (hasDeserializer) {
-                            console.log('[TiddlyDesktop] Deserializer found for type ' + type + ', letting TiddlyWiki handle import');
+                            console.log('[TiddlyDesktop] Deserializer found for type ' + type + (extType ? ' (ext: ' + extType + ')' : '') + ', letting TiddlyWiki handle import');
                             return info;
                         }
 
@@ -2445,13 +2457,14 @@ class WikiActivity : AppCompatActivity() {
                         var externalEnabled = ${'$'}tw.wiki.getTiddlerText(CONFIG_ENABLE, "yes") === "yes";
 
                         // Determine if this is a binary file
-                        // TiddlyWiki may not recognize all audio/video MIME types, so check explicitly
-                        var isBinaryType = info.isBinary ||
-                            type.indexOf('audio/') === 0 ||
-                            type.indexOf('video/') === 0 ||
-                            type.indexOf('image/') === 0 ||
-                            type === 'application/pdf' ||
-                            type === 'application/octet-stream';
+                        // Use extension-resolved type if available (don't trust application/octet-stream)
+                        var effectiveType = extType || type;
+                        var effectiveContentTypeInfo = ${'$'}tw.config.contentTypeInfo[effectiveType];
+                        var isBinaryType = (effectiveContentTypeInfo ? effectiveContentTypeInfo.encoding === 'base64' : info.isBinary) ||
+                            effectiveType.indexOf('audio/') === 0 ||
+                            effectiveType.indexOf('video/') === 0 ||
+                            effectiveType.indexOf('image/') === 0 ||
+                            effectiveType === 'application/pdf';
 
                         // Only handle binary files when external attachments enabled
                         if (!externalEnabled || !isBinaryType) {
@@ -4497,6 +4510,30 @@ class WikiActivity : AppCompatActivity() {
                 if (scheme == "http" && uri.host == "127.0.0.1") return false
                 // Internal schemes that should stay in the WebView
                 if (scheme == "data" || scheme == "blob" || scheme == "javascript") return false
+                // Handle intent:// URIs (e.g. calendar events, app deep links)
+                if (scheme == "intent") {
+                    Log.d(TAG, "Parsing intent:// URI: $url")
+                    try {
+                        val intent = Intent.parseUri(url, Intent.URI_INTENT_SCHEME)
+                        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        if (intent.resolveActivity(packageManager) != null) {
+                            startActivity(intent)
+                        } else {
+                            // Try browser_fallback_url if no handler found
+                            val fallback = intent.getStringExtra("browser_fallback_url")
+                            if (fallback != null) {
+                                val fallbackIntent = Intent(Intent.ACTION_VIEW, Uri.parse(fallback))
+                                fallbackIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                startActivity(fallbackIntent)
+                            } else {
+                                Log.w(TAG, "No handler found for intent:// URI and no fallback URL")
+                            }
+                        }
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Failed to parse/launch intent:// URI: ${e.message}")
+                    }
+                    return true
+                }
                 // All other URLs (http, https, mailto, tel, sms, geo, etc.)
                 // open via the OS-assigned handler
                 Log.d(TAG, "Opening external URL: $url (scheme=$scheme)")

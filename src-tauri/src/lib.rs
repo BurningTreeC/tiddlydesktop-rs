@@ -5426,80 +5426,45 @@ async fn check_for_updates() -> Result<UpdateCheckResult, String> {
     }
 }
 
-/// Android version - separate from desktop versioning
+/// Android version - separate from desktop versioning (must match build.gradle.kts versionName)
 #[cfg(target_os = "android")]
-const ANDROID_VERSION: &str = "0.0.1";
+const ANDROID_VERSION: &str = "0.0.2";
 
-/// Check for updates on Android via Play Store
+/// Check for updates on Android via version file on GitHub, linking to Play Store
 #[cfg(target_os = "android")]
 async fn check_for_updates_android() -> Result<UpdateCheckResult, String> {
     let current_version = ANDROID_VERSION;
     let releases_url = "https://play.google.com/store/apps/details?id=com.burningtreec.tiddlydesktop_rs".to_string();
 
-    // Fetch Play Store page to extract version
     let client = reqwest::Client::builder()
-        .user_agent("Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36")
+        .user_agent("TiddlyDesktop-RS")
         .build()
         .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
 
     let response = client
-        .get(&releases_url)
+        .get("https://raw.githubusercontent.com/BurningTreeC/tiddlydesktop-rs/main/android-version.txt")
         .send()
         .await
-        .map_err(|e| format!("Failed to fetch Play Store page: {}", e))?;
+        .map_err(|e| format!("Failed to fetch version file: {}", e))?;
 
     if !response.status().is_success() {
-        return Err(format!("Play Store returned status: {}", response.status()));
+        return Err(format!("GitHub returned status: {}", response.status()));
     }
 
-    let html = response
+    let text = response
         .text()
         .await
-        .map_err(|e| format!("Failed to read Play Store page: {}", e))?;
+        .map_err(|e| format!("Failed to read version file: {}", e))?;
 
-    // Parse version from Play Store HTML
-    // The version is typically in a pattern like: [["X.Y.Z"]] or "X.Y.Z" near version indicators
-    let latest_version = extract_play_store_version(&html);
-
-    let update_available = if let Some(ref latest) = latest_version {
-        version_is_newer(latest, current_version)
-    } else {
-        false
-    };
+    let latest_version = text.trim().to_string();
+    let update_available = version_is_newer(&latest_version, current_version);
 
     Ok(UpdateCheckResult {
         update_available,
-        latest_version,
+        latest_version: Some(latest_version),
         releases_url,
         current_version: current_version.to_string(),
     })
-}
-
-/// Extract version string from Play Store HTML
-#[cfg(target_os = "android")]
-fn extract_play_store_version(html: &str) -> Option<String> {
-    // Play Store embeds version in JSON-like structures
-    // Look for patterns like [["0.0.1"]] or similar version patterns
-    // The version often appears after "Current Version" or in AF_initDataCallback
-
-    // Try to find version pattern in the HTML
-    // Common patterns: "softwareVersion":"X.Y.Z" or [["X.Y.Z"
-    let patterns = [
-        r#""softwareVersion":"([0-9]+\.[0-9]+\.[0-9]+)"#,
-        r#"\[\["([0-9]+\.[0-9]+\.[0-9]+)"\]\]"#,
-    ];
-
-    for pattern in patterns {
-        if let Ok(re) = regex::Regex::new(pattern) {
-            if let Some(captures) = re.captures(html) {
-                if let Some(version) = captures.get(1) {
-                    return Some(version.as_str().to_string());
-                }
-            }
-        }
-    }
-
-    None
 }
 
 /// Check for updates on Desktop via GitHub releases

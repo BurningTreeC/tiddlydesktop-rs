@@ -4028,7 +4028,15 @@ async fn create_wiki_file(_app: tauri::AppHandle, path: String, edition: String,
     // 2. Copy the temp file to the SAF location
 
     // Create a temporary file for the build output
-    let temp_dir = std::env::temp_dir();
+    // Use app cache dir on Android (std::env::temp_dir() returns /tmp which isn't writable)
+    let temp_dir = {
+        use tauri::Manager;
+        _app.path().app_cache_dir()
+            .unwrap_or_else(|_| std::env::temp_dir())
+            .join("tmp")
+    };
+    std::fs::create_dir_all(&temp_dir)
+        .map_err(|e| format!("Failed to create temp directory: {}", e))?;
     let temp_file = temp_dir.join(format!("wiki-{}.html", std::process::id()));
     let temp_path = temp_file.to_str().ok_or("Invalid temp path")?;
 
@@ -5441,7 +5449,7 @@ async fn check_for_updates() -> Result<UpdateCheckResult, String> {
 
 /// Android version - separate from desktop versioning (must match build.gradle.kts versionName)
 #[cfg(target_os = "android")]
-const ANDROID_VERSION: &str = "0.0.4";
+const ANDROID_VERSION: &str = "0.0.5";
 
 /// Check for updates on Android via version file on GitHub, linking to Play Store
 #[cfg(target_os = "android")]

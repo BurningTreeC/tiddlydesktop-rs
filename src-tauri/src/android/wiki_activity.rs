@@ -575,7 +575,7 @@ pub fn set_system_bar_colors(status_bar_color: &str, nav_bar_color: &str, foregr
     ).map_err(|e| format!("Failed to get window: {}", e))?
         .l().map_err(|e| format!("Failed to convert window: {}", e))?;
 
-    // Set status bar color
+    // Set status bar color (deprecated on API 35+ but still works on older)
     env.call_method(
         &window,
         "setStatusBarColor",
@@ -583,13 +583,27 @@ pub fn set_system_bar_colors(status_bar_color: &str, nav_bar_color: &str, foregr
         &[jni::objects::JValue::Int(status_color_int)],
     ).map_err(|e| format!("Failed to set status bar color: {}", e))?;
 
-    // Set navigation bar color
+    // Set navigation bar color (deprecated on API 35+ but still works on older)
     env.call_method(
         &window,
         "setNavigationBarColor",
         "(I)V",
         &[jni::objects::JValue::Int(nav_color_int)],
     ).map_err(|e| format!("Failed to set navigation bar color: {}", e))?;
+
+    // API 35+: setStatusBarColor/setNavigationBarColor are ignored.
+    // Try to call setBarBackgroundColors() on MainActivity to update bg views.
+    if env.call_method(
+        &activity,
+        "setBarBackgroundColors",
+        "(II)V",
+        &[
+            jni::objects::JValue::Int(status_color_int),
+            jni::objects::JValue::Int(nav_color_int),
+        ],
+    ).is_err() {
+        let _ = env.exception_clear();
+    }
 
     // Get the decor view for setting light/dark status bar
     let decor_view = env.call_method(

@@ -1,27 +1,32 @@
 package com.burningtreec.tiddlydesktop_rs
 
+import android.app.Activity
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
-import android.provider.DocumentsContract
 import android.util.Log
 import android.widget.Toast
-import androidx.appcompat.app.AppCompatActivity
-import androidx.documentfile.provider.DocumentFile
 
 /**
- * Activity that handles "Open with" intents for HTML files and folders.
+ * Activity that handles "Open with" intents for HTML files.
  * This allows users to open TiddlyWiki files directly from file managers.
  *
- * Supported scenarios:
- * - Single-file wiki: .html or .htm files
- * - Folder wiki: Directories (especially those containing tiddlywiki.info)
+ * Flow:
+ * 1. Receive file URI from VIEW/SEND intent
+ * 2. Try to take persistable permission; if that fails, fall back to SAF file picker
+ * 3. Ask user to select the parent folder (for backups, attachments, saving)
+ * 4. Launch WikiActivity with both file URI and folder tree URI
  */
-class OpenWithActivity : AppCompatActivity() {
+class OpenWithActivity : Activity() {
 
     companion object {
         private const val TAG = "OpenWithActivity"
+        private const val REQUEST_CODE_PICK_FILE = 1001
+        private const val REQUEST_CODE_PICK_FOLDER = 1002
     }
+
+    private var pendingTitle: String = "TiddlyWiki"
+    private var authorizedFileUri: Uri? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -53,31 +58,19 @@ class OpenWithActivity : AppCompatActivity() {
 
         Log.d(TAG, "Processing URI: $uri")
 
-        // Try to take persistable permission for the URI
-        try {
-            val takeFlags = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
-            contentResolver.takePersistableUriPermission(uri, takeFlags)
-            Log.d(TAG, "Took persistable permission for: $uri")
-        } catch (e: SecurityException) {
-            Log.w(TAG, "Could not take persistable permission: ${e.message}")
-            // Continue anyway - we may still have temporary permission
-        }
+        val displayName = getDisplayName(uri) ?: "TiddlyWiki"
+        pendingTitle = displayName.removeSuffix(".html").removeSuffix(".htm")
 
-        // Determine if this is a file or directory
-        val docFile = DocumentFile.fromSingleUri(this, uri)
-        val isDirectory = isDirectoryUri(uri)
-
-        Log.d(TAG, "isDirectory: $isDirectory, docFile: ${docFile?.name}, isFile: ${docFile?.isFile}")
-
-        if (isDirectory) {
-            handleDirectoryOpen(uri)
+        if (tryTakePermission(uri)) {
+            Log.d(TAG, "Persistable permission acquired for file")
+            onFileAuthorized(uri)
         } else {
-            handleFileOpen(uri)
+            Log.w(TAG, "No persistable permission, falling back to SAF file picker")
+            launchFilePicker()
         }
     }
 
     private fun handleSendIntent() {
-        // Handle ACTION_SEND (share) - get URI from extras
         val uri = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
             intent.getParcelableExtra(Intent.EXTRA_STREAM, Uri::class.java)
         } else {
@@ -93,121 +86,172 @@ class OpenWithActivity : AppCompatActivity() {
         }
 
         Log.d(TAG, "Processing shared URI: $uri")
-        handleFileOpen(uri)
+        pendingTitle = (getDisplayName(uri) ?: "TiddlyWiki").removeSuffix(".html").removeSuffix(".htm")
+
+        if (tryTakePermission(uri)) {
+            onFileAuthorized(uri)
+        } else {
+            Log.w(TAG, "No persistable permission for shared file, falling back to SAF file picker")
+            launchFilePicker()
+        }
     }
 
     /**
-     * Check if a URI points to a directory.
+     * Called once we have a file URI with persistable permission.
+     * Next step: ask for folder access.
      */
-    private fun isDirectoryUri(uri: Uri): Boolean {
-        // Check MIME type first
-        val mimeType = contentResolver.getType(uri)
-        Log.d(TAG, "MIME type for $uri: $mimeType")
+    private fun onFileAuthorized(fileUri: Uri) {
+        authorizedFileUri = fileUri
+        Log.d(TAG, "File authorized: $fileUri, now requesting folder access")
+        Toast.makeText(this, "Now select the folder containing the wiki (for saving & backups)", Toast.LENGTH_LONG).show()
+        launchFolderPicker()
+    }
 
-        if (mimeType == DocumentsContract.Document.MIME_TYPE_DIR ||
-            mimeType == "vnd.android.document/directory" ||
-            mimeType?.contains("directory") == true) {
+    /**
+     * Called once we have both file and folder URIs.
+     * Launches WikiActivity.
+     */
+    private fun onFolderAuthorized(treeUri: Uri?) {
+        val fileUri = authorizedFileUri
+        if (fileUri == null) {
+            Log.e(TAG, "No file URI when folder was authorized")
+            showError("Internal error: no file URI")
+            finish()
+            return
+        }
+
+        val wikiPath = buildWikiPath(fileUri, treeUri)
+        Log.d(TAG, "Launching wiki: path=$wikiPath, title=$pendingTitle")
+        launchWikiActivity(wikiPath, pendingTitle, isFolder = false)
+    }
+
+    /**
+     * Try to take persistable read+write permission for a URI.
+     */
+    private fun tryTakePermission(uri: Uri): Boolean {
+        val alreadyPersisted = contentResolver.persistedUriPermissions.any {
+            it.uri == uri && it.isReadPermission
+        }
+        if (alreadyPersisted) {
+            Log.d(TAG, "Already have persisted permission for: $uri")
             return true
         }
 
-        // Try to create a tree document
         try {
-            val treeDoc = DocumentFile.fromTreeUri(this, uri)
-            if (treeDoc != null && treeDoc.isDirectory) {
-                return true
-            }
-        } catch (e: Exception) {
-            // Not a tree URI
+            val takeFlags = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+            contentResolver.takePersistableUriPermission(uri, takeFlags)
+            Log.d(TAG, "Took persistable read+write permission for: $uri")
+            return true
+        } catch (e: SecurityException) {
+            Log.w(TAG, "Could not take read+write permission: ${e.message}")
+        }
+
+        try {
+            contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            Log.d(TAG, "Took persistable read-only permission for: $uri")
+            return true
+        } catch (e: SecurityException) {
+            Log.w(TAG, "Could not take read-only permission: ${e.message}")
         }
 
         return false
     }
 
-    /**
-     * Handle opening a single HTML file as a wiki.
-     */
-    private fun handleFileOpen(uri: Uri) {
-        Log.d(TAG, "handleFileOpen: $uri")
-
-        // Get the display name for the wiki title
-        val displayName = getDisplayName(uri) ?: "TiddlyWiki"
-        val wikiTitle = displayName.removeSuffix(".html").removeSuffix(".htm")
-
-        Log.d(TAG, "Opening single-file wiki: $wikiTitle")
-
-        // Build the wiki path in JSON format (same as SAF picker)
-        // For single-file wikis, we need the document URI
-        val wikiPath = buildWikiPath(uri, null)
-
-        Log.d(TAG, "Wiki path: $wikiPath")
-
-        launchWikiActivity(wikiPath, wikiTitle, isFolder = false)
+    private fun launchFilePicker() {
+        Toast.makeText(this, "Please select the wiki file to grant access", Toast.LENGTH_LONG).show()
+        @Suppress("DEPRECATION")
+        startActivityForResult(
+            Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+                addCategory(Intent.CATEGORY_OPENABLE)
+                type = "text/html"
+            },
+            REQUEST_CODE_PICK_FILE
+        )
     }
 
-    /**
-     * Handle opening a folder as a wiki.
-     */
-    private fun handleDirectoryOpen(uri: Uri) {
-        Log.d(TAG, "handleDirectoryOpen: $uri")
-
-        // Get the display name for the wiki title
-        val displayName = getDisplayName(uri) ?: "TiddlyWiki"
-
-        Log.d(TAG, "Opening folder wiki: $displayName")
-
-        // For folder wikis, we need to find tiddlywiki.info or treat as new wiki
-        val treeDoc = try {
-            DocumentFile.fromTreeUri(this, uri)
-        } catch (e: Exception) {
-            Log.e(TAG, "Cannot access directory: ${e.message}")
-            showError("Cannot access directory")
-            finish()
-            return
-        }
-
-        if (treeDoc == null) {
-            Log.e(TAG, "Could not create DocumentFile for directory")
-            showError("Cannot access directory")
-            finish()
-            return
-        }
-
-        // Check if this looks like a TiddlyWiki folder
-        val hasTiddlyWikiInfo = treeDoc.findFile("tiddlywiki.info") != null
-        Log.d(TAG, "Has tiddlywiki.info: $hasTiddlyWikiInfo")
-
-        // Build the wiki path
-        val wikiPath = buildWikiPath(null, uri)
-
-        Log.d(TAG, "Wiki path: $wikiPath")
-
-        // For folder wikis, we need to go through MainActivity/Rust to start Node.js server
-        // This is more complex - we'll show a message for now and launch MainActivity
-        launchMainActivityWithFolder(uri, displayName)
+    private fun launchFolderPicker() {
+        @Suppress("DEPRECATION")
+        startActivityForResult(
+            Intent(Intent.ACTION_OPEN_DOCUMENT_TREE),
+            REQUEST_CODE_PICK_FOLDER
+        )
     }
 
-    /**
-     * Build the wiki path JSON string expected by WikiActivity.
-     */
+    @Suppress("DEPRECATION")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+
+        when (requestCode) {
+            REQUEST_CODE_PICK_FILE -> {
+                if (resultCode != RESULT_OK || data?.data == null) {
+                    Log.d(TAG, "File picker cancelled")
+                    showError("File selection cancelled")
+                    finish()
+                    return
+                }
+
+                val uri = data.data!!
+                Log.d(TAG, "File picker result: $uri")
+
+                try {
+                    val takeFlags = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                    contentResolver.takePersistableUriPermission(uri, takeFlags)
+                } catch (e: SecurityException) {
+                    Log.e(TAG, "Failed to take permission from file picker: ${e.message}")
+                    showError("Could not get file access permission")
+                    finish()
+                    return
+                }
+
+                val displayName = getDisplayName(uri)
+                if (displayName != null) {
+                    pendingTitle = displayName.removeSuffix(".html").removeSuffix(".htm")
+                }
+
+                onFileAuthorized(uri)
+            }
+
+            REQUEST_CODE_PICK_FOLDER -> {
+                if (resultCode != RESULT_OK || data?.data == null) {
+                    // User cancelled folder picker — proceed without folder access
+                    Log.d(TAG, "Folder picker cancelled, proceeding without tree URI")
+                    onFolderAuthorized(null)
+                    return
+                }
+
+                val treeUri = data.data!!
+                Log.d(TAG, "Folder picker result: $treeUri")
+
+                try {
+                    val takeFlags = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                    contentResolver.takePersistableUriPermission(treeUri, takeFlags)
+                    Log.d(TAG, "Took persistable permission for folder: $treeUri")
+                } catch (e: SecurityException) {
+                    Log.w(TAG, "Could not take folder permission: ${e.message}")
+                    // Proceed without folder access
+                }
+
+                onFolderAuthorized(treeUri)
+            }
+        }
+    }
+
     private fun buildWikiPath(documentUri: Uri?, treeUri: Uri?): String {
         val parts = mutableListOf<String>()
 
         documentUri?.let {
             val escaped = it.toString().replace("\"", "\\\"")
-            parts.add("\"document_uri\":\"$escaped\"")
+            parts.add("\"uri\":\"$escaped\"")
         }
 
         treeUri?.let {
             val escaped = it.toString().replace("\"", "\\\"")
-            parts.add("\"tree_uri\":\"$escaped\"")
+            parts.add("\"documentTopTreeUri\":\"$escaped\"")
         }
 
         return "{${parts.joinToString(",")}}"
     }
 
-    /**
-     * Get the display name of a file/directory from its URI.
-     */
     private fun getDisplayName(uri: Uri): String? {
         try {
             contentResolver.query(uri, null, null, null, null)?.use { cursor ->
@@ -221,14 +265,9 @@ class OpenWithActivity : AppCompatActivity() {
         } catch (e: Exception) {
             Log.w(TAG, "Could not get display name: ${e.message}")
         }
-
-        // Fall back to last path segment
         return uri.lastPathSegment
     }
 
-    /**
-     * Launch WikiActivity to open a single-file wiki.
-     */
     private fun launchWikiActivity(wikiPath: String, wikiTitle: String, isFolder: Boolean) {
         Log.d(TAG, "Launching WikiActivity: path=$wikiPath, title=$wikiTitle, isFolder=$isFolder")
 
@@ -238,33 +277,10 @@ class OpenWithActivity : AppCompatActivity() {
             putExtra(WikiActivity.EXTRA_IS_FOLDER, isFolder)
             putExtra(WikiActivity.EXTRA_BACKUPS_ENABLED, true)
             putExtra(WikiActivity.EXTRA_BACKUP_COUNT, 20)
-            // Launch in new task so it appears separately in recent apps
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         }
 
         startActivity(wikiIntent)
-        finish()
-    }
-
-    /**
-     * Launch MainActivity to handle folder wiki opening.
-     * Folder wikis need Node.js server which is managed by the main process.
-     */
-    private fun launchMainActivityWithFolder(uri: Uri, title: String) {
-        Log.d(TAG, "Launching MainActivity for folder wiki: $uri")
-
-        // For now, just launch MainActivity and show a toast
-        // The user will need to use the folder picker in the app
-        // A full implementation would pass the folder URI to be handled by Rust
-
-        val mainIntent = Intent(this, MainActivity::class.java).apply {
-            putExtra("open_folder_uri", uri.toString())
-            putExtra("open_folder_title", title)
-            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
-        }
-
-        Toast.makeText(this, "Opening folder wiki: $title", Toast.LENGTH_SHORT).show()
-        startActivity(mainIntent)
         finish()
     }
 

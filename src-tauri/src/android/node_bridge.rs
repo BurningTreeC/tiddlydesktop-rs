@@ -16,6 +16,23 @@ use std::time::SystemTime;
 /// Port counter for wiki servers
 static NEXT_PORT: AtomicU16 = AtomicU16::new(39000);
 
+/// Get a writable temp directory for Android.
+/// `android_temp_dir()` returns `/tmp` which isn't writable on Android.
+/// Use the app's cache directory instead.
+fn android_temp_dir() -> PathBuf {
+    if let Some(app) = crate::get_global_app_handle() {
+        use tauri::Manager;
+        if let Ok(cache_dir) = app.path().app_cache_dir() {
+            return cache_dir.join("tmp");
+        }
+        if let Ok(data_dir) = app.path().app_data_dir() {
+            return data_dir.join("tmp");
+        }
+    }
+    // Last resort fallback
+    android_temp_dir()
+}
+
 /// Active file sync watchers for SAF wikis
 /// Maps local_path -> SyncWatcher
 static SAF_SYNC_WATCHERS: std::sync::LazyLock<Mutex<HashMap<String, Arc<SyncWatcher>>>> =
@@ -598,7 +615,7 @@ pub fn build_wiki_file(
     eprintln!("[NodeBridge]   plugins: {:?}", plugins);
 
     // Create temp directory for build output
-    let temp_dir = std::env::temp_dir().join(format!("tw-build-{}", std::process::id()));
+    let temp_dir = android_temp_dir().join(format!("tw-build-{}", std::process::id()));
     std::fs::create_dir_all(&temp_dir)
         .map_err(|e| format!("Failed to create temp directory: {}", e))?;
 
@@ -1101,7 +1118,7 @@ pub fn render_folder_wiki_html(saf_uri: &str) -> Result<String, String> {
     }
 
     // Create temp output directory
-    let temp_output = std::env::temp_dir().join(format!("tw-render-{}", std::process::id()));
+    let temp_output = android_temp_dir().join(format!("tw-render-{}", std::process::id()));
     std::fs::create_dir_all(&temp_output)
         .map_err(|e| format!("Failed to create temp output dir: {}", e))?;
 
@@ -1328,7 +1345,7 @@ pub fn convert_file_to_folder(source_saf_uri: &str, dest_saf_uri: &str) -> Resul
         .map_err(|e| format!("Failed to read source wiki: {}", e))?;
 
     // Create temp directory for the source file
-    let temp_dir = std::env::temp_dir().join(format!("tw-convert-{}", std::process::id()));
+    let temp_dir = android_temp_dir().join(format!("tw-convert-{}", std::process::id()));
     std::fs::create_dir_all(&temp_dir)
         .map_err(|e| format!("Failed to create temp directory: {}", e))?;
 
@@ -1409,7 +1426,7 @@ pub fn convert_folder_to_file(source_saf_uri: &str, dest_saf_uri: &str) -> Resul
     }
 
     // Create temp output directory
-    let temp_output = std::env::temp_dir().join(format!("tw-convert-out-{}", std::process::id()));
+    let temp_output = android_temp_dir().join(format!("tw-convert-out-{}", std::process::id()));
     std::fs::create_dir_all(&temp_output)
         .map_err(|e| format!("Failed to create temp output dir: {}", e))?;
 

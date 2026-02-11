@@ -296,6 +296,9 @@ class WikiActivity : AppCompatActivity() {
 
     private lateinit var webView: WebView
     private lateinit var rootLayout: FrameLayout
+    // Android 15+: Colored views behind transparent system bars
+    private var statusBarBgView: View? = null
+    private var navBarBgView: View? = null
     private var wikiPath: String? = null
     private var wikiTitle: String = "TiddlyWiki"
     private var isFolder: Boolean = false
@@ -1426,8 +1429,14 @@ class WikiActivity : AppCompatActivity() {
             val statusColor = parseCssColor(statusBarColorHex)
             val navColor = parseCssColor(navBarColorHex)
 
-            window.statusBarColor = statusColor
-            window.navigationBarColor = navColor
+            // Android 15+: system bars are transparent, color them via background views
+            if (Build.VERSION.SDK_INT >= 35) {
+                statusBarBgView?.setBackgroundColor(statusColor)
+                navBarBgView?.setBackgroundColor(navColor)
+            } else {
+                window.statusBarColor = statusColor
+                window.navigationBarColor = navColor
+            }
 
             // Determine icon colors based on BACKGROUND luminance to ensure contrast
             // Light background (luminance > 0.5) = dark icons for visibility
@@ -2135,20 +2144,48 @@ class WikiActivity : AppCompatActivity() {
 
         // Android 15+ (API 35+): Edge-to-edge is enforced and setDecorFitsSystemWindows
         // is ignored. We must handle insets ourselves with a persistent listener.
+        // Also add colored background views behind the transparent system bars for palette colors.
         // Pre-Android 15: System manages insets via setDecorFitsSystemWindows — no setup needed.
         if (Build.VERSION.SDK_INT >= 35) {
-            ViewCompat.setOnApplyWindowInsetsListener(rootLayout) { view, insets ->
-                if (isImmersiveFullscreen) {
-                    val navBars = insets.getInsets(WindowInsetsCompat.Type.navigationBars())
-                    view.setPadding(0, 0, 0, navBars.bottom)
-                } else {
-                    val systemBars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
-                    view.setPadding(systemBars.left, systemBars.top, systemBars.right, systemBars.bottom)
-                }
-                WindowInsetsCompat.CONSUMED
+            // Disable system scrim so our background colors show through unmodified
+            window.isStatusBarContrastEnforced = false
+            window.isNavigationBarContrastEnforced = false
+
+            // Create background views for system bar coloring (behind transparent bars)
+            statusBarBgView = View(this).apply {
+                setBackgroundColor(android.graphics.Color.TRANSPARENT)
             }
-            // Defer requestApplyInsets to after the view is fully attached to the window
-            rootLayout.post { rootLayout.requestApplyInsets() }
+            navBarBgView = View(this).apply {
+                setBackgroundColor(android.graphics.Color.TRANSPARENT)
+            }
+            // Add at index 0 so they're behind the webView
+            rootLayout.addView(statusBarBgView, 0, FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT, 0, android.view.Gravity.TOP))
+            rootLayout.addView(navBarBgView, 0, FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT, 0, android.view.Gravity.BOTTOM))
+
+            window.decorView.setOnApplyWindowInsetsListener { _, insets ->
+                // Use webView margins (not rootLayout padding) so bg views stay at screen edges.
+                // rootLayout has no padding, so Gravity.TOP/BOTTOM bg views are at the true edges.
+                if (isImmersiveFullscreen) {
+                    val navBars = insets.getInsets(WindowInsets.Type.navigationBars())
+                    val params = webView.layoutParams as FrameLayout.LayoutParams
+                    params.setMargins(0, 0, 0, navBars.bottom)
+                    webView.layoutParams = params
+                    statusBarBgView?.layoutParams?.height = 0
+                    navBarBgView?.layoutParams?.height = navBars.bottom
+                } else {
+                    val systemBars = insets.getInsets(WindowInsets.Type.systemBars())
+                    val params = webView.layoutParams as FrameLayout.LayoutParams
+                    params.setMargins(systemBars.left, systemBars.top, systemBars.right, systemBars.bottom)
+                    webView.layoutParams = params
+                    statusBarBgView?.layoutParams?.height = systemBars.top
+                    navBarBgView?.layoutParams?.height = systemBars.bottom
+                }
+                statusBarBgView?.requestLayout()
+                navBarBgView?.requestLayout()
+                insets
+            }
         }
 
         // Register back navigation handler for modern Android (gesture nav / API 33+)
@@ -5295,7 +5332,9 @@ class WikiActivity : AppCompatActivity() {
             }
         }
 
-        webView.destroy()
+        if (::webView.isInitialized) {
+            webView.destroy()
+        }
         super.onDestroy()
     }
 

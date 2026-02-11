@@ -65,17 +65,6 @@
                 <category android:name="android.intent.category.DEFAULT" />
                 <data android:mimeType="text/html" />
             </intent-filter>
-            <!-- Handle VIEW intent for directories (folder wikis) -->
-            <intent-filter>
-                <action android:name="android.intent.action.VIEW" />
-                <category android:name="android.intent.category.DEFAULT" />
-                <data android:mimeType="vnd.android.document/directory" />
-            </intent-filter>
-            <intent-filter>
-                <action android:name="android.intent.action.VIEW" />
-                <category android:name="android.intent.category.DEFAULT" />
-                <data android:mimeType="resource/folder" />
-            </intent-filter>
         </activity>
 
         <provider

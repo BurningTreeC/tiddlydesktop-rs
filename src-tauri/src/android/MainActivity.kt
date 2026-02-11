@@ -6,6 +6,10 @@ import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
 import android.util.Log
+import android.view.Gravity
+import android.view.View
+import android.view.WindowInsets
+import android.widget.FrameLayout
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import org.json.JSONObject
@@ -18,8 +22,62 @@ class MainActivity : TauriActivity() {
         private const val NOTIFICATION_PERMISSION_REQUEST_CODE = 1001
     }
 
+    // Android 15+: Colored views behind transparent system bars
+    private var statusBarBgView: View? = null
+    private var navBarBgView: View? = null
+
+    /**
+     * Called from Rust JNI to update the background colors of the system bar views.
+     * On API 35+, window.setStatusBarColor/setNavigationBarColor are ignored,
+     * so we use actual View elements positioned behind the transparent bars.
+     */
+    fun setBarBackgroundColors(statusColor: Int, navColor: Int) {
+        runOnUiThread {
+            statusBarBgView?.setBackgroundColor(statusColor)
+            navBarBgView?.setBackgroundColor(navColor)
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        // Android 15+ (API 35+): Edge-to-edge is enforced. Pad the content view
+        // so it doesn't render behind the status bar and navigation bar.
+        // Also add colored background views to the decorView for palette bar colors.
+        if (Build.VERSION.SDK_INT >= 35) {
+            val contentView = findViewById<FrameLayout>(android.R.id.content)
+            val decorView = window.decorView as FrameLayout
+
+            // Disable system scrim so our background colors show through unmodified
+            window.isStatusBarContrastEnforced = false
+            window.isNavigationBarContrastEnforced = false
+
+            // Add colored bg views to decorView (not contentView) so they sit at
+            // the true screen edges, above everything including Tauri's WebView.
+            statusBarBgView = View(this).apply {
+                setBackgroundColor(android.graphics.Color.TRANSPARENT)
+            }
+            navBarBgView = View(this).apply {
+                setBackgroundColor(android.graphics.Color.TRANSPARENT)
+            }
+            decorView.addView(statusBarBgView, FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT, 0, Gravity.TOP))
+            decorView.addView(navBarBgView, FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT, 0, Gravity.BOTTOM))
+
+            decorView.setOnApplyWindowInsetsListener { _, insets ->
+                val systemBars = insets.getInsets(WindowInsets.Type.systemBars())
+                // Pad content to keep Tauri's WebView away from system bars
+                contentView.setPadding(systemBars.left, systemBars.top, systemBars.right, systemBars.bottom)
+                // Size bg views to match system bar heights
+                statusBarBgView?.layoutParams?.height = systemBars.top
+                navBarBgView?.layoutParams?.height = systemBars.bottom
+                statusBarBgView?.requestLayout()
+                navBarBgView?.requestLayout()
+                insets
+            }
+        }
+
         requestNotificationPermission()
         handleWidgetIntent(intent)
     }

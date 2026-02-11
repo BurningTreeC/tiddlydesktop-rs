@@ -1,0 +1,32 @@
+<resources>
+    <string name="capture_title">Captura ràpida</string>
+    <string name="capture_unsupported_type">Tipus de contingut no compatible</string>
+    <string name="capture_no_text">No hi ha text per capturar</string>
+    <string name="capture_no_image">No hi ha imatge per capturar</string>
+    <string name="capture_failed_load_image">No s\'ha pogut carregar la imatge</string>
+    <string name="capture_no_file">No hi ha fitxer per capturar</string>
+    <string name="capture_no_file_import">No hi ha fitxer per importar</string>
+    <string name="capture_import_format">Importa: %s</string>
+    <string name="capture_import_note">TiddlyWiki gestionarà la importació.</string>
+    <string name="capture_untitled">Captura sense títol</string>
+    <string name="capture_no_wikis">No s\'han trobat wikis. Obre primer un wiki.</string>
+    <string name="capture_select_wiki">Selecciona un wiki</string>
+    <string name="capture_saved_title">Capturat</string>
+    <string name="capture_saved_message">Desat a %s</string>
+    <string name="capture_failed_copy">No s\'ha pogut copiar el fitxer a la carpeta d\'adjunts</string>
+    <string name="capture_no_attachments">Aquest wiki no admet adjunts externs. Fes servir un wiki de carpeta per capturar vídeos.</string>
+    <string name="capture_failed_read">No s\'ha pogut llegir el fitxer</string>
+    <string name="capture_failed_save">No s\'ha pogut desar la captura</string>
+    <string name="capture_imported">%d captura/es importada/es</string>
+    <string name="label_title">Títol</string>
+    <string name="label_tags">Etiquetes</string>
+    <string name="label_save_to">Desa a</string>
+    <string name="hint_tiddler_title">Títol del tiddler</string>
+    <string name="hint_tags">Etiqueta1 Etiqueta2</string>
+    <string name="btn_cancel">Cancel·la</string>
+    <string name="btn_save">Desa</string>
+    <string name="btn_ok">D\'acord</string>
+    <string name="btn_open_wiki">Obre wiki</string>
+    <string name="open_as_wiki">Obre com a wiki</string>
+    <string name="import_into_wiki">Importa a un wiki</string>
+</resources>

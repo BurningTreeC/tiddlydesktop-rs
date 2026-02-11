@@ -1,0 +1,32 @@
+<resources>
+    <string name="capture_title">ਤੇਜ਼ ਕੈਪਚਰ</string>
+    <string name="capture_unsupported_type">ਅਸਮਰੱਥ ਸਮੱਗਰੀ ਕਿਸਮ</string>
+    <string name="capture_no_text">ਕੈਪਚਰ ਕਰਨ ਲਈ ਕੋਈ ਟੈਕਸਟ ਨਹੀਂ</string>
+    <string name="capture_no_image">ਕੈਪਚਰ ਕਰਨ ਲਈ ਕੋਈ ਚਿੱਤਰ ਨਹੀਂ</string>
+    <string name="capture_failed_load_image">ਚਿੱਤਰ ਲੋਡ ਕਰਨ ਵਿੱਚ ਅਸਫਲ</string>
+    <string name="capture_no_file">ਕੈਪਚਰ ਕਰਨ ਲਈ ਕੋਈ ਫ਼ਾਈਲ ਨਹੀਂ</string>
+    <string name="capture_no_file_import">ਆਯਾਤ ਕਰਨ ਲਈ ਕੋਈ ਫ਼ਾਈਲ ਨਹੀਂ</string>
+    <string name="capture_import_format">ਆਯਾਤ: %s</string>
+    <string name="capture_import_note">TiddlyWiki ਆਯਾਤ ਨੂੰ ਸੰਭਾਲੇਗਾ।</string>
+    <string name="capture_untitled">ਬਿਨਾਂ ਸਿਰਲੇਖ ਕੈਪਚਰ</string>
+    <string name="capture_no_wikis">ਕੋਈ ਵਿਕੀ ਨਹੀਂ ਮਿਲੀ। ਪਹਿਲਾਂ ਇੱਕ ਵਿਕੀ ਖੋਲ੍ਹੋ।</string>
+    <string name="capture_select_wiki">ਕਿਰਪਾ ਕਰਕੇ ਇੱਕ ਵਿਕੀ ਚੁਣੋ</string>
+    <string name="capture_saved_title">ਕੈਪਚਰ ਕੀਤਾ</string>
+    <string name="capture_saved_message">%s ਵਿੱਚ ਸੁਰੱਖਿਅਤ ਕੀਤਾ</string>
+    <string name="capture_failed_copy">ਫ਼ਾਈਲ ਨੂੰ ਅਟੈਚਮੈਂਟ ਫੋਲਡਰ ਵਿੱਚ ਕਾਪੀ ਕਰਨ ਵਿੱਚ ਅਸਫਲ</string>
+    <string name="capture_no_attachments">ਇਹ ਵਿਕੀ ਬਾਹਰੀ ਅਟੈਚਮੈਂਟਾਂ ਦਾ ਸਮਰਥਨ ਨਹੀਂ ਕਰਦੀ। ਵੀਡੀਓ ਕੈਪਚਰ ਕਰਨ ਲਈ ਫੋਲਡਰ ਵਿਕੀ ਵਰਤੋ।</string>
+    <string name="capture_failed_read">ਫ਼ਾਈਲ ਪੜ੍ਹਨ ਵਿੱਚ ਅਸਫਲ</string>
+    <string name="capture_failed_save">ਕੈਪਚਰ ਸੁਰੱਖਿਅਤ ਕਰਨ ਵਿੱਚ ਅਸਫਲ</string>
+    <string name="capture_imported">%d ਕੈਪਚਰ ਆਯਾਤ ਕੀਤੇ</string>
+    <string name="label_title">ਸਿਰਲੇਖ</string>
+    <string name="label_tags">ਟੈਗ</string>
+    <string name="label_save_to">ਇੱਥੇ ਸੁਰੱਖਿਅਤ ਕਰੋ</string>
+    <string name="hint_tiddler_title">Tiddler ਸਿਰਲੇਖ</string>
+    <string name="hint_tags">ਟੈਗ1 ਟੈਗ2</string>
+    <string name="btn_cancel">ਰੱਦ ਕਰੋ</string>
+    <string name="btn_save">ਸੁਰੱਖਿਅਤ ਕਰੋ</string>
+    <string name="btn_ok">ਠੀਕ ਹੈ</string>
+    <string name="btn_open_wiki">ਵਿਕੀ ਖੋਲ੍ਹੋ</string>
+    <string name="open_as_wiki">ਵਿਕੀ ਵਜੋਂ ਖੋਲ੍ਹੋ</string>
+    <string name="import_into_wiki">ਵਿਕੀ ਵਿੱਚ ਆਯਾਤ ਕਰੋ</string>
+</resources>

@@ -1,0 +1,32 @@
+<resources>
+    <string name="capture_title">Hitro zajemanje</string>
+    <string name="capture_unsupported_type">Nepodprta vrsta vsebine</string>
+    <string name="capture_no_text">Ni besedila za zajemanje</string>
+    <string name="capture_no_image">Ni slike za zajemanje</string>
+    <string name="capture_failed_load_image">Slike ni bilo mogoče naložiti</string>
+    <string name="capture_no_file">Ni datoteke za zajemanje</string>
+    <string name="capture_no_file_import">Ni datoteke za uvoz</string>
+    <string name="capture_import_format">Uvoz: %s</string>
+    <string name="capture_import_note">TiddlyWiki bo poskrbel za uvoz.</string>
+    <string name="capture_untitled">Neimenovano zajemanje</string>
+    <string name="capture_no_wikis">Ni najdenih wikijev. Najprej odprite wiki.</string>
+    <string name="capture_select_wiki">Izberite wiki</string>
+    <string name="capture_saved_title">Zajeto</string>
+    <string name="capture_saved_message">Shranjeno v %s</string>
+    <string name="capture_failed_copy">Datoteke ni bilo mogoče kopirati v mapo prilog</string>
+    <string name="capture_no_attachments">Ta wiki ne podpira zunanjih prilog. Za zajemanje videov uporabite wiki mapo.</string>
+    <string name="capture_failed_read">Datoteke ni bilo mogoče prebrati</string>
+    <string name="capture_failed_save">Zajemanja ni bilo mogoče shraniti</string>
+    <string name="capture_imported">Uvoženih zajemanj: %d</string>
+    <string name="label_title">Naslov</string>
+    <string name="label_tags">Oznake</string>
+    <string name="label_save_to">Shrani v</string>
+    <string name="hint_tiddler_title">Naslov tiddlerja</string>
+    <string name="hint_tags">Oznaka1 Oznaka2</string>
+    <string name="btn_cancel">Prekliči</string>
+    <string name="btn_save">Shrani</string>
+    <string name="btn_ok">V redu</string>
+    <string name="btn_open_wiki">Odpri wiki</string>
+    <string name="open_as_wiki">Odpri kot wiki</string>
+    <string name="import_into_wiki">Uvozi v wiki</string>
+</resources>

@@ -1,6 +1,7 @@
 package com.burningtreec.tiddlydesktop_rs
 
 import android.app.Activity
+import android.app.AlertDialog
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
@@ -8,14 +9,19 @@ import android.util.Log
 import android.widget.Toast
 
 /**
- * Activity that handles "Open with" intents for HTML files.
- * This allows users to open TiddlyWiki files directly from file managers.
+ * Activity that handles "Open with" intents for HTML and importable files.
+ * - HTML files: Opens as a TiddlyWiki (existing flow with folder picker)
+ * - JSON, CSV, TID files: Forwards to CaptureActivity for import into a wiki
  *
- * Flow:
+ * Flow for wiki files:
  * 1. Receive file URI from VIEW/SEND intent
  * 2. Try to take persistable permission; if that fails, fall back to SAF file picker
  * 3. Ask user to select the parent folder (for backups, attachments, saving)
  * 4. Launch WikiActivity with both file URI and folder tree URI
+ *
+ * Flow for importable files:
+ * 1. Receive file URI from VIEW intent
+ * 2. Forward to CaptureActivity with the URI (handles wiki selection + TW5 native import)
  */
 class OpenWithActivity : Activity() {
 
@@ -58,6 +64,23 @@ class OpenWithActivity : Activity() {
 
         Log.d(TAG, "Processing URI: $uri")
 
+        // Check if this is an importable file (JSON, CSV, TID) — forward to CaptureActivity
+        if (isImportableFile(uri)) {
+            forwardToCaptureActivity(uri)
+            return
+        }
+
+        // For HTML files, ask user whether to open as wiki or import into a wiki
+        if (isHtmlFile(uri)) {
+            showHtmlChooser(uri)
+            return
+        }
+
+        // Default: open as wiki
+        proceedOpenAsWiki(uri)
+    }
+
+    private fun proceedOpenAsWiki(uri: Uri) {
         val displayName = getDisplayName(uri) ?: "TiddlyWiki"
         pendingTitle = displayName.removeSuffix(".html").removeSuffix(".htm")
 
@@ -86,6 +109,20 @@ class OpenWithActivity : Activity() {
         }
 
         Log.d(TAG, "Processing shared URI: $uri")
+
+        // Check if this is an importable file (JSON, CSV, TID) — forward to CaptureActivity
+        if (isImportableFile(uri)) {
+            forwardToCaptureActivity(uri)
+            return
+        }
+
+        // For HTML files, ask user whether to open as wiki or import into a wiki
+        if (isHtmlFile(uri)) {
+            showHtmlChooser(uri)
+            return
+        }
+
+        // Default: open as wiki
         pendingTitle = (getDisplayName(uri) ?: "TiddlyWiki").removeSuffix(".html").removeSuffix(".htm")
 
         if (tryTakePermission(uri)) {
@@ -281,6 +318,59 @@ class OpenWithActivity : Activity() {
         }
 
         startActivity(wikiIntent)
+        finish()
+    }
+
+    /**
+     * Check if this file should be imported into a wiki (JSON, CSV, TID)
+     * rather than opened as a wiki.
+     */
+    private fun isImportableFile(uri: Uri): Boolean {
+        val name = getDisplayName(uri)?.lowercase() ?: ""
+        if (name.endsWith(".tid") || name.endsWith(".json") || name.endsWith(".csv")) return true
+        val mimeType = intent.type ?: contentResolver.getType(uri) ?: ""
+        return mimeType == "application/json" || mimeType == "text/csv"
+    }
+
+    /**
+     * Check if this file is an HTML file.
+     */
+    private fun isHtmlFile(uri: Uri): Boolean {
+        val name = getDisplayName(uri)?.lowercase() ?: ""
+        if (name.endsWith(".html") || name.endsWith(".htm")) return true
+        val mimeType = intent.type ?: contentResolver.getType(uri) ?: ""
+        return mimeType == "text/html" || mimeType == "application/xhtml+xml"
+    }
+
+    /**
+     * Show chooser dialog for HTML files: open as wiki or import into a wiki.
+     */
+    private fun showHtmlChooser(uri: Uri) {
+        val displayName = getDisplayName(uri) ?: "file"
+        AlertDialog.Builder(this)
+            .setTitle(displayName)
+            .setItems(arrayOf(getString(R.string.open_as_wiki), getString(R.string.import_into_wiki))) { _, which ->
+                when (which) {
+                    0 -> proceedOpenAsWiki(uri)
+                    1 -> forwardToCaptureActivity(uri)
+                }
+            }
+            .setOnCancelListener { finish() }
+            .show()
+    }
+
+    /**
+     * Forward file to CaptureActivity for import into a wiki via TW5 native import.
+     */
+    private fun forwardToCaptureActivity(uri: Uri) {
+        Log.d(TAG, "Forwarding importable file to CaptureActivity: $uri")
+        val captureIntent = Intent(this, CaptureActivity::class.java).apply {
+            action = Intent.ACTION_SEND
+            putExtra(Intent.EXTRA_STREAM, uri)
+            type = contentResolver.getType(uri) ?: intent.type ?: "*/*"
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        startActivity(captureIntent)
         finish()
     }
 

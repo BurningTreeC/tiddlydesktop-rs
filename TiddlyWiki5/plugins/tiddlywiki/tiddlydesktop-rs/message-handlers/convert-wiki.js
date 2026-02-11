@@ -56,8 +56,8 @@ exports.startup = function() {
                 console.log("[TiddlyDesktop] Conversion successful");
                 // Remove converting indicator
                 $tw.wiki.deleteTiddler("$:/temp/tiddlydesktop-rs/converting");
-                // Refresh the wiki list
-                $tw.rootWidget.dispatchEvent({type: "tm-tiddlydesktop-rs-refresh"});
+                // Auto-open the converted wiki (open-path auto-detects file vs folder)
+                $tw.rootWidget.dispatchEvent({type: "tm-tiddlydesktop-rs-open-path", param: destPath});
             }).catch(function(err) {
                 console.error("[TiddlyDesktop] Conversion failed:", err);
                 // Remove converting indicator

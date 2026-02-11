@@ -1,0 +1,40 @@
+<resources>
+    <string name="app_name">tiddlydesktop-rs</string>
+    <string name="main_activity_title">tiddlydesktop-rs</string>
+
+    <!-- CaptureActivity -->
+    <string name="capture_title">Quick Capture</string>
+    <string name="capture_unsupported_type">Unsupported content type</string>
+    <string name="capture_no_text">No text to capture</string>
+    <string name="capture_no_image">No image to capture</string>
+    <string name="capture_failed_load_image">Failed to load image</string>
+    <string name="capture_no_file">No file to capture</string>
+    <string name="capture_no_file_import">No file to import</string>
+    <string name="capture_import_format">Import: %s</string>
+    <string name="capture_import_note">TiddlyWiki will handle the import.</string>
+    <string name="capture_untitled">Untitled Capture</string>
+    <string name="capture_no_wikis">No wikis found. Open a wiki first.</string>
+    <string name="capture_select_wiki">Please select a wiki</string>
+    <string name="capture_saved_title">Captured</string>
+    <string name="capture_saved_message">Saved to %s</string>
+    <string name="capture_failed_copy">Failed to copy file to attachments folder</string>
+    <string name="capture_no_attachments">This wiki does not support external attachments. Use a folder wiki to capture videos.</string>
+    <string name="capture_failed_read">Failed to read file</string>
+    <string name="capture_failed_save">Failed to save capture</string>
+    <string name="capture_imported">Imported %d capture(s)</string>
+
+    <string name="label_title">Title</string>
+    <string name="label_tags">Tags</string>
+    <string name="label_save_to">Save to</string>
+    <string name="hint_tiddler_title">Tiddler title</string>
+    <string name="hint_tags">Tag1 Tag2</string>
+
+    <string name="btn_cancel">Cancel</string>
+    <string name="btn_save">Save</string>
+    <string name="btn_ok">OK</string>
+    <string name="btn_open_wiki">Open Wiki</string>
+
+    <!-- OpenWithActivity -->
+    <string name="open_as_wiki">Open as Wiki</string>
+    <string name="import_into_wiki">Import into Wiki</string>
+</resources>

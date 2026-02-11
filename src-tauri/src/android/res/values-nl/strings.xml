@@ -1,0 +1,32 @@
+<resources>
+    <string name="capture_title">Snel vastleggen</string>
+    <string name="capture_unsupported_type">Niet-ondersteund inhoudstype</string>
+    <string name="capture_no_text">Geen tekst om vast te leggen</string>
+    <string name="capture_no_image">Geen afbeelding om vast te leggen</string>
+    <string name="capture_failed_load_image">Kan afbeelding niet laden</string>
+    <string name="capture_no_file">Geen bestand om vast te leggen</string>
+    <string name="capture_no_file_import">Geen bestand om te importeren</string>
+    <string name="capture_import_format">Importeren: %s</string>
+    <string name="capture_import_note">TiddlyWiki verwerkt de import.</string>
+    <string name="capture_untitled">Naamloze vastlegging</string>
+    <string name="capture_no_wikis">Geen wiki\'s gevonden. Open eerst een wiki.</string>
+    <string name="capture_select_wiki">Selecteer een wiki</string>
+    <string name="capture_saved_title">Vastgelegd</string>
+    <string name="capture_saved_message">Opgeslagen in %s</string>
+    <string name="capture_failed_copy">Kan bestand niet naar de bijlagenmap kopiëren</string>
+    <string name="capture_no_attachments">Deze wiki ondersteunt geen externe bijlagen. Gebruik een mapwiki om video\'s vast te leggen.</string>
+    <string name="capture_failed_read">Kan bestand niet lezen</string>
+    <string name="capture_failed_save">Kan vastlegging niet opslaan</string>
+    <string name="capture_imported">%d vastlegging(en) geïmporteerd</string>
+    <string name="label_title">Titel</string>
+    <string name="label_tags">Tags</string>
+    <string name="label_save_to">Opslaan in</string>
+    <string name="hint_tiddler_title">Tiddler-titel</string>
+    <string name="hint_tags">Tag1 Tag2</string>
+    <string name="btn_cancel">Annuleren</string>
+    <string name="btn_save">Opslaan</string>
+    <string name="btn_ok">OK</string>
+    <string name="btn_open_wiki">Wiki openen</string>
+    <string name="open_as_wiki">Openen als wiki</string>
+    <string name="import_into_wiki">Importeren in wiki</string>
+</resources>

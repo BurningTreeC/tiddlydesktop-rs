@@ -1,0 +1,32 @@
+<resources>
+    <string name="capture_title">ضبط سریع</string>
+    <string name="capture_unsupported_type">نوع محتوای پشتیبانی‌نشده</string>
+    <string name="capture_no_text">متنی برای ضبط وجود ندارد</string>
+    <string name="capture_no_image">تصویری برای ضبط وجود ندارد</string>
+    <string name="capture_failed_load_image">بارگذاری تصویر ناموفق بود</string>
+    <string name="capture_no_file">فایلی برای ضبط وجود ندارد</string>
+    <string name="capture_no_file_import">فایلی برای واردکردن وجود ندارد</string>
+    <string name="capture_import_format">واردکردن: %s</string>
+    <string name="capture_import_note">TiddlyWiki واردکردن را انجام خواهد داد.</string>
+    <string name="capture_untitled">ضبط بدون عنوان</string>
+    <string name="capture_no_wikis">ویکی‌ای یافت نشد. ابتدا یک ویکی باز کنید.</string>
+    <string name="capture_select_wiki">لطفاً یک ویکی انتخاب کنید</string>
+    <string name="capture_saved_title">ضبط شد</string>
+    <string name="capture_saved_message">ذخیره شد در %s</string>
+    <string name="capture_failed_copy">کپی فایل به پوشه پیوست‌ها ناموفق بود</string>
+    <string name="capture_no_attachments">این ویکی از پیوست‌های خارجی پشتیبانی نمی‌کند. برای ضبط ویدیو از ویکی پوشه‌ای استفاده کنید.</string>
+    <string name="capture_failed_read">خواندن فایل ناموفق بود</string>
+    <string name="capture_failed_save">ذخیره ضبط ناموفق بود</string>
+    <string name="capture_imported">%d ضبط واردشده</string>
+    <string name="label_title">عنوان</string>
+    <string name="label_tags">برچسب‌ها</string>
+    <string name="label_save_to">ذخیره در</string>
+    <string name="hint_tiddler_title">عنوان Tiddler</string>
+    <string name="hint_tags">برچسب۱ برچسب۲</string>
+    <string name="btn_cancel">لغو</string>
+    <string name="btn_save">ذخیره</string>
+    <string name="btn_ok">تأیید</string>
+    <string name="btn_open_wiki">باز کردن ویکی</string>
+    <string name="open_as_wiki">باز کردن به عنوان ویکی</string>
+    <string name="import_into_wiki">واردکردن به ویکی</string>
+</resources>

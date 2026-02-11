@@ -1,0 +1,32 @@
+<resources>
+    <string name="capture_title">クイックキャプチャ</string>
+    <string name="capture_unsupported_type">サポートされていないコンテンツタイプ</string>
+    <string name="capture_no_text">キャプチャするテキストがありません</string>
+    <string name="capture_no_image">キャプチャする画像がありません</string>
+    <string name="capture_failed_load_image">画像を読み込めませんでした</string>
+    <string name="capture_no_file">キャプチャするファイルがありません</string>
+    <string name="capture_no_file_import">インポートするファイルがありません</string>
+    <string name="capture_import_format">インポート: %s</string>
+    <string name="capture_import_note">TiddlyWikiがインポートを処理します。</string>
+    <string name="capture_untitled">無題のキャプチャ</string>
+    <string name="capture_no_wikis">Wikiが見つかりません。まずWikiを開いてください。</string>
+    <string name="capture_select_wiki">Wikiを選択してください</string>
+    <string name="capture_saved_title">キャプチャ完了</string>
+    <string name="capture_saved_message">%sに保存しました</string>
+    <string name="capture_failed_copy">添付フォルダへのファイルコピーに失敗しました</string>
+    <string name="capture_no_attachments">このWikiは外部添付ファイルに対応していません。動画をキャプチャするにはフォルダWikiを使用してください。</string>
+    <string name="capture_failed_read">ファイルを読み取れませんでした</string>
+    <string name="capture_failed_save">キャプチャを保存できませんでした</string>
+    <string name="capture_imported">%d件のキャプチャをインポートしました</string>
+    <string name="label_title">タイトル</string>
+    <string name="label_tags">タグ</string>
+    <string name="label_save_to">保存先</string>
+    <string name="hint_tiddler_title">Tiddlerのタイトル</string>
+    <string name="hint_tags">タグ1 タグ2</string>
+    <string name="btn_cancel">キャンセル</string>
+    <string name="btn_save">保存</string>
+    <string name="btn_ok">OK</string>
+    <string name="btn_open_wiki">Wikiを開く</string>
+    <string name="open_as_wiki">Wikiとして開く</string>
+    <string name="import_into_wiki">Wikiにインポート</string>
+</resources>

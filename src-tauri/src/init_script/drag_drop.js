@@ -496,6 +496,62 @@
             document.body.classList.remove("td-drag-over");
         });
 
+        // ========================================
+        // File Input Interception (for Import button)
+        // ========================================
+        document.addEventListener('click', function(e) {
+            var input = e.target;
+            if (input.tagName === 'INPUT' && input.type === 'file') {
+                e.preventDefault();
+                e.stopPropagation();
+
+                var multiple = input.hasAttribute('multiple');
+                invoke('pick_files_for_import', { multiple: multiple }).then(function(paths) {
+                    if (paths.length === 0) return;
+
+                    var filePromises = paths.map(function(filepath) {
+                        var filename = filepath.split(/[/\\]/).pop();
+
+                        return invoke('read_file_as_binary', { path: filepath }).then(function(bytes) {
+                            var ext = filename.split('.').pop().toLowerCase();
+                            var mimeTypes = {
+                                'json': 'application/json',
+                                'tid': 'application/x-tiddler',
+                                'csv': 'text/csv',
+                                'html': 'text/html',
+                                'htm': 'text/html',
+                                'txt': 'text/plain',
+                                'jpg': 'image/jpeg',
+                                'jpeg': 'image/jpeg',
+                                'png': 'image/png',
+                                'gif': 'image/gif',
+                                'svg': 'image/svg+xml',
+                                'pdf': 'application/pdf'
+                            };
+                            var mimeType = mimeTypes[ext] || 'application/octet-stream';
+                            return new File([new Uint8Array(bytes)], filename, { type: mimeType });
+                        }).catch(function(err) {
+                            console.error('[TiddlyDesktop] Failed to read file:', filepath, err);
+                            return null;
+                        });
+                    });
+
+                    Promise.all(filePromises).then(function(files) {
+                        var validFiles = files.filter(function(f) { return f !== null; });
+                        if (validFiles.length === 0) return;
+
+                        var dt = new DataTransfer();
+                        validFiles.forEach(function(file) { dt.items.add(file); });
+
+                        input.files = dt.files;
+                        input.dispatchEvent(new Event('change', { bubbles: true }));
+                    });
+                }).catch(function(err) {
+                    console.error('[TiddlyDesktop] Failed to pick files:', err);
+                });
+            }
+        }, true);
+
         invoke("js_log", { message: "Landing page drag-drop ready" });
     }
 

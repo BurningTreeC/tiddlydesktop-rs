@@ -1,0 +1,32 @@
+<resources>
+    <string name="capture_title">Cattura rapida</string>
+    <string name="capture_unsupported_type">Tipo di contenuto non supportato</string>
+    <string name="capture_no_text">Nessun testo da catturare</string>
+    <string name="capture_no_image">Nessuna immagine da catturare</string>
+    <string name="capture_failed_load_image">Impossibile caricare l\'immagine</string>
+    <string name="capture_no_file">Nessun file da catturare</string>
+    <string name="capture_no_file_import">Nessun file da importare</string>
+    <string name="capture_import_format">Importa: %s</string>
+    <string name="capture_import_note">TiddlyWiki gestirà l\'importazione.</string>
+    <string name="capture_untitled">Cattura senza titolo</string>
+    <string name="capture_no_wikis">Nessun wiki trovato. Apri prima un wiki.</string>
+    <string name="capture_select_wiki">Seleziona un wiki</string>
+    <string name="capture_saved_title">Catturato</string>
+    <string name="capture_saved_message">Salvato in %s</string>
+    <string name="capture_failed_copy">Impossibile copiare il file nella cartella degli allegati</string>
+    <string name="capture_no_attachments">Questo wiki non supporta allegati esterni. Usa un wiki-cartella per catturare video.</string>
+    <string name="capture_failed_read">Impossibile leggere il file</string>
+    <string name="capture_failed_save">Impossibile salvare la cattura</string>
+    <string name="capture_imported">%d cattura/e importata/e</string>
+    <string name="label_title">Titolo</string>
+    <string name="label_tags">Tag</string>
+    <string name="label_save_to">Salva in</string>
+    <string name="hint_tiddler_title">Titolo del tiddler</string>
+    <string name="hint_tags">Tag1 Tag2</string>
+    <string name="btn_cancel">Annulla</string>
+    <string name="btn_save">Salva</string>
+    <string name="btn_ok">OK</string>
+    <string name="btn_open_wiki">Apri wiki</string>
+    <string name="open_as_wiki">Apri come wiki</string>
+    <string name="import_into_wiki">Importa in un wiki</string>
+</resources>

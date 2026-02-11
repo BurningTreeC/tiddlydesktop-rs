@@ -1,0 +1,32 @@
+<resources>
+    <string name="capture_title">Rýchle zachytenie</string>
+    <string name="capture_unsupported_type">Nepodporovaný typ obsahu</string>
+    <string name="capture_no_text">Žiadny text na zachytenie</string>
+    <string name="capture_no_image">Žiadny obrázok na zachytenie</string>
+    <string name="capture_failed_load_image">Nepodarilo sa načítať obrázok</string>
+    <string name="capture_no_file">Žiadny súbor na zachytenie</string>
+    <string name="capture_no_file_import">Žiadny súbor na import</string>
+    <string name="capture_import_format">Import: %s</string>
+    <string name="capture_import_note">TiddlyWiki spracuje import.</string>
+    <string name="capture_untitled">Nepomenované zachytenie</string>
+    <string name="capture_no_wikis">Nenašli sa žiadne wiki. Najprv otvorte wiki.</string>
+    <string name="capture_select_wiki">Vyberte wiki</string>
+    <string name="capture_saved_title">Zachytené</string>
+    <string name="capture_saved_message">Uložené do %s</string>
+    <string name="capture_failed_copy">Nepodarilo sa skopírovať súbor do priečinka príloh</string>
+    <string name="capture_no_attachments">Toto wiki nepodporuje externé prílohy. Na zachytenie videí použite priečinkové wiki.</string>
+    <string name="capture_failed_read">Nepodarilo sa prečítať súbor</string>
+    <string name="capture_failed_save">Nepodarilo sa uložiť zachytenie</string>
+    <string name="capture_imported">Importovaných zachytení: %d</string>
+    <string name="label_title">Názov</string>
+    <string name="label_tags">Štítky</string>
+    <string name="label_save_to">Uložiť do</string>
+    <string name="hint_tiddler_title">Názov tiddlera</string>
+    <string name="hint_tags">Štítok1 Štítok2</string>
+    <string name="btn_cancel">Zrušiť</string>
+    <string name="btn_save">Uložiť</string>
+    <string name="btn_ok">OK</string>
+    <string name="btn_open_wiki">Otvoriť wiki</string>
+    <string name="open_as_wiki">Otvoriť ako wiki</string>
+    <string name="import_into_wiki">Importovať do wiki</string>
+</resources>

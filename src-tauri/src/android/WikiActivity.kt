@@ -4597,7 +4597,13 @@ class WikiActivity : AppCompatActivity() {
         webView.webViewClient = object : WebViewClient() {
             private fun handleUrl(url: String): Boolean {
                 val uri = Uri.parse(url)
-                val scheme = uri.scheme?.lowercase() ?: return false
+                val scheme = uri.scheme?.lowercase()
+                // No scheme (e.g. bare words like "nothing", relative paths) —
+                // block navigation so WebView doesn't silently fail
+                if (scheme == null) {
+                    Log.d(TAG, "Blocking navigation to scheme-less URL: $url")
+                    return true
+                }
                 // Allow wiki server URLs to load in the WebView
                 if (scheme == "http" && uri.host == "127.0.0.1") return false
                 // Internal schemes that should stay in the WebView
@@ -4619,10 +4625,12 @@ class WikiActivity : AppCompatActivity() {
                                 startActivity(fallbackIntent)
                             } else {
                                 Log.w(TAG, "No handler found for intent:// URI and no fallback URL")
+                                android.widget.Toast.makeText(this@WikiActivity, "No app found to handle this link", android.widget.Toast.LENGTH_SHORT).show()
                             }
                         }
                     } catch (e: Exception) {
                         Log.e(TAG, "Failed to parse/launch intent:// URI: ${e.message}")
+                        android.widget.Toast.makeText(this@WikiActivity, "No app found to handle this link", android.widget.Toast.LENGTH_SHORT).show()
                     }
                     return true
                 }
@@ -4632,9 +4640,15 @@ class WikiActivity : AppCompatActivity() {
                 try {
                     val intent = Intent(Intent.ACTION_VIEW, uri)
                     intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                    startActivity(intent)
+                    if (intent.resolveActivity(packageManager) != null) {
+                        startActivity(intent)
+                    } else {
+                        Log.w(TAG, "No handler found for URL: $url")
+                        android.widget.Toast.makeText(this@WikiActivity, "No app found to handle this link", android.widget.Toast.LENGTH_SHORT).show()
+                    }
                 } catch (e: Exception) {
                     Log.e(TAG, "Failed to open external URL: ${e.message}")
+                    android.widget.Toast.makeText(this@WikiActivity, "No app found to handle this link", android.widget.Toast.LENGTH_SHORT).show()
                 }
                 return true
             }
@@ -4721,14 +4735,15 @@ class WikiActivity : AppCompatActivity() {
                         return@evaluateJavascript
                     }
                     Log.d(TAG, "Injecting scripts for: $url")
+                    // Inject the palette monitoring script FIRST — must run before media
+                    // scripts which can saturate WebView connections and cause timeouts
+                    view.evaluateJavascript(paletteScript, null)
                     // Inject the external attachment handler
                     view.evaluateJavascript(externalAttachmentScript, null)
                     // Inject the saver for single-file wikis
                     if (saverScript.isNotEmpty()) {
                         view.evaluateJavascript(saverScript, null)
                     }
-                    // Inject the palette monitoring script
-                    view.evaluateJavascript(paletteScript, null)
                     // Inject the fullscreen toggle handler
                     view.evaluateJavascript(fullscreenScript, null)
                     // Clipboard override is now in the main settings script (settingsScript)
@@ -4746,6 +4761,8 @@ class WikiActivity : AppCompatActivity() {
                     injectServerHealthCheck()
                     // Inject inline PDF.js and Plyr enhancement
                     view.evaluateJavascript(inlineMediaScript, null)
+                    // Import pending Quick Captures
+                    importPendingCaptures()
                 }
             }
         }
@@ -4975,6 +4992,13 @@ class WikiActivity : AppCompatActivity() {
         // by attempting a quick HTTP request. If it fails, show a reload button.
         if (isFolder) {
             checkFolderServerHealth()
+        }
+
+        // Check for pending captures if wiki is loaded
+        if (::webView.isInitialized) {
+            webView.evaluateJavascript("typeof \$tw!=='undefined'&&\$tw.wiki?'ready':'no'") { r ->
+                if (r?.contains("ready") == true) importPendingCaptures()
+            }
         }
     }
 
@@ -5666,6 +5690,144 @@ class WikiActivity : AppCompatActivity() {
             Log.e(TAG, "Failed to parse wiki path JSON: ${e.message}")
             // Try as plain URI string
             Pair(Uri.parse(pathJson), null)
+        }
+    }
+
+    /**
+     * Escape a string for safe inclusion in a JavaScript single-quoted string literal.
+     */
+    private fun escapeForJs(s: String): String =
+        s.replace("\\", "\\\\")
+         .replace("'", "\\'")
+         .replace("\n", "\\n")
+         .replace("\r", "\\r")
+         .replace("\t", "\\t")
+
+    /**
+     * Import pending Quick Captures that target this wiki.
+     * Captures are JSON files in {filesDir}/captures/ written by CaptureActivity.
+     * Auto-deletes captures older than 7 days.
+     */
+    private fun importPendingCaptures() {
+        val capturesDir = File(filesDir, "captures")
+        if (!capturesDir.exists() || !capturesDir.isDirectory) return
+        val myPath = wikiPath ?: return
+        val captureFiles = capturesDir.listFiles { f ->
+            f.name.startsWith("capture_") && f.name.endsWith(".json")
+        } ?: return
+
+        // Read and delete files immediately to prevent duplicate imports
+        // (both onPageFinished and onResume can call this concurrently)
+        val now = System.currentTimeMillis()
+        val captureJsons = mutableListOf<JSONObject>()
+        for (f in captureFiles) {
+            try {
+                val json = JSONObject(f.readText())
+                if (now - json.optLong("created", now) > 7 * 86400000L) {
+                    f.delete(); continue  // expired
+                }
+                if (json.optString("target_wiki_path") == myPath) {
+                    captureJsons.add(json)
+                    f.delete()  // Delete immediately after reading
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "Skipping malformed capture file ${f.name}: ${e.message}")
+            }
+        }
+        if (captureJsons.isEmpty()) return
+
+        // Separate file imports (native TW import) from direct tiddler captures
+        val directCaptures = mutableListOf<JSONObject>()
+        val fileImports = mutableListOf<JSONObject>()
+        for (json in captureJsons) {
+            if (json.has("import_file")) {
+                fileImports.add(json)
+            } else {
+                directCaptures.add(json)
+            }
+        }
+
+        // Handle direct tiddler captures (text, images, etc.)
+        if (directCaptures.isNotEmpty()) {
+            val js = StringBuilder("(function(){if(typeof \$tw==='undefined'||!\$tw.wiki)return 0;var c=0;")
+            for (json in directCaptures) {
+                try {
+                    val title = escapeForJs(json.optString("title", "Untitled Capture"))
+                    val text = escapeForJs(json.optString("text", ""))
+                    val tags = escapeForJs(json.optString("tags", ""))
+                    val type = escapeForJs(json.optString("type", "text/vnd.tiddlywiki"))
+                    val sourceUrl = escapeForJs(json.optString("source_url", ""))
+                    val canonicalUri = escapeForJs(json.optString("_canonical_uri", ""))
+                    val created = json.optLong("created", now)
+                    js.append("try{var f={title:'$title',text:'$text',tags:'$tags',type:'$type'")
+                    if (sourceUrl.isNotEmpty()) js.append(",'source-url':'$sourceUrl'")
+                    if (canonicalUri.isNotEmpty()) js.append(",'_canonical_uri':'$canonicalUri'")
+                    js.append(",created:new Date($created),modified:new Date()};")
+                    js.append("\$tw.wiki.addTiddler(new \$tw.Tiddler(f));c++;}catch(e){}")
+                } catch (e: Exception) {
+                    Log.w(TAG, "Skipping capture: ${e.message}")
+                }
+            }
+            js.append("return c;})()")
+
+            webView.evaluateJavascript(js.toString()) { result ->
+                val count = result?.trim('"')?.toIntOrNull() ?: 0
+                if (count > 0) {
+                    runOnUiThread {
+                        android.widget.Toast.makeText(this, getString(R.string.capture_imported, count), android.widget.Toast.LENGTH_SHORT).show()
+                    }
+                }
+            }
+        }
+
+        // Handle file imports — use TiddlyWiki's native import via tm-import-tiddlers
+        // The event must be dispatched from a leaf widget so it bubbles UP to NavigatorWidget,
+        // which handles creating $:/Import, navigating to it, and merging with existing imports.
+        for (json in fileImports) {
+            val importFilename = json.optString("import_file", "")
+            val fileType = json.optString("file_type", "text/html")
+            if (importFilename.isEmpty()) continue
+
+            val importFile = File(capturesDir, importFilename)
+            if (!importFile.exists()) continue
+
+            try {
+                val contentBytes = importFile.readBytes()
+                importFile.delete()
+
+                // Base64 encode to safely pass content to JS (avoids all escaping issues)
+                val base64Content = android.util.Base64.encodeToString(contentBytes, android.util.Base64.NO_WRAP)
+                val safeFileType = escapeForJs(fileType)
+
+                // Poll until TW5 widget tree is ready, then dispatch tm-import-tiddlers
+                // from a leaf widget so it bubbles up through NavigatorWidget.
+                // NavigatorWidget's handler creates $:/Import, navigates to it, and merges.
+                val importJs = "(function check(){" +
+                    "if(typeof \$tw==='undefined'||!\$tw.wiki||!\$tw.rootWidget" +
+                    "||!\$tw.rootWidget.children||!\$tw.rootWidget.children.length){" +
+                    "setTimeout(check,200);return;}" +
+                    "try{" +
+                    "var b=atob('$base64Content');" +
+                    "var bytes=new Uint8Array(b.length);" +
+                    "for(var i=0;i<b.length;i++)bytes[i]=b.charCodeAt(i);" +
+                    "var content=new TextDecoder().decode(bytes);" +
+                    "var tiddlers=\$tw.wiki.deserializeTiddlers('$safeFileType',content);" +
+                    "if(!tiddlers||tiddlers.length===0)return;" +
+                    // Find a leaf widget and dispatch — event bubbles up to NavigatorWidget
+                    "var w=\$tw.rootWidget;" +
+                    "while(w.children&&w.children.length>0)w=w.children[0];" +
+                    "w.dispatchEvent({type:'tm-import-tiddlers',param:JSON.stringify(tiddlers)});" +
+                    "}catch(e){console.error('Import error:',e);}" +
+                    "})()"
+
+                webView.evaluateJavascript(importJs, null)
+                runOnUiThread {
+                    android.widget.Toast.makeText(this, "Importing file...", android.widget.Toast.LENGTH_SHORT).show()
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to process import file $importFilename: ${e.message}")
+                importFile.delete()
+            }
         }
     }
 }

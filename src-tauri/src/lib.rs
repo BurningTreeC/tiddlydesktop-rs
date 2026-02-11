@@ -5449,7 +5449,7 @@ async fn check_for_updates() -> Result<UpdateCheckResult, String> {
 
 /// Android version - separate from desktop versioning (must match build.gradle.kts versionName)
 #[cfg(target_os = "android")]
-const ANDROID_VERSION: &str = "0.0.5";
+const ANDROID_VERSION: &str = "0.0.6";
 
 /// Check for updates on Android via version file on GitHub, linking to Play Store
 #[cfg(target_os = "android")]
@@ -6560,16 +6560,19 @@ window.__SAVE_URL__ = "{save_url}";
 
                     // Try Tauri IPC first (works reliably on all platforms)
                     if(window.__TAURI__ && window.__TAURI__.core && window.__TAURI__.core.invoke) {{
-                        window.__TAURI__.core.invoke('save_wiki', {{
+                        var savePromise = window.__TAURI__.core.invoke('save_wiki', {{
                             path: wikiPath,
                             content: text
                         }}).then(function() {{
+                            window.__TD_SAVE_PROMISE__ = null;
                             callback(null);
                             chainCloudSavers();
                         }}).catch(function(err) {{
+                            window.__TD_SAVE_PROMISE__ = null;
                             // IPC failed, try fetch as fallback
                             saveViaFetch(text, callback);
                         }});
+                        window.__TD_SAVE_PROMISE__ = savePromise;
                     }} else {{
                         // No Tauri IPC, use fetch
                         saveViaFetch(text, callback);
@@ -6663,6 +6666,23 @@ window.__SAVE_URL__ = "{save_url}";
         }}
 
         addToSaverHandler();
+
+        // Intercept tm-browser-refresh to wait for any pending save to complete
+        // Plugin "save and reload" buttons dispatch tm-save-wiki then tm-browser-refresh
+        // sequentially, but the save is async — reload would happen before save finishes.
+        $tw.rootWidget.addEventListener("tm-browser-refresh", function(event) {{
+            if (window.__TD_SAVE_PROMISE__) {{
+                console.log('[TiddlyDesktop] Waiting for save to complete before reload...');
+                window.__TD_SAVE_PROMISE__.then(function() {{
+                    setTimeout(function() {{ window.location.reload(); }}, 100);
+                }}).catch(function() {{
+                    setTimeout(function() {{ window.location.reload(); }}, 100);
+                }});
+            }} else {{
+                window.location.reload();
+            }}
+            return false;
+        }});
     }}
 
     registerWithTiddlyWiki();

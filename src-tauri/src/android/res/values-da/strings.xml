@@ -1,0 +1,32 @@
+<resources>
+    <string name="capture_title">Hurtig opsamling</string>
+    <string name="capture_unsupported_type">Ikke understøttet indholdstype</string>
+    <string name="capture_no_text">Ingen tekst at opsamle</string>
+    <string name="capture_no_image">Intet billede at opsamle</string>
+    <string name="capture_failed_load_image">Kunne ikke indlæse billedet</string>
+    <string name="capture_no_file">Ingen fil at opsamle</string>
+    <string name="capture_no_file_import">Ingen fil at importere</string>
+    <string name="capture_import_format">Importér: %s</string>
+    <string name="capture_import_note">TiddlyWiki håndterer importen.</string>
+    <string name="capture_untitled">Unavngivet opsamling</string>
+    <string name="capture_no_wikis">Ingen wikier fundet. Åbn en wiki først.</string>
+    <string name="capture_select_wiki">Vælg en wiki</string>
+    <string name="capture_saved_title">Opsamlet</string>
+    <string name="capture_saved_message">Gemt i %s</string>
+    <string name="capture_failed_copy">Kunne ikke kopiere filen til bilagsmappen</string>
+    <string name="capture_no_attachments">Denne wiki understøtter ikke eksterne bilag. Brug en mappewiki til at opsamle videoer.</string>
+    <string name="capture_failed_read">Kunne ikke læse filen</string>
+    <string name="capture_failed_save">Kunne ikke gemme opsamlingen</string>
+    <string name="capture_imported">%d opsamling(er) importeret</string>
+    <string name="label_title">Titel</string>
+    <string name="label_tags">Tags</string>
+    <string name="label_save_to">Gem i</string>
+    <string name="hint_tiddler_title">Tiddler-titel</string>
+    <string name="hint_tags">Tag1 Tag2</string>
+    <string name="btn_cancel">Annullér</string>
+    <string name="btn_save">Gem</string>
+    <string name="btn_ok">OK</string>
+    <string name="btn_open_wiki">Åbn wiki</string>
+    <string name="open_as_wiki">Åbn som wiki</string>
+    <string name="import_into_wiki">Importér til wiki</string>
+</resources>

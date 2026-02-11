@@ -1,0 +1,32 @@
+<resources>
+    <string name="capture_title">Snabbfångst</string>
+    <string name="capture_unsupported_type">Innehållstyp stöds inte</string>
+    <string name="capture_no_text">Ingen text att fånga</string>
+    <string name="capture_no_image">Ingen bild att fånga</string>
+    <string name="capture_failed_load_image">Kunde inte ladda bilden</string>
+    <string name="capture_no_file">Ingen fil att fånga</string>
+    <string name="capture_no_file_import">Ingen fil att importera</string>
+    <string name="capture_import_format">Importera: %s</string>
+    <string name="capture_import_note">TiddlyWiki hanterar importen.</string>
+    <string name="capture_untitled">Namnlös fångst</string>
+    <string name="capture_no_wikis">Inga wikis hittades. Öppna en wiki först.</string>
+    <string name="capture_select_wiki">Välj en wiki</string>
+    <string name="capture_saved_title">Fångad</string>
+    <string name="capture_saved_message">Sparad i %s</string>
+    <string name="capture_failed_copy">Kunde inte kopiera filen till bilagemappen</string>
+    <string name="capture_no_attachments">Denna wiki stöder inte externa bilagor. Använd en mappwiki för att fånga videor.</string>
+    <string name="capture_failed_read">Kunde inte läsa filen</string>
+    <string name="capture_failed_save">Kunde inte spara fångsten</string>
+    <string name="capture_imported">%d fångst(er) importerad(e)</string>
+    <string name="label_title">Titel</string>
+    <string name="label_tags">Taggar</string>
+    <string name="label_save_to">Spara i</string>
+    <string name="hint_tiddler_title">Tiddler-titel</string>
+    <string name="hint_tags">Tagg1 Tagg2</string>
+    <string name="btn_cancel">Avbryt</string>
+    <string name="btn_save">Spara</string>
+    <string name="btn_ok">OK</string>
+    <string name="btn_open_wiki">Öppna wiki</string>
+    <string name="open_as_wiki">Öppna som wiki</string>
+    <string name="import_into_wiki">Importera till wiki</string>
+</resources>

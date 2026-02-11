@@ -1,0 +1,32 @@
+<resources>
+    <string name="capture_title">Γρήγορη σύλληψη</string>
+    <string name="capture_unsupported_type">Μη υποστηριζόμενος τύπος περιεχομένου</string>
+    <string name="capture_no_text">Δεν υπάρχει κείμενο για σύλληψη</string>
+    <string name="capture_no_image">Δεν υπάρχει εικόνα για σύλληψη</string>
+    <string name="capture_failed_load_image">Αποτυχία φόρτωσης εικόνας</string>
+    <string name="capture_no_file">Δεν υπάρχει αρχείο για σύλληψη</string>
+    <string name="capture_no_file_import">Δεν υπάρχει αρχείο για εισαγωγή</string>
+    <string name="capture_import_format">Εισαγωγή: %s</string>
+    <string name="capture_import_note">Το TiddlyWiki θα διαχειριστεί την εισαγωγή.</string>
+    <string name="capture_untitled">Σύλληψη χωρίς τίτλο</string>
+    <string name="capture_no_wikis">Δεν βρέθηκαν wiki. Ανοίξτε πρώτα ένα wiki.</string>
+    <string name="capture_select_wiki">Επιλέξτε ένα wiki</string>
+    <string name="capture_saved_title">Συλλήφθηκε</string>
+    <string name="capture_saved_message">Αποθηκεύτηκε στο %s</string>
+    <string name="capture_failed_copy">Αποτυχία αντιγραφής αρχείου στον φάκελο συνημμένων</string>
+    <string name="capture_no_attachments">Αυτό το wiki δεν υποστηρίζει εξωτερικά συνημμένα. Χρησιμοποιήστε wiki φακέλου για σύλληψη βίντεο.</string>
+    <string name="capture_failed_read">Αποτυχία ανάγνωσης αρχείου</string>
+    <string name="capture_failed_save">Αποτυχία αποθήκευσης σύλληψης</string>
+    <string name="capture_imported">Εισήχθησαν %d σύλληψη(-εις)</string>
+    <string name="label_title">Τίτλος</string>
+    <string name="label_tags">Ετικέτες</string>
+    <string name="label_save_to">Αποθήκευση σε</string>
+    <string name="hint_tiddler_title">Τίτλος tiddler</string>
+    <string name="hint_tags">Ετικέτα1 Ετικέτα2</string>
+    <string name="btn_cancel">Ακύρωση</string>
+    <string name="btn_save">Αποθήκευση</string>
+    <string name="btn_ok">OK</string>
+    <string name="btn_open_wiki">Άνοιγμα wiki</string>
+    <string name="open_as_wiki">Άνοιγμα ως wiki</string>
+    <string name="import_into_wiki">Εισαγωγή σε wiki</string>
+</resources>

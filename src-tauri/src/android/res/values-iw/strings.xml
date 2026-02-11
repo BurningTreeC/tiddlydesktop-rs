@@ -1,0 +1,32 @@
+<resources>
+    <string name="capture_title">לכידה מהירה</string>
+    <string name="capture_unsupported_type">סוג תוכן לא נתמך</string>
+    <string name="capture_no_text">אין טקסט ללכידה</string>
+    <string name="capture_no_image">אין תמונה ללכידה</string>
+    <string name="capture_failed_load_image">טעינת התמונה נכשלה</string>
+    <string name="capture_no_file">אין קובץ ללכידה</string>
+    <string name="capture_no_file_import">אין קובץ לייבוא</string>
+    <string name="capture_import_format">ייבוא: %s</string>
+    <string name="capture_import_note">TiddlyWiki יטפל בייבוא.</string>
+    <string name="capture_untitled">לכידה ללא כותרת</string>
+    <string name="capture_no_wikis">לא נמצאו ויקי. פתח ויקי קודם.</string>
+    <string name="capture_select_wiki">בחר ויקי</string>
+    <string name="capture_saved_title">נלכד</string>
+    <string name="capture_saved_message">נשמר ב-%s</string>
+    <string name="capture_failed_copy">העתקת הקובץ לתיקיית הקבצים המצורפים נכשלה</string>
+    <string name="capture_no_attachments">ויקי זה אינו תומך בקבצים מצורפים חיצוניים. השתמש בתיקיית ויקי ללכידת סרטונים.</string>
+    <string name="capture_failed_read">קריאת הקובץ נכשלה</string>
+    <string name="capture_failed_save">שמירת הלכידה נכשלה</string>
+    <string name="capture_imported">יובאו %d לכידה/ות</string>
+    <string name="label_title">כותרת</string>
+    <string name="label_tags">תגיות</string>
+    <string name="label_save_to">שמור ב</string>
+    <string name="hint_tiddler_title">כותרת Tiddler</string>
+    <string name="hint_tags">תגית1 תגית2</string>
+    <string name="btn_cancel">ביטול</string>
+    <string name="btn_save">שמירה</string>
+    <string name="btn_ok">אישור</string>
+    <string name="btn_open_wiki">פתח ויקי</string>
+    <string name="open_as_wiki">פתח כוויקי</string>
+    <string name="import_into_wiki">ייבוא לוויקי</string>
+</resources>

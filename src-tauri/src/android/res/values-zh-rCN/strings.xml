@@ -1,0 +1,32 @@
+<resources>
+    <string name="capture_title">快速捕获</string>
+    <string name="capture_unsupported_type">不支持的内容类型</string>
+    <string name="capture_no_text">没有可捕获的文本</string>
+    <string name="capture_no_image">没有可捕获的图片</string>
+    <string name="capture_failed_load_image">无法加载图片</string>
+    <string name="capture_no_file">没有可捕获的文件</string>
+    <string name="capture_no_file_import">没有可导入的文件</string>
+    <string name="capture_import_format">导入：%s</string>
+    <string name="capture_import_note">TiddlyWiki 将处理导入。</string>
+    <string name="capture_untitled">未命名捕获</string>
+    <string name="capture_no_wikis">未找到维基。请先打开一个维基。</string>
+    <string name="capture_select_wiki">请选择一个维基</string>
+    <string name="capture_saved_title">已捕获</string>
+    <string name="capture_saved_message">已保存到 %s</string>
+    <string name="capture_failed_copy">无法将文件复制到附件文件夹</string>
+    <string name="capture_no_attachments">此维基不支持外部附件。请使用文件夹维基来捕获视频。</string>
+    <string name="capture_failed_read">无法读取文件</string>
+    <string name="capture_failed_save">无法保存捕获</string>
+    <string name="capture_imported">已导入 %d 个捕获</string>
+    <string name="label_title">标题</string>
+    <string name="label_tags">标签</string>
+    <string name="label_save_to">保存到</string>
+    <string name="hint_tiddler_title">条目标题</string>
+    <string name="hint_tags">标签1 标签2</string>
+    <string name="btn_cancel">取消</string>
+    <string name="btn_save">保存</string>
+    <string name="btn_ok">确定</string>
+    <string name="btn_open_wiki">打开维基</string>
+    <string name="open_as_wiki">作为维基打开</string>
+    <string name="import_into_wiki">导入到维基</string>
+</resources>

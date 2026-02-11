@@ -1,0 +1,32 @@
+<resources>
+    <string name="capture_title">त्वरित कैप्चर</string>
+    <string name="capture_unsupported_type">असमर्थित सामग्री प्रकार</string>
+    <string name="capture_no_text">कैप्चर करने के लिए कोई टेक्स्ट नहीं</string>
+    <string name="capture_no_image">कैप्चर करने के लिए कोई छवि नहीं</string>
+    <string name="capture_failed_load_image">छवि लोड करने में विफल</string>
+    <string name="capture_no_file">कैप्चर करने के लिए कोई फ़ाइल नहीं</string>
+    <string name="capture_no_file_import">आयात करने के लिए कोई फ़ाइल नहीं</string>
+    <string name="capture_import_format">आयात: %s</string>
+    <string name="capture_import_note">TiddlyWiki आयात को संभालेगा।</string>
+    <string name="capture_untitled">शीर्षकहीन कैप्चर</string>
+    <string name="capture_no_wikis">कोई विकी नहीं मिला। पहले एक विकी खोलें।</string>
+    <string name="capture_select_wiki">कृपया एक विकी चुनें</string>
+    <string name="capture_saved_title">कैप्चर किया गया</string>
+    <string name="capture_saved_message">%s में सहेजा गया</string>
+    <string name="capture_failed_copy">फ़ाइल को अनुलग्नक फ़ोल्डर में कॉपी करने में विफल</string>
+    <string name="capture_no_attachments">यह विकी बाहरी अनुलग्नकों का समर्थन नहीं करता। वीडियो कैप्चर करने के लिए फ़ोल्डर विकी का उपयोग करें।</string>
+    <string name="capture_failed_read">फ़ाइल पढ़ने में विफल</string>
+    <string name="capture_failed_save">कैप्चर सहेजने में विफल</string>
+    <string name="capture_imported">%d कैप्चर आयात किए गए</string>
+    <string name="label_title">शीर्षक</string>
+    <string name="label_tags">टैग</string>
+    <string name="label_save_to">यहाँ सहेजें</string>
+    <string name="hint_tiddler_title">Tiddler शीर्षक</string>
+    <string name="hint_tags">टैग1 टैग2</string>
+    <string name="btn_cancel">रद्द करें</string>
+    <string name="btn_save">सहेजें</string>
+    <string name="btn_ok">ठीक है</string>
+    <string name="btn_open_wiki">विकी खोलें</string>
+    <string name="open_as_wiki">विकी के रूप में खोलें</string>
+    <string name="import_into_wiki">विकी में आयात करें</string>
+</resources>

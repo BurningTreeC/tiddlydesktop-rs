@@ -1,12 +1,20 @@
 package com.burningtreec.tiddlydesktop_rs
 
 import android.app.Activity
-import android.app.AlertDialog
 import android.content.Intent
+import android.graphics.drawable.GradientDrawable
 import android.net.Uri
 import android.os.Bundle
 import android.util.Log
+import android.util.TypedValue
+import android.view.ContextThemeWrapper
+import android.view.Gravity
+import android.view.ViewGroup
+import android.widget.FrameLayout
+import android.widget.LinearLayout
+import android.widget.TextView
 import android.widget.Toast
+import com.google.android.material.button.MaterialButton
 
 /**
  * Activity that handles "Open with" intents for HTML and importable files.
@@ -29,6 +37,21 @@ class OpenWithActivity : Activity() {
         private const val TAG = "OpenWithActivity"
         private const val REQUEST_CODE_PICK_FILE = 1001
         private const val REQUEST_CODE_PICK_FOLDER = 1002
+    }
+
+    // Material Design 3 color palette
+    private val colorPrimary = 0xFF6750A4.toInt()
+    private val colorOnPrimary = 0xFFFFFFFF.toInt()
+    private val colorSurface = 0xFFFFFBFE.toInt()
+    private val colorOnSurface = 0xFF1C1B1F.toInt()
+    private val colorOnSurfaceVariant = 0xFF49454F.toInt()
+    private val colorOutline = 0xFF79747E.toInt()
+    private val colorScrim = 0x52000000.toInt()
+
+    private fun dp(value: Int): Int {
+        return TypedValue.applyDimension(
+            TypedValue.COMPLEX_UNIT_DIP, value.toFloat(), resources.displayMetrics
+        ).toInt()
     }
 
     private var pendingTitle: String = "TiddlyWiki"
@@ -343,31 +366,135 @@ class OpenWithActivity : Activity() {
     }
 
     /**
-     * Show chooser dialog for HTML files: open as wiki or import into a wiki.
+     * Show Material Design 3 chooser for HTML files: open as wiki or import into a wiki.
      */
     private fun showHtmlChooser(uri: Uri) {
-        val displayName = getDisplayName(uri) ?: "file"
-        AlertDialog.Builder(this)
-            .setTitle(displayName)
-            .setItems(arrayOf(getString(R.string.open_as_wiki), getString(R.string.import_into_wiki))) { _, which ->
-                when (which) {
-                    0 -> proceedOpenAsWiki(uri)
-                    1 -> forwardToCaptureActivity(uri)
-                }
+        val rawName = getDisplayName(uri) ?: "file"
+        // Clean up filename: remove .html/.htm suffix and trailing dots (some providers strip extension)
+        val displayName = rawName.removeSuffix(".html").removeSuffix(".htm").trimEnd('.')
+            .ifEmpty { "file" }
+        val materialCtx = ContextThemeWrapper(this, com.google.android.material.R.style.Theme_MaterialComponents)
+
+        // Scrim overlay (tap to dismiss)
+        val overlay = FrameLayout(this).apply {
+            setBackgroundColor(colorScrim)
+            setOnClickListener { finish() }
+        }
+
+        // Card background
+        val cardBg = GradientDrawable().apply {
+            setColor(colorSurface)
+            cornerRadius = dp(28).toFloat()
+        }
+
+        // Card layout
+        val card = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            background = cardBg
+            setPadding(dp(24), dp(24), dp(24), dp(24))
+            isClickable = true
+            elevation = dp(6).toFloat()
+        }
+
+        // Filename title
+        card.addView(TextView(this@OpenWithActivity).apply {
+            text = displayName
+            setTextColor(colorOnSurface)
+            textSize = 22f
+            setTypeface(typeface, android.graphics.Typeface.BOLD)
+        })
+
+        // Spacer 16dp
+        card.addView(android.view.View(this).apply {
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(16)
+            )
+        })
+
+        // "Open as Wiki" — filled primary button
+        card.addView(MaterialButton(materialCtx).apply {
+            text = getString(R.string.open_as_wiki)
+            setOnClickListener { proceedOpenAsWiki(uri) }
+            cornerRadius = dp(20)
+            setBackgroundColor(colorPrimary)
+            setTextColor(colorOnPrimary)
+            elevation = dp(2).toFloat()
+        }, LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.WRAP_CONTENT
+        ))
+
+        // Spacer 12dp
+        card.addView(android.view.View(this).apply {
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(12)
+            )
+        })
+
+        // "Import into Wiki" — outlined button
+        card.addView(MaterialButton(materialCtx, null, com.google.android.material.R.attr.materialButtonOutlinedStyle).apply {
+            text = getString(R.string.import_into_wiki)
+            setOnClickListener { forwardToCaptureActivity(uri, "text/html") }
+            cornerRadius = dp(20)
+            setStrokeColorResource(android.R.color.transparent)
+            setTextColor(colorPrimary)
+        }, LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.WRAP_CONTENT
+        ))
+
+        // Spacer 8dp
+        card.addView(android.view.View(this).apply {
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(8)
+            )
+        })
+
+        // "Cancel" — text-only button, end-aligned
+        card.addView(MaterialButton(materialCtx, null, com.google.android.material.R.attr.materialButtonOutlinedStyle).apply {
+            text = getString(R.string.btn_cancel)
+            setOnClickListener { finish() }
+            cornerRadius = dp(20)
+            setStrokeColorResource(android.R.color.transparent)
+            setTextColor(colorOnSurfaceVariant)
+        }, LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.WRAP_CONTENT,
+            ViewGroup.LayoutParams.WRAP_CONTENT
+        ).apply { gravity = Gravity.END })
+
+        // Card container with max width and centering
+        val cardParams = FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.WRAP_CONTENT
+        ).apply {
+            gravity = Gravity.CENTER
+            val maxWidthPx = dp(400)
+            val screenWidth = resources.displayMetrics.widthPixels
+            val margin = dp(32)
+            if (screenWidth > maxWidthPx + margin * 2) {
+                leftMargin = (screenWidth - maxWidthPx) / 2
+                rightMargin = (screenWidth - maxWidthPx) / 2
+            } else {
+                leftMargin = margin
+                rightMargin = margin
             }
-            .setOnCancelListener { finish() }
-            .show()
+            topMargin = margin
+            bottomMargin = margin
+        }
+        overlay.addView(card, cardParams)
+
+        setContentView(overlay)
     }
 
     /**
      * Forward file to CaptureActivity for import into a wiki via TW5 native import.
      */
-    private fun forwardToCaptureActivity(uri: Uri) {
-        Log.d(TAG, "Forwarding importable file to CaptureActivity: $uri")
+    private fun forwardToCaptureActivity(uri: Uri, mimeType: String? = null) {
+        Log.d(TAG, "Forwarding importable file to CaptureActivity: $uri (mimeType=$mimeType)")
         val captureIntent = Intent(this, CaptureActivity::class.java).apply {
             action = Intent.ACTION_SEND
             putExtra(Intent.EXTRA_STREAM, uri)
-            type = contentResolver.getType(uri) ?: intent.type ?: "*/*"
+            type = mimeType ?: contentResolver.getType(uri) ?: intent.type ?: "*/*"
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         }
         startActivity(captureIntent)

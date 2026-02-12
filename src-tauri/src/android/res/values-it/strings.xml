@@ -14,7 +14,8 @@
     <string name="capture_saved_title">Catturato</string>
     <string name="capture_saved_message">Salvato in %s</string>
     <string name="capture_failed_copy">Impossibile copiare il file nella cartella degli allegati</string>
-    <string name="capture_no_attachments">Questo wiki non supporta allegati esterni. Usa un wiki-cartella per catturare video.</string>
+    <string name="capture_no_attachments">Questo wiki non supporta allegati esterni. Usa un wiki-cartella per file di grandi dimensioni.</string>
+    <string name="capture_multiple_items">%d elementi</string>
     <string name="capture_failed_read">Impossibile leggere il file</string>
     <string name="capture_failed_save">Impossibile salvare la cattura</string>
     <string name="capture_imported">%d cattura/e importata/e</string>
@@ -29,4 +30,5 @@
     <string name="btn_open_wiki">Apri wiki</string>
     <string name="open_as_wiki">Apri come wiki</string>
     <string name="import_into_wiki">Importa in un wiki</string>
+    <string name="no_app_for_link">Nessuna app trovata per aprire questo link</string>
 </resources>

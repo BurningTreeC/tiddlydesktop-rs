@@ -14,7 +14,8 @@
     <string name="capture_saved_title">Erfasst</string>
     <string name="capture_saved_message">Gespeichert in %s</string>
     <string name="capture_failed_copy">Datei konnte nicht in den Anhangsordner kopiert werden</string>
-    <string name="capture_no_attachments">Dieses Wiki unterstützt keine externen Anhänge. Verwende ein Ordner-Wiki für Videos.</string>
+    <string name="capture_no_attachments">Dieses Wiki unterstützt keine externen Anhänge. Verwende ein Ordner-Wiki für grosse Dateien.</string>
+    <string name="capture_multiple_items">%d Elemente</string>
     <string name="capture_failed_read">Datei konnte nicht gelesen werden</string>
     <string name="capture_failed_save">Erfassung konnte nicht gespeichert werden</string>
     <string name="capture_imported">%d Erfassung(en) importiert</string>
@@ -29,4 +30,5 @@
     <string name="btn_open_wiki">Wiki öffnen</string>
     <string name="open_as_wiki">Als Wiki öffnen</string>
     <string name="import_into_wiki">In Wiki importieren</string>
+    <string name="no_app_for_link">Keine App zum Öffnen dieses Links gefunden</string>
 </resources>

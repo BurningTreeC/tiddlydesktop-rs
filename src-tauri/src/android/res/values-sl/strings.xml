@@ -14,7 +14,8 @@
     <string name="capture_saved_title">Zajeto</string>
     <string name="capture_saved_message">Shranjeno v %s</string>
     <string name="capture_failed_copy">Datoteke ni bilo mogoče kopirati v mapo prilog</string>
-    <string name="capture_no_attachments">Ta wiki ne podpira zunanjih prilog. Za zajemanje videov uporabite wiki mapo.</string>
+    <string name="capture_no_attachments">Ta wiki ne podpira zunanjih prilog. Za velike datoteke uporabite wiki mapo.</string>
+    <string name="capture_multiple_items">%d elementov</string>
     <string name="capture_failed_read">Datoteke ni bilo mogoče prebrati</string>
     <string name="capture_failed_save">Zajemanja ni bilo mogoče shraniti</string>
     <string name="capture_imported">Uvoženih zajemanj: %d</string>
@@ -29,4 +30,5 @@
     <string name="btn_open_wiki">Odpri wiki</string>
     <string name="open_as_wiki">Odpri kot wiki</string>
     <string name="import_into_wiki">Uvozi v wiki</string>
+    <string name="no_app_for_link">Ni najdene aplikacije za odpiranje te povezave</string>
 </resources>

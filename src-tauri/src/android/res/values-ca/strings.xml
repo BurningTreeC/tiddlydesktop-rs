@@ -14,7 +14,8 @@
     <string name="capture_saved_title">Capturat</string>
     <string name="capture_saved_message">Desat a %s</string>
     <string name="capture_failed_copy">No s\'ha pogut copiar el fitxer a la carpeta d\'adjunts</string>
-    <string name="capture_no_attachments">Aquest wiki no admet adjunts externs. Fes servir un wiki de carpeta per capturar vídeos.</string>
+    <string name="capture_no_attachments">Aquest wiki no admet adjunts externs. Fes servir un wiki de carpeta per a fitxers grans.</string>
+    <string name="capture_multiple_items">%d elements</string>
     <string name="capture_failed_read">No s\'ha pogut llegir el fitxer</string>
     <string name="capture_failed_save">No s\'ha pogut desar la captura</string>
     <string name="capture_imported">%d captura/es importada/es</string>
@@ -29,4 +30,5 @@
     <string name="btn_open_wiki">Obre wiki</string>
     <string name="open_as_wiki">Obre com a wiki</string>
     <string name="import_into_wiki">Importa a un wiki</string>
+    <string name="no_app_for_link">No s\'ha trobat cap aplicació per obrir aquest enllaç</string>
 </resources>

@@ -14,7 +14,8 @@
     <string name="capture_saved_title">Opsamlet</string>
     <string name="capture_saved_message">Gemt i %s</string>
     <string name="capture_failed_copy">Kunne ikke kopiere filen til bilagsmappen</string>
-    <string name="capture_no_attachments">Denne wiki understøtter ikke eksterne bilag. Brug en mappewiki til at opsamle videoer.</string>
+    <string name="capture_no_attachments">Denne wiki understøtter ikke eksterne bilag. Brug en mappewiki til store filer.</string>
+    <string name="capture_multiple_items">%d elementer</string>
     <string name="capture_failed_read">Kunne ikke læse filen</string>
     <string name="capture_failed_save">Kunne ikke gemme opsamlingen</string>
     <string name="capture_imported">%d opsamling(er) importeret</string>
@@ -29,4 +30,5 @@
     <string name="btn_open_wiki">Åbn wiki</string>
     <string name="open_as_wiki">Åbn som wiki</string>
     <string name="import_into_wiki">Importér til wiki</string>
+    <string name="no_app_for_link">Ingen app fundet til at håndtere dette link</string>
 </resources>

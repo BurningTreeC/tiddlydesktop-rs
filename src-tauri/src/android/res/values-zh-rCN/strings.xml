@@ -14,7 +14,8 @@
     <string name="capture_saved_title">已捕获</string>
     <string name="capture_saved_message">已保存到 %s</string>
     <string name="capture_failed_copy">无法将文件复制到附件文件夹</string>
-    <string name="capture_no_attachments">此维基不支持外部附件。请使用文件夹维基来捕获视频。</string>
+    <string name="capture_no_attachments">此维基不支持外部附件。大文件请使用文件夹维基。</string>
+    <string name="capture_multiple_items">%d 个项目</string>
     <string name="capture_failed_read">无法读取文件</string>
     <string name="capture_failed_save">无法保存捕获</string>
     <string name="capture_imported">已导入 %d 个捕获</string>
@@ -29,4 +30,5 @@
     <string name="btn_open_wiki">打开维基</string>
     <string name="open_as_wiki">作为维基打开</string>
     <string name="import_into_wiki">导入到维基</string>
+    <string name="no_app_for_link">未找到可打开此链接的应用</string>
 </resources>

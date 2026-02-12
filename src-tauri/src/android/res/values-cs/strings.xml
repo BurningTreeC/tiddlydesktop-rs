@@ -14,7 +14,8 @@
     <string name="capture_saved_title">Zachyceno</string>
     <string name="capture_saved_message">Uloženo do %s</string>
     <string name="capture_failed_copy">Nepodařilo se zkopírovat soubor do složky příloh</string>
-    <string name="capture_no_attachments">Tato wiki nepodporuje externí přílohy. Pro zachycení videí použijte složkovou wiki.</string>
+    <string name="capture_no_attachments">Tato wiki nepodporuje externí přílohy. Pro velké soubory použijte složkovou wiki.</string>
+    <string name="capture_multiple_items">%d položek</string>
     <string name="capture_failed_read">Nepodařilo se přečíst soubor</string>
     <string name="capture_failed_save">Nepodařilo se uložit zachycení</string>
     <string name="capture_imported">Importováno zachycení: %d</string>
@@ -29,4 +30,5 @@
     <string name="btn_open_wiki">Otevřít wiki</string>
     <string name="open_as_wiki">Otevřít jako wiki</string>
     <string name="import_into_wiki">Importovat do wiki</string>
+    <string name="no_app_for_link">Nebyla nalezena žádná aplikace pro otevření tohoto odkazu</string>
 </resources>

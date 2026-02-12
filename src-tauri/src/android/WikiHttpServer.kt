@@ -41,15 +41,21 @@ class WikiHttpServer(
         private val portLock = Any()
 
         /**
-         * Find an available port starting from the base port.
+         * Find an available port and bind a ServerSocket to it atomically.
+         * Returns the bound ServerSocket (caller takes ownership).
+         * The binding happens inside the lock to prevent race conditions
+         * when multiple wikis are opened concurrently.
          */
-        private fun findAvailablePort(): Int {
+        private fun bindAvailablePort(): ServerSocket {
             synchronized(portLock) {
                 for (attempt in 0 until 100) {
                     val port = nextPort++
                     if (nextPort > 39999) nextPort = 39000
                     try {
-                        ServerSocket(port).use { return port }
+                        val socket = ServerSocket(port, 50,
+                            java.net.InetAddress.getByName("127.0.0.1"))
+                        socket.soTimeout = 5000
+                        return socket
                     } catch (e: Exception) {
                         // Port in use, try next
                     }
@@ -234,13 +240,9 @@ class WikiHttpServer(
             return "http://127.0.0.1:$port"
         }
 
-        port = findAvailablePort()
-        // Bind to localhost ONLY - do not expose on external interfaces
-        serverSocket = ServerSocket(port, 50, java.net.InetAddress.getByName("127.0.0.1")).apply {
-            // Set a timeout so accept() doesn't block forever
-            // This allows us to periodically check if we should still be running
-            soTimeout = 5000  // 5 second timeout
-        }
+        // Bind atomically — port allocation + socket binding in one lock
+        serverSocket = bindAvailablePort()
+        port = serverSocket!!.localPort
         executor = Executors.newCachedThreadPool()
         running.set(true)
 
@@ -478,6 +480,7 @@ class WikiHttpServer(
             sendError(output, 500, "Internal Server Error: ${e.message}")
         }
     }
+
 
     /**
      * Handle PUT / - save the wiki content.

@@ -226,6 +226,7 @@ pub fn launch_wiki_activity(
     server_url: Option<&str>,
     backups_enabled: bool,
     backup_count: u32,
+    folder_local_path: Option<&str>,
 ) -> Result<(), String> {
     eprintln!("[WikiActivity] launch_wiki_activity called:");
     eprintln!("[WikiActivity]   wiki_path: {}", wiki_path);
@@ -333,6 +334,20 @@ pub fn launch_wiki_activity(
             "(Ljava/lang/String;Ljava/lang/String;)Landroid/content/Intent;",
             &[(&extra_wiki_url).into(), (&value_wiki_url).into()],
         ).map_err(|e| format!("Failed to putExtra wiki_url: {}", e))?;
+    }
+
+    // Add local filesystem path for folder wikis (SAF wiki copied to local storage)
+    if let Some(local_path) = folder_local_path {
+        let extra_key = env.new_string("folder_local_path")
+            .map_err(|e| format!("Failed to create string: {}", e))?;
+        let extra_value = env.new_string(local_path)
+            .map_err(|e| format!("Failed to create string: {}", e))?;
+        env.call_method(
+            &intent,
+            "putExtra",
+            "(Ljava/lang/String;Ljava/lang/String;)Landroid/content/Intent;",
+            &[(&extra_key).into(), (&extra_value).into()],
+        ).map_err(|e| format!("Failed to putExtra folder_local_path: {}", e))?;
     }
 
     // Add backup settings

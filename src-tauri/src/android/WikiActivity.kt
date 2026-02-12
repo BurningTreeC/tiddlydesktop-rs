@@ -33,7 +33,9 @@ import android.widget.FrameLayout
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.ActivityResultLauncher
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.content.FileProvider
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
@@ -69,6 +71,7 @@ class WikiActivity : AppCompatActivity() {
         const val EXTRA_BACKUPS_ENABLED = "backups_enabled"
         const val EXTRA_BACKUP_COUNT = "backup_count"
         const val EXTRA_TIDDLER_TITLE = "tiddler_title"  // For tm-open-window: navigate to specific tiddler
+        const val EXTRA_FOLDER_LOCAL_PATH = "folder_local_path"  // Local filesystem path for SAF folder wikis
         private const val TAG = "WikiActivity"
 
         init {
@@ -87,6 +90,21 @@ class WikiActivity : AppCompatActivity() {
          */
         @JvmStatic
         external fun cleanupWikiLocalCopy(wikiPath: String, isFolder: Boolean)
+
+        /**
+         * Native method to restart a folder wiki's Node.js server.
+         * Returns the new server URL on success, or empty string on failure.
+         */
+        @JvmStatic
+        external fun restartFolderWikiServer(wikiPath: String): String
+
+        /**
+         * Native method to start a Node.js server from a local filesystem path.
+         * Does NOT do SAF operations — expects wiki files already at localPath.
+         * Returns the server URL on success, or "ERROR:..." on failure.
+         */
+        @JvmStatic
+        external fun startFolderWikiServerFromLocal(localPath: String, wikiPath: String): String
 
         /**
          * Check if a wiki is already open by scanning running tasks.
@@ -292,6 +310,40 @@ class WikiActivity : AppCompatActivity() {
                 Log.e(TAG, "Failed to update favicon in recent_wikis.json: ${e.message}")
             }
         }
+
+        /**
+         * Update recent_wikis.json with external attachments setting for a wiki.
+         */
+        @JvmStatic
+        fun updateRecentWikisExternalAttachments(context: Context, wikiPath: String, enabled: Boolean) {
+            try {
+                val recentWikisFile = File(context.filesDir, "recent_wikis.json")
+
+                if (!recentWikisFile.exists()) {
+                    Log.w(TAG, "recent_wikis.json does not exist, cannot update external_attachments")
+                    return
+                }
+
+                val existingWikis = JSONArray(recentWikisFile.readText())
+                var updated = false
+
+                for (i in 0 until existingWikis.length()) {
+                    val wiki = existingWikis.optJSONObject(i)
+                    if (wiki != null && wiki.optString("path") == wikiPath) {
+                        wiki.put("external_attachments", enabled)
+                        updated = true
+                        break
+                    }
+                }
+
+                if (updated) {
+                    recentWikisFile.writeText(existingWikis.toString(2))
+                    Log.d(TAG, "Updated external_attachments=$enabled for wiki: $wikiPath")
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to update external_attachments in recent_wikis.json: ${e.message}")
+            }
+        }
     }
 
     private lateinit var webView: WebView
@@ -302,6 +354,7 @@ class WikiActivity : AppCompatActivity() {
     private var wikiPath: String? = null
     private var wikiTitle: String = "TiddlyWiki"
     private var isFolder: Boolean = false
+    private var currentWikiUrl: String? = null
     private var httpServer: WikiHttpServer? = null
 
     // Fullscreen video support
@@ -317,6 +370,20 @@ class WikiActivity : AppCompatActivity() {
 
     // WakeLock to keep the HTTP server alive when app is in background
     private var wakeLock: PowerManager.WakeLock? = null
+
+    // Watchdog thread for folder wiki server — detects server death and auto-restarts
+    @Volatile private var folderWatchdogRunning = false
+    private var folderWatchdog: Thread? = null
+    // Guard to prevent concurrent folder server restart attempts
+    @Volatile private var folderServerRestarting = false
+    // Set to true once the folder wiki server is confirmed running and ready
+    @Volatile private var folderServerReady = false
+    // Local filesystem path for SAF folder wikis (Node.js reads from here)
+    private var folderLocalPath: String? = null
+
+    // SyncWatcher thread — syncs local folder wiki changes back to SAF
+    @Volatile private var syncWatcherRunning = false
+    private var syncWatcherThread: Thread? = null
 
     // File chooser support for import functionality
     private var filePathCallback: ValueCallback<Array<Uri>>? = null
@@ -416,6 +483,16 @@ class WikiActivity : AppCompatActivity() {
         @JavascriptInterface
         fun isSingleFileWiki(): Boolean {
             return !isFolder && httpServer != null
+        }
+
+        /**
+         * Restart the folder wiki's Node.js server via JNI.
+         * Returns the new server URL on success, or empty string on failure.
+         */
+        @JavascriptInterface
+        fun restartFolderServer(): String {
+            if (!isFolder) return ""
+            return attemptFolderServerRestart()
         }
 
         /**
@@ -1356,6 +1433,227 @@ class WikiActivity : AppCompatActivity() {
     }
 
     /**
+     * JavaScript interface for sharing tiddler content via Android share sheet.
+     * Shows a format picker dialog, then generates a file and shares it.
+     */
+    inner class ShareInterface {
+        @JavascriptInterface
+        fun prepareShare(title: String, fieldsJson: String, renderedHtml: String, plainText: String) {
+            runOnUiThread {
+                showShareFormatDialog(title, fieldsJson, renderedHtml, plainText)
+            }
+        }
+    }
+
+    private fun showShareFormatDialog(title: String, fieldsJson: String, renderedHtml: String, plainText: String) {
+        val formats = arrayOf(
+            "Image",
+            "Plain Text",
+            "JSON (.json)",
+            "TID (.tid)",
+            "CSV (.csv)"
+        )
+        AlertDialog.Builder(this)
+            .setTitle("Share as\u2026")
+            .setItems(formats) { _, which ->
+                when (which) {
+                    0 -> shareAsImage(title)
+                    1 -> shareAsPlainText(title, plainText)
+                    2 -> shareAsFile(title, generateJson(fieldsJson), "json", "application/json")
+                    3 -> shareAsFile(title, generateTid(fieldsJson), "tid", "text/plain")
+                    4 -> shareAsFile(title, generateCsv(fieldsJson), "csv", "text/csv")
+                }
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    private fun shareAsPlainText(title: String, text: String) {
+        try {
+            val intent = Intent(Intent.ACTION_SEND).apply {
+                type = "text/plain"
+                putExtra(Intent.EXTRA_SUBJECT, title)
+                putExtra(Intent.EXTRA_TEXT, text.ifBlank { title })
+            }
+            startActivity(Intent.createChooser(intent, null))
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to share as text: ${e.message}")
+        }
+    }
+
+    private fun shareAsImage(title: String) {
+        // Use html-to-image library directly in the wiki's WebView to capture the tiddler body.
+        // This preserves all TiddlyWiki CSS/styling and avoids off-screen WebView issues.
+        val escapedTitle = title.replace("\\", "\\\\").replace("'", "\\'").replace("\n", "\\n")
+        webView?.evaluateJavascript("""
+            (function() {
+                var title = '$escapedTitle';
+                function doCapture() {
+                    var bodyEl = null;
+                    document.querySelectorAll('[data-tiddler-title]').forEach(function(el) {
+                        if (!bodyEl && el.getAttribute('data-tiddler-title') === title) {
+                            bodyEl = el;
+                        }
+                    });
+                    if (!bodyEl) {
+                        console.error('[TiddlyDesktop] shareAsImage: tiddler element not found for: ' + title);
+                        return;
+                    }
+                    console.log('[TiddlyDesktop] shareAsImage: capturing element, size=' + bodyEl.offsetWidth + 'x' + bodyEl.offsetHeight);
+                    htmlToImage.toJpeg(bodyEl, { quality: 0.92, backgroundColor: '#ffffff' }).then(function(dataUrl) {
+                        console.log('[TiddlyDesktop] shareAsImage: captured, dataUrl length=' + dataUrl.length);
+                        TiddlyDesktopShareCapture.onImageReady(title, dataUrl);
+                    }).catch(function(err) {
+                        console.error('[TiddlyDesktop] shareAsImage: capture failed:', err);
+                    });
+                }
+                if (typeof htmlToImage !== 'undefined') {
+                    doCapture();
+                } else {
+                    var s = document.createElement('script');
+                    s.src = '/_td/html-to-image.js';
+                    s.onload = doCapture;
+                    s.onerror = function() { console.error('[TiddlyDesktop] Failed to load html-to-image.js'); };
+                    document.head.appendChild(s);
+                }
+            })();
+        """.trimIndent(), null)
+    }
+
+    /**
+     * JavaScript interface to receive captured image data from html-to-image.
+     */
+    inner class ShareCaptureInterface {
+        @JavascriptInterface
+        fun onImageReady(title: String, dataUrl: String) {
+            try {
+                val base64Data = dataUrl.substringAfter("base64,")
+                val imageBytes = android.util.Base64.decode(base64Data, android.util.Base64.DEFAULT)
+                Log.d(TAG, "shareAsImage: received ${imageBytes.size} bytes for '$title'")
+
+                val shareDir = File(cacheDir, "shared")
+                shareDir.mkdirs()
+                shareDir.listFiles()?.forEach { it.delete() }
+
+                val safeName = title.replace(Regex("[^\\w\\s.-]"), "_").take(80).trim()
+                val file = File(shareDir, "${safeName}.jpg")
+                file.writeBytes(imageBytes)
+                Log.d(TAG, "shareAsImage: JPEG saved, size=${file.length()}")
+
+                val uri = FileProvider.getUriForFile(
+                    this@WikiActivity,
+                    "${packageName}.fileprovider",
+                    file
+                )
+
+                val intent = Intent(Intent.ACTION_SEND).apply {
+                    type = "image/jpeg"
+                    putExtra(Intent.EXTRA_STREAM, uri)
+                    putExtra(Intent.EXTRA_SUBJECT, title)
+                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                }
+                runOnUiThread {
+                    startActivity(Intent.createChooser(intent, null))
+                }
+            } catch (t: Throwable) {
+                Log.e(TAG, "Failed to share image: ${t.message}", t)
+            }
+        }
+    }
+
+    private fun shareAsFile(title: String, content: String, extension: String, mimeType: String) {
+        try {
+            val shareDir = File(cacheDir, "shared")
+            shareDir.mkdirs()
+            // Clean old shared files
+            shareDir.listFiles()?.forEach { it.delete() }
+
+            val safeName = title.replace(Regex("[^\\w\\s.-]"), "_").take(80).trim()
+            val file = File(shareDir, "${safeName}.${extension}")
+            file.writeText(content, Charsets.UTF_8)
+
+            val uri = FileProvider.getUriForFile(this,
+                "${packageName}.fileprovider", file)
+
+            val intent = Intent(Intent.ACTION_SEND).apply {
+                type = mimeType
+                putExtra(Intent.EXTRA_STREAM, uri)
+                putExtra(Intent.EXTRA_SUBJECT, title)
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            startActivity(Intent.createChooser(intent, null))
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to share as file: ${e.message}")
+        }
+    }
+
+    private fun generateJson(fieldsJson: String): String {
+        return try {
+            // fieldsJson is already a JSON object of all fields — wrap in array
+            val obj = JSONObject(fieldsJson)
+            val arr = JSONArray().put(obj)
+            arr.toString(2)
+        } catch (e: Exception) {
+            fieldsJson
+        }
+    }
+
+    private fun generateTid(fieldsJson: String): String {
+        return try {
+            val obj = JSONObject(fieldsJson)
+            buildString {
+                val keys = obj.keys().asSequence().sorted().toList()
+                // Write all fields except "text" as headers
+                for (key in keys) {
+                    if (key == "text") continue
+                    appendLine("${key}: ${obj.optString(key, "")}")
+                }
+                appendLine()
+                // Write text as body
+                append(obj.optString("text", ""))
+            }
+        } catch (e: Exception) {
+            fieldsJson
+        }
+    }
+
+    private fun generateCsv(fieldsJson: String): String {
+        return try {
+            val obj = JSONObject(fieldsJson)
+            val keys = obj.keys().asSequence().sorted().toList()
+            buildString {
+                // Header row
+                appendLine(keys.joinToString(",") { csvEscape(it) })
+                // Value row
+                appendLine(keys.joinToString(",") { csvEscape(obj.optString(it, "")) })
+            }
+        } catch (e: Exception) {
+            fieldsJson
+        }
+    }
+
+    private fun csvEscape(value: String): String {
+        return if (value.contains(',') || value.contains('"') || value.contains('\n')) {
+            "\"${value.replace("\"", "\"\"")}\""
+        } else {
+            value
+        }
+    }
+
+    /**
+     * JavaScript interface for persisting wiki config changes to recent_wikis.json.
+     */
+    inner class ConfigInterface {
+        @JavascriptInterface
+        fun setExternalAttachments(enabled: Boolean) {
+            val path = wikiPath ?: return
+            Thread {
+                updateRecentWikisExternalAttachments(applicationContext, path, enabled)
+            }.start()
+        }
+    }
+
+    /**
      * Notify JavaScript of export result.
      */
     private fun notifyExportResult(success: Boolean, message: String?) {
@@ -1887,10 +2185,11 @@ class WikiActivity : AppCompatActivity() {
         wikiTitle = intent.getStringExtra(EXTRA_WIKI_TITLE) ?: "TiddlyWiki"
         isFolder = intent.getBooleanExtra(EXTRA_IS_FOLDER, false)
         val folderServerUrl = intent.getStringExtra(EXTRA_WIKI_URL)  // For folder wikis: Node.js server URL
+        folderLocalPath = intent.getStringExtra(EXTRA_FOLDER_LOCAL_PATH)  // Local path for SAF folder wikis
         val backupsEnabled = intent.getBooleanExtra(EXTRA_BACKUPS_ENABLED, true)  // Default: enabled
         val backupCount = intent.getIntExtra(EXTRA_BACKUP_COUNT, 20)  // Default: 20 backups
 
-        Log.d(TAG, "WikiActivity onCreate - path: $wikiPath, title: $wikiTitle, isFolder: $isFolder, folderUrl: $folderServerUrl, backupsEnabled: $backupsEnabled, backupCount: $backupCount")
+        Log.d(TAG, "WikiActivity onCreate - path: $wikiPath, title: $wikiTitle, isFolder: $isFolder, folderUrl: $folderServerUrl, localPath: $folderLocalPath, backupsEnabled: $backupsEnabled, backupCount: $backupCount")
 
         // Start foreground service from WikiActivity (runs in :wiki process, same as the service).
         // This is more reliable than the cross-process JNI call from the main process,
@@ -1927,21 +2226,31 @@ class WikiActivity : AppCompatActivity() {
         var wikiUrl: String
         val attachmentServerUrl: String
 
+        // Track whether we need to start the folder wiki server in a background thread
+        var folderServerNeeded = false
+
         if (isFolder) {
-            // Folder wiki: use Node.js server URL provided by Rust
-            if (folderServerUrl.isNullOrEmpty()) {
-                Log.e(TAG, "No server URL provided for folder wiki!")
+            if (!folderServerUrl.isNullOrEmpty()) {
+                // Server URL provided by caller
+                wikiUrl = folderServerUrl
+                Log.d(TAG, "Folder wiki using provided Node.js server at: $wikiUrl")
+            } else if (!folderLocalPath.isNullOrEmpty()) {
+                // Local path provided — start Node.js server in a background thread.
+                folderServerNeeded = true
+                wikiUrl = ""  // Will be set when server starts
+                Log.d(TAG, "Folder wiki: will start Node.js server from local path: $folderLocalPath")
+            } else {
+                Log.e(TAG, "No server URL or local path provided for folder wiki!")
                 finish()
                 return
             }
-            wikiUrl = folderServerUrl
-            Log.d(TAG, "Folder wiki using Node.js server at: $wikiUrl")
 
             // Also start an HTTP server for serving attachments (Node.js server doesn't have /_relative/ endpoint)
             if (wikiUri != null && parsedTreeUri != null) {
                 httpServer = WikiHttpServer(this, wikiUri!!, parsedTreeUri, true, null, false, 0)  // No backups for folder wikis
                 attachmentServerUrl = try {
-                    httpServer!!.start()                } catch (e: Exception) {
+                    httpServer!!.start()
+                } catch (e: Exception) {
                     Log.e(TAG, "Failed to start attachment server: ${e.message}")
                     // Fall back to wiki URL (attachments won't display but wiki will work)
                     wikiUrl
@@ -1984,6 +2293,10 @@ class WikiActivity : AppCompatActivity() {
         }
 
         Log.d(TAG, "Wiki opened: path=$wikiPath, url=$wikiUrl, taskId=$taskId")
+        currentWikiUrl = wikiUrl
+
+        // Clean up stale capture files (>24h old) on wiki open
+        cleanupStaleCaptureFiles()
 
         // Update recent wikis list for home screen widget
         updateRecentWikis(applicationContext, wikiPath!!, wikiTitle, isFolder)
@@ -2135,6 +2448,13 @@ class WikiActivity : AppCompatActivity() {
 
             // Add JavaScript interface for video poster extraction
             addJavascriptInterface(PosterInterface(), "TiddlyDesktopPoster")
+
+            // Add JavaScript interface for sharing tiddler content
+            addJavascriptInterface(ShareInterface(), "TiddlyDesktopShare")
+            addJavascriptInterface(ShareCaptureInterface(), "TiddlyDesktopShareCapture")
+
+            // Add JavaScript interface for persisting wiki config
+            addJavascriptInterface(ConfigInterface(), "TiddlyDesktopConfig")
         }
 
         // Use FrameLayout wrapper for fullscreen video support
@@ -2230,14 +2550,29 @@ class WikiActivity : AppCompatActivity() {
                 var SESSION_AUTH_PREFIX = "${'$'}:/plugins/tiddlydesktop-rs/session-auth/";
                 var SESSION_AUTH_SETTINGS_TAB = SESSION_AUTH_PREFIX + "settings";
 
-                // Install save hook to filter out our injected plugin
+                // Check if a tiddler title is one of our injected ephemeral tiddlers
+                function isInjectedTiddler(title) {
+                    return title === PLUGIN_TITLE ||
+                        title === CONFIG_ENABLE ||
+                        title === CONFIG_SETTINGS_TAB ||
+                        title === SESSION_AUTH_SETTINGS_TAB ||
+                        title === "${'$'}:/plugins/tiddlydesktop-rs/android-share" ||
+                        title === "${'$'}:/plugins/tiddlydesktop-rs/android-share/icon" ||
+                        title === "${'$'}:/plugins/tiddlydesktop-rs/android-share/button" ||
+                        title === "${'$'}:/config/ViewToolbarButtons/Visibility/${'$'}:/plugins/tiddlydesktop-rs/android-share/button" ||
+                        title.indexOf(SESSION_AUTH_PREFIX + "url/") === 0 ||
+                        title === SESSION_AUTH_PREFIX + "new-name" ||
+                        title === SESSION_AUTH_PREFIX + "new-url";
+                }
+
+                // Expose isInjectedTiddler globally so other scripts can use it
+                window.__tdIsInjected = isInjectedTiddler;
+
+                // Install save hook to filter out our injected tiddlers (single-file wiki saver)
                 if (!window.__tdSaveHookInstalled && ${'$'}tw.hooks) {
                     ${'$'}tw.hooks.addHook("th-saving-tiddler", function(tiddler) {
                         if (tiddler && tiddler.fields && tiddler.fields.title) {
-                            var title = tiddler.fields.title;
-                            if (title === PLUGIN_TITLE ||
-                                title.indexOf("${'$'}:/plugins/tiddlydesktop-rs/") === 0 ||
-                                title.indexOf("${'$'}:/temp/tiddlydesktop") === 0) {
+                            if (isInjectedTiddler(tiddler.fields.title)) {
                                 return null;
                             }
                         }
@@ -2245,6 +2580,22 @@ class WikiActivity : AppCompatActivity() {
                     });
                     window.__tdSaveHookInstalled = true;
                     console.log("[TiddlyDesktop] Save hook installed");
+
+                    // For folder wikis (Node.js syncer): patch getSyncedTiddlers to exclude our tiddlers.
+                    // The syncer uses getSyncedTiddlers() to determine which tiddlers to save/sync.
+                    function patchSyncer() {
+                        if (!${'$'}tw.syncer || ${'$'}tw.syncer.__tdPatched) return !!${'$'}tw.syncer;
+                        ${'$'}tw.syncer.__tdPatched = true;
+                        var origGS = ${'$'}tw.syncer.getSyncedTiddlers.bind(${'$'}tw.syncer);
+                        ${'$'}tw.syncer.getSyncedTiddlers = function(source) {
+                            return origGS(source).filter(function(t) { return !isInjectedTiddler(t); });
+                        };
+                        console.log("[TiddlyDesktop] Syncer patched: getSyncedTiddlers excludes injected tiddlers");
+                        return true;
+                    }
+                    if (!patchSyncer()) {
+                        var patchIv = setInterval(function() { if (patchSyncer()) clearInterval(patchIv); }, 100);
+                    }
                 }
 
                 // Plugin tiddlers collection
@@ -2280,6 +2631,14 @@ class WikiActivity : AppCompatActivity() {
                     ${'$'}tw.wiki.readPluginInfo();
                     ${'$'}tw.wiki.registerPluginTiddlers("plugin");
                     ${'$'}tw.wiki.unpackPluginTiddlers();
+
+                    // Mark as "in sync" so syncer won't save this plugin to disk
+                    if (${'$'}tw.syncer) {
+                        ${'$'}tw.syncer.tiddlerInfo[PLUGIN_TITLE] = {
+                            changeCount: ${'$'}tw.wiki.getChangeCount(PLUGIN_TITLE),
+                            revision: "0"
+                        };
+                    }
 
                     // Trigger UI refresh
                     ${'$'}tw.rootWidget.refresh({});
@@ -2345,9 +2704,18 @@ class WikiActivity : AppCompatActivity() {
                             var enabled = ${'$'}tw.wiki.getTiddlerText(CONFIG_ENABLE) === "yes";
                             settings.enabled = enabled;
                             saveSettings(settings);
+                            // Persist to recent_wikis.json so CaptureActivity can read it
+                            if (window.TiddlyDesktopConfig) {
+                                window.TiddlyDesktopConfig.setExternalAttachments(enabled);
+                            }
                             console.log('[TiddlyDesktop] External attachments ' + (enabled ? 'enabled' : 'disabled'));
                         }
                     });
+
+                    // Persist initial setting to recent_wikis.json
+                    if (window.TiddlyDesktopConfig) {
+                        window.TiddlyDesktopConfig.setExternalAttachments(settings.enabled !== false);
+                    }
 
                     console.log('[TiddlyDesktop] External attachments UI injected');
                 }
@@ -3747,9 +4115,13 @@ class WikiActivity : AppCompatActivity() {
                                 var pageInfo = toolbar.querySelector('.td-pdf-pageinfo');
                                 function renderPage(num, canvas) {
                                     pdfDoc.getPage(num).then(function(page) {
+                                        var dpr = iWin.devicePixelRatio || 1;
                                         var vp = page.getViewport({ scale: scale });
-                                        canvas.width = vp.width; canvas.height = vp.height;
-                                        page.render({ canvasContext: canvas.getContext('2d'), viewport: vp });
+                                        canvas.width = Math.floor(vp.width * dpr); canvas.height = Math.floor(vp.height * dpr);
+                                        canvas.style.width = Math.floor(vp.width) + 'px'; canvas.style.height = Math.floor(vp.height) + 'px';
+                                        var ctx = canvas.getContext('2d');
+                                        var transform = dpr !== 1 ? [dpr, 0, 0, dpr, 0, 0] : null;
+                                        page.render({ canvasContext: ctx, transform: transform, viewport: vp });
                                     });
                                 }
                                 function renderAll() { pageCanvases.forEach(function(c, i) { renderPage(i + 1, c); }); }
@@ -4278,11 +4650,15 @@ class WikiActivity : AppCompatActivity() {
 
                     function renderPage(num, canvas) {
                         pdfDoc.getPage(num).then(function(page) {
+                            var dpr = window.devicePixelRatio || 1;
                             var viewport = page.getViewport({ scale: scale });
-                            canvas.width = viewport.width;
-                            canvas.height = viewport.height;
+                            canvas.width = Math.floor(viewport.width * dpr);
+                            canvas.height = Math.floor(viewport.height * dpr);
+                            canvas.style.width = Math.floor(viewport.width) + 'px';
+                            canvas.style.height = Math.floor(viewport.height) + 'px';
                             var ctx = canvas.getContext('2d');
-                            page.render({ canvasContext: ctx, viewport: viewport });
+                            var transform = dpr !== 1 ? [dpr, 0, 0, dpr, 0, 0] : null;
+                            page.render({ canvasContext: ctx, transform: transform, viewport: viewport });
                         });
                     }
 
@@ -4593,6 +4969,205 @@ class WikiActivity : AppCompatActivity() {
             })();
         """.trimIndent()
 
+        // Build the Android Share toolbar button as an ephemeral TiddlyWiki plugin.
+        // Uses JSONObject to safely build the plugin JSON, then base64-encodes it
+        // to avoid escaping issues when injecting via evaluateJavascript.
+        val sharePluginJson = run {
+            val iconTiddler = JSONObject().apply {
+                put("title", "\$:/plugins/tiddlydesktop-rs/android-share/icon")
+                put("tags", "\$:/tags/Image")
+                put("type", "text/vnd.tiddlywiki")
+                put("text", "\\parameters (size:\"22pt\")\n" +
+                    "<svg width=<<size>> height=<<size>> class=\"tc-image-share tc-image-button\" viewBox=\"0 0 24 24\">" +
+                    "<path d=\"M18 16.08c-.76 0-1.44.3-1.96.77L8.91 12.7c.05-.23.09-.46.09-.7s-.04-.47-.09-.7l7.05-4.11c.54.5 1.25.81 2.04.81 1.66 0 3-1.34 3-3s-1.34-3-3-3-3 1.34-3 3c0 .24.04.47.09.7L8.04 9.81C7.5 9.31 6.79 9 6 9c-1.66 0-3 1.34-3 3s1.34 3 3 3c.79 0 1.5-.31 2.04-.81l7.12 4.16c-.05.21-.08.43-.08.65 0 1.61 1.31 2.92 2.92 2.92 1.61 0 2.92-1.31 2.92-2.92s-1.31-2.92-2.92-2.92z\"/>" +
+                    "</svg>")
+            }
+            val buttonTiddler = JSONObject().apply {
+                put("title", "\$:/plugins/tiddlydesktop-rs/android-share/button")
+                put("tags", "\$:/tags/ViewToolbar")
+                put("caption", "{{\$:/plugins/tiddlydesktop-rs/android-share/icon}} share")
+                put("description", "Share this tiddler")
+                put("text", "\\whitespace trim\n" +
+                    "<\$button message=\"tm-tiddlydesktop-rs-share\" param=<<currentTiddler>> " +
+                    "tooltip=\"Share this tiddler\" aria-label=\"Share this tiddler\" " +
+                    "class=<<tv-config-toolbar-class>>>\n" +
+                    "<%if [<tv-config-toolbar-icons>match[yes]] %>\n" +
+                    "{{\$:/plugins/tiddlydesktop-rs/android-share/icon}}\n" +
+                    "<%endif%>\n" +
+                    "<%if [<tv-config-toolbar-text>match[yes]] %>\n" +
+                    "<span class=\"tc-btn-text\">share</span>\n" +
+                    "<%endif%>\n" +
+                    "</\$button>")
+            }
+            val visibilityTiddler = JSONObject().apply {
+                put("title", "\$:/config/ViewToolbarButtons/Visibility/\$:/plugins/tiddlydesktop-rs/android-share/button")
+                put("text", "hide")
+            }
+            val tiddlersMap = JSONObject().apply {
+                put("\$:/plugins/tiddlydesktop-rs/android-share/icon", iconTiddler)
+                put("\$:/plugins/tiddlydesktop-rs/android-share/button", buttonTiddler)
+                put("\$:/config/ViewToolbarButtons/Visibility/\$:/plugins/tiddlydesktop-rs/android-share/button", visibilityTiddler)
+            }
+            JSONObject().apply {
+                put("title", "\$:/plugins/tiddlydesktop-rs/android-share")
+                put("type", "application/json")
+                put("plugin-type", "plugin")
+                put("description", "Share tiddler content via Android share sheet")
+                put("name", "Android Share")
+                put("version", "1.0.0")
+                put("text", JSONObject().put("tiddlers", tiddlersMap).toString())
+            }.toString()
+        }
+        val sharePluginBase64 = android.util.Base64.encodeToString(
+            sharePluginJson.toByteArray(Charsets.UTF_8), android.util.Base64.NO_WRAP)
+        val sharePluginScript = "(function w(){" +
+            "if(typeof \$tw==='undefined'||!\$tw.wiki||!\$tw.rootWidget){setTimeout(w,100);return;}" +
+            // Clean up stale .json/.meta files on disk from previous syncer leaks (folder wikis only).
+            // We do NOT call deleteTiddler() — the tiddler must stay in the store for functionality.
+            // REST DELETE removes the disk file; system tiddler protection prevents browser-side deletion.
+            "if(!\$tw.rootWidget.__tdShareCleanup){" +
+            "\$tw.rootWidget.__tdShareCleanup=true;" +
+            "['\$:/plugins/tiddlydesktop-rs/android-share','\$:/plugins/tiddlydesktop-rs/injected'].forEach(function(t){" +
+            "var ex=\$tw.wiki.getTiddler(t);" +
+            "if(ex&&ex.fields.revision){" +
+            "try{fetch('/bags/default/tiddlers/'+encodeURIComponent(t),{method:'DELETE',headers:{'X-Requested-With':'TiddlyWiki'}});}catch(e){}" +
+            "console.log('[TiddlyDesktop] Deleted stale disk file for:',t);" +
+            "}" +
+            "});" +
+            "}" +
+            // Register share message handler FIRST (independent of plugin setup)
+            "if(!\$tw.rootWidget.__tdShareHandler){" +
+            "\$tw.rootWidget.__tdShareHandler=true;" +
+            // Helper: resolve a URL to absolute using location.origin
+            "function __tdAbsUrl(src){" +
+            "if(!src||src.indexOf('data:')===0)return '';" +
+            "if(src.indexOf('http://127.0.0.1')===0||src.indexOf('https://127.0.0.1')===0)return src;" +
+            "if(src.indexOf('/')===0)return location.origin+src;" +
+            "if(src.indexOf('http:')===0||src.indexOf('https:')===0)return '';" +  // external URL — skip
+            "return location.origin+'/'+src;" +  // relative path
+            "}" +
+            // Async helper: convert a local URL to a data URI via fetch
+            "function __tdToDataUri(src){" +
+            "var abs=__tdAbsUrl(src);" +
+            "if(!abs)return Promise.resolve('');" +
+            "return fetch(abs).then(function(r){if(!r.ok)throw 0;return r.blob();}).then(function(b){" +
+            "return new Promise(function(ok){var r=new FileReader();r.onload=function(){ok(r.result);};r.onerror=function(){ok('');};r.readAsDataURL(b);});" +
+            "}).catch(function(){return '';});" +
+            "}" +
+            // Helper: strip local server URL prefix to get relative path
+            "function __tdRelPath(src){" +
+            "if(!src)return '';" +
+            "return decodeURIComponent(src.replace(/^https?:\\/\\/127\\.0\\.0\\.1:\\d+\\//,'').replace(/^\\/_file\\//,'').replace(/^\\/_relative\\//,''));" +
+            "}" +
+            // Async share handler: gathers fields + rendered HTML, calls prepareShare
+            "async function __tdShareTiddler(title){" +
+            // Get tiddler fields as JSON
+            "var tiddler=\$tw.wiki.getTiddler(title);" +
+            "var fields={};" +
+            "if(tiddler){for(var k in tiddler.fields){" +
+            "var v=tiddler.fields[k];" +
+            "if(v instanceof Date){fields[k]=\$tw.utils.stringifyDate(v);}else if(Array.isArray(v)){fields[k]=\$tw.utils.stringifyList(v);}else{fields[k]=String(v);}" +
+            "}}" +
+            "var fieldsJson=JSON.stringify(fields);" +
+            "var html='';var plainText=fields.text||'';" +
+            // Get the rendered body from the live DOM (fast, avoids re-rendering)
+            "if(tiddler){" +
+            "var bodyEl;document.querySelectorAll('[data-tiddler-title]').forEach(function(el){" +
+            "if(!bodyEl&&el.getAttribute('data-tiddler-title')===title){" +
+            "var b=el.querySelector('.tc-tiddler-body');if(b)bodyEl=b;" +
+            "}" +
+            "});" +
+            "if(bodyEl){html=bodyEl.innerHTML||'';}else{" +
+            // Fallback: render via TW5 API if tiddler not visible in DOM
+            "try{html=\$tw.wiki.renderTiddler('text/html',title)||'';}catch(e){console.error('[TiddlyDesktop] Share render error:',e);}" +
+            "}" +
+            "}" +
+            // Convert local URLs in rendered HTML to data URIs
+            "if(html){" +
+            "var tmp=document.createElement('div');" +
+            "tmp.innerHTML=html;" +
+            "var promises=[];" +
+            // Replace <video> with poster thumbnail as <img> (data URI)
+            "tmp.querySelectorAll('video').forEach(function(v){" +
+            "var src=v.getAttribute('src')||'';if(!src){var s=v.querySelector('source');if(s)src=s.getAttribute('src')||'';}" +
+            "if(src&&window.TiddlyDesktopPoster){" +
+            "try{" +
+            "var rel=__tdRelPath(src);" +
+            "var poster=TiddlyDesktopPoster.getPoster(rel);" +
+            "if(poster){var img=document.createElement('img');img.src=poster;img.style.maxWidth='100%';v.parentNode.replaceChild(img,v);return;}" +
+            "}catch(e){}" +
+            "}" +
+            "var t=document.createTextNode('[Video]');v.parentNode.replaceChild(t,v);" +
+            "});" +
+            // Convert <audio> src to data URI
+            "tmp.querySelectorAll('audio').forEach(function(a){" +
+            "var src=a.getAttribute('src')||'';if(!src){var s=a.querySelector('source');if(s)src=s.getAttribute('src')||'';}" +
+            "if(src&&src.indexOf('data:')!==0){" +
+            "promises.push(__tdToDataUri(src).then(function(d){" +
+            "if(d){a.removeAttribute('src');a.querySelectorAll('source').forEach(function(s){s.remove();});a.setAttribute('src',d);}" +
+            "else{var em=document.createElement('em');em.textContent='[Audio]';a.parentNode.replaceChild(em,a);}" +
+            "}));" +
+            "}});" +
+            // Convert <img> src to data URI (skip already-inlined data: URIs)
+            "tmp.querySelectorAll('img').forEach(function(img){" +
+            "var src=img.getAttribute('src')||'';" +
+            "if(src&&src.indexOf('data:')!==0){" +
+            "promises.push(__tdToDataUri(src).then(function(d){if(d)img.setAttribute('src',d);}));" +
+            "}" +
+            "});" +
+            // Convert <object>/<embed> to data URI <img> if image, else placeholder
+            "tmp.querySelectorAll('object,embed').forEach(function(obj){" +
+            "var src=obj.getAttribute('data')||obj.getAttribute('src')||'';" +
+            "var tp=(obj.getAttribute('type')||'').toLowerCase();" +
+            "if(src&&src.indexOf('data:')!==0&&(tp.indexOf('image/')===0||/\\.(png|jpe?g|gif|svg|webp|bmp)$/i.test(src))){" +
+            "var img=document.createElement('img');img.style.maxWidth='100%';" +
+            "promises.push(__tdToDataUri(src).then(function(d){if(d){img.src=d;obj.parentNode.replaceChild(img,obj);}else obj.remove();}));" +
+            "}else if(tp.indexOf('application/pdf')===0||/\\.pdf$/i.test(src)){" +
+            "var em=document.createElement('em');em.textContent='[PDF: '+(src.split('/').pop()||'document')+']';obj.parentNode.replaceChild(em,obj);" +
+            "}else{obj.remove();}" +
+            "});" +
+            // Convert <iframe> — replace with link or placeholder
+            "tmp.querySelectorAll('iframe').forEach(function(f){" +
+            "var src=f.getAttribute('src')||'';" +
+            "if(src&&src.indexOf('data:')!==0&&src.indexOf('about:')!==0){" +
+            "var a=document.createElement('a');a.href=src;a.textContent=src;a.style.display='block';f.parentNode.replaceChild(a,f);" +
+            "}else{f.remove();}" +
+            "});" +
+            // Wait for all async conversions
+            "if(promises.length)await Promise.all(promises);" +
+            "html=tmp.innerHTML||'';" +
+            "}" +
+            "console.log('[TiddlyDesktop] Share: html.length='+html.length);" +
+            "if(window.TiddlyDesktopShare)window.TiddlyDesktopShare.prepareShare(title,fieldsJson,html,plainText);" +
+            "}" +
+            "\$tw.rootWidget.addEventListener('tm-tiddlydesktop-rs-share',function(e){" +
+            "var t=e.param||e.tiddlerTitle;if(!t)return false;" +
+            "__tdShareTiddler(t);" +
+            "return true;" +
+            "});}" +
+            // Now set up the ephemeral plugin (button UI)
+            "try{" +
+            "var p=JSON.parse(atob('$sharePluginBase64'));" +
+            "\$tw.wiki.addTiddler(new \$tw.Tiddler(p));" +
+            "\$tw.wiki.registerPluginTiddlers('plugin',[p.title]);" +
+            "\$tw.wiki.unpackPluginTiddlers();" +
+            // Mark as "in sync" so syncer won't save this plugin
+            "if(\$tw.syncer){" +
+            "\$tw.syncer.tiddlerInfo[p.title]={changeCount:\$tw.wiki.getChangeCount(p.title),revision:'0'};" +
+            // Also ensure getSyncedTiddlers patch is installed (backup for saver script)
+            "if(!${'$'}tw.syncer.__tdPatched&&window.__tdIsInjected){" +
+            "\$tw.syncer.__tdPatched=true;" +
+            "var oGS=\$tw.syncer.getSyncedTiddlers.bind(\$tw.syncer);" +
+            "\$tw.syncer.getSyncedTiddlers=function(s){return oGS(s).filter(function(t){return !window.__tdIsInjected(t);});};" +
+            "console.log('[TiddlyDesktop] Syncer patched from share plugin');" +
+            "}" +
+            "}" +
+            // Trigger toolbar refresh
+            "if(\$tw.wiki.enqueueTiddlerEvent)\$tw.wiki.enqueueTiddlerEvent('\$:/plugins/tiddlydesktop-rs/android-share/button');" +
+            "console.log('[TiddlyDesktop] Share plugin injected');" +
+            "}catch(e){console.error('[TiddlyDesktop] Share plugin error:',e);}" +
+            "})()"
+
         // Add a WebViewClient that injects the script after page load
         webView.webViewClient = object : WebViewClient() {
             private fun handleUrl(url: String): Boolean {
@@ -4614,9 +5189,9 @@ class WikiActivity : AppCompatActivity() {
                     try {
                         val intent = Intent.parseUri(url, Intent.URI_INTENT_SCHEME)
                         intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                        if (intent.resolveActivity(packageManager) != null) {
+                        try {
                             startActivity(intent)
-                        } else {
+                        } catch (e: android.content.ActivityNotFoundException) {
                             // Try browser_fallback_url if no handler found
                             val fallback = intent.getStringExtra("browser_fallback_url")
                             if (fallback != null) {
@@ -4625,30 +5200,30 @@ class WikiActivity : AppCompatActivity() {
                                 startActivity(fallbackIntent)
                             } else {
                                 Log.w(TAG, "No handler found for intent:// URI and no fallback URL")
-                                android.widget.Toast.makeText(this@WikiActivity, "No app found to handle this link", android.widget.Toast.LENGTH_SHORT).show()
+                                android.widget.Toast.makeText(this@WikiActivity, getString(R.string.no_app_for_link), android.widget.Toast.LENGTH_SHORT).show()
                             }
                         }
                     } catch (e: Exception) {
                         Log.e(TAG, "Failed to parse/launch intent:// URI: ${e.message}")
-                        android.widget.Toast.makeText(this@WikiActivity, "No app found to handle this link", android.widget.Toast.LENGTH_SHORT).show()
+                        android.widget.Toast.makeText(this@WikiActivity, getString(R.string.no_app_for_link), android.widget.Toast.LENGTH_SHORT).show()
                     }
                     return true
                 }
                 // All other URLs (http, https, mailto, tel, sms, geo, etc.)
-                // open via the OS-assigned handler
+                // open via the OS-assigned handler.
+                // Note: don't use resolveActivity() — it returns null on Android 11+
+                // due to package visibility restrictions, even when a handler exists.
                 Log.d(TAG, "Opening external URL: $url (scheme=$scheme)")
                 try {
                     val intent = Intent(Intent.ACTION_VIEW, uri)
                     intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                    if (intent.resolveActivity(packageManager) != null) {
-                        startActivity(intent)
-                    } else {
-                        Log.w(TAG, "No handler found for URL: $url")
-                        android.widget.Toast.makeText(this@WikiActivity, "No app found to handle this link", android.widget.Toast.LENGTH_SHORT).show()
-                    }
+                    startActivity(intent)
+                } catch (e: android.content.ActivityNotFoundException) {
+                    Log.w(TAG, "No handler found for URL: $url")
+                    android.widget.Toast.makeText(this@WikiActivity, getString(R.string.no_app_for_link), android.widget.Toast.LENGTH_SHORT).show()
                 } catch (e: Exception) {
                     Log.e(TAG, "Failed to open external URL: ${e.message}")
-                    android.widget.Toast.makeText(this@WikiActivity, "No app found to handle this link", android.widget.Toast.LENGTH_SHORT).show()
+                    android.widget.Toast.makeText(this@WikiActivity, getString(R.string.no_app_for_link), android.widget.Toast.LENGTH_SHORT).show()
                 }
                 return true
             }
@@ -4761,8 +5336,77 @@ class WikiActivity : AppCompatActivity() {
                     injectServerHealthCheck()
                     // Inject inline PDF.js and Plyr enhancement
                     view.evaluateJavascript(inlineMediaScript, null)
+                    // Inject Android Share toolbar button (ephemeral plugin)
+                    view.evaluateJavascript(sharePluginScript, null)
                     // Import pending Quick Captures
                     importPendingCaptures()
+                }
+            }
+
+            override fun onReceivedError(view: WebView, request: WebResourceRequest, error: android.webkit.WebResourceError) {
+                super.onReceivedError(view, request, error)
+                // Only handle main frame errors for folder wikis
+                if (!isFolder || !request.isForMainFrame) return
+
+                val errorCode = error.errorCode
+                Log.w(TAG, "Folder wiki main frame error: code=$errorCode desc=${error.description} url=${request.url}")
+
+                // Connection errors (server not ready or died)
+                if (errorCode == ERROR_CONNECT || errorCode == ERROR_TIMEOUT ||
+                    errorCode == ERROR_HOST_LOOKUP || errorCode == ERROR_IO) {
+                    // Show a reconnecting page instead of the ugly Chrome error
+                    val reconnectHtml = """
+                        <html><head><meta name="viewport" content="width=device-width,initial-scale=1">
+                        <style>body{font-family:sans-serif;display:flex;align-items:center;justify-content:center;
+                        min-height:100vh;margin:0;background:#f5f5f5;color:#333}
+                        .c{text-align:center}.spinner{width:40px;height:40px;border:4px solid #ddd;
+                        border-top:4px solid #5778d8;border-radius:50%;animation:s .8s linear infinite;margin:0 auto 16px}
+                        @keyframes s{to{transform:rotate(360deg)}}</style></head>
+                        <body><div class="c"><div class="spinner"></div>
+                        <p>Connecting to wiki server...</p></div></body></html>
+                    """.trimIndent()
+                    view.loadData(reconnectHtml, "text/html", "UTF-8")
+
+                    // Try to connect: first poll the existing server (it may just be slow to start),
+                    // only restart if it's truly dead after several retries.
+                    Thread {
+                        val url = currentWikiUrl ?: return@Thread
+
+                        // Poll for existing server (it may still be starting up)
+                        for (attempt in 1..8) {
+                            Thread.sleep(2000)
+                            try {
+                                val conn = java.net.URL("$url/status").openConnection() as java.net.HttpURLConnection
+                                conn.connectTimeout = 3000
+                                conn.readTimeout = 3000
+                                val code = conn.responseCode
+                                conn.disconnect()
+                                if (code == 200) {
+                                    Log.d(TAG, "Error handler: server came alive after ${attempt * 2}s")
+                                    runOnUiThread {
+                                        view.clearHistory()
+                                        view.loadUrl(url)
+                                    }
+                                    return@Thread
+                                }
+                            } catch (_: Exception) {
+                                Log.d(TAG, "Error handler: poll attempt $attempt failed, retrying...")
+                            }
+                        }
+
+                        // Server is truly dead — restart via centralized method
+                        Log.w(TAG, "Error handler: server dead after polling, restarting...")
+                        val newUrl = attemptFolderServerRestart()
+                        if (newUrl.isNotEmpty()) {
+                            Log.d(TAG, "Error handler: server restarted at $newUrl")
+                            runOnUiThread {
+                                view.clearHistory()
+                                view.loadUrl(newUrl)
+                            }
+                        } else {
+                            Log.e(TAG, "Error handler: restart failed or already in progress")
+                        }
+                    }.start()
                 }
             }
         }
@@ -4778,9 +5422,64 @@ class WikiActivity : AppCompatActivity() {
             updateSystemBarColors("#ffffff", "#ffffff")
         }
 
-        // Load the wiki URL
-        Log.d(TAG, "Loading wiki URL: $wikiUrl")
-        webView.loadUrl(wikiUrl)
+        // Load the wiki URL (skip for folder wikis that need to start a server first)
+        if (!folderServerNeeded) {
+            Log.d(TAG, "Loading wiki URL: $wikiUrl")
+            webView.loadUrl(wikiUrl)
+        } else {
+            Log.d(TAG, "Folder wiki: waiting for Node.js server before loading")
+        }
+
+        if (folderServerNeeded && !folderLocalPath.isNullOrEmpty()) {
+            // Start Node.js server in a background thread from the local filesystem path.
+            // The SAF copy was done in the main process; this just starts Node.js.
+            val localPath = folderLocalPath!!
+            Thread {
+                Log.d(TAG, "Background thread: starting Node.js server from local path: $localPath")
+                val serverUrl = try {
+                    startFolderWikiServerFromLocal(localPath, wikiPath!!)
+                } catch (e: Throwable) {
+                    Log.e(TAG, "Background thread: failed to start folder wiki server: ${e.message}", e)
+                    "ERROR:${e.message}"
+                }
+                if (serverUrl.startsWith("ERROR:")) {
+                    Log.e(TAG, "Background thread: folder wiki server failed: $serverUrl")
+                    runOnUiThread {
+                        webView.loadData(
+                            "<html><body style='background:#1a1a2e;color:#e0e0e0;font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0'>" +
+                            "<div style='text-align:center'><h2>Failed to start wiki server</h2><p>${serverUrl.removePrefix("ERROR:")}</p></div></body></html>",
+                            "text/html", "UTF-8"
+                        )
+                    }
+                    return@Thread
+                }
+                Log.d(TAG, "Background thread: Node.js server started at: $serverUrl")
+                currentWikiUrl = serverUrl
+                runOnUiThread {
+                    if (!isFinishing) {
+                        webView.clearHistory()
+                        webView.loadUrl(serverUrl)
+                    }
+                }
+
+                // Server is up — start watchdog and sync watcher immediately
+                folderServerReady = true
+                startFolderServerWatchdog()
+                if (treeUri != null) {
+                    startSyncWatcher(localPath)
+                }
+            }.start()
+        }
+
+        // For folder wikis where server URL was already provided (server already running):
+        // start watchdog and sync watcher directly.
+        if (isFolder && !folderServerNeeded) {
+            folderServerReady = true
+            startFolderServerWatchdog()
+            if (!folderLocalPath.isNullOrEmpty() && treeUri != null) {
+                startSyncWatcher(folderLocalPath!!)
+            }
+        }
     }
 
     // Flag to track if we're waiting for unsaved changes check
@@ -4990,47 +5689,388 @@ class WikiActivity : AppCompatActivity() {
 
         // For folder wikis using Node.js server, we can check if the server is still accessible
         // by attempting a quick HTTP request. If it fails, show a reload button.
-        if (isFolder) {
-            checkFolderServerHealth()
-        }
-
-        // Check for pending captures if wiki is loaded
-        if (::webView.isInitialized) {
-            webView.evaluateJavascript("typeof \$tw!=='undefined'&&\$tw.wiki?'ready':'no'") { r ->
-                if (r?.contains("ready") == true) importPendingCaptures()
+        // Import pending captures only AFTER health check passes (otherwise JS can't run).
+        // Skip if server hasn't finished starting yet (avoids false restart during initial boot).
+        if (isFolder && folderServerReady) {
+            checkFolderServerHealth(onHealthy = {
+                // Server is healthy — safe to import captures
+                if (::webView.isInitialized) {
+                    webView.evaluateJavascript("typeof \$tw!=='undefined'&&\$tw.wiki?'ready':'no'") { r ->
+                        if (r?.contains("ready") == true) importPendingCaptures()
+                    }
+                }
+            })
+        } else {
+            // Single-file wiki: check for pending captures directly
+            if (::webView.isInitialized) {
+                webView.evaluateJavascript("typeof \$tw!=='undefined'&&\$tw.wiki?'ready':'no'") { r ->
+                    if (r?.contains("ready") == true) importPendingCaptures()
+                }
             }
         }
     }
 
     /**
-     * Check if the folder wiki's Node.js server is still accessible.
-     * If not, inject a message suggesting to reload.
+     * Attempt to restart the folder wiki server. Thread-safe: only one restart runs at a time.
+     * Returns the new URL on success, empty string on failure.
      */
-    private fun checkFolderServerHealth() {
-        val serverUrl = intent.getStringExtra(EXTRA_WIKI_URL) ?: return
+    private fun attemptFolderServerRestart(): String {
+        if (folderServerRestarting) {
+            Log.d(TAG, "Folder server restart already in progress, skipping")
+            return ""
+        }
+        folderServerRestarting = true
+        try {
+            val path = wikiPath ?: return ""
+            Log.w(TAG, "Attempting folder server restart for: $path")
+            // Use local path if available (SAF wikis), otherwise fall back to restartFolderWikiServer
+            val newUrl = if (!folderLocalPath.isNullOrEmpty()) {
+                startFolderWikiServerFromLocal(folderLocalPath!!, path)
+            } else {
+                restartFolderWikiServer(path)
+            }
+            if (newUrl.isNotEmpty() && !newUrl.startsWith("ERROR:")) {
+                Log.d(TAG, "Folder server restarted at: $newUrl")
+                currentWikiUrl = newUrl
+                return newUrl
+            }
+            Log.e(TAG, "Folder server restart returned: $newUrl")
+            return ""
+        } catch (e: Exception) {
+            Log.e(TAG, "Folder server restart failed: ${e.message}")
+            return ""
+        } finally {
+            folderServerRestarting = false
+        }
+    }
+
+    /**
+     * Check if the folder wiki's Node.js server is still accessible.
+     * Uses currentWikiUrl (updated after restarts) instead of the original intent URL.
+     * Retries up to 3 times with increasing delay to handle the server
+     * waking up after the app returns from background.
+     * If not reachable after retries, attempts to restart the server via JNI.
+     */
+    private fun checkFolderServerHealth(onHealthy: (() -> Unit)? = null) {
+        val serverUrl = currentWikiUrl ?: return
 
         Thread {
-            try {
-                val url = java.net.URL("$serverUrl/status")
-                val connection = url.openConnection() as java.net.HttpURLConnection
-                connection.connectTimeout = 2000
-                connection.readTimeout = 2000
-                connection.requestMethod = "GET"
+            val maxRetries = 3
+            val delays = longArrayOf(500, 1500, 3000) // ms before each retry
+            var healthy = false
 
-                val responseCode = connection.responseCode
-                connection.disconnect()
-
-                if (responseCode != 200) {
-                    Log.w(TAG, "Folder wiki server health check failed: $responseCode")
-                    showServerUnavailableMessage(serverUrl)
-                } else {
-                    Log.d(TAG, "Folder wiki server is healthy")
+            for (attempt in 0 until maxRetries) {
+                if (attempt > 0) {
+                    Thread.sleep(delays[attempt])
                 }
-            } catch (e: Exception) {
-                Log.w(TAG, "Folder wiki server health check failed: ${e.message}")
-                showServerUnavailableMessage(serverUrl)
+                try {
+                    val url = java.net.URL("$serverUrl/status")
+                    val connection = url.openConnection() as java.net.HttpURLConnection
+                    connection.connectTimeout = 3000
+                    connection.readTimeout = 3000
+                    connection.requestMethod = "GET"
+
+                    val responseCode = connection.responseCode
+                    connection.disconnect()
+
+                    if (responseCode == 200) {
+                        Log.d(TAG, "Folder wiki server is healthy (attempt ${attempt + 1})")
+                        healthy = true
+                        break
+                    } else {
+                        Log.w(TAG, "Folder wiki server health check attempt ${attempt + 1} failed: HTTP $responseCode")
+                    }
+                } catch (e: Exception) {
+                    Log.w(TAG, "Folder wiki server health check attempt ${attempt + 1} failed: ${e.message}")
+                }
+            }
+
+            if (healthy) {
+                if (onHealthy != null) {
+                    runOnUiThread { onHealthy() }
+                }
+            } else {
+                val newUrl = attemptFolderServerRestart()
+                if (newUrl.isNotEmpty()) {
+                    runOnUiThread {
+                        webView.clearHistory()
+                        webView.loadUrl(newUrl)
+                    }
+                } else {
+                    showServerUnavailableMessage(serverUrl)
+                }
             }
         }.start()
+    }
+
+    /**
+     * Start a background watchdog thread for folder wikis.
+     * Periodically checks if the Node.js server is reachable and auto-restarts it
+     * if it dies. This handles:
+     * - Main process killed (landing page closed, memory pressure)
+     * - User switching away from the app
+     * - Heavy wikis causing memory pressure
+     *
+     * The restarted server runs in the :wiki process (protected by foreground service),
+     * so it won't die again unless the :wiki process itself is killed.
+     */
+    private fun startFolderServerWatchdog() {
+        if (folderWatchdogRunning) return
+        folderWatchdogRunning = true
+
+        folderWatchdog = Thread {
+            Log.d(TAG, "Folder server watchdog started")
+            // Brief initial wait to let the server finish startup
+            Thread.sleep(2000)
+
+            while (folderWatchdogRunning && !isFinishing) {
+                try {
+                    Thread.sleep(5000) // Check every 5 seconds
+                } catch (_: InterruptedException) {
+                    break
+                }
+                if (!folderWatchdogRunning || isFinishing) break
+
+                val url = currentWikiUrl ?: continue
+                var healthy = false
+
+                try {
+                    val conn = java.net.URL("$url/status").openConnection() as java.net.HttpURLConnection
+                    conn.connectTimeout = 3000
+                    conn.readTimeout = 3000
+                    conn.requestMethod = "GET"
+                    val code = conn.responseCode
+                    conn.disconnect()
+                    healthy = (code == 200)
+                } catch (_: Exception) {
+                    // Server is down
+                }
+
+                if (healthy) continue
+
+                // Server is dead — attempt restart via centralized method
+                Log.w(TAG, "Watchdog: folder server unreachable at $url, restarting...")
+
+                val newUrl = attemptFolderServerRestart()
+                if (newUrl.isNotEmpty()) {
+                    Log.d(TAG, "Watchdog: server restarted at $newUrl")
+                    runOnUiThread {
+                        // Remove any error banner
+                        webView.evaluateJavascript(
+                            "document.getElementById('td-server-unavailable')?.remove()", null
+                        )
+                        webView.clearHistory()
+                        webView.loadUrl(newUrl)
+                    }
+                } else {
+                    Log.e(TAG, "Watchdog: restart failed or already in progress")
+                }
+
+                // After a restart attempt, wait longer before next check to allow server startup
+                try { Thread.sleep(10000) } catch (_: InterruptedException) { break }
+            }
+            Log.d(TAG, "Folder server watchdog stopped")
+        }.apply {
+            isDaemon = true
+            name = "FolderServerWatchdog"
+            start()
+        }
+    }
+
+    /**
+     * Stop the folder server watchdog thread.
+     */
+    private fun stopFolderServerWatchdog() {
+        folderWatchdogRunning = false
+        folderWatchdog?.interrupt()
+        folderWatchdog = null
+    }
+
+    /**
+     * Start the SyncWatcher thread that polls the local folder wiki copy for changes
+     * and syncs them back to SAF. This runs in the :wiki process so it survives
+     * main process death.
+     */
+    private fun startSyncWatcher(localPath: String) {
+        if (syncWatcherRunning) return
+        syncWatcherRunning = true
+
+        val safTreeUri = treeUri ?: return
+        val localBase = File(localPath)
+
+        syncWatcherThread = Thread {
+            Log.d(TAG, "[SyncWatcher] Started for: $localPath")
+
+            // Initial scan to populate modification times
+            val fileMtimes = mutableMapOf<String, Long>()
+            scanDirectory(localBase, localBase.absolutePath, fileMtimes)
+            Log.d(TAG, "[SyncWatcher] Initial scan found ${fileMtimes.size} files")
+
+            // Poll every 2 seconds for changes
+            while (syncWatcherRunning && !isFinishing) {
+                try {
+                    Thread.sleep(2000)
+                } catch (_: InterruptedException) {
+                    break
+                }
+                if (!syncWatcherRunning || isFinishing) break
+
+                // Scan current state
+                val currentMtimes = mutableMapOf<String, Long>()
+                scanDirectory(localBase, localBase.absolutePath, currentMtimes)
+
+                // Find new or modified files
+                val changedFiles = mutableListOf<String>()
+                for ((path, mtime) in currentMtimes) {
+                    val oldMtime = fileMtimes[path]
+                    if (oldMtime == null || oldMtime != mtime) {
+                        changedFiles.add(path)
+                    }
+                }
+
+                // Find deleted files (in old map but not current)
+                val deletedFiles = mutableListOf<String>()
+                for (path in fileMtimes.keys) {
+                    if (!currentMtimes.containsKey(path)) {
+                        deletedFiles.add(path)
+                    }
+                }
+
+                // Update stored mtimes
+                fileMtimes.clear()
+                fileMtimes.putAll(currentMtimes)
+
+                // Sync changed files to SAF
+                if (changedFiles.isNotEmpty()) {
+                    Log.d(TAG, "[SyncWatcher] ${changedFiles.size} files changed, syncing to SAF...")
+                    for (relPath in changedFiles) {
+                        try {
+                            syncFileToSaf(localBase, relPath, safTreeUri)
+                            Log.d(TAG, "[SyncWatcher] Synced: $relPath")
+                        } catch (e: Exception) {
+                            Log.e(TAG, "[SyncWatcher] Error syncing $relPath: ${e.message}")
+                        }
+                    }
+                }
+
+                // Delete files from SAF that were deleted locally
+                if (deletedFiles.isNotEmpty()) {
+                    Log.d(TAG, "[SyncWatcher] ${deletedFiles.size} files deleted locally, removing from SAF...")
+                    for (relPath in deletedFiles) {
+                        try {
+                            deleteFileFromSaf(relPath, safTreeUri)
+                            Log.d(TAG, "[SyncWatcher] Deleted from SAF: $relPath")
+                        } catch (e: Exception) {
+                            Log.e(TAG, "[SyncWatcher] Error deleting $relPath: ${e.message}")
+                        }
+                    }
+                }
+            }
+            Log.d(TAG, "[SyncWatcher] Stopped for: $localPath")
+        }.apply {
+            isDaemon = true
+            name = "SyncWatcher"
+            start()
+        }
+    }
+
+    /**
+     * Stop the SyncWatcher thread.
+     */
+    private fun stopSyncWatcher() {
+        syncWatcherRunning = false
+        syncWatcherThread?.interrupt()
+        syncWatcherThread = null
+    }
+
+    /**
+     * Recursively scan a directory, producing a map of relative path -> lastModified.
+     */
+    private fun scanDirectory(dir: File, basePath: String, result: MutableMap<String, Long>) {
+        val files = dir.listFiles() ?: return
+        for (f in files) {
+            val relPath = f.absolutePath.removePrefix(basePath).trimStart('/')
+            if (f.isDirectory) {
+                scanDirectory(f, basePath, result)
+            } else {
+                result[relPath] = f.lastModified()
+            }
+        }
+    }
+
+    /**
+     * Sync a single local file to SAF by navigating/creating the directory tree.
+     */
+    private fun syncFileToSaf(localBase: File, relPath: String, safTreeUri: Uri) {
+        val localFile = File(localBase, relPath)
+        if (!localFile.exists()) return
+
+        val rootDoc = DocumentFile.fromTreeUri(this, safTreeUri) ?: return
+        val parts = relPath.split("/")
+
+        // Navigate/create subdirectories
+        var currentDoc: DocumentFile = rootDoc
+        for (dirName in parts.dropLast(1)) {
+            currentDoc = currentDoc.findFile(dirName)
+                ?: currentDoc.createDirectory(dirName)
+                ?: return
+        }
+
+        // Find or create the file
+        val fileName = parts.last()
+        var file = currentDoc.findFile(fileName)
+        if (file == null) {
+            val mime = syncGuessMimeType(fileName)
+            file = currentDoc.createFile(mime, fileName) ?: return
+        }
+
+        // Write content (truncate mode)
+        contentResolver.openOutputStream(file.uri, "wt")?.use { os ->
+            os.write(localFile.readBytes())
+        }
+    }
+
+    /**
+     * Delete a file from SAF that was deleted locally.
+     */
+    private fun deleteFileFromSaf(relPath: String, safTreeUri: Uri) {
+        val rootDoc = DocumentFile.fromTreeUri(this, safTreeUri) ?: return
+        val parts = relPath.split("/")
+
+        // Navigate to parent directory
+        var currentDoc: DocumentFile = rootDoc
+        for (dirName in parts.dropLast(1)) {
+            currentDoc = currentDoc.findFile(dirName) ?: return
+        }
+
+        currentDoc.findFile(parts.last())?.delete()
+    }
+
+    /**
+     * Guess MIME type for SAF file creation based on file extension.
+     */
+    private fun syncGuessMimeType(fileName: String): String {
+        // IMPORTANT: SAF's createFile() appends an extension based on MIME type.
+        // Use "application/octet-stream" for types where SAF would add a wrong extension
+        // (e.g. "text/plain" → ".txt" appended to "foo.tid" → "foo.tid.txt").
+        return when (fileName.substringAfterLast('.', "").lowercase()) {
+            "json" -> "application/json"
+            "html", "htm" -> "text/html"
+            "css" -> "text/css"
+            "js" -> "application/javascript"
+            "png" -> "image/png"
+            "jpg", "jpeg" -> "image/jpeg"
+            "gif" -> "image/gif"
+            "svg" -> "image/svg+xml"
+            "pdf" -> "application/pdf"
+            "mp4" -> "video/mp4"
+            "webm" -> "video/webm"
+            "mp3" -> "audio/mpeg"
+            "ogg" -> "audio/ogg"
+            "woff" -> "font/woff"
+            "woff2" -> "font/woff2"
+            else -> "application/octet-stream" // .tid, .meta, .info, etc.
+        }
     }
 
     /**
@@ -5075,7 +6115,7 @@ class WikiActivity : AppCompatActivity() {
                 })();
                 """.trimIndent()
             } else {
-                // Folder wiki: Can only reload (Node.js server is in main process)
+                // Folder wiki: Try to restart Node.js server via JNI
                 """
                 (function() {
                     // Only show if we haven't already
@@ -5084,8 +6124,27 @@ class WikiActivity : AppCompatActivity() {
                     var div = document.createElement('div');
                     div.id = 'td-server-unavailable';
                     div.style.cssText = 'position:fixed;top:0;left:0;right:0;background:#c42b2b;color:white;padding:12px;text-align:center;z-index:999999;font-family:sans-serif;';
-                    div.innerHTML = 'Server connection lost. <button onclick="location.reload()" style="margin-left:8px;padding:4px 12px;background:white;color:#c42b2b;border:none;border-radius:4px;cursor:pointer;">Reload</button>';
+                    div.innerHTML = 'Server connection lost. <button id="td-reconnect-btn" style="margin-left:8px;padding:4px 12px;background:white;color:#c42b2b;border:none;border-radius:4px;cursor:pointer;">Reconnect</button>';
                     document.body.insertBefore(div, document.body.firstChild);
+
+                    document.getElementById('td-reconnect-btn').onclick = function() {
+                        this.textContent = 'Reconnecting...';
+                        this.disabled = true;
+                        try {
+                            var newUrl = window.TiddlyDesktopServer.restartFolderServer();
+                            if (newUrl && newUrl.length > 0) {
+                                window.location.href = newUrl;
+                            } else {
+                                alert('Failed to restart server. Please close and reopen this wiki.');
+                                this.textContent = 'Reconnect';
+                                this.disabled = false;
+                            }
+                        } catch (e) {
+                            alert('Error: ' + e.message);
+                            this.textContent = 'Reconnect';
+                            this.disabled = false;
+                        }
+                    };
                 })();
                 """.trimIndent()
             }
@@ -5331,6 +6390,12 @@ class WikiActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         Log.d(TAG, "Wiki closed: path=$wikiPath, isFolder=$isFolder")
+
+        // Stop folder server watchdog
+        stopFolderServerWatchdog()
+
+        // Stop sync watcher (local -> SAF)
+        stopSyncWatcher()
 
         // Clean up auth overlay if present
         dismissAuthOverlay()
@@ -5704,10 +6769,76 @@ class WikiActivity : AppCompatActivity() {
          .replace("\t", "\\t")
 
     /**
+     * Generate a TiddlyWiki-format timestamp: YYYYMMDDHHmmssSSS (UTC).
+     */
+    private fun twTimestamp(): String {
+        val now = java.util.Calendar.getInstance(java.util.TimeZone.getTimeZone("UTC"))
+        return String.format(
+            "%04d%02d%02d%02d%02d%02d%03d",
+            now.get(java.util.Calendar.YEAR),
+            now.get(java.util.Calendar.MONTH) + 1,
+            now.get(java.util.Calendar.DAY_OF_MONTH),
+            now.get(java.util.Calendar.HOUR_OF_DAY),
+            now.get(java.util.Calendar.MINUTE),
+            now.get(java.util.Calendar.SECOND),
+            now.get(java.util.Calendar.MILLISECOND)
+        )
+    }
+
+    /**
      * Import pending Quick Captures that target this wiki.
      * Captures are JSON files in {filesDir}/captures/ written by CaptureActivity.
      * Auto-deletes captures older than 7 days.
      */
+    /**
+     * Clean up stale capture files older than 24 hours.
+     * Also removes orphaned import data files (.dat).
+     */
+    private fun cleanupStaleCaptureFiles() {
+        try {
+            val capturesDir = File(filesDir, "captures")
+            if (!capturesDir.exists() || !capturesDir.isDirectory) return
+            val files = capturesDir.listFiles() ?: return
+            val now = System.currentTimeMillis()
+            val maxAge = 24 * 60 * 60 * 1000L  // 24 hours
+
+            val referencedImports = mutableSetOf<String>()
+            var deletedCount = 0
+
+            for (f in files) {
+                if (f.name.startsWith("capture_") && f.name.endsWith(".json")) {
+                    try {
+                        val json = JSONObject(f.readText())
+                        val created = json.optLong("created", 0)
+                        if (created > 0 && now - created > maxAge) {
+                            val importFile = json.optString("import_file", "")
+                            if (importFile.isNotEmpty()) File(capturesDir, importFile).delete()
+                            f.delete()
+                            deletedCount++
+                        } else {
+                            val importFile = json.optString("import_file", "")
+                            if (importFile.isNotEmpty()) referencedImports.add(importFile)
+                        }
+                    } catch (e: Exception) {
+                        if (now - f.lastModified() > maxAge) { f.delete(); deletedCount++ }
+                    }
+                }
+            }
+            // Clean orphaned .dat import files
+            for (f in files) {
+                if (f.name.startsWith("import_") && f.name.endsWith(".dat") && f.name !in referencedImports) {
+                    f.delete(); deletedCount++
+                }
+            }
+            if (deletedCount > 0) Log.d(TAG, "Cleaned up $deletedCount stale capture file(s)")
+        } catch (e: Exception) {
+            Log.w(TAG, "Capture cleanup failed: ${e.message}")
+        }
+    }
+
+    // Track which capture files are currently being imported to prevent duplicates
+    private val importingCaptures = java.util.Collections.synchronizedSet(mutableSetOf<String>())
+
     private fun importPendingCaptures() {
         val capturesDir = File(filesDir, "captures")
         if (!capturesDir.exists() || !capturesDir.isDirectory) return
@@ -5716,65 +6847,105 @@ class WikiActivity : AppCompatActivity() {
             f.name.startsWith("capture_") && f.name.endsWith(".json")
         } ?: return
 
-        // Read and delete files immediately to prevent duplicate imports
-        // (both onPageFinished and onResume can call this concurrently)
         val now = System.currentTimeMillis()
-        val captureJsons = mutableListOf<JSONObject>()
+        data class CaptureEntry(val file: File, val json: JSONObject)
+        val matching = mutableListOf<CaptureEntry>()
         for (f in captureFiles) {
+            // Skip files already being imported
+            if (!importingCaptures.add(f.name)) continue
             try {
                 val json = JSONObject(f.readText())
                 if (now - json.optLong("created", now) > 7 * 86400000L) {
-                    f.delete(); continue  // expired
+                    f.delete(); importingCaptures.remove(f.name); continue  // expired
                 }
                 if (json.optString("target_wiki_path") == myPath) {
-                    captureJsons.add(json)
-                    f.delete()  // Delete immediately after reading
+                    matching.add(CaptureEntry(f, json))
+                } else {
+                    importingCaptures.remove(f.name)  // not for this wiki
                 }
             } catch (e: Exception) {
                 Log.w(TAG, "Skipping malformed capture file ${f.name}: ${e.message}")
+                importingCaptures.remove(f.name)
             }
         }
-        if (captureJsons.isEmpty()) return
+        if (matching.isEmpty()) return
 
         // Separate file imports (native TW import) from direct tiddler captures
-        val directCaptures = mutableListOf<JSONObject>()
-        val fileImports = mutableListOf<JSONObject>()
-        for (json in captureJsons) {
-            if (json.has("import_file")) {
-                fileImports.add(json)
+        val directCaptures = mutableListOf<CaptureEntry>()
+        val fileImports = mutableListOf<CaptureEntry>()
+        for (entry in matching) {
+            if (entry.json.has("import_file")) {
+                fileImports.add(entry)
             } else {
-                directCaptures.add(json)
+                directCaptures.add(entry)
             }
         }
 
         // Handle direct tiddler captures (text, images, etc.)
+        // Uses tm-import-tiddlers so user sees $:/Import dialog and can review before committing.
         if (directCaptures.isNotEmpty()) {
-            val js = StringBuilder("(function(){if(typeof \$tw==='undefined'||!\$tw.wiki)return 0;var c=0;")
-            for (json in directCaptures) {
+            val tiddlersJson = JSONArray()
+            for (entry in directCaptures) {
                 try {
-                    val title = escapeForJs(json.optString("title", "Untitled Capture"))
-                    val text = escapeForJs(json.optString("text", ""))
-                    val tags = escapeForJs(json.optString("tags", ""))
-                    val type = escapeForJs(json.optString("type", "text/vnd.tiddlywiki"))
-                    val sourceUrl = escapeForJs(json.optString("source_url", ""))
-                    val canonicalUri = escapeForJs(json.optString("_canonical_uri", ""))
-                    val created = json.optLong("created", now)
-                    js.append("try{var f={title:'$title',text:'$text',tags:'$tags',type:'$type'")
-                    if (sourceUrl.isNotEmpty()) js.append(",'source-url':'$sourceUrl'")
-                    if (canonicalUri.isNotEmpty()) js.append(",'_canonical_uri':'$canonicalUri'")
-                    js.append(",created:new Date($created),modified:new Date()};")
-                    js.append("\$tw.wiki.addTiddler(new \$tw.Tiddler(f));c++;}catch(e){}")
+                    val json = entry.json
+                    val tiddler = JSONObject()
+                    tiddler.put("title", json.optString("title", "Untitled Capture"))
+                    tiddler.put("text", json.optString("text", ""))
+                    val tags = json.optString("tags", "")
+                    if (tags.isNotEmpty()) tiddler.put("tags", tags)
+                    tiddler.put("type", json.optString("type", "text/vnd.tiddlywiki"))
+                    val sourceUrl = json.optString("source_url", "")
+                    if (sourceUrl.isNotEmpty()) tiddler.put("source-url", sourceUrl)
+                    val canonicalUri = json.optString("_canonical_uri", "")
+                    if (canonicalUri.isNotEmpty()) tiddler.put("_canonical_uri", canonicalUri)
+                    val caption = json.optString("caption", "")
+                    if (caption.isNotEmpty()) tiddler.put("caption", caption)
+                    // Add TiddlyWiki timestamps (format: YYYYMMDDHHmmssSSS)
+                    val ts = twTimestamp()
+                    tiddler.put("created", ts)
+                    tiddler.put("modified", ts)
+                    tiddlersJson.put(tiddler)
                 } catch (e: Exception) {
                     Log.w(TAG, "Skipping capture: ${e.message}")
                 }
             }
-            js.append("return c;})()")
-
-            webView.evaluateJavascript(js.toString()) { result ->
-                val count = result?.trim('"')?.toIntOrNull() ?: 0
-                if (count > 0) {
-                    runOnUiThread {
-                        android.widget.Toast.makeText(this, getString(R.string.capture_imported, count), android.widget.Toast.LENGTH_SHORT).show()
+            if (tiddlersJson.length() > 0) {
+                // Collect filenames for deletion after successful import
+                val fileNames = directCaptures.map { it.file.name }
+                val base64Payload = android.util.Base64.encodeToString(
+                    tiddlersJson.toString().toByteArray(Charsets.UTF_8),
+                    android.util.Base64.NO_WRAP
+                )
+                val js = "(function check(){" +
+                    "if(typeof \$tw==='undefined'||!\$tw.wiki||!\$tw.rootWidget" +
+                    "||!\$tw.rootWidget.children||!\$tw.rootWidget.children.length){" +
+                    "setTimeout(check,200);return;}" +
+                    "try{" +
+                    // atob() returns Latin-1 chars, but payload is UTF-8 bytes.
+                    // Decode UTF-8 properly via TextDecoder (same pattern as file imports).
+                    "var b=atob('$base64Payload');" +
+                    "var bytes=new Uint8Array(b.length);" +
+                    "for(var i=0;i<b.length;i++)bytes[i]=b.charCodeAt(i);" +
+                    "var tiddlers=JSON.parse(new TextDecoder().decode(bytes));" +
+                    "var w=\$tw.rootWidget;" +
+                    "while(w.children&&w.children.length>0)w=w.children[0];" +
+                    "w.dispatchEvent({type:'tm-import-tiddlers',param:JSON.stringify(tiddlers)});" +
+                    "return 'ok';" +
+                    "}catch(e){console.error('Capture import error:',e);return 'error';}" +
+                    "})()"
+                webView.evaluateJavascript(js) { result ->
+                    // Delete capture files only after JS executed successfully
+                    if (result != null && result.contains("ok")) {
+                        for (entry in directCaptures) {
+                            try { entry.file.delete() } catch (_: Exception) {}
+                        }
+                        Log.d(TAG, "Imported ${directCaptures.size} capture(s), files deleted")
+                    } else {
+                        Log.w(TAG, "Capture import JS failed, keeping files for retry")
+                    }
+                    // Release lock either way so retry can pick them up
+                    for (name in fileNames) {
+                        importingCaptures.remove(name)
                     }
                 }
             }
@@ -5783,50 +6954,67 @@ class WikiActivity : AppCompatActivity() {
         // Handle file imports — use TiddlyWiki's native import via tm-import-tiddlers
         // The event must be dispatched from a leaf widget so it bubbles UP to NavigatorWidget,
         // which handles creating $:/Import, navigating to it, and merging with existing imports.
-        for (json in fileImports) {
-            val importFilename = json.optString("import_file", "")
-            val fileType = json.optString("file_type", "text/html")
-            if (importFilename.isEmpty()) continue
+        for (entry in fileImports) {
+            val importFilename = entry.json.optString("import_file", "")
+            val fileType = entry.json.optString("file_type", "text/html")
+            val importTitle = entry.json.optString("title", "import")
+            if (importFilename.isEmpty()) {
+                entry.file.delete(); importingCaptures.remove(entry.file.name); continue
+            }
 
             val importFile = File(capturesDir, importFilename)
-            if (!importFile.exists()) continue
+            if (!importFile.exists()) {
+                entry.file.delete(); importingCaptures.remove(entry.file.name); continue
+            }
 
             try {
                 val contentBytes = importFile.readBytes()
-                importFile.delete()
 
                 // Base64 encode to safely pass content to JS (avoids all escaping issues)
                 val base64Content = android.util.Base64.encodeToString(contentBytes, android.util.Base64.NO_WRAP)
                 val safeFileType = escapeForJs(fileType)
+                val safeTitle = escapeForJs(importTitle)
+                val captureFileName = entry.file.name
 
                 // Poll until TW5 widget tree is ready, then dispatch tm-import-tiddlers
                 // from a leaf widget so it bubbles up through NavigatorWidget.
                 // NavigatorWidget's handler creates $:/Import, navigates to it, and merges.
+                // Pass {title: filename} as srcFields so non-TiddlyWiki HTML gets a title
+                // (matches TiddlyWiki's own browser import in $tw.utils.readFile).
                 val importJs = "(function check(){" +
                     "if(typeof \$tw==='undefined'||!\$tw.wiki||!\$tw.rootWidget" +
                     "||!\$tw.rootWidget.children||!\$tw.rootWidget.children.length){" +
-                    "setTimeout(check,200);return;}" +
+                    "setTimeout(check,200);return 'wait';}" +
                     "try{" +
                     "var b=atob('$base64Content');" +
                     "var bytes=new Uint8Array(b.length);" +
                     "for(var i=0;i<b.length;i++)bytes[i]=b.charCodeAt(i);" +
                     "var content=new TextDecoder().decode(bytes);" +
-                    "var tiddlers=\$tw.wiki.deserializeTiddlers('$safeFileType',content);" +
-                    "if(!tiddlers||tiddlers.length===0)return;" +
+                    "var tiddlers=\$tw.wiki.deserializeTiddlers('$safeFileType',content,{title:'$safeTitle'});" +
+                    "if(!tiddlers||tiddlers.length===0)return 'empty';" +
                     // Find a leaf widget and dispatch — event bubbles up to NavigatorWidget
                     "var w=\$tw.rootWidget;" +
                     "while(w.children&&w.children.length>0)w=w.children[0];" +
                     "w.dispatchEvent({type:'tm-import-tiddlers',param:JSON.stringify(tiddlers)});" +
-                    "}catch(e){console.error('Import error:',e);}" +
+                    "return 'ok';" +
+                    "}catch(e){console.error('Import error:',e);return 'error';}" +
                     "})()"
 
-                webView.evaluateJavascript(importJs, null)
-                runOnUiThread {
-                    android.widget.Toast.makeText(this, "Importing file...", android.widget.Toast.LENGTH_SHORT).show()
+                webView.evaluateJavascript(importJs) { result ->
+                    if (result != null && (result.contains("ok") || result.contains("empty"))) {
+                        try { entry.file.delete() } catch (_: Exception) {}
+                        try { importFile.delete() } catch (_: Exception) {}
+                        Log.d(TAG, "File import complete, files deleted")
+                    } else {
+                        Log.w(TAG, "File import JS failed, keeping files for retry")
+                    }
+                    importingCaptures.remove(captureFileName)
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to process import file $importFilename: ${e.message}")
+                entry.file.delete()
                 importFile.delete()
+                importingCaptures.remove(entry.file.name)
             }
         }
     }

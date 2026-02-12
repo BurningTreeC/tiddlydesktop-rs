@@ -14,7 +14,8 @@
     <string name="capture_saved_title">Συλλήφθηκε</string>
     <string name="capture_saved_message">Αποθηκεύτηκε στο %s</string>
     <string name="capture_failed_copy">Αποτυχία αντιγραφής αρχείου στον φάκελο συνημμένων</string>
-    <string name="capture_no_attachments">Αυτό το wiki δεν υποστηρίζει εξωτερικά συνημμένα. Χρησιμοποιήστε wiki φακέλου για σύλληψη βίντεο.</string>
+    <string name="capture_no_attachments">Αυτό το wiki δεν υποστηρίζει εξωτερικά συνημμένα. Χρησιμοποιήστε wiki φακέλου για μεγάλα αρχεία.</string>
+    <string name="capture_multiple_items">%d στοιχεία</string>
     <string name="capture_failed_read">Αποτυχία ανάγνωσης αρχείου</string>
     <string name="capture_failed_save">Αποτυχία αποθήκευσης σύλληψης</string>
     <string name="capture_imported">Εισήχθησαν %d σύλληψη(-εις)</string>
@@ -29,4 +30,5 @@
     <string name="btn_open_wiki">Άνοιγμα wiki</string>
     <string name="open_as_wiki">Άνοιγμα ως wiki</string>
     <string name="import_into_wiki">Εισαγωγή σε wiki</string>
+    <string name="no_app_for_link">Δεν βρέθηκε εφαρμογή για αυτόν τον σύνδεσμο</string>
 </resources>

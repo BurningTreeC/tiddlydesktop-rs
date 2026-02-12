@@ -353,6 +353,31 @@ exports.startup = function(callback) {
 		return [];
 	}
 
+	// Get the list of collapsed group names from the persistent tiddler
+	function getCollapsedGroups() {
+		var text = $tw.wiki.getTiddlerText("$:/TiddlyDesktop/CollapsedGroups", "");
+		if (!text.trim()) return [];
+		try { return JSON.parse(text); } catch(e) { return []; }
+	}
+
+	// Save collapsed groups and trigger autosave
+	function saveCollapsedGroups(collapsed) {
+		$tw.wiki.addTiddler({
+			title: "$:/TiddlyDesktop/CollapsedGroups",
+			type: "application/json",
+			text: JSON.stringify(collapsed)
+		});
+		$tw.rootWidget.dispatchEvent({type: "tm-auto-save-wiki"});
+	}
+
+	// Restore collapsed group state tiddlers from persistent storage
+	function restoreCollapsedGroups() {
+		var collapsed = getCollapsedGroups();
+		for (var i = 0; i < collapsed.length; i++) {
+			$tw.wiki.setText("$:/state/tiddlydesktop-rs/group-collapsed/" + collapsed[i], "text", null, "yes");
+		}
+	}
+
 	// Save wiki list to the persistent tiddler and trigger autosave
 	function saveWikiList(entries) {
 		$tw.wiki.addTiddler({
@@ -437,6 +462,9 @@ exports.startup = function(callback) {
 			list: groups.join(" "),
 			text: groups.join("\n")
 		});
+
+		// Restore persisted collapsed states
+		restoreCollapsedGroups();
 
 		// Populate temp tiddlers for UI
 		entries.forEach(function(entry, index) {
@@ -1114,6 +1142,13 @@ exports.startup = function(callback) {
 						entries[i].group = newName.trim();
 					}
 				}
+				// Transfer collapsed state to the new group name
+				var collapsed = getCollapsedGroups();
+				var idx = collapsed.indexOf(oldName);
+				if (idx !== -1) {
+					collapsed[idx] = newName.trim();
+					saveCollapsedGroups(collapsed);
+				}
 				saveWikiList(entries);
 				refreshWikiList();
 			}).catch(function(err) {
@@ -1134,6 +1169,10 @@ exports.startup = function(callback) {
 						delete entries[i].group;
 					}
 				}
+				// Remove from collapsed groups
+				var collapsed = getCollapsedGroups();
+				collapsed = collapsed.filter(function(g) { return g !== groupName; });
+				saveCollapsedGroups(collapsed);
 				saveWikiList(entries);
 				refreshWikiList();
 			}).catch(function(err) {
@@ -1142,12 +1181,23 @@ exports.startup = function(callback) {
 		}
 	});
 
-	// Message handler: toggle group collapse state
+	// Message handler: toggle group collapse state (persistent)
 	$tw.rootWidget.addEventListener("tm-tiddlydesktop-rs-toggle-group", function(event) {
 		var groupName = event.param || (event.paramObject && event.paramObject.group);
-		var stateTitle = "$:/state/tiddlydesktop-rs/group-collapsed/" + (groupName || "Ungrouped");
+		var key = groupName || "Ungrouped";
+		var stateTitle = "$:/state/tiddlydesktop-rs/group-collapsed/" + key;
 		var currentState = $tw.wiki.getTiddlerText(stateTitle);
-		$tw.wiki.setText(stateTitle, "text", null, currentState === "yes" ? "no" : "yes");
+		var newState = currentState === "yes" ? "no" : "yes";
+		// Update ephemeral state for instant UI response
+		$tw.wiki.setText(stateTitle, "text", null, newState);
+		// Persist collapsed groups to a saved tiddler
+		var collapsed = getCollapsedGroups();
+		if (newState === "yes") {
+			if (collapsed.indexOf(key) === -1) collapsed.push(key);
+		} else {
+			collapsed = collapsed.filter(function(g) { return g !== key; });
+		}
+		saveCollapsedGroups(collapsed);
 	});
 
 	// Message handler: show group manager modal
@@ -1326,17 +1376,17 @@ exports.startup = function(callback) {
 		document.addEventListener("visibilitychange", function() {
 			if (document.visibilityState === "visible") {
 				mergeFaviconsFromDisk();
+				checkPendingWikiOpen();
 			}
 		});
 	}
 
-	// Check if the home screen widget requested opening a wiki.
-	// This happens when the user taps a wiki in the widget while the app is closed.
+	// Check if a pending wiki open was requested (from widget or Quick Capture).
 	// MainActivity writes a pending file, and we consume it here.
-	if (isAndroid) {
+	function checkPendingWikiOpen() {
 		invoke("get_pending_widget_wiki").then(function(pendingWiki) {
 			if (pendingWiki && pendingWiki.path) {
-				console.log("[TiddlyDesktop] Opening wiki from widget: " + pendingWiki.path);
+				console.log("[TiddlyDesktop] Opening pending wiki: " + pendingWiki.path);
 				var path = pendingWiki.path;
 				var isFolder = !!pendingWiki.is_folder;
 
@@ -1361,12 +1411,15 @@ exports.startup = function(callback) {
 					addToWikiList(resultEntry);
 					refreshWikiList();
 				}).catch(function(err) {
-					console.error("[TiddlyDesktop] Failed to open wiki from widget:", err);
+					console.error("[TiddlyDesktop] Failed to open pending wiki:", err);
 				});
 			}
 		}).catch(function(err) {
-			console.log("[TiddlyDesktop] No pending widget wiki:", err);
+			// No pending wiki — normal case
 		});
+	}
+	if (isAndroid) {
+		checkPendingWikiOpen();
 	}
 
 	// Check for application updates

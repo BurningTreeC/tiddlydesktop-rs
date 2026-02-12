@@ -14,7 +14,8 @@
     <string name="capture_saved_title">ضبط شد</string>
     <string name="capture_saved_message">ذخیره شد در %s</string>
     <string name="capture_failed_copy">کپی فایل به پوشه پیوست‌ها ناموفق بود</string>
-    <string name="capture_no_attachments">این ویکی از پیوست‌های خارجی پشتیبانی نمی‌کند. برای ضبط ویدیو از ویکی پوشه‌ای استفاده کنید.</string>
+    <string name="capture_no_attachments">این ویکی از پیوست‌های خارجی پشتیبانی نمی‌کند. برای فایل‌های بزرگ از ویکی پوشه‌ای استفاده کنید.</string>
+    <string name="capture_multiple_items">%d مورد</string>
     <string name="capture_failed_read">خواندن فایل ناموفق بود</string>
     <string name="capture_failed_save">ذخیره ضبط ناموفق بود</string>
     <string name="capture_imported">%d ضبط واردشده</string>
@@ -29,4 +30,5 @@
     <string name="btn_open_wiki">باز کردن ویکی</string>
     <string name="open_as_wiki">باز کردن به عنوان ویکی</string>
     <string name="import_into_wiki">واردکردن به ویکی</string>
+    <string name="no_app_for_link">برنامه‌ای برای باز کردن این پیوند یافت نشد</string>
 </resources>

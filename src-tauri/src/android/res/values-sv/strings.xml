@@ -14,7 +14,8 @@
     <string name="capture_saved_title">Fångad</string>
     <string name="capture_saved_message">Sparad i %s</string>
     <string name="capture_failed_copy">Kunde inte kopiera filen till bilagemappen</string>
-    <string name="capture_no_attachments">Denna wiki stöder inte externa bilagor. Använd en mappwiki för att fånga videor.</string>
+    <string name="capture_no_attachments">Denna wiki stöder inte externa bilagor. Använd en mappwiki för stora filer.</string>
+    <string name="capture_multiple_items">%d objekt</string>
     <string name="capture_failed_read">Kunde inte läsa filen</string>
     <string name="capture_failed_save">Kunde inte spara fångsten</string>
     <string name="capture_imported">%d fångst(er) importerad(e)</string>
@@ -29,4 +30,5 @@
     <string name="btn_open_wiki">Öppna wiki</string>
     <string name="open_as_wiki">Öppna som wiki</string>
     <string name="import_into_wiki">Importera till wiki</string>
+    <string name="no_app_for_link">Ingen app hittades för att öppna denna länk</string>
 </resources>

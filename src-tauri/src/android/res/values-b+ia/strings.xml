@@ -14,7 +14,8 @@
     <string name="capture_saved_title">Capturate</string>
     <string name="capture_saved_message">Salvate in %s</string>
     <string name="capture_failed_copy">Falleva a copiar le file al dossier de attachamentos</string>
-    <string name="capture_no_attachments">Iste wiki non supporta attachamentos externe. Usa un wiki de dossier pro capturar videos.</string>
+    <string name="capture_no_attachments">Iste wiki non supporta attachamentos externe. Usa un wiki de dossier pro files grande.</string>
+    <string name="capture_multiple_items">%d elementos</string>
     <string name="capture_failed_read">Falleva a leger le file</string>
     <string name="capture_failed_save">Falleva a salvar le captura</string>
     <string name="capture_imported">%d captura(s) importate</string>
@@ -29,4 +30,5 @@
     <string name="btn_open_wiki">Aperir wiki</string>
     <string name="open_as_wiki">Aperir como wiki</string>
     <string name="import_into_wiki">Importar in wiki</string>
+    <string name="no_app_for_link">Nulle application trovate pro aperir iste ligamine</string>
 </resources>

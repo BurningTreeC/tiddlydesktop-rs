@@ -14,7 +14,8 @@
     <string name="capture_saved_title">ਕੈਪਚਰ ਕੀਤਾ</string>
     <string name="capture_saved_message">%s ਵਿੱਚ ਸੁਰੱਖਿਅਤ ਕੀਤਾ</string>
     <string name="capture_failed_copy">ਫ਼ਾਈਲ ਨੂੰ ਅਟੈਚਮੈਂਟ ਫੋਲਡਰ ਵਿੱਚ ਕਾਪੀ ਕਰਨ ਵਿੱਚ ਅਸਫਲ</string>
-    <string name="capture_no_attachments">ਇਹ ਵਿਕੀ ਬਾਹਰੀ ਅਟੈਚਮੈਂਟਾਂ ਦਾ ਸਮਰਥਨ ਨਹੀਂ ਕਰਦੀ। ਵੀਡੀਓ ਕੈਪਚਰ ਕਰਨ ਲਈ ਫੋਲਡਰ ਵਿਕੀ ਵਰਤੋ।</string>
+    <string name="capture_no_attachments">ਇਹ ਵਿਕੀ ਬਾਹਰੀ ਅਟੈਚਮੈਂਟਾਂ ਦਾ ਸਮਰਥਨ ਨਹੀਂ ਕਰਦੀ। ਵੱਡੀਆਂ ਫਾਈਲਾਂ ਲਈ ਫੋਲਡਰ ਵਿਕੀ ਵਰਤੋ।</string>
+    <string name="capture_multiple_items">%d ਆਈਟਮਾਂ</string>
     <string name="capture_failed_read">ਫ਼ਾਈਲ ਪੜ੍ਹਨ ਵਿੱਚ ਅਸਫਲ</string>
     <string name="capture_failed_save">ਕੈਪਚਰ ਸੁਰੱਖਿਅਤ ਕਰਨ ਵਿੱਚ ਅਸਫਲ</string>
     <string name="capture_imported">%d ਕੈਪਚਰ ਆਯਾਤ ਕੀਤੇ</string>
@@ -29,4 +30,5 @@
     <string name="btn_open_wiki">ਵਿਕੀ ਖੋਲ੍ਹੋ</string>
     <string name="open_as_wiki">ਵਿਕੀ ਵਜੋਂ ਖੋਲ੍ਹੋ</string>
     <string name="import_into_wiki">ਵਿਕੀ ਵਿੱਚ ਆਯਾਤ ਕਰੋ</string>
+    <string name="no_app_for_link">ਇਸ ਲਿੰਕ ਨੂੰ ਖੋਲ੍ਹਣ ਲਈ ਕੋਈ ਐਪ ਨਹੀਂ ਮਿਲੀ</string>
 </resources>

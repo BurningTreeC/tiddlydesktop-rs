@@ -14,7 +14,8 @@
     <string name="capture_saved_title">कैप्चर किया गया</string>
     <string name="capture_saved_message">%s में सहेजा गया</string>
     <string name="capture_failed_copy">फ़ाइल को अनुलग्नक फ़ोल्डर में कॉपी करने में विफल</string>
-    <string name="capture_no_attachments">यह विकी बाहरी अनुलग्नकों का समर्थन नहीं करता। वीडियो कैप्चर करने के लिए फ़ोल्डर विकी का उपयोग करें।</string>
+    <string name="capture_no_attachments">यह विकी बाहरी अनुलग्नकों का समर्थन नहीं करता। बड़ी फ़ाइलों के लिए फ़ोल्डर विकी का उपयोग करें।</string>
+    <string name="capture_multiple_items">%d आइटम</string>
     <string name="capture_failed_read">फ़ाइल पढ़ने में विफल</string>
     <string name="capture_failed_save">कैप्चर सहेजने में विफल</string>
     <string name="capture_imported">%d कैप्चर आयात किए गए</string>
@@ -29,4 +30,5 @@
     <string name="btn_open_wiki">विकी खोलें</string>
     <string name="open_as_wiki">विकी के रूप में खोलें</string>
     <string name="import_into_wiki">विकी में आयात करें</string>
+    <string name="no_app_for_link">इस लिंक को खोलने के लिए कोई ऐप नहीं मिला</string>
 </resources>

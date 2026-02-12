@@ -46,6 +46,39 @@ class CaptureActivity : AppCompatActivity() {
     companion object {
         private const val TAG = "CaptureActivity"
         private val URL_PATTERN: Pattern = Pattern.compile("""https?://\S+""")
+
+        /**
+         * Sanitize a title string from external apps.
+         * Strips zero-width chars, control chars, directional markers,
+         * HTML entities, and normalizes whitespace.
+         */
+        fun sanitizeTitle(raw: String): String {
+            var s = raw
+            // Decode HTML entities
+            s = s.replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">")
+                .replace("&quot;", "\"").replace("&#39;", "'").replace("&apos;", "'")
+                .replace("&nbsp;", " ")
+                .replace(Regex("""&#(\d+);""")) { m ->
+                    val code = m.groupValues[1].toIntOrNull()
+                    if (code != null) String(Character.toChars(code)) else m.value
+                }
+                .replace(Regex("""&#x([0-9a-fA-F]+);""")) { m ->
+                    val code = m.groupValues[1].toIntOrNull(16)
+                    if (code != null) String(Character.toChars(code)) else m.value
+                }
+            // Strip zero-width and invisible Unicode characters:
+            // U+200B (zero-width space), U+200C/D (zero-width non-joiner/joiner),
+            // U+200E/F (LRM/RLM), U+202A-202E (bidi), U+2060 (word joiner),
+            // U+FEFF (BOM/zero-width no-break space), U+00AD (soft hyphen)
+            s = s.replace(Regex("[\u200B-\u200F\u202A-\u202E\u2060\uFEFF\u00AD]"), "")
+            // Strip remaining control chars (C0/C1) except newline/tab
+            s = s.replace(Regex("[\\x00-\\x08\\x0B\\x0C\\x0E-\\x1F\\x7F-\\x9F]"), "")
+            // Normalize whitespace: collapse runs, trim
+            s = s.replace(Regex("\\s+"), " ").trim()
+            return s
+        }
+
+
     }
 
     private var sharedText: String? = null
@@ -58,22 +91,27 @@ class CaptureActivity : AppCompatActivity() {
     private var importFileUri: Uri? = null
     private var importFileName: String? = null
     private var importFileMimeType: String? = null
+    private var multipleUris: List<Uri>? = null
+    private var multipleThumbnails: List<Bitmap?> = emptyList()
+    private var captureType: String = "text/vnd.tiddlywiki"
     private var wikiList: List<WikiEntry> = emptyList()
 
     // UI references
     private var titleEdit: EditText? = null
     private var tagsEdit: EditText? = null
     private var wikiSpinner: Spinner? = null
-    // clipButton removed — web clip is now automatic for URL shares
     private var clipProgress: ProgressBar? = null
     private var clippedContent: String? = null
 
-    data class WikiEntry(val path: String, val title: String, val isFolder: Boolean)
+    data class WikiEntry(val path: String, val title: String, val isFolder: Boolean, val externalAttachments: Boolean = true)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        if (intent.action != Intent.ACTION_SEND) {
+        // Clean up stale captures on every launch
+        cleanupStaleCaptureFiles()
+
+        if (intent.action != Intent.ACTION_SEND && intent.action != Intent.ACTION_SEND_MULTIPLE) {
             Log.w(TAG, "Unsupported action: ${intent.action}")
             finish()
             return
@@ -82,10 +120,18 @@ class CaptureActivity : AppCompatActivity() {
         wikiList = loadRecentWikis()
 
         when {
+            intent.action == Intent.ACTION_SEND_MULTIPLE -> handleMultipleIntent()
+            intent.type == "image/svg+xml" -> handleSvgIntent()
             intent.type == "text/plain" -> handleTextIntent()
             intent.type?.startsWith("image/") == true -> handleImageIntent()
             intent.type?.startsWith("video/") == true ||
-            intent.type?.startsWith("audio/") == true -> handleFileIntent()
+            intent.type?.startsWith("audio/") == true ||
+            intent.type == "application/pdf" -> handleFileIntent()
+            intent.type == "text/markdown" ||
+            intent.type == "text/x-markdown" -> handleMarkdownIntent()
+            intent.type == "text/vcard" ||
+            intent.type == "text/x-vcard" -> handleContactIntent()
+            intent.type == "text/calendar" -> handleCalendarIntent()
             intent.type == "text/html" ||
             intent.type == "application/xhtml+xml" ||
             intent.type == "application/json" ||
@@ -108,7 +154,7 @@ class CaptureActivity : AppCompatActivity() {
 
     private fun handleTextIntent() {
         sharedText = intent.getStringExtra(Intent.EXTRA_TEXT)
-        sharedSubject = intent.getStringExtra(Intent.EXTRA_SUBJECT)
+        sharedSubject = intent.getStringExtra(Intent.EXTRA_SUBJECT)?.let { sanitizeTitle(it) }
 
         if (sharedText.isNullOrBlank()) {
             Toast.makeText(this, getString(R.string.capture_no_text), Toast.LENGTH_SHORT).show()
@@ -116,14 +162,55 @@ class CaptureActivity : AppCompatActivity() {
             return
         }
 
-        // Detect URL in shared text
+        // Detect URL(s) in shared text.
+        // Browsers append the page URL at the end of EXTRA_TEXT, so use the LAST URL.
+        // Only remove that last URL from the text — other URLs are part of the content.
         val matcher = URL_PATTERN.matcher(sharedText!!)
-        if (matcher.find()) {
-            val rawUrl = matcher.group()
+        val allUrls = mutableListOf<Pair<String, Int>>() // raw url + start index
+        while (matcher.find()) {
+            allUrls.add(Pair(matcher.group(), matcher.start()))
+        }
+
+        // Also check EXTRA_SUBJECT for URLs (some apps put the URL there)
+        val subjectUrl = sharedSubject?.let {
+            val m = URL_PATTERN.matcher(it)
+            if (m.find()) m.group() else null
+        }
+
+        if (allUrls.isNotEmpty()) {
+            Log.d(TAG, "Found ${allUrls.size} URL(s) in EXTRA_TEXT: ${allUrls.map { it.first }}")
+            // Strip trailing punctuation that isn't part of the URL
+            val cleaned = allUrls.map { it.first.trimEnd('.', ',', ')', ';', '!', '?') }
+            // Use the last URL (browser-appended page URL), but if a longer URL
+            // shares the same domain, prefer it (handles root-vs-subpage).
+            // Also include subjectUrl as a candidate.
+            val lastUrl = cleaned.last()
+            val lastDomain = try { URL(lastUrl).host } catch (_: Exception) { "" }
+            val candidates = cleaned.toMutableList()
+            if (subjectUrl != null) {
+                val cleanedSubjectUrl = subjectUrl.trimEnd('.', ',', ')', ';', '!', '?')
+                candidates.add(cleanedSubjectUrl)
+            }
+            val bestUrl = candidates.filter {
+                try { URL(it).host == lastDomain } catch (_: Exception) { false }
+            }.maxByOrNull { it.length } ?: lastUrl
+            val rawUrl = bestUrl
             // Strip Chrome's text fragment (#:~:text=...) from URL for clean links
             detectedUrl = rawUrl.replace(Regex("#:~:.*$"), "")
-            // Remove the raw URL (with fragment) from sharedText to extract selected text
-            sharedText = sharedText!!.replace(rawUrl, "").trim().ifBlank { null }
+            Log.d(TAG, "Selected URL: $detectedUrl")
+            // Only remove the selected URL from sharedText — leave other URLs in place
+            // as they're part of the user's selected content
+            var remaining = sharedText!!.replace(rawUrl, "")
+            // Also remove the original (pre-trim) version if different
+            val origIdx = cleaned.indexOf(rawUrl)
+            if (origIdx >= 0 && allUrls[origIdx].first != rawUrl) {
+                remaining = remaining.replace(allUrls[origIdx].first, "")
+            }
+            sharedText = remaining.trim().ifBlank { null }
+            // If the best URL came from EXTRA_SUBJECT, remove it from the subject too
+            if (subjectUrl != null && detectedUrl == subjectUrl.trimEnd('.', ',', ')', ';', '!', '?').replace(Regex("#:~:.*$"), "")) {
+                sharedSubject = sharedSubject?.replace(subjectUrl, "")?.let { sanitizeTitle(it) }?.ifBlank { null }
+            }
         }
     }
 
@@ -152,7 +239,9 @@ class CaptureActivity : AppCompatActivity() {
             return
         }
 
-        sharedSubject = intent.getStringExtra(Intent.EXTRA_SUBJECT)
+        sharedSubject = intent.getStringExtra(Intent.EXTRA_SUBJECT)?.let { sanitizeTitle(it) }
+        // WhatsApp and other apps send captions/descriptions in EXTRA_TEXT
+        sharedText = intent.getStringExtra(Intent.EXTRA_TEXT)
     }
 
     private fun handleFileIntent() {
@@ -181,7 +270,7 @@ class CaptureActivity : AppCompatActivity() {
             }
         }
 
-        sharedSubject = intent.getStringExtra(Intent.EXTRA_SUBJECT)
+        sharedSubject = intent.getStringExtra(Intent.EXTRA_SUBJECT)?.let { sanitizeTitle(it) }
     }
 
     /**
@@ -212,14 +301,326 @@ class CaptureActivity : AppCompatActivity() {
             importFileName!!.endsWith(".json") -> "application/json"
             importFileName!!.endsWith(".csv") -> "text/csv"
             importFileName!!.endsWith(".html") || importFileName!!.endsWith(".htm") -> "text/html"
-            else -> contentResolver.getType(streamUri) ?: intent.type ?: "text/plain"
+            else -> intent.type ?: contentResolver.getType(streamUri) ?: "text/plain"
         }
 
         sharedSubject = importFileName
     }
 
+    private fun getStreamUri(): Uri? {
+        return if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+            intent.getParcelableExtra(Intent.EXTRA_STREAM, Uri::class.java)
+        } else {
+            @Suppress("DEPRECATION")
+            intent.getParcelableExtra(Intent.EXTRA_STREAM)
+        }
+    }
+
+    private fun readTextFromUri(uri: Uri): String? {
+        return try {
+            contentResolver.openInputStream(uri)?.use { stream ->
+                stream.bufferedReader().readText()
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to read text from URI: ${e.message}")
+            null
+        }
+    }
+
+    private fun handleSvgIntent() {
+        val uri = getStreamUri()
+        if (uri == null) {
+            Toast.makeText(this, getString(R.string.capture_no_file), Toast.LENGTH_SHORT).show()
+            finish()
+            return
+        }
+        val svgText = readTextFromUri(uri)
+        if (svgText.isNullOrBlank()) {
+            Toast.makeText(this, getString(R.string.capture_failed_read), Toast.LENGTH_SHORT).show()
+            finish()
+            return
+        }
+        sharedText = svgText
+        captureType = "image/svg+xml"
+        sharedSubject = getDisplayName(uri)?.substringBeforeLast(".") ?: intent.getStringExtra(Intent.EXTRA_SUBJECT)
+    }
+
+    private fun handleMarkdownIntent() {
+        val uri = getStreamUri()
+        if (uri == null) {
+            Toast.makeText(this, getString(R.string.capture_no_file), Toast.LENGTH_SHORT).show()
+            finish()
+            return
+        }
+        val mdText = readTextFromUri(uri)
+        if (mdText.isNullOrBlank()) {
+            Toast.makeText(this, getString(R.string.capture_failed_read), Toast.LENGTH_SHORT).show()
+            finish()
+            return
+        }
+        sharedText = mdText
+        captureType = "text/x-markdown"
+        sharedSubject = getDisplayName(uri)?.substringBeforeLast(".") ?: intent.getStringExtra(Intent.EXTRA_SUBJECT)
+    }
+
+    private fun handleContactIntent() {
+        val uri = getStreamUri()
+        if (uri == null) {
+            Toast.makeText(this, getString(R.string.capture_no_file), Toast.LENGTH_SHORT).show()
+            finish()
+            return
+        }
+        val vcardText = readTextFromUri(uri) ?: ""
+
+        // Unfold vCard continuation lines (lines starting with space or tab are continuations)
+        val unfolded = vcardText.replace(Regex("\r?\n[ \t]"), "")
+
+        // Parse vCard fields into wikitext
+        val fields = mutableMapOf<String, String>()
+        for (line in unfolded.lines()) {
+            val parts = line.split(":", limit = 2)
+            if (parts.size != 2) continue
+            val prefix = parts[0]  // e.g. "FN;CHARSET=UTF-8;ENCODING=QUOTED-PRINTABLE"
+            val rawValue = parts[1].trim()
+            val params = prefix.split(";")
+            val key = params[0].uppercase()
+
+            // Decode value based on encoding parameter
+            val value = decodeVcardValue(rawValue, params)
+
+            when (key) {
+                "FN" -> fields["Name"] = value
+                "N" -> {
+                    // N field: Last;First;Middle;Prefix;Suffix
+                    if (!fields.containsKey("Name") || fields["Name"].isNullOrBlank()) {
+                        val nameParts = value.split(";").map { it.trim() }
+                        val assembled = listOfNotNull(
+                            nameParts.getOrNull(3)?.ifBlank { null },  // prefix
+                            nameParts.getOrNull(1)?.ifBlank { null },  // first
+                            nameParts.getOrNull(2)?.ifBlank { null },  // middle
+                            nameParts.getOrNull(0)?.ifBlank { null },  // last
+                            nameParts.getOrNull(4)?.ifBlank { null }   // suffix
+                        ).joinToString(" ")
+                        if (assembled.isNotBlank()) fields["Name"] = assembled
+                    }
+                }
+                "TEL" -> fields.merge("Phone", value) { old, new -> "$old, $new" }
+                "EMAIL" -> fields.merge("Email", value) { old, new -> "$old, $new" }
+                "ORG" -> fields["Organization"] = value.replace(";", ", ")
+                "TITLE" -> fields["Job Title"] = value
+                "ADR" -> {
+                    val addr = value.replace(";", " ").replace(Regex("\\s+"), " ").trim()
+                    if (addr.isNotBlank()) fields["Address"] = addr
+                }
+                "URL" -> fields.merge("URL", value) { old, new -> "$old, $new" }
+                "NOTE" -> fields["Note"] = value
+                "BDAY" -> fields["Birthday"] = value
+            }
+        }
+        val wikitext = buildString {
+            fields.forEach { (key, value) ->
+                when (key) {
+                    "URL" -> appendLine("|$key|[[$value]]|")
+                    "Email" -> {
+                        val emails = value.split(",").map { it.trim() }
+                        val links = emails.joinToString(", ") { "[ext[${it}|mailto:${it}]]" }
+                        appendLine("|$key|$links|")
+                    }
+                    "Phone" -> {
+                        val phones = value.split(",").map { it.trim() }
+                        val links = phones.joinToString(", ") { "[ext[${it}|tel:${it}]]" }
+                        appendLine("|$key|$links|")
+                    }
+                    else -> appendLine("|$key|$value|")
+                }
+            }
+        }
+        sharedText = wikitext.ifBlank { vcardText }
+        sharedSubject = fields["Name"] ?: getDisplayName(uri)?.substringBeforeLast(".")
+    }
+
+    /**
+     * Decode a vCard property value based on encoding parameters.
+     * Handles QUOTED-PRINTABLE and BASE64 encodings.
+     */
+    private fun decodeVcardValue(raw: String, params: List<String>): String {
+        val upperParams = params.map { it.uppercase() }
+        val isQP = upperParams.any { it.contains("QUOTED-PRINTABLE") }
+        val isBase64 = upperParams.any { it.contains("BASE64") || it.contains("ENCODING=B") }
+        val charset = upperParams.firstOrNull { it.startsWith("CHARSET=") }
+            ?.substringAfter("CHARSET=") ?: "UTF-8"
+
+        return when {
+            isQP -> decodeQuotedPrintable(raw, charset)
+            isBase64 -> try {
+                String(android.util.Base64.decode(raw, android.util.Base64.DEFAULT),
+                    java.nio.charset.Charset.forName(charset))
+            } catch (_: Exception) { raw }
+            else -> raw
+        }
+    }
+
+    /**
+     * Decode a quoted-printable encoded string.
+     * =XX is a hex-encoded byte, =\n is a soft line break.
+     */
+    private fun decodeQuotedPrintable(input: String, charset: String = "UTF-8"): String {
+        val bytes = mutableListOf<Byte>()
+        var i = 0
+        while (i < input.length) {
+            val c = input[i]
+            if (c == '=' && i + 2 < input.length) {
+                val hex = input.substring(i + 1, i + 3)
+                if (hex == "\r\n" || hex.startsWith("\n")) {
+                    // Soft line break — skip
+                    i += if (hex == "\r\n") 3 else 2
+                    continue
+                }
+                try {
+                    bytes.add(hex.toInt(16).toByte())
+                    i += 3
+                    continue
+                } catch (_: NumberFormatException) {
+                    // Not valid QP, treat as literal
+                }
+            }
+            bytes.add(c.code.toByte())
+            i++
+        }
+        return try {
+            String(bytes.toByteArray(), java.nio.charset.Charset.forName(charset))
+        } catch (_: Exception) {
+            String(bytes.toByteArray(), Charsets.UTF_8)
+        }
+    }
+
+    private fun handleCalendarIntent() {
+        val uri = getStreamUri()
+        if (uri == null) {
+            Toast.makeText(this, getString(R.string.capture_no_file), Toast.LENGTH_SHORT).show()
+            finish()
+            return
+        }
+        val icsText = readTextFromUri(uri) ?: ""
+        // Parse iCalendar VEVENT fields
+        val fields = mutableMapOf<String, String>()
+        var inEvent = false
+        for (line in icsText.lines()) {
+            val trimmed = line.trim()
+            if (trimmed == "BEGIN:VEVENT") inEvent = true
+            if (trimmed == "END:VEVENT") inEvent = false
+            if (!inEvent) continue
+            val parts = trimmed.split(":", limit = 2)
+            if (parts.size == 2) {
+                val key = parts[0].split(";")[0].uppercase()
+                val value = parts[1].trim()
+                when (key) {
+                    "SUMMARY" -> fields["Summary"] = value
+                    "DTSTART" -> fields["Start"] = formatIcsDate(value)
+                    "DTEND" -> fields["End"] = formatIcsDate(value)
+                    "LOCATION" -> fields["Location"] = value
+                    "DESCRIPTION" -> fields["Description"] = value.replace("\\n", "\n").replace("\\,", ",")
+                    "URL" -> fields["URL"] = value
+                    "ORGANIZER" -> {
+                        val email = value.removePrefix("mailto:").removePrefix("MAILTO:")
+                        fields["Organizer"] = email
+                    }
+                }
+            }
+        }
+        val wikitext = buildString {
+            fields.forEach { (key, value) ->
+                when (key) {
+                    "Description" -> {
+                        appendLine("")
+                        appendLine(value)
+                    }
+                    "URL" -> appendLine("|$key|[[$value]]|")
+                    else -> appendLine("|$key|$value|")
+                }
+            }
+        }
+        sharedText = wikitext.ifBlank { icsText }
+        sharedSubject = fields["Summary"] ?: getDisplayName(uri)?.substringBeforeLast(".")
+    }
+
+    private fun formatIcsDate(value: String): String {
+        // Convert 20260211T100000Z or 20260211 to readable format
+        return try {
+            val clean = value.replace("Z", "").replace("T", "")
+            val year = clean.substring(0, 4)
+            val month = clean.substring(4, 6)
+            val day = clean.substring(6, 8)
+            if (clean.length >= 12) {
+                val hour = clean.substring(8, 10)
+                val min = clean.substring(10, 12)
+                "$year-$month-$day $hour:$min"
+            } else {
+                "$year-$month-$day"
+            }
+        } catch (e: Exception) { value }
+    }
+
+    private fun handleMultipleIntent() {
+        val uris = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+            intent.getParcelableArrayListExtra(Intent.EXTRA_STREAM, Uri::class.java)
+        } else {
+            @Suppress("DEPRECATION")
+            intent.getParcelableArrayListExtra<Uri>(Intent.EXTRA_STREAM)
+        }
+
+        if (uris.isNullOrEmpty()) {
+            Toast.makeText(this, getString(R.string.capture_no_file), Toast.LENGTH_SHORT).show()
+            finish()
+            return
+        }
+
+        multipleUris = uris
+        sharedSubject = intent.getStringExtra(Intent.EXTRA_SUBJECT)?.let { sanitizeTitle(it) }
+
+        // Load thumbnails for first few items (max 4)
+        val thumbs = mutableListOf<Bitmap?>()
+        for (uri in uris.take(4)) {
+            val mimeType = contentResolver.getType(uri) ?: ""
+            var thumb: Bitmap? = null
+            if (mimeType.startsWith("image/")) {
+                try {
+                    contentResolver.openInputStream(uri)?.use { stream ->
+                        val opts = BitmapFactory.Options().apply { inSampleSize = 4 }
+                        thumb = BitmapFactory.decodeStream(stream, null, opts)
+                    }
+                } catch (_: Exception) {}
+            } else if (mimeType.startsWith("video/")) {
+                try {
+                    val mmr = MediaMetadataRetriever()
+                    mmr.setDataSource(this, uri)
+                    thumb = mmr.getFrameAtTime(500000)
+                    mmr.release()
+                } catch (_: Exception) {}
+            }
+            thumbs.add(thumb)
+        }
+        multipleThumbnails = thumbs
+    }
+
     private fun loadRecentWikis(): List<WikiEntry> {
         val wikis = mutableListOf<WikiEntry>()
+
+        // Load the authoritative Rust-side wiki list paths for cross-referencing
+        val rustPaths = mutableSetOf<String>()
+        val rustFile = File(filesDir.parentFile, "recent_wikis.json")
+        if (rustFile.exists()) {
+            try {
+                val arr = JSONArray(rustFile.readText())
+                for (i in 0 until arr.length()) {
+                    val obj = arr.optJSONObject(i) ?: continue
+                    val path = obj.optString("path", "")
+                    if (path.isNotEmpty()) rustPaths.add(path)
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed to read Rust recent_wikis.json: ${e.message}")
+            }
+        }
 
         // Try Kotlin-side recent_wikis.json first (written by WikiActivity.updateRecentWikis)
         val kotlinFile = File(filesDir, "recent_wikis.json")
@@ -231,8 +632,12 @@ class CaptureActivity : AppCompatActivity() {
                     val path = obj.optString("path", "")
                     val title = obj.optString("title", "")
                     val isFolder = obj.optBoolean("is_folder", false)
+                    val externalAttachments = obj.optBoolean("external_attachments", true)
                     if (path.isNotEmpty() && title.isNotEmpty()) {
-                        wikis.add(WikiEntry(path, title, isFolder))
+                        // Only include if still present in the authoritative Rust-side list
+                        if (rustPaths.isEmpty() || rustPaths.contains(path)) {
+                            wikis.add(WikiEntry(path, title, isFolder, externalAttachments))
+                        }
                     }
                 }
             } catch (e: Exception) {
@@ -240,24 +645,21 @@ class CaptureActivity : AppCompatActivity() {
             }
         }
 
-        if (wikis.isEmpty()) {
+        if (wikis.isEmpty() && rustPaths.isNotEmpty()) {
             // Fall back to Rust-side recent_wikis.json
-            val rustFile = File(filesDir.parentFile, "recent_wikis.json")
-            if (rustFile.exists()) {
-                try {
-                    val arr = JSONArray(rustFile.readText())
-                    for (i in 0 until arr.length()) {
-                        val obj = arr.optJSONObject(i) ?: continue
-                        val path = obj.optString("path", "")
-                        val filename = obj.optString("filename", "")
-                        val isFolder = obj.optBoolean("is_folder", false)
-                        if (path.isNotEmpty()) {
-                            wikis.add(WikiEntry(path, filename.ifEmpty { "Wiki" }, isFolder))
-                        }
+            try {
+                val arr = JSONArray(rustFile.readText())
+                for (i in 0 until arr.length()) {
+                    val obj = arr.optJSONObject(i) ?: continue
+                    val path = obj.optString("path", "")
+                    val filename = obj.optString("filename", "")
+                    val isFolder = obj.optBoolean("is_folder", false)
+                    if (path.isNotEmpty()) {
+                        wikis.add(WikiEntry(path, filename.ifEmpty { "Wiki" }, isFolder))
                     }
-                } catch (e: Exception) {
-                    Log.w(TAG, "Failed to read Rust recent_wikis.json: ${e.message}")
                 }
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed to read Rust recent_wikis.json (fallback): ${e.message}")
             }
         }
 
@@ -419,6 +821,50 @@ class CaptureActivity : AppCompatActivity() {
             ).apply { bottomMargin = dp(16) })
         }
 
+        // Multiple items preview (SEND_MULTIPLE)
+        if (multipleUris != null) {
+            val count = multipleUris!!.size
+            // Thumbnail row
+            if (multipleThumbnails.isNotEmpty()) {
+                val thumbRow = LinearLayout(this).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    gravity = Gravity.START
+                }
+                for (thumb in multipleThumbnails) {
+                    if (thumb != null) {
+                        thumbRow.addView(ImageView(this).apply {
+                            setImageBitmap(thumb)
+                            scaleType = ImageView.ScaleType.CENTER_CROP
+                            outlineProvider = makeRoundedClip(12)
+                            clipToOutline = true
+                        }, LinearLayout.LayoutParams(dp(80), dp(80)).apply {
+                            rightMargin = dp(8)
+                        })
+                    }
+                }
+                if (count > 4) {
+                    thumbRow.addView(TextView(this).apply {
+                        text = "+${count - 4}"
+                        setTextColor(colorOnSurfaceVariant)
+                        setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f)
+                        gravity = Gravity.CENTER
+                    }, LinearLayout.LayoutParams(dp(80), dp(80)))
+                }
+                card.addView(thumbRow, LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT
+                ).apply { bottomMargin = dp(8) })
+            }
+            card.addView(TextView(this).apply {
+                text = getString(R.string.capture_multiple_items, count)
+                setTextColor(colorOnSurfaceVariant)
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
+            }, LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { bottomMargin = dp(16) })
+        }
+
         // URL preview chip
         if (detectedUrl != null) {
             val urlBg = GradientDrawable().apply {
@@ -439,45 +885,52 @@ class CaptureActivity : AppCompatActivity() {
             ).apply { bottomMargin = dp(16) })
         }
 
-        // Title field with outlined style
-        card.addView(TextView(this).apply {
-            text = getString(R.string.label_title)
-            setTextColor(colorOnSurfaceVariant)
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
-            letterSpacing = 0.04f
-        }, LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT,
-            ViewGroup.LayoutParams.WRAP_CONTENT
-        ).apply { bottomMargin = dp(4) })
+        // Title field with outlined style (hidden for multiple items — each uses its filename)
+        if (multipleUris == null) {
+            card.addView(TextView(this).apply {
+                text = getString(R.string.label_title)
+                setTextColor(colorOnSurfaceVariant)
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+                letterSpacing = 0.04f
+            }, LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { bottomMargin = dp(4) })
 
-        titleEdit = EditText(this).apply {
-            inputType = InputType.TYPE_CLASS_TEXT
-            setSingleLine(true)
-            background = makeOutlinedFieldBg()
-            setPadding(dp(16), dp(12), dp(16), dp(12))
-            if (importFileUri != null) {
-                setText(getString(R.string.capture_import_format, importFileName))
-                isEnabled = false
-            } else {
-                val defaultTitle = sharedSubject
-                    ?: detectedUrl
-                    ?: (sharedFileUri ?: sharedImageUri)?.let { getDisplayName(it)?.substringBeforeLast(".") }
-                    ?: ""
-                setText(defaultTitle)
+            titleEdit = EditText(this).apply {
+                inputType = InputType.TYPE_CLASS_TEXT
+                setSingleLine(true)
+                background = makeOutlinedFieldBg()
+                setPadding(dp(16), dp(12), dp(16), dp(12))
+                if (importFileUri != null) {
+                    setText(importFileName?.trimEnd('.') ?: "import")
+                } else {
+                    // When there's a URL with remaining text, use it as title — it's
+                    // almost always more meaningful than the raw URL.
+                    val textTitle = if (detectedUrl != null && !sharedText.isNullOrBlank()) {
+                        sanitizeTitle(sharedText!!).take(100).ifBlank { null }
+                    } else null
+                    val defaultTitle = sharedSubject
+                        ?: textTitle
+                        ?: detectedUrl
+                        ?: (sharedFileUri ?: sharedImageUri)?.let { getDisplayName(it)?.substringBeforeLast(".") }
+                        ?: ""
+                    setText(defaultTitle)
+                }
+                setTextColor(colorOnSurface)
+                setHintTextColor(colorOutline)
+                hint = getString(R.string.hint_tiddler_title)
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
+                setOnFocusChangeListener { _, hasFocus ->
+                    val bg = background as? GradientDrawable ?: return@setOnFocusChangeListener
+                    bg.setStroke(dp(if (hasFocus) 2 else 1), if (hasFocus) colorPrimary else colorOutline)
+                }
             }
-            setTextColor(colorOnSurface)
-            setHintTextColor(colorOutline)
-            hint = getString(R.string.hint_tiddler_title)
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
-            setOnFocusChangeListener { _, hasFocus ->
-                val bg = background as? GradientDrawable ?: return@setOnFocusChangeListener
-                bg.setStroke(dp(if (hasFocus) 2 else 1), if (hasFocus) colorPrimary else colorOutline)
-            }
+            card.addView(titleEdit, LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { bottomMargin = dp(16) })
         }
-        card.addView(titleEdit, LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT,
-            ViewGroup.LayoutParams.WRAP_CONTENT
-        ).apply { bottomMargin = dp(16) })
 
         // Tags field with outlined style (hidden for imports)
         val tagsLabel = TextView(this).apply {
@@ -648,8 +1101,11 @@ class CaptureActivity : AppCompatActivity() {
 
                 if (result != null) {
                     clippedContent = result.second
-                    if (titleEdit?.text.isNullOrBlank() || titleEdit?.text.toString() == detectedUrl) {
-                        titleEdit?.setText(result.first)
+                    // Always update title from web clip — it's more accurate than
+                    // EXTRA_SUBJECT (which may be empty, a URL, or have wrong encoding)
+                    val clippedTitle = sanitizeTitle(result.first)
+                    if (clippedTitle.isNotBlank() && !clippedTitle.startsWith("http")) {
+                        titleEdit?.setText(clippedTitle)
                     }
                 }
                 // On failure, save will fall back to [[title|url]] bookmark
@@ -687,10 +1143,19 @@ class CaptureActivity : AppCompatActivity() {
                     if (clean.isNotBlank()) result["description"] = clean
                 }
 
-                // Author
-                val authorObj = json.optJSONObject("author")
-                val authorName = authorObj?.optString("name", "")
-                    ?: json.optString("author", "")
+                // Author — can be a string, object, or array of objects
+                val authorName = when {
+                    json.has("author") && json.opt("author") is org.json.JSONArray -> {
+                        val arr = json.getJSONArray("author")
+                        (0 until arr.length()).mapNotNull { i ->
+                            arr.optJSONObject(i)?.optString("name", "")?.takeIf { it.isNotBlank() }
+                        }.joinToString(", ")
+                    }
+                    json.optJSONObject("author") != null -> {
+                        json.getJSONObject("author").optString("name", "")
+                    }
+                    else -> json.optString("author", "")
+                }
                 if (authorName.isNotBlank()) result["author"] = authorName
 
                 // Date
@@ -718,32 +1183,114 @@ class CaptureActivity : AppCompatActivity() {
      * falls back to OG/meta tags. Does NOT extract body content.
      * Returns Pair(title, wikitextContent) or null on failure.
      */
-    private fun fetchAndParseWebPage(urlString: String): Pair<String, String>? {
-        return try {
-            val url = URL(urlString)
+    /**
+     * Fetch a URL, following HTTP and HTML/JS redirects. Returns Pair(finalUrl, rawBytes, httpCharset).
+     */
+    private fun fetchUrl(urlString: String): Triple<String, ByteArray, String?>? {
+        var currentUrl = urlString
+        var maxRedirects = 8
+
+        while (maxRedirects > 0) {
+            val url = URL(currentUrl)
             val conn = url.openConnection() as HttpURLConnection
             conn.connectTimeout = 10000
             conn.readTimeout = 10000
-            conn.instanceFollowRedirects = true
-            conn.setRequestProperty("User-Agent", "Mozilla/5.0 (Android; TiddlyDesktop) AppleWebKit/537.36")
+            conn.instanceFollowRedirects = false
+            conn.useCaches = false
+            conn.setRequestProperty("Cache-Control", "no-cache")
+            conn.setRequestProperty("User-Agent",
+                "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36")
+            conn.setRequestProperty("Accept", "text/html,application/xhtml+xml,*/*")
+            conn.setRequestProperty("Accept-Language", "en-US,en;q=0.9,de;q=0.8")
 
             val responseCode = conn.responseCode
+
+            // HTTP redirect (301-308)
+            if (responseCode in 301..308) {
+                val location = conn.getHeaderField("Location")
+                conn.disconnect()
+                if (location.isNullOrBlank()) return null
+                currentUrl = if (location.startsWith("http")) location
+                             else URL(URL(currentUrl), location).toString()
+                maxRedirects--
+                Log.d(TAG, "Web clip: HTTP redirect → $currentUrl")
+                continue
+            }
+
             if (responseCode != 200) {
-                Log.w(TAG, "Web clip failed: HTTP $responseCode")
+                Log.w(TAG, "Web clip failed: HTTP $responseCode for $currentUrl")
                 conn.disconnect()
                 return null
             }
 
-            // Determine charset
             val contentType = conn.contentType ?: ""
-            val charset = if (contentType.contains("charset=", ignoreCase = true)) {
+            val httpCharset = if (contentType.contains("charset=", ignoreCase = true)) {
                 contentType.substringAfter("charset=").substringBefore(";").trim()
-            } else {
-                "UTF-8"
+                    .removeSurrounding("\"").removeSurrounding("'").trim()
+            } else null
+
+            val rawBytes = conn.inputStream.readBytes()
+            conn.disconnect()
+
+            // Check for HTML meta-refresh or JS redirects in small/redirect pages
+            if (rawBytes.size < 10000) {
+                val preview = String(rawBytes, Charsets.UTF_8)
+                // <meta http-equiv="refresh" content="0;url=...">
+                val metaRefresh = Regex(
+                    """<meta\s[^>]*http-equiv\s*=\s*["']?refresh["']?\s[^>]*content\s*=\s*["'][^"']*url=([^"'\s>]+)""",
+                    RegexOption.IGNORE_CASE
+                ).find(preview)
+                    ?: Regex(
+                        """<meta\s[^>]*content\s*=\s*["'][^"']*url=([^"'\s>]+)["'][^>]*http-equiv\s*=\s*["']?refresh""",
+                        RegexOption.IGNORE_CASE
+                    ).find(preview)
+                if (metaRefresh != null) {
+                    val target = metaRefresh.groupValues[1].trim()
+                    if (target.startsWith("http")) {
+                        currentUrl = target
+                        maxRedirects--
+                        Log.d(TAG, "Web clip: meta-refresh redirect → $currentUrl")
+                        continue
+                    }
+                }
+                // window.location = "..." or window.location.href = "..."
+                val jsRedirect = Regex(
+                    """(?:window\.location(?:\.href)?\s*=\s*|window\.location\.replace\s*\(\s*)["']([^"']+)["']""",
+                    RegexOption.IGNORE_CASE
+                ).find(preview)
+                if (jsRedirect != null) {
+                    val target = jsRedirect.groupValues[1].trim()
+                    if (target.startsWith("http")) {
+                        currentUrl = target
+                        maxRedirects--
+                        Log.d(TAG, "Web clip: JS redirect → $currentUrl")
+                        continue
+                    }
+                }
             }
 
-            val html = conn.inputStream.bufferedReader(java.nio.charset.Charset.forName(charset)).readText()
-            conn.disconnect()
+            Log.d(TAG, "Web clip: final URL=$currentUrl, ${rawBytes.size} bytes, charset=$httpCharset")
+            return Triple(currentUrl, rawBytes, httpCharset)
+        }
+
+        Log.w(TAG, "Web clip: too many redirects from $urlString")
+        return null
+    }
+
+    private fun fetchAndParseWebPage(urlString: String): Pair<String, String>? {
+        return try {
+            val (finalUrl, rawBytes, httpCharset) = fetchUrl(urlString) ?: return null
+
+            // Charset detection: always prefer UTF-8 if bytes are valid UTF-8.
+            // Many servers/meta tags declare wrong charsets. Browsers default to UTF-8.
+            val html = if (looksLikeUtf8(rawBytes)) {
+                Log.d(TAG, "Web clip: using UTF-8 (valid UTF-8 bytes)")
+                String(rawBytes, Charsets.UTF_8)
+            } else {
+                val charset = detectHtmlCharset(rawBytes, httpCharset)
+                Log.d(TAG, "Web clip: using charset=$charset (not valid UTF-8)")
+                String(rawBytes, java.nio.charset.Charset.forName(charset))
+            }
 
             // Try JSON-LD first (more specific for sub-pages, forum posts, etc.)
             val jsonLd = extractJsonLd(html)
@@ -751,7 +1298,7 @@ class CaptureActivity : AppCompatActivity() {
             // Extract title
             val title = extractHtmlTag(html, "og:title")
                 ?: extractHtmlTitle(html)
-                ?: urlString
+                ?: finalUrl
 
             // Prefer JSON-LD data over OG tags (JSON-LD is often page-specific)
             val description = jsonLd["description"]
@@ -772,6 +1319,9 @@ class CaptureActivity : AppCompatActivity() {
                 ?: extractHtmlTag(html, "datePublished")
                 ?: ""
 
+            // Use the final URL after redirects for the Source link
+            val sourceUrl = finalUrl
+
             // Any selected text the user shared (text beyond the URL)
             // sharedText has URL already stripped in handleTextIntent
             val selectedText = sharedText?.trim()
@@ -788,7 +1338,7 @@ class CaptureActivity : AppCompatActivity() {
                     appendLine("<<<")
                     appendLine()
                 }
-                append("Source: [[${urlString}]]")
+                append("Source: [[${sourceUrl}]]")
                 if (siteName.isNotBlank()) append(" (${siteName})")
                 appendLine()
                 if (author.isNotBlank()) appendLine("Author: $author")
@@ -804,11 +1354,114 @@ class CaptureActivity : AppCompatActivity() {
                 }
             }.trim()
 
+            // Also update the detected URL for the capture file's source_url
+            detectedUrl = sourceUrl
+
             Pair(title, wikitext)
         } catch (e: Exception) {
             Log.e(TAG, "Web clip failed: ${e.message}")
             null
         }
+    }
+
+    /**
+     * Detect the actual charset of HTML content by checking (in priority order):
+     * 1. BOM (Byte Order Mark)
+     * 2. HTML <meta charset="..."> tag
+     * 3. HTML <meta http-equiv="Content-Type" content="...;charset=..."> tag
+     * 4. HTTP Content-Type header charset
+     * 5. Default to UTF-8
+     */
+    private fun detectHtmlCharset(rawBytes: ByteArray, httpCharset: String?): String {
+        // Check for UTF-8 BOM
+        if (rawBytes.size >= 3 &&
+            rawBytes[0] == 0xEF.toByte() && rawBytes[1] == 0xBB.toByte() && rawBytes[2] == 0xBF.toByte()) {
+            return "UTF-8"
+        }
+
+        // Scan the first 4KB as ASCII/Latin-1 to find meta charset declarations
+        // (charset declarations must appear early in the document)
+        val preview = String(rawBytes, 0, minOf(rawBytes.size, 4096), Charsets.ISO_8859_1)
+
+        // <meta charset="UTF-8"> (charset can be anywhere in the tag)
+        val metaCharset = Regex(
+            """<meta\s[^>]*charset\s*=\s*["']?([^"'\s;>]+)""",
+            RegexOption.IGNORE_CASE
+        ).find(preview)
+        if (metaCharset != null) {
+            val cs = metaCharset.groupValues[1].trim()
+            return try { java.nio.charset.Charset.forName(cs); cs } catch (_: Exception) { "UTF-8" }
+        }
+
+        // <meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+        // Search for charset= inside any meta content attribute
+        val metaHttpEquiv = Regex(
+            """<meta\s[^>]*content\s*=\s*["'][^"']*charset=([^"'\s;]+)""",
+            RegexOption.IGNORE_CASE
+        ).find(preview)
+        if (metaHttpEquiv != null) {
+            val cs = metaHttpEquiv.groupValues[1].trim()
+            return try { java.nio.charset.Charset.forName(cs); cs } catch (_: Exception) { "UTF-8" }
+        }
+
+        // Fall back to HTTP header charset, but validate against actual content.
+        // Many servers declare ISO-8859-1 or Windows-1252 while serving UTF-8 content.
+        if (httpCharset != null) {
+            val normalized = httpCharset.uppercase()
+            if (normalized != "UTF-8" && normalized != "UTF8") {
+                // If HTTP says non-UTF-8, check if content is actually valid UTF-8
+                if (looksLikeUtf8(rawBytes)) {
+                    return "UTF-8"
+                }
+            }
+            return try { java.nio.charset.Charset.forName(httpCharset); httpCharset } catch (_: Exception) { "UTF-8" }
+        }
+
+        return "UTF-8"
+    }
+
+    /**
+     * Quick check if raw bytes look like valid UTF-8 by scanning for multi-byte sequences.
+     * Returns true if we find valid multi-byte UTF-8 sequences and no invalid ones.
+     * Scans up to 8KB for efficiency.
+     */
+    private fun looksLikeUtf8(rawBytes: ByteArray): Boolean {
+        val limit = minOf(rawBytes.size, 8192)
+        var i = 0
+        var multiByteCount = 0
+        while (i < limit) {
+            val b = rawBytes[i].toInt() and 0xFF
+            when {
+                b <= 0x7F -> i++ // ASCII
+                b in 0xC2..0xDF -> { // 2-byte
+                    if (i + 1 >= limit) break
+                    val b2 = rawBytes[i + 1].toInt() and 0xFF
+                    if (b2 !in 0x80..0xBF) return false
+                    multiByteCount++
+                    i += 2
+                }
+                b in 0xE0..0xEF -> { // 3-byte
+                    if (i + 2 >= limit) break
+                    val b2 = rawBytes[i + 1].toInt() and 0xFF
+                    val b3 = rawBytes[i + 2].toInt() and 0xFF
+                    if (b2 !in 0x80..0xBF || b3 !in 0x80..0xBF) return false
+                    multiByteCount++
+                    i += 3
+                }
+                b in 0xF0..0xF4 -> { // 4-byte
+                    if (i + 3 >= limit) break
+                    val b2 = rawBytes[i + 1].toInt() and 0xFF
+                    val b3 = rawBytes[i + 2].toInt() and 0xFF
+                    val b4 = rawBytes[i + 3].toInt() and 0xFF
+                    if (b2 !in 0x80..0xBF || b3 !in 0x80..0xBF || b4 !in 0x80..0xBF) return false
+                    multiByteCount++
+                    i += 4
+                }
+                else -> return false // Invalid UTF-8 leading byte
+            }
+        }
+        // Only claim UTF-8 if we actually found multi-byte sequences
+        return multiByteCount > 0
     }
 
     private fun extractHtmlTitle(html: String): String? {
@@ -868,6 +1521,20 @@ class CaptureActivity : AppCompatActivity() {
      * Copy the shared file to the wiki's attachments folder as an external attachment.
      * Returns the relative path (e.g. "./attachments/photo.jpg") or null on failure.
      */
+    private fun getFileSize(uri: Uri): Long {
+        return try {
+            contentResolver.openAssetFileDescriptor(uri, "r")?.use { it.length } ?: -1L
+        } catch (e: Exception) { -1L }
+    }
+
+    private fun filesMatchBySize(uri1: Uri, uri2: Uri): Boolean {
+        val size1 = getFileSize(uri1)
+        val size2 = getFileSize(uri2)
+        if (size1 > 0 && size1 == size2) return true
+        if (size1 < 0 && size2 < 0) return true  // Both unknown, assume same
+        return false
+    }
+
     private fun copyToAttachmentsFolder(sourceUri: Uri, treeUri: Uri, suggestedName: String, mimeType: String): String? {
         return try {
             val parentDoc = DocumentFile.fromTreeUri(this, treeUri) ?: return null
@@ -881,14 +1548,27 @@ class CaptureActivity : AppCompatActivity() {
             // Sanitize filename
             val safeName = suggestedName.replace("/", "_").replace("\\", "_")
 
-            // Handle collisions
+            // Check for existing file — reuse if same size (deduplication)
             var finalName = safeName
-            var counter = 1
-            while (attachmentsDir.findFile(finalName) != null && counter < 1000) {
+            var existingFile = attachmentsDir.findFile(safeName)
+            if (existingFile != null) {
+                if (filesMatchBySize(sourceUri, existingFile.uri)) {
+                    Log.d(TAG, "Attachment already exists with matching size: ./attachments/$safeName")
+                    return "./attachments/$safeName"
+                }
+                // Different size, find unique name
                 val baseName = safeName.substringBeforeLast(".")
                 val ext = safeName.substringAfterLast(".", "")
-                finalName = if (ext.isNotEmpty()) "${baseName}_${counter}.${ext}" else "${baseName}_${counter}"
-                counter++
+                var counter = 1
+                do {
+                    finalName = if (ext.isNotEmpty()) "${baseName}_${counter}.${ext}" else "${baseName}_${counter}"
+                    existingFile = attachmentsDir.findFile(finalName)
+                    if (existingFile != null && filesMatchBySize(sourceUri, existingFile.uri)) {
+                        Log.d(TAG, "Attachment already exists with matching size: ./attachments/$finalName")
+                        return "./attachments/$finalName"
+                    }
+                    counter++
+                } while (existingFile != null && counter < 1000)
             }
 
             // Create file and copy content
@@ -915,9 +1595,15 @@ class CaptureActivity : AppCompatActivity() {
         }
 
         val wiki = wikiList[selectedIndex]
-        val title = titleEdit?.text?.toString()?.trim() ?: getString(R.string.capture_untitled)
+        val title = titleEdit?.text?.toString()?.let { sanitizeTitle(it) }?.ifBlank { null } ?: getString(R.string.capture_untitled)
         val tags = tagsEdit?.text?.toString()?.trim() ?: ""
         val now = System.currentTimeMillis()
+
+        // Handle SEND_MULTIPLE — save each item as a separate capture (no title prefix)
+        if (multipleUris != null) {
+            saveMultipleCaptures(wiki, "", tags, now)
+            return
+        }
 
         val captureJson = JSONObject().apply {
             put("target_wiki_path", wiki.path)
@@ -933,9 +1619,14 @@ class CaptureActivity : AppCompatActivity() {
             val ext = MimeTypeMap.getSingleton().getExtensionFromMimeType(mimeType) ?: "jpg"
             val filename = getDisplayName(sharedImageUri!!) ?: "capture_${now}.${ext}"
 
+            // Store caption from EXTRA_TEXT (e.g. WhatsApp image captions)
+            if (!sharedText.isNullOrBlank()) {
+                captureJson.put("caption", sharedText!!.trim())
+            }
+
             // Try external attachment: copy file to wiki's attachments folder
             val treeUri = extractTreeUri(wiki.path)
-            if (treeUri != null) {
+            if (treeUri != null && wiki.externalAttachments) {
                 val relativePath = copyToAttachmentsFolder(sharedImageUri!!, treeUri, filename, mimeType)
                 if (relativePath != null) {
                     captureJson.put("type", mimeType)
@@ -946,17 +1637,17 @@ class CaptureActivity : AppCompatActivity() {
                     embedImageAsBase64(captureJson)
                 }
             } else {
-                // No folder access, embed as base64
+                // External attachments disabled or no folder access, embed as base64
                 embedImageAsBase64(captureJson)
             }
         } else if (sharedFileUri != null) {
-            // Video/audio file — requires external attachments (too large for base64)
+            // Video/audio/PDF file — requires external attachments (too large for base64)
             val mimeType = contentResolver.getType(sharedFileUri!!) ?: intent.type ?: "application/octet-stream"
-            val ext = MimeTypeMap.getSingleton().getExtensionFromMimeType(mimeType) ?: "mp4"
+            val ext = MimeTypeMap.getSingleton().getExtensionFromMimeType(mimeType) ?: "bin"
             val filename = getDisplayName(sharedFileUri!!) ?: "capture_${now}.${ext}"
 
             val treeUri = extractTreeUri(wiki.path)
-            if (treeUri != null) {
+            if (treeUri != null && wiki.externalAttachments) {
                 val relativePath = copyToAttachmentsFolder(sharedFileUri!!, treeUri, filename, mimeType)
                 if (relativePath != null) {
                     captureJson.put("type", mimeType)
@@ -993,8 +1684,8 @@ class CaptureActivity : AppCompatActivity() {
             captureJson.put("file_type", importFileMimeType)
             captureJson.put("text", "")
         } else {
-            // Text capture
-            captureJson.put("type", "text/vnd.tiddlywiki")
+            // Text capture (plain text, markdown, SVG, contacts, calendar)
+            captureJson.put("type", captureType)
 
             val text = when {
                 clippedContent != null -> clippedContent!!
@@ -1021,10 +1712,107 @@ class CaptureActivity : AppCompatActivity() {
             }
         }
 
-        // Write capture file
+        writeCaptureAndFinish(captureJson, wiki)
+    }
+
+    /**
+     * Save multiple items from SEND_MULTIPLE intent, one capture file per item.
+     */
+    private fun saveMultipleCaptures(wiki: WikiEntry, titlePrefix: String, tags: String, now: Long) {
+        val uris = multipleUris ?: return
+        val treeUri = extractTreeUri(wiki.path)
         val capturesDir = File(filesDir, "captures")
         if (!capturesDir.exists()) capturesDir.mkdirs()
 
+        var savedCount = 0
+        for ((index, uri) in uris.withIndex()) {
+            val mimeType = contentResolver.getType(uri) ?: "application/octet-stream"
+            val ext = MimeTypeMap.getSingleton().getExtensionFromMimeType(mimeType) ?: "bin"
+            val displayName = getDisplayName(uri) ?: "item_${index + 1}.${ext}"
+            val itemTitle = if (titlePrefix.isNotBlank()) {
+                if (uris.size > 1) "$titlePrefix ${index + 1}" else titlePrefix
+            } else {
+                displayName.substringBeforeLast(".")
+            }
+
+            val captureJson = JSONObject().apply {
+                put("target_wiki_path", wiki.path)
+                put("target_wiki_title", wiki.title)
+                put("title", itemTitle)
+                put("tags", tags)
+                put("created", now + index) // offset to ensure unique timestamps
+            }
+
+            if (treeUri != null && wiki.externalAttachments) {
+                // Folder wiki with external attachments enabled — copy as external attachment
+                val relativePath = copyToAttachmentsFolder(uri, treeUri, displayName, mimeType)
+                if (relativePath != null) {
+                    captureJson.put("type", mimeType)
+                    captureJson.put("_canonical_uri", relativePath)
+                    captureJson.put("text", "")
+                } else {
+                    // Try base64 fallback for images
+                    if (mimeType.startsWith("image/") && !mimeType.contains("svg")) {
+                        embedUriAsBase64(captureJson, uri)
+                    } else {
+                        continue // skip this item
+                    }
+                }
+            } else if (mimeType.startsWith("image/") && !mimeType.contains("svg")) {
+                // Single-file wiki — embed images as base64
+                embedUriAsBase64(captureJson, uri)
+            } else {
+                // Can't embed large files in single-file wiki
+                continue
+            }
+
+            val random = (('a'..'z') + ('0'..'9')).shuffled().take(4).joinToString("")
+            val captureFile = File(capturesDir, "capture_${now + index}_${random}.json")
+            try {
+                captureFile.writeText(captureJson.toString(2))
+                savedCount++
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to save capture ${index + 1}: ${e.message}")
+            }
+        }
+
+        if (savedCount == 0) {
+            Toast.makeText(this, getString(R.string.capture_no_attachments), Toast.LENGTH_LONG).show()
+            return
+        }
+
+        AlertDialog.Builder(this)
+            .setTitle(getString(R.string.capture_saved_title))
+            .setMessage(getString(R.string.capture_saved_message, wiki.title))
+            .setPositiveButton(getString(R.string.btn_ok)) { _, _ -> finish() }
+            .setNeutralButton(getString(R.string.btn_open_wiki)) { _, _ ->
+                launchWikiActivity(wiki.path, wiki.title, wiki.isFolder)
+                finish()
+            }
+            .setCancelable(false)
+            .show()
+    }
+
+    private fun embedUriAsBase64(captureJson: JSONObject, uri: Uri) {
+        try {
+            contentResolver.openInputStream(uri)?.use { stream ->
+                val bitmap = BitmapFactory.decodeStream(stream)
+                if (bitmap != null) {
+                    captureJson.put("type", "image/jpeg")
+                    val base64 = bitmapToBase64(bitmap, 85)
+                    captureJson.put("text", if (base64.length > 5 * 1024 * 1024) bitmapToBase64(bitmap, 60) else base64)
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to embed image as base64: ${e.message}")
+        }
+    }
+
+    private fun writeCaptureAndFinish(captureJson: JSONObject, wiki: WikiEntry) {
+        val capturesDir = File(filesDir, "captures")
+        if (!capturesDir.exists()) capturesDir.mkdirs()
+
+        val now = System.currentTimeMillis()
         val random = (('a'..'z') + ('0'..'9')).shuffled().take(4).joinToString("")
         val captureFile = File(capturesDir, "capture_${now}_${random}.json")
 
@@ -1090,6 +1878,22 @@ class CaptureActivity : AppCompatActivity() {
             return
         }
 
+        if (isFolder) {
+            // Folder wikis need Node.js server started by Rust — launch the main app
+            // with extras so handleWidgetIntent() writes pending_widget_wiki.json,
+            // which the landing page reads and auto-opens the folder wiki.
+            Log.d(TAG, "Folder wiki not yet open, launching main app with open_wiki extras")
+            val mainIntent = packageManager.getLaunchIntentForPackage(packageName)
+            if (mainIntent != null) {
+                mainIntent.putExtra("open_wiki_path", wikiPath)
+                mainIntent.putExtra("open_wiki_title", wikiTitle)
+                mainIntent.putExtra("open_wiki_is_folder", true)
+                mainIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                startActivity(mainIntent)
+            }
+            return
+        }
+
         val wikiIntent = Intent(this, WikiActivity::class.java).apply {
             putExtra(WikiActivity.EXTRA_WIKI_PATH, wikiPath)
             putExtra(WikiActivity.EXTRA_WIKI_TITLE, wikiTitle)
@@ -1099,5 +1903,67 @@ class CaptureActivity : AppCompatActivity() {
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         }
         startActivity(wikiIntent)
+    }
+
+    /**
+     * Clean up stale capture files older than 24 hours.
+     * Also removes orphaned import data files (.dat) whose capture JSON no longer exists.
+     */
+    private fun cleanupStaleCaptureFiles() {
+        try {
+            val capturesDir = File(filesDir, "captures")
+            if (!capturesDir.exists() || !capturesDir.isDirectory) return
+            val files = capturesDir.listFiles() ?: return
+            val now = System.currentTimeMillis()
+            val maxAge = 24 * 60 * 60 * 1000L  // 24 hours
+
+            // Collect all referenced import filenames from still-valid capture JSONs
+            val referencedImports = mutableSetOf<String>()
+            var deletedCount = 0
+
+            for (f in files) {
+                if (f.name.startsWith("capture_") && f.name.endsWith(".json")) {
+                    try {
+                        val json = JSONObject(f.readText())
+                        val created = json.optLong("created", 0)
+                        if (created > 0 && now - created > maxAge) {
+                            // Also delete any referenced import file
+                            val importFile = json.optString("import_file", "")
+                            if (importFile.isNotEmpty()) {
+                                File(capturesDir, importFile).delete()
+                            }
+                            f.delete()
+                            deletedCount++
+                        } else {
+                            // Still valid — track its import file reference
+                            val importFile = json.optString("import_file", "")
+                            if (importFile.isNotEmpty()) referencedImports.add(importFile)
+                        }
+                    } catch (e: Exception) {
+                        // Malformed JSON — delete if old (by file modification time)
+                        if (now - f.lastModified() > maxAge) {
+                            f.delete()
+                            deletedCount++
+                        }
+                    }
+                }
+            }
+
+            // Clean orphaned .dat import files not referenced by any capture JSON
+            for (f in files) {
+                if (f.name.startsWith("import_") && f.name.endsWith(".dat")) {
+                    if (f.name !in referencedImports) {
+                        f.delete()
+                        deletedCount++
+                    }
+                }
+            }
+
+            if (deletedCount > 0) {
+                Log.d(TAG, "Cleaned up $deletedCount stale capture file(s)")
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Capture cleanup failed: ${e.message}")
+        }
     }
 }

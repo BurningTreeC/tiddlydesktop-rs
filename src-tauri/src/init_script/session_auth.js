@@ -31,14 +31,17 @@
         var CONFIG_AUTH_URLS = CONFIG_PREFIX + "urls";
         var invoke = window.__TAURI__.core.invoke;
 
-        // Install save hook to filter out the injected plugin tiddler
+        function isInjectedTiddler(title) {
+            return title === PLUGIN_TITLE ||
+                title.indexOf("$:/plugins/tiddlydesktop-rs/") === 0 ||
+                title.indexOf("$:/temp/tiddlydesktop") === 0;
+        }
+
+        // Install save hook to filter out the injected plugin tiddler (single-file wikis)
         if (!window.__tdSaveHookInstalled && $tw.hooks) {
             $tw.hooks.addHook("th-saving-tiddler", function(tiddler) {
                 if (tiddler && tiddler.fields && tiddler.fields.title) {
-                    var title = tiddler.fields.title;
-                    if (title === PLUGIN_TITLE ||
-                        title.indexOf("$:/plugins/tiddlydesktop-rs/") === 0 ||
-                        title.indexOf("$:/temp/tiddlydesktop") === 0) {
+                    if (isInjectedTiddler(tiddler.fields.title)) {
                         return null;
                     }
                 }
@@ -46,6 +49,22 @@
             });
             window.__tdSaveHookInstalled = true;
             console.log("[TiddlyDesktop] Save hook installed");
+        }
+
+        // For folder wikis (Node.js syncer): patch getSyncedTiddlers to exclude injected tiddlers.
+        // The syncer bypasses th-saving-tiddler and uses getSyncedTiddlers() to decide what to sync.
+        function patchSyncer() {
+            if (!$tw.syncer || $tw.syncer.__tdPatched) return !!$tw.syncer;
+            $tw.syncer.__tdPatched = true;
+            var origGS = $tw.syncer.getSyncedTiddlers.bind($tw.syncer);
+            $tw.syncer.getSyncedTiddlers = function(source) {
+                return origGS(source).filter(function(t) { return !isInjectedTiddler(t); });
+            };
+            console.log("[TiddlyDesktop] Syncer patched: getSyncedTiddlers excludes injected tiddlers");
+            return true;
+        }
+        if (!patchSyncer()) {
+            var patchIv = setInterval(function() { if (patchSyncer()) clearInterval(patchIv); }, 100);
         }
 
         // Cleanup: Silently remove any accidentally-saved tiddlers from previous versions.
@@ -111,6 +130,14 @@
             $tw.wiki.readPluginInfo();
             $tw.wiki.registerPluginTiddlers("plugin");
             $tw.wiki.unpackPluginTiddlers();
+
+            // Mark as "in sync" so syncer won't save this plugin to disk
+            if ($tw.syncer) {
+                $tw.syncer.tiddlerInfo[PLUGIN_TITLE] = {
+                    changeCount: $tw.wiki.getChangeCount(PLUGIN_TITLE),
+                    revision: "0"
+                };
+            }
 
             // Trigger UI refresh
             $tw.rootWidget.refresh({});

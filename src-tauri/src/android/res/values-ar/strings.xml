@@ -14,7 +14,8 @@
     <string name="capture_saved_title">تم الالتقاط</string>
     <string name="capture_saved_message">تم الحفظ في %s</string>
     <string name="capture_failed_copy">فشل نسخ الملف إلى مجلد المرفقات</string>
-    <string name="capture_no_attachments">هذا الويكي لا يدعم المرفقات الخارجية. استخدم ويكي مجلد لالتقاط الفيديو.</string>
+    <string name="capture_no_attachments">هذا الويكي لا يدعم المرفقات الخارجية. استخدم ويكي مجلد للملفات الكبيرة.</string>
+    <string name="capture_multiple_items">%d عناصر</string>
     <string name="capture_failed_read">فشل قراءة الملف</string>
     <string name="capture_failed_save">فشل حفظ الالتقاط</string>
     <string name="capture_imported">تم استيراد %d التقاط(ات)</string>
@@ -29,4 +30,5 @@
     <string name="btn_open_wiki">فتح الويكي</string>
     <string name="open_as_wiki">فتح كويكي</string>
     <string name="import_into_wiki">استيراد إلى ويكي</string>
+    <string name="no_app_for_link">لا يوجد تطبيق لفتح هذا الرابط</string>
 </resources>

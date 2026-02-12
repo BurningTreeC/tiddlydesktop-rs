@@ -3256,6 +3256,20 @@ async fn open_wiki_folder(app: tauri::AppHandle, path: String) -> Result<WikiEnt
 #[cfg(target_os = "android")]
 #[tauri::command]
 async fn open_wiki_folder(app: tauri::AppHandle, path: String) -> Result<WikiEntry, String> {
+    // Run the entire folder wiki opening on a blocking thread so it doesn't
+    // hold up the Tauri async runtime (Node.js server startup polls for up to 5s).
+    // This allows other commands (like open_wiki_window) to run concurrently.
+    let app_clone = app.clone();
+    let path_clone = path.clone();
+    tokio::task::spawn_blocking(move || {
+        open_wiki_folder_blocking(app_clone, path_clone)
+    })
+    .await
+    .map_err(|e| format!("Task join error: {}", e))?
+}
+
+#[cfg(target_os = "android")]
+fn open_wiki_folder_blocking(app: tauri::AppHandle, path: String) -> Result<WikiEntry, String> {
     // Verify this is a valid wiki folder (has tiddlywiki.info)
     let is_saf_uri = path.starts_with("content://") || path.starts_with('{');
 
@@ -3283,33 +3297,41 @@ async fn open_wiki_folder(app: tauri::AppHandle, path: String) -> Result<WikiEnt
             .to_string()
     };
 
-    // Start Node.js TiddlyWiki server for this folder wiki
-    // For SAF URIs, this copies to local storage first since Node.js can't read SAF directly
-    eprintln!("[TiddlyDesktop] Starting Node.js TiddlyWiki server for folder wiki...");
+    // For SAF URIs: copy to local storage in this process (has AppHandle for SAF access),
+    // then pass the local path to WikiActivity so it can start Node.js from it.
+    // The sync watcher also runs here (needs SAF access for writing back).
+    // For filesystem paths: pass directly, WikiActivity starts Node.js from it.
+    let folder_local_path = if is_saf_uri {
+        eprintln!("[TiddlyDesktop] Copying SAF wiki to local storage...");
+        let local_path = android::node_bridge::copy_saf_wiki_to_local(&path)?;
 
-    let server_url = if is_saf_uri {
-        // SAF URI: copy to local and start server with auto-sync back to SAF
-        let (url, _local_path) = android::node_bridge::start_saf_wiki_server(&path)?;
-        // Changes are automatically synced back to SAF every 2 seconds
-        url
+        // Prepare tiddlywiki.info for Android
+        let info_path = PathBuf::from(&local_path).join("tiddlywiki.info");
+        if info_path.exists() {
+            if let Err(e) = android::node_bridge::prepare_info_for_android(&info_path) {
+                eprintln!("[TiddlyDesktop] Warning: Failed to prepare tiddlywiki.info: {}", e);
+            }
+        }
+
+        // Track the mapping for cleanup (sync watcher now runs in WikiActivity/Kotlin)
+        android::node_bridge::track_wiki_local_path(&path, &local_path);
+        eprintln!("[TiddlyDesktop] SAF wiki copied to: {}", local_path);
+        Some(local_path)
     } else {
-        // Local filesystem path: start server directly
-        let port = android::node_bridge::find_available_port()?;
-        android::node_bridge::start_wiki_server(&path, port)?
+        None
     };
 
-    eprintln!("[TiddlyDesktop] Node.js server started at: {}", server_url);
-
-    // Foreground service is now started from WikiActivity.onCreate() (same :wiki process)
-
-    // Launch WikiActivity with the Node.js server URL
+    // Node.js server is started in the :wiki process (WikiActivity.onCreate)
+    // so it's protected by the foreground service from the start.
+    // Duplicate wiki check is handled by try_bring_wiki_to_front() inside launch_wiki_activity().
     android::wiki_activity::launch_wiki_activity(
         &path,
         &wiki_name,
         true, // is_folder
-        Some(&server_url), // Node.js server URL for folder wiki
+        None, // No server URL — WikiActivity starts the server itself
         false, // backups not applicable for folder wikis
         0, // backup_count not applicable
+        folder_local_path.as_deref(), // Local path for SAF wikis (Node.js reads from here)
     )?;
 
     // Create wiki entry for the recent files list
@@ -3821,6 +3843,7 @@ async fn init_wiki_folder(app: tauri::AppHandle, path: String, edition: String, 
         Some(&server_url), // Node.js server URL
         false, // backups not applicable for folder wikis
         0, // backup_count not applicable
+        None, // No local path needed - server already running
     )?;
 
     // Create wiki entry for the recent files list
@@ -4997,6 +5020,24 @@ async fn open_wiki_window(
     backups_enabled: Option<bool>,
     backup_count: Option<u32>,
 ) -> Result<WikiEntry, String> {
+    // Run on a blocking thread so SAF reads don't block the Tauri async runtime.
+    // This allows concurrent wiki opening (e.g. single-file + folder wiki at the same time).
+    let app_clone = app.clone();
+    let path_clone = path.clone();
+    tokio::task::spawn_blocking(move || {
+        open_wiki_window_blocking(app_clone, path_clone, backups_enabled, backup_count)
+    })
+    .await
+    .map_err(|e| format!("Task join error: {}", e))?
+}
+
+#[cfg(target_os = "android")]
+fn open_wiki_window_blocking(
+    app: tauri::AppHandle,
+    path: String,
+    backups_enabled: Option<bool>,
+    backup_count: Option<u32>,
+) -> Result<WikiEntry, String> {
     // Path is a content:// URI or JSON-serialized FileUri on Android
     let is_saf_uri = path.starts_with("content://") || path.starts_with("{");
 
@@ -5041,6 +5082,7 @@ async fn open_wiki_window(
         None,  // No pre-rendered HTML for single-file wikis
         use_backups,
         use_backup_count,
+        None, // Not a folder wiki
     )?;
 
     let entry = WikiEntry {
@@ -5449,7 +5491,7 @@ async fn check_for_updates() -> Result<UpdateCheckResult, String> {
 
 /// Android version - separate from desktop versioning (must match build.gradle.kts versionName)
 #[cfg(target_os = "android")]
-const ANDROID_VERSION: &str = "0.0.6";
+const ANDROID_VERSION: &str = "0.0.7";
 
 /// Check for updates on Android via version file on GitHub, linking to Play Store
 #[cfg(target_os = "android")]
@@ -8365,5 +8407,98 @@ pub extern "system" fn Java_com_burningtreec_tiddlydesktop_1rs_WikiActivity_clea
     };
 
     eprintln!("[TiddlyDesktop] JNI cleanupWikiLocalCopy called for: {}", wiki_path_str);
+    android::node_bridge::unregister_running_server(&wiki_path_str);
     android::node_bridge::cleanup_wiki_local_copy(&wiki_path_str);
+}
+
+/// JNI function called from WikiActivity to restart a folder wiki's Node.js server.
+/// Returns the new server URL on success, or an empty string on failure.
+#[cfg(target_os = "android")]
+#[no_mangle]
+pub extern "system" fn Java_com_burningtreec_tiddlydesktop_1rs_WikiActivity_restartFolderWikiServer<'a>(
+    mut env: jni::JNIEnv<'a>,
+    _class: jni::objects::JClass<'a>,
+    wiki_path: jni::objects::JString<'a>,
+) -> jni::objects::JString<'a> {
+    let wiki_path_str: String = match env.get_string(&wiki_path) {
+        Ok(s) => s.into(),
+        Err(e) => {
+            eprintln!("[TiddlyDesktop] JNI restartFolderWikiServer: Failed to get wiki_path string: {}", e);
+            return env.new_string("").unwrap();
+        }
+    };
+
+    eprintln!("[TiddlyDesktop] JNI restartFolderWikiServer called for: {}", wiki_path_str);
+
+    // Unregister any stale entry
+    android::node_bridge::unregister_running_server(&wiki_path_str);
+
+    let is_saf_uri = wiki_path_str.starts_with("content://") || wiki_path_str.starts_with('{');
+
+    let result = if is_saf_uri {
+        // SAF URI: clean up old local copy first, then start fresh
+        android::node_bridge::cleanup_wiki_local_copy(&wiki_path_str);
+        android::node_bridge::start_saf_wiki_server(&wiki_path_str).map(|(url, _)| url)
+    } else {
+        android::node_bridge::find_available_port()
+            .and_then(|port| android::node_bridge::start_wiki_server(&wiki_path_str, port))
+    };
+
+    match result {
+        Ok(url) => {
+            android::node_bridge::register_running_server(&wiki_path_str, &url);
+            eprintln!("[TiddlyDesktop] Folder wiki server restarted at: {}", url);
+            env.new_string(&url).unwrap()
+        }
+        Err(e) => {
+            eprintln!("[TiddlyDesktop] Failed to restart folder wiki server: {}", e);
+            env.new_string("").unwrap()
+        }
+    }
+}
+
+/// JNI function to start a Node.js server from a local filesystem path.
+/// Unlike restartFolderWikiServer, this does NOT do any SAF operations —
+/// it expects the wiki files to already be at the local path.
+/// Returns the server URL on success, or "ERROR:..." on failure.
+#[cfg(target_os = "android")]
+#[no_mangle]
+pub extern "system" fn Java_com_burningtreec_tiddlydesktop_1rs_WikiActivity_startFolderWikiServerFromLocal<'a>(
+    mut env: jni::JNIEnv<'a>,
+    _class: jni::objects::JClass<'a>,
+    local_path: jni::objects::JString<'a>,
+    wiki_path: jni::objects::JString<'a>,
+) -> jni::objects::JString<'a> {
+    let local_path_str: String = match env.get_string(&local_path) {
+        Ok(s) => s.into(),
+        Err(e) => {
+            return env.new_string(format!("ERROR:Failed to get local_path: {}", e)).unwrap();
+        }
+    };
+    let wiki_path_str: String = match env.get_string(&wiki_path) {
+        Ok(s) => s.into(),
+        Err(e) => {
+            return env.new_string(format!("ERROR:Failed to get wiki_path: {}", e)).unwrap();
+        }
+    };
+
+    eprintln!("[TiddlyDesktop] JNI startFolderWikiServerFromLocal: {} (wiki: {})", local_path_str, wiki_path_str);
+
+    // Unregister any stale entry
+    android::node_bridge::unregister_running_server(&wiki_path_str);
+
+    let result = android::node_bridge::find_available_port()
+        .and_then(|port| android::node_bridge::start_wiki_server(&local_path_str, port));
+
+    match result {
+        Ok(url) => {
+            android::node_bridge::register_running_server(&wiki_path_str, &url);
+            eprintln!("[TiddlyDesktop] Folder wiki server started at: {}", url);
+            env.new_string(&url).unwrap()
+        }
+        Err(e) => {
+            eprintln!("[TiddlyDesktop] Failed to start folder wiki server: {}", e);
+            env.new_string(format!("ERROR:{}", e)).unwrap()
+        }
+    }
 }

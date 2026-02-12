@@ -7,31 +7,31 @@ title: $:/plugins/tiddlywiki/tiddlydesktop-rs/WikiList
 <$button class="tc-btn-invisible">
 <$action-sendmessage $message="tm-tiddlydesktop-rs-open-path" path=<<path>> isFolder=<<isFolder>>/>
 <$list filter="[<favicon>!is[blank]]" variable="ignore">
-<img src=<<favicon>> class="td-favicon"/>
+<img src=<<favicon>> class="td-favicon" onerror="this.style.display='none';var d=this.parentNode.querySelector('.td-favicon-default');if(d)d.style.display=''"/>
 </$list>
-<$list filter="[<favicon>is[blank]]" variable="ignore">
+<span class="td-favicon-default" style={{{ [<favicon>!is[blank]then[display:none]else[]] }}}>
 <$list filter="[<isFolder>match[true]]" variable="ignore">
 {{$:/core/images/folder}}
 </$list>
 <$list filter="[<isFolder>!match[true]]" variable="ignore">
 {{$:/core/images/file}}
 </$list>
-</$list>
+</span>
 </$button>
 </div>
 <div class="td-wikilist-info">
 <div class="td-wiki-title">
 <$list filter="[<favicon>!is[blank]]" variable="ignore">
-<img src=<<favicon>> class="td-favicon-small"/>
+<img src=<<favicon>> class="td-favicon-small" onerror="this.style.display='none';var d=this.parentNode.querySelector('.td-favicon-small-default');if(d)d.style.display=''"/>
 </$list>
-<$list filter="[<favicon>is[blank]]" variable="ignore">
+<span class="td-favicon-small-default" style={{{ [<favicon>!is[blank]then[display:none]else[]] }}}>
 <$list filter="[<isFolder>match[true]]" variable="ignore">
 {{$:/core/images/folder}}
 </$list>
 <$list filter="[<isFolder>!match[true]]" variable="ignore">
 {{$:/core/images/file}}
 </$list>
-</$list>
+</span>
 <$text text=<<filename>>/>
 </div>
 <div class="td-wiki-url"><$text text=<<displayPath>>/></div>

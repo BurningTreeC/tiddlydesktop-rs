@@ -14,7 +14,8 @@
     <string name="capture_saved_title">Capturado</string>
     <string name="capture_saved_message">Guardado en %s</string>
     <string name="capture_failed_copy">No se pudo copiar el archivo a la carpeta de adjuntos</string>
-    <string name="capture_no_attachments">Este wiki no admite adjuntos externos. Usa un wiki de carpeta para capturar vídeos.</string>
+    <string name="capture_no_attachments">Este wiki no admite adjuntos externos. Usa un wiki de carpeta para archivos grandes.</string>
+    <string name="capture_multiple_items">%d elementos</string>
     <string name="capture_failed_read">No se pudo leer el archivo</string>
     <string name="capture_failed_save">No se pudo guardar la captura</string>
     <string name="capture_imported">%d captura(s) importada(s)</string>
@@ -29,4 +30,5 @@
     <string name="btn_open_wiki">Abrir wiki</string>
     <string name="open_as_wiki">Abrir como wiki</string>
     <string name="import_into_wiki">Importar en un wiki</string>
+    <string name="no_app_for_link">No se encontró ninguna aplicación para abrir este enlace</string>
 </resources>

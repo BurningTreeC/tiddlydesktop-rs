@@ -14,7 +14,8 @@
     <string name="capture_saved_title">キャプチャ完了</string>
     <string name="capture_saved_message">%sに保存しました</string>
     <string name="capture_failed_copy">添付フォルダへのファイルコピーに失敗しました</string>
-    <string name="capture_no_attachments">このWikiは外部添付ファイルに対応していません。動画をキャプチャするにはフォルダWikiを使用してください。</string>
+    <string name="capture_no_attachments">このWikiは外部添付ファイルに対応していません。大きなファイルにはフォルダウィキを使用してください。</string>
+    <string name="capture_multiple_items">%d 件</string>
     <string name="capture_failed_read">ファイルを読み取れませんでした</string>
     <string name="capture_failed_save">キャプチャを保存できませんでした</string>
     <string name="capture_imported">%d件のキャプチャをインポートしました</string>
@@ -29,4 +30,5 @@
     <string name="btn_open_wiki">Wikiを開く</string>
     <string name="open_as_wiki">Wikiとして開く</string>
     <string name="import_into_wiki">Wikiにインポート</string>
+    <string name="no_app_for_link">このリンクを開くアプリが見つかりません</string>
 </resources>

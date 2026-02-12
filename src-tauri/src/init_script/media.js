@@ -374,11 +374,17 @@
 
         function renderPage(num, canvas) {
             pdfDoc.getPage(num).then(function(page) {
+                var dpr = window.devicePixelRatio || 1;
                 var viewport = page.getViewport({ scale: scale });
-                canvas.width = viewport.width;
-                canvas.height = viewport.height;
+                canvas.width = Math.floor(viewport.width * dpr);
+                canvas.height = Math.floor(viewport.height * dpr);
+                canvas.style.width = Math.floor(viewport.width) + 'px';
+                canvas.style.height = Math.floor(viewport.height) + 'px';
                 var ctx = canvas.getContext('2d');
-                page.render({ canvasContext: ctx, viewport: viewport });
+                // Pass DPR transform to render() so it composes correctly with
+                // PDF.js's own viewport transform (which handles page rotation).
+                var transform = dpr !== 1 ? [dpr, 0, 0, dpr, 0, 0] : null;
+                page.render({ canvasContext: ctx, transform: transform, viewport: viewport });
             });
         }
 

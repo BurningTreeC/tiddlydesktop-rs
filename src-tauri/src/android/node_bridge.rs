@@ -14,23 +14,87 @@ use std::sync::{Arc, Mutex};
 use std::time::SystemTime;
 
 /// Port counter for wiki servers
-static NEXT_PORT: AtomicU16 = AtomicU16::new(39000);
+// Node.js servers use port range 38000-38999.
+// WikiHttpServer (Kotlin, :wiki process) uses 39000-39999.
+// Separate ranges prevent port collisions between processes.
+static NEXT_PORT: AtomicU16 = AtomicU16::new(38000);
 
-/// Get a writable temp directory for Android.
-/// `android_temp_dir()` returns `/tmp` which isn't writable on Android.
-/// Use the app's cache directory instead.
-fn android_temp_dir() -> PathBuf {
+/// Cached app data directory path. Resolved once, reused forever.
+/// Works in both main process (via Tauri) and :wiki process (via JNI).
+static APP_DATA_DIR: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+
+/// Get the app data directory, working in both the main process and :wiki process.
+/// Tries Tauri AppHandle first, falls back to JNI.
+fn get_app_data_dir() -> Result<PathBuf, String> {
+    if let Some(dir) = APP_DATA_DIR.get() {
+        return Ok(dir.clone());
+    }
+
+    // Try Tauri first (works in main process)
     if let Some(app) = crate::get_global_app_handle() {
         use tauri::Manager;
-        if let Ok(cache_dir) = app.path().app_cache_dir() {
-            return cache_dir.join("tmp");
-        }
         if let Ok(data_dir) = app.path().app_data_dir() {
-            return data_dir.join("tmp");
+            let _ = APP_DATA_DIR.set(data_dir.clone());
+            return Ok(data_dir);
         }
     }
-    // Last resort fallback
-    android_temp_dir()
+
+    // Fallback: get data dir via JNI (works in :wiki process)
+    let dir = get_app_data_dir_jni()?;
+    let _ = APP_DATA_DIR.set(dir.clone());
+    Ok(dir)
+}
+
+/// Get the app data directory via JNI (ApplicationInfo.dataDir).
+fn get_app_data_dir_jni() -> Result<PathBuf, String> {
+    use super::wiki_activity::get_java_vm;
+
+    let vm = get_java_vm()?;
+    let mut env = vm.attach_current_thread()
+        .map_err(|e| format!("Failed to attach thread: {}", e))?;
+
+    let activity_thread_class = env.find_class("android/app/ActivityThread")
+        .map_err(|e| format!("Failed to find ActivityThread: {}", e))?;
+
+    let app_context = env.call_static_method(
+        &activity_thread_class,
+        "currentApplication",
+        "()Landroid/app/Application;",
+        &[],
+    ).map_err(|e| format!("Failed to get current application: {}", e))?
+        .l().map_err(|e| format!("Failed to convert: {}", e))?;
+
+    let app_info = env.call_method(
+        &app_context,
+        "getApplicationInfo",
+        "()Landroid/content/pm/ApplicationInfo;",
+        &[],
+    ).map_err(|e| format!("Failed to get applicationInfo: {}", e))?
+        .l().map_err(|e| format!("Failed to convert: {}", e))?;
+
+    let data_dir_jstr = env.get_field(
+        &app_info,
+        "dataDir",
+        "Ljava/lang/String;",
+    ).map_err(|e| format!("Failed to get dataDir: {}", e))?
+        .l().map_err(|e| format!("Failed to convert: {}", e))?;
+
+    let data_dir_str: String = env.get_string((&data_dir_jstr).into())
+        .map_err(|e| format!("Failed to convert string: {}", e))?
+        .into();
+
+    eprintln!("[NodeBridge] App data dir (JNI): {}", data_dir_str);
+    Ok(PathBuf::from(data_dir_str))
+}
+
+/// Get a writable temp directory for Android.
+/// `/tmp` isn't writable on Android — use the app's data directory instead.
+fn android_temp_dir() -> PathBuf {
+    if let Ok(data_dir) = get_app_data_dir() {
+        return data_dir.join("tmp");
+    }
+    // Last resort fallback (shouldn't happen)
+    PathBuf::from("/data/local/tmp")
 }
 
 /// Active file sync watchers for SAF wikis
@@ -41,6 +105,11 @@ static SAF_SYNC_WATCHERS: std::sync::LazyLock<Mutex<HashMap<String, Arc<SyncWatc
 /// Tracks which wiki_path (SAF URI) maps to which local_path
 /// Used for cleanup when a wiki is closed
 static WIKI_LOCAL_PATHS: std::sync::LazyLock<Mutex<HashMap<String, String>>> =
+    std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// Tracks running folder wiki servers: wiki_path -> server_url
+/// Prevents starting duplicate Node.js servers for the same wiki
+static RUNNING_SERVERS: std::sync::LazyLock<Mutex<HashMap<String, String>>> =
     std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
 
 /// A file sync watcher that polls for changes and syncs them back to SAF.
@@ -304,6 +373,30 @@ pub fn start_saf_sync_watcher(local_path: &str, saf_uri: &str) {
     watcher.start();
 }
 
+/// Get the URL of an already-running server for the given wiki path, if any.
+pub fn get_running_server(wiki_path: &str) -> Option<String> {
+    let servers = RUNNING_SERVERS.lock().unwrap();
+    servers.get(wiki_path).cloned()
+}
+
+/// Register a running server for a wiki path.
+pub fn register_running_server(wiki_path: &str, server_url: &str) {
+    let mut servers = RUNNING_SERVERS.lock().unwrap();
+    servers.insert(wiki_path.to_string(), server_url.to_string());
+}
+
+/// Unregister a running server for a wiki path (called on wiki close).
+pub fn unregister_running_server(wiki_path: &str) {
+    let mut servers = RUNNING_SERVERS.lock().unwrap();
+    servers.remove(wiki_path);
+}
+
+/// Track the mapping from wiki_path (SAF URI) to local_path for cleanup.
+pub fn track_wiki_local_path(wiki_path: &str, local_path: &str) {
+    let mut paths = WIKI_LOCAL_PATHS.lock().unwrap();
+    paths.insert(wiki_path.to_string(), local_path.to_string());
+}
+
 /// Stop the file sync watcher for an SAF wiki and clean up the local copy.
 pub fn stop_saf_sync_watcher(local_path: &str) {
     let mut watchers = SAF_SYNC_WATCHERS.lock().unwrap();
@@ -324,13 +417,7 @@ pub fn stop_saf_sync_watcher(local_path: &str) {
 /// Clean up all stale wiki mirror directories.
 /// Call this on app startup to remove any leftover copies from previous sessions.
 pub fn cleanup_stale_wiki_mirrors() {
-    let app = match crate::get_global_app_handle() {
-        Some(app) => app,
-        None => return,
-    };
-
-    use tauri::Manager;
-    let data_dir = match app.path().app_data_dir() {
+    let data_dir = match get_app_data_dir() {
         Ok(dir) => dir,
         Err(_) => return,
     };
@@ -384,13 +471,7 @@ pub fn get_node_path() -> Result<PathBuf, String> {
 /// files ending in .so. We create symlinks from versioned names to unversioned files.
 /// Returns the path to the symlink directory.
 fn prepare_library_symlinks() -> Result<PathBuf, String> {
-    let app = crate::get_global_app_handle()
-        .ok_or_else(|| "App not initialized".to_string())?;
-
-    use tauri::Manager;
-    let data_dir = app.path().app_data_dir()
-        .map_err(|e| format!("Failed to get app data dir: {}", e))?;
-
+    let data_dir = get_app_data_dir()?;
     let symlink_dir = data_dir.join("node-libs");
     std::fs::create_dir_all(&symlink_dir)
         .map_err(|e| format!("Failed to create symlink dir: {}", e))?;
@@ -477,13 +558,7 @@ fn get_native_library_dir() -> Result<String, String> {
 
 /// Get the path to the extracted TiddlyWiki resources.
 pub fn get_tiddlywiki_dir() -> Result<PathBuf, String> {
-    let app = crate::get_global_app_handle()
-        .ok_or_else(|| "App not initialized".to_string())?;
-
-    use tauri::Manager;
-    let data_dir = app.path().app_data_dir()
-        .map_err(|e| format!("Failed to get app data dir: {}", e))?;
-
+    let data_dir = get_app_data_dir()?;
     let tw_dir = data_dir.join("tiddlywiki");
 
     if tw_dir.exists() {
@@ -824,21 +899,22 @@ pub fn start_wiki_server(folder_path: &str, port: u16) -> Result<String, String>
 
     let url = format!("http://127.0.0.1:{}", port);
 
-    // Wait for the server to start by polling the port
-    // Node.js can take a while to start on Android
+    // Brief poll for server startup — don't block long since WikiActivity's
+    // error handler and watchdog will auto-retry if the server isn't ready yet.
+    // This avoids blocking the landing page for 5+ seconds under load.
     eprintln!("[NodeBridge] Waiting for server to start on port {}...", port);
     let mut server_ready = false;
-    for attempt in 0..20 {
-        std::thread::sleep(std::time::Duration::from_millis(250));
+    for attempt in 0..6 {
+        std::thread::sleep(std::time::Duration::from_millis(500));
         if std::net::TcpStream::connect(format!("127.0.0.1:{}", port)).is_ok() {
-            eprintln!("[NodeBridge] Server ready after {} ms", (attempt + 1) * 250);
+            eprintln!("[NodeBridge] Server ready after {} ms", (attempt + 1) * 500);
             server_ready = true;
             break;
         }
     }
 
     if !server_ready {
-        eprintln!("[NodeBridge] Warning: Server may not be ready yet, proceeding anyway");
+        eprintln!("[NodeBridge] Server not ready yet, WikiActivity will retry");
     }
 
     eprintln!("[NodeBridge] Server started at: {}", url);
@@ -846,14 +922,15 @@ pub fn start_wiki_server(folder_path: &str, port: u16) -> Result<String, String>
     Ok(url)
 }
 
-/// Find an available port for a wiki server.
+/// Find an available port for a Node.js wiki server (range 38000-38999).
+/// WikiHttpServer uses 39000-39999 in the :wiki process.
 pub fn find_available_port() -> Result<u16, String> {
     // Try ports starting from the counter
     let start = NEXT_PORT.fetch_add(1, Ordering::SeqCst);
 
     for offset in 0..1000 {
         let port = start + offset;
-        if port > 40000 {
+        if port > 38999 {
             break;
         }
         if std::net::TcpListener::bind(format!("127.0.0.1:{}", port)).is_ok() {
@@ -879,12 +956,7 @@ pub fn find_available_port() -> Result<u16, String> {
 pub fn copy_saf_wiki_to_local(saf_uri: &str) -> Result<String, String> {
     use crate::android::saf;
 
-    let app = crate::get_global_app_handle()
-        .ok_or_else(|| "App not initialized".to_string())?;
-
-    use tauri::Manager;
-    let data_dir = app.path().app_data_dir()
-        .map_err(|e| format!("Failed to get app data dir: {}", e))?;
+    let data_dir = get_app_data_dir()?;
 
     // Create a unique local directory for this wiki based on URI hash
     let uri_hash = format!("{:x}", md5::compute(saf_uri.as_bytes()));
@@ -893,6 +965,13 @@ pub fn copy_saf_wiki_to_local(saf_uri: &str) -> Result<String, String> {
     eprintln!("[NodeBridge] Copying SAF wiki to local:");
     eprintln!("[NodeBridge]   SAF URI: {}", saf_uri);
     eprintln!("[NodeBridge]   Local path: {:?}", local_wiki_dir);
+
+    // Clear the local directory first to remove any stale files
+    // (e.g. tiddler files saved by syncer that no longer exist in SAF source)
+    if local_wiki_dir.exists() {
+        std::fs::remove_dir_all(&local_wiki_dir)
+            .map_err(|e| format!("Failed to clear local wiki directory: {}", e))?;
+    }
 
     // Create the local directory
     std::fs::create_dir_all(&local_wiki_dir)
@@ -1180,7 +1259,7 @@ pub fn render_folder_wiki_html(saf_uri: &str) -> Result<String, String> {
 ///
 /// The tiddlywiki.info file is NOT modified for includeWikis/config paths — we keep the
 /// original relative paths and make them resolve by placing symlinks at the expected locations.
-fn prepare_info_for_android(info_path: &std::path::Path) -> Result<(), String> {
+pub fn prepare_info_for_android(info_path: &std::path::Path) -> Result<(), String> {
     use std::io::{Read, Write};
 
     let tw_dir = get_tiddlywiki_dir()?;

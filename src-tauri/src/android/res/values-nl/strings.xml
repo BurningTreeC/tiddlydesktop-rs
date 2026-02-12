@@ -14,7 +14,8 @@
     <string name="capture_saved_title">Vastgelegd</string>
     <string name="capture_saved_message">Opgeslagen in %s</string>
     <string name="capture_failed_copy">Kan bestand niet naar de bijlagenmap kopiëren</string>
-    <string name="capture_no_attachments">Deze wiki ondersteunt geen externe bijlagen. Gebruik een mapwiki om video\'s vast te leggen.</string>
+    <string name="capture_no_attachments">Deze wiki ondersteunt geen externe bijlagen. Gebruik een mapwiki voor grote bestanden.</string>
+    <string name="capture_multiple_items">%d items</string>
     <string name="capture_failed_read">Kan bestand niet lezen</string>
     <string name="capture_failed_save">Kan vastlegging niet opslaan</string>
     <string name="capture_imported">%d vastlegging(en) geïmporteerd</string>
@@ -29,4 +30,5 @@
     <string name="btn_open_wiki">Wiki openen</string>
     <string name="open_as_wiki">Openen als wiki</string>
     <string name="import_into_wiki">Importeren in wiki</string>
+    <string name="no_app_for_link">Geen app gevonden om deze link te openen</string>
 </resources>

@@ -14,7 +14,8 @@
     <string name="capture_saved_title">Захвачено</string>
     <string name="capture_saved_message">Сохранено в %s</string>
     <string name="capture_failed_copy">Не удалось скопировать файл в папку вложений</string>
-    <string name="capture_no_attachments">Эта вики не поддерживает внешние вложения. Используйте вики-папку для захвата видео.</string>
+    <string name="capture_no_attachments">Эта вики не поддерживает внешние вложения. Используйте вики-папку для больших файлов.</string>
+    <string name="capture_multiple_items">%d элементов</string>
     <string name="capture_failed_read">Не удалось прочитать файл</string>
     <string name="capture_failed_save">Не удалось сохранить захват</string>
     <string name="capture_imported">Импортировано захватов: %d</string>
@@ -29,4 +30,5 @@
     <string name="btn_open_wiki">Открыть вики</string>
     <string name="open_as_wiki">Открыть как вики</string>
     <string name="import_into_wiki">Импортировать в вики</string>
+    <string name="no_app_for_link">Не найдено приложение для открытия этой ссылки</string>
 </resources>

@@ -14,7 +14,8 @@
     <string name="capture_saved_title">Фатено</string>
     <string name="capture_saved_message">Зачувано во %s</string>
     <string name="capture_failed_copy">Неуспешно копирање на датотеката во папката за прилози</string>
-    <string name="capture_no_attachments">Ова вики не поддржува надворешни прилози. Користете папка-вики за фаќање видеа.</string>
+    <string name="capture_no_attachments">Ова вики не поддржува надворешни прилози. Користете папка-вики за големи датотеки.</string>
+    <string name="capture_multiple_items">%d ставки</string>
     <string name="capture_failed_read">Неуспешно читање на датотеката</string>
     <string name="capture_failed_save">Неуспешно зачувување на фаќањето</string>
     <string name="capture_imported">Увезени фаќања: %d</string>
@@ -29,4 +30,5 @@
     <string name="btn_open_wiki">Отвори вики</string>
     <string name="open_as_wiki">Отвори како вики</string>
     <string name="import_into_wiki">Увези во вики</string>
+    <string name="no_app_for_link">Не е пронајдена апликација за отворање на овој линк</string>
 </resources>

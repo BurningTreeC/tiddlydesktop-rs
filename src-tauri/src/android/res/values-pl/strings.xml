@@ -14,7 +14,8 @@
     <string name="capture_saved_title">Przechwycono</string>
     <string name="capture_saved_message">Zapisano w %s</string>
     <string name="capture_failed_copy">Nie udało się skopiować pliku do folderu załączników</string>
-    <string name="capture_no_attachments">To wiki nie obsługuje zewnętrznych załączników. Użyj wiki-folderu do przechwytywania wideo.</string>
+    <string name="capture_no_attachments">To wiki nie obsługuje zewnętrznych załączników. Użyj wiki-folderu dla dużych plików.</string>
+    <string name="capture_multiple_items">%d elementów</string>
     <string name="capture_failed_read">Nie udało się odczytać pliku</string>
     <string name="capture_failed_save">Nie udało się zapisać przechwycenia</string>
     <string name="capture_imported">Zaimportowano przechwyceń: %d</string>
@@ -29,4 +30,5 @@
     <string name="btn_open_wiki">Otwórz wiki</string>
     <string name="open_as_wiki">Otwórz jako wiki</string>
     <string name="import_into_wiki">Importuj do wiki</string>
+    <string name="no_app_for_link">Nie znaleziono aplikacji do otwarcia tego linku</string>
 </resources>

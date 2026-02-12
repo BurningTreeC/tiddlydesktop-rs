@@ -14,7 +14,8 @@
     <string name="capture_saved_title">נלכד</string>
     <string name="capture_saved_message">נשמר ב-%s</string>
     <string name="capture_failed_copy">העתקת הקובץ לתיקיית הקבצים המצורפים נכשלה</string>
-    <string name="capture_no_attachments">ויקי זה אינו תומך בקבצים מצורפים חיצוניים. השתמש בתיקיית ויקי ללכידת סרטונים.</string>
+    <string name="capture_no_attachments">ויקי זה אינו תומך בקבצים מצורפים חיצוניים. השתמש בתיקיית ויקי לקבצים גדולים.</string>
+    <string name="capture_multiple_items">%d פריטים</string>
     <string name="capture_failed_read">קריאת הקובץ נכשלה</string>
     <string name="capture_failed_save">שמירת הלכידה נכשלה</string>
     <string name="capture_imported">יובאו %d לכידה/ות</string>
@@ -29,4 +30,5 @@
     <string name="btn_open_wiki">פתח ויקי</string>
     <string name="open_as_wiki">פתח כוויקי</string>
     <string name="import_into_wiki">ייבוא לוויקי</string>
+    <string name="no_app_for_link">לא נמצאה אפליקציה לפתיחת קישור זה</string>
 </resources>

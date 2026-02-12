@@ -14,7 +14,8 @@
     <string name="capture_saved_title">已擷取</string>
     <string name="capture_saved_message">已儲存至 %s</string>
     <string name="capture_failed_copy">無法將檔案複製到附件資料夾</string>
-    <string name="capture_no_attachments">此維基不支援外部附件。請使用資料夾維基來擷取影片。</string>
+    <string name="capture_no_attachments">此維基不支援外部附件。大檔案請使用資料夾維基。</string>
+    <string name="capture_multiple_items">%d 個項目</string>
     <string name="capture_failed_read">無法讀取檔案</string>
     <string name="capture_failed_save">無法儲存擷取</string>
     <string name="capture_imported">已匯入 %d 個擷取</string>
@@ -29,4 +30,5 @@
     <string name="btn_open_wiki">開啟維基</string>
     <string name="open_as_wiki">作為維基開啟</string>
     <string name="import_into_wiki">匯入至維基</string>
+    <string name="no_app_for_link">找不到可開啟此連結的應用程式</string>
 </resources>

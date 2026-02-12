@@ -1011,6 +1011,13 @@ class CaptureActivity : AppCompatActivity() {
                 adapter = ArrayAdapter(this@CaptureActivity, android.R.layout.simple_spinner_dropdown_item, wikiTitles)
                 background = spinnerBg
                 setPadding(dp(12), dp(8), dp(12), dp(8))
+                // Restore last selected wiki
+                val lastPath = getSharedPreferences("capture_prefs", MODE_PRIVATE)
+                    .getString("last_wiki_path", null)
+                if (lastPath != null) {
+                    val idx = wikiList.indexOfFirst { it.path == lastPath }
+                    if (idx >= 0) setSelection(idx)
+                }
             }
             card.addView(wikiSpinner, LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
@@ -1595,6 +1602,9 @@ class CaptureActivity : AppCompatActivity() {
         }
 
         val wiki = wikiList[selectedIndex]
+        // Remember selected wiki for next time
+        getSharedPreferences("capture_prefs", MODE_PRIVATE).edit()
+            .putString("last_wiki_path", wiki.path).apply()
         val title = titleEdit?.text?.toString()?.let { sanitizeTitle(it) }?.ifBlank { null } ?: getString(R.string.capture_untitled)
         val tags = tagsEdit?.text?.toString()?.trim() ?: ""
         val now = System.currentTimeMillis()

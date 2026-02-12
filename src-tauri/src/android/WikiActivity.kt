@@ -404,6 +404,7 @@ class WikiActivity : AppCompatActivity() {
     private var authOverlayContainer: FrameLayout? = null
     private var authWebView: WebView? = null
 
+
     /**
      * JavaScript interface for receiving palette color updates from TiddlyWiki.
      */
@@ -1505,10 +1506,22 @@ class WikiActivity : AppCompatActivity() {
                         console.error('[TiddlyDesktop] shareAsImage: tiddler element not found for: ' + title);
                         return;
                     }
-                    console.log('[TiddlyDesktop] shareAsImage: capturing element, size=' + bodyEl.offsetWidth + 'x' + bodyEl.offsetHeight);
+                    // Wrap in a container div to preserve margins between child elements
+                    // (tags, body, etc.). html-to-image clones elements into an isolated
+                    // context where CSS margin collapsing behaves differently. The wrapper
+                    // with overflow:hidden establishes a block formatting context that
+                    // forces proper margin rendering.
+                    var wrapper = document.createElement('div');
+                    wrapper.style.cssText = 'overflow:hidden;background:#ffffff;padding:8px;width:' + bodyEl.offsetWidth + 'px;';
+                    var clone = bodyEl.cloneNode(true);
+                    // Reset outer margins on the clone so they become inner spacing
+                    clone.style.margin = '0';
+                    wrapper.appendChild(clone);
+                    document.body.appendChild(wrapper);
+                    console.log('[TiddlyDesktop] shareAsImage: capturing element, size=' + wrapper.offsetWidth + 'x' + wrapper.offsetHeight);
                     // 1px transparent PNG as fallback for broken/unloadable images
                     var PLACEHOLDER = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVQI12NgAAIABQABNjN9GQAAAAlwSFlzAAAWJQAAFiUBSVIk8AAAAA0lEQVQI12P4z8BQDwAEgAF/QualzQAAAABJRU5ErkJggg==';
-                    htmlToImage.toJpeg(bodyEl, {
+                    htmlToImage.toJpeg(wrapper, {
                         quality: 0.92,
                         backgroundColor: '#ffffff',
                         pixelRatio: 2,
@@ -1524,9 +1537,11 @@ class WikiActivity : AppCompatActivity() {
                             return true;
                         }
                     }).then(function(dataUrl) {
+                        wrapper.remove();
                         console.log('[TiddlyDesktop] shareAsImage: captured, dataUrl length=' + dataUrl.length);
                         TiddlyDesktopShareCapture.onImageReady(title, dataUrl);
                     }).catch(function(err) {
+                        wrapper.remove();
                         console.error('[TiddlyDesktop] shareAsImage: capture failed:', err);
                     });
                 }
@@ -1740,6 +1755,10 @@ class WikiActivity : AppCompatActivity() {
         return name
     }
 
+    /**
+     * Create the editor toolbar with Save (✓) and Cancel (✕) buttons.
+     * The toolbar is initially GONE and shown above the keyboard when editing a tiddler.
+     */
     /**
      * Update the status bar and navigation bar colors.
      * Icon colors are determined by the background luminance to ensure contrast.
@@ -2478,6 +2497,7 @@ class WikiActivity : AppCompatActivity() {
 
             // Add JavaScript interface for persisting wiki config
             addJavascriptInterface(ConfigInterface(), "TiddlyDesktopConfig")
+
         }
 
         // Use FrameLayout wrapper for fullscreen video support

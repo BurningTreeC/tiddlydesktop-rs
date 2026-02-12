@@ -966,6 +966,18 @@ pub fn copy_saf_wiki_to_local(saf_uri: &str) -> Result<String, String> {
     eprintln!("[NodeBridge]   SAF URI: {}", saf_uri);
     eprintln!("[NodeBridge]   Local path: {:?}", local_wiki_dir);
 
+    // Stop any existing Rust SyncWatcher for this path BEFORE clearing the directory.
+    // If a watcher is running and we clear the directory, it would see all files as
+    // "deleted" and propagate those deletions to SAF — destroying the wiki source.
+    {
+        let local_path_str = local_wiki_dir.to_string_lossy().to_string();
+        let mut watchers = SAF_SYNC_WATCHERS.lock().unwrap();
+        if let Some(watcher) = watchers.remove(&local_path_str) {
+            watcher.stop();
+            eprintln!("[NodeBridge] Stopped existing SyncWatcher before clearing local dir");
+        }
+    }
+
     // Clear the local directory first to remove any stale files
     // (e.g. tiddler files saved by syncer that no longer exist in SAF source)
     if local_wiki_dir.exists() {
@@ -1139,9 +1151,9 @@ pub fn start_saf_wiki_server(saf_uri: &str) -> Result<(String, String), String> 
     // Start the TiddlyWiki server on the local copy
     let server_url = start_wiki_server(&local_path, port)?;
 
-    // Start the file sync watcher to sync changes back to SAF
-    start_saf_sync_watcher(&local_path, saf_uri);
-    eprintln!("[NodeBridge] Started SAF sync watcher for: {}", local_path);
+    // NOTE: The SAF sync watcher now runs in Kotlin (WikiActivity.kt) in the :wiki process,
+    // so it survives main process death. Do NOT start the Rust SyncWatcher here — it races
+    // with copy_saf_wiki_to_local's remove_dir_all and can delete all files from SAF.
 
     Ok((server_url, local_path))
 }

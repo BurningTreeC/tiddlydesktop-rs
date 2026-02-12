@@ -12,6 +12,9 @@ import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.FileObserver
+import android.os.Handler
+import android.os.Looper
 import android.os.PowerManager
 import android.util.Base64
 import android.util.Log
@@ -381,9 +384,12 @@ class WikiActivity : AppCompatActivity() {
     // Local filesystem path for SAF folder wikis (Node.js reads from here)
     private var folderLocalPath: String? = null
 
-    // SyncWatcher thread — syncs local folder wiki changes back to SAF
+    // SyncWatcher — syncs local folder wiki changes back to SAF via FileObserver (inotify)
     @Volatile private var syncWatcherRunning = false
-    private var syncWatcherThread: Thread? = null
+    private val syncFileObservers = mutableListOf<FileObserver>()
+    private val pendingSyncDeletes = java.util.Collections.synchronizedList(mutableListOf<String>())
+    private var syncDeleteHandler: Handler? = null
+    private val syncTrackedFileCount = java.util.concurrent.atomic.AtomicInteger(0)
 
     // File chooser support for import functionality
     private var filePathCallback: ValueCallback<Array<Uri>>? = null
@@ -1500,7 +1506,24 @@ class WikiActivity : AppCompatActivity() {
                         return;
                     }
                     console.log('[TiddlyDesktop] shareAsImage: capturing element, size=' + bodyEl.offsetWidth + 'x' + bodyEl.offsetHeight);
-                    htmlToImage.toJpeg(bodyEl, { quality: 0.92, backgroundColor: '#ffffff' }).then(function(dataUrl) {
+                    // 1px transparent PNG as fallback for broken/unloadable images
+                    var PLACEHOLDER = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVQI12NgAAIABQABNjN9GQAAAAlwSFlzAAAWJQAAFiUBSVIk8AAAAA0lEQVQI12P4z8BQDwAEgAF/QualzQAAAABJRU5ErkJggg==';
+                    htmlToImage.toJpeg(bodyEl, {
+                        quality: 0.92,
+                        backgroundColor: '#ffffff',
+                        pixelRatio: 2,
+                        imagePlaceholder: PLACEHOLDER,
+                        filter: function(node) {
+                            if (!(node instanceof HTMLElement)) return true;
+                            // Skip hidden elements
+                            if (node.hidden || node.getAttribute('hidden') === 'true' || node.getAttribute('hidden') === '') return false;
+                            var style = window.getComputedStyle(node);
+                            if (style.display === 'none' || style.visibility === 'hidden') return false;
+                            // Skip broken images
+                            if (node.tagName === 'IMG' && node.naturalWidth === 0 && node.complete) return false;
+                            return true;
+                        }
+                    }).then(function(dataUrl) {
                         console.log('[TiddlyDesktop] shareAsImage: captured, dataUrl length=' + dataUrl.length);
                         TiddlyDesktopShareCapture.onImageReady(title, dataUrl);
                     }).catch(function(err) {
@@ -5887,9 +5910,9 @@ class WikiActivity : AppCompatActivity() {
     }
 
     /**
-     * Start the SyncWatcher thread that polls the local folder wiki copy for changes
-     * and syncs them back to SAF. This runs in the :wiki process so it survives
-     * main process death.
+     * Start the SyncWatcher using FileObserver (inotify) for instant change detection.
+     * Syncs local folder wiki changes back to SAF. Runs in the :wiki process so it
+     * survives main process death.
      */
     private fun startSyncWatcher(localPath: String) {
         if (syncWatcherRunning) return
@@ -5897,105 +5920,151 @@ class WikiActivity : AppCompatActivity() {
 
         val safTreeUri = treeUri ?: return
         val localBase = File(localPath)
+        syncDeleteHandler = Handler(Looper.getMainLooper())
 
-        syncWatcherThread = Thread {
-            Log.d(TAG, "[SyncWatcher] Started for: $localPath")
+        Log.d(TAG, "[SyncWatcher] Starting FileObserver for: $localPath")
 
-            // Initial scan to populate modification times
-            val fileMtimes = mutableMapOf<String, Long>()
-            scanDirectory(localBase, localBase.absolutePath, fileMtimes)
-            Log.d(TAG, "[SyncWatcher] Initial scan found ${fileMtimes.size} files")
+        // Recursively watch the directory tree
+        val fileCount = java.util.concurrent.atomic.AtomicInteger(0)
+        watchDirectoryRecursive(localBase, localBase.absolutePath, safTreeUri, fileCount)
+        syncTrackedFileCount.set(fileCount.get())
 
-            // Poll every 2 seconds for changes
-            while (syncWatcherRunning && !isFinishing) {
-                try {
-                    Thread.sleep(2000)
-                } catch (_: InterruptedException) {
-                    break
-                }
-                if (!syncWatcherRunning || isFinishing) break
+        Log.d(TAG, "[SyncWatcher] Watching ${fileCount.get()} files across directory tree")
+    }
 
-                // Scan current state
-                val currentMtimes = mutableMapOf<String, Long>()
-                scanDirectory(localBase, localBase.absolutePath, currentMtimes)
+    /**
+     * Set up a FileObserver for a directory and all its subdirectories.
+     */
+    private fun watchDirectoryRecursive(
+        dir: File, basePath: String, safTreeUri: Uri,
+        fileCount: java.util.concurrent.atomic.AtomicInteger
+    ) {
+        val mask = FileObserver.CLOSE_WRITE or FileObserver.DELETE or
+                   FileObserver.CREATE or FileObserver.MOVED_FROM or FileObserver.MOVED_TO
 
-                // Find new or modified files
-                val changedFiles = mutableListOf<String>()
-                for ((path, mtime) in currentMtimes) {
-                    val oldMtime = fileMtimes[path]
-                    if (oldMtime == null || oldMtime != mtime) {
-                        changedFiles.add(path)
-                    }
-                }
+        val observer = object : FileObserver(dir, mask) {
+            override fun onEvent(event: Int, path: String?) {
+                if (path == null || !syncWatcherRunning) return
+                val file = File(dir, path)
+                val relPath = file.absolutePath.removePrefix(basePath).trimStart('/')
 
-                // Find deleted files (in old map but not current)
-                val deletedFiles = mutableListOf<String>()
-                for (path in fileMtimes.keys) {
-                    if (!currentMtimes.containsKey(path)) {
-                        deletedFiles.add(path)
-                    }
-                }
-
-                // Update stored mtimes
-                fileMtimes.clear()
-                fileMtimes.putAll(currentMtimes)
-
-                // Sync changed files to SAF
-                if (changedFiles.isNotEmpty()) {
-                    Log.d(TAG, "[SyncWatcher] ${changedFiles.size} files changed, syncing to SAF...")
-                    for (relPath in changedFiles) {
+                when (event and FileObserver.ALL_EVENTS) {
+                    FileObserver.CLOSE_WRITE -> {
+                        // File finished writing — sync to SAF immediately
+                        Log.d(TAG, "[SyncWatcher] File changed: $relPath")
                         try {
-                            syncFileToSaf(localBase, relPath, safTreeUri)
+                            syncFileToSaf(File(basePath), relPath, safTreeUri)
                             Log.d(TAG, "[SyncWatcher] Synced: $relPath")
                         } catch (e: Exception) {
                             Log.e(TAG, "[SyncWatcher] Error syncing $relPath: ${e.message}")
                         }
                     }
-                }
-
-                // Delete files from SAF that were deleted locally
-                if (deletedFiles.isNotEmpty()) {
-                    Log.d(TAG, "[SyncWatcher] ${deletedFiles.size} files deleted locally, removing from SAF...")
-                    for (relPath in deletedFiles) {
-                        try {
-                            deleteFileFromSaf(relPath, safTreeUri)
-                            Log.d(TAG, "[SyncWatcher] Deleted from SAF: $relPath")
-                        } catch (e: Exception) {
-                            Log.e(TAG, "[SyncWatcher] Error deleting $relPath: ${e.message}")
+                    FileObserver.CREATE -> {
+                        if (file.isDirectory) {
+                            // New subdirectory — add a watcher for it
+                            Log.d(TAG, "[SyncWatcher] New directory: $relPath")
+                            watchDirectoryRecursive(file, basePath, safTreeUri, fileCount)
+                        } else {
+                            syncTrackedFileCount.incrementAndGet()
+                        }
+                        // Note: CREATE for files is followed by CLOSE_WRITE, so no sync here
+                    }
+                    FileObserver.DELETE, FileObserver.MOVED_FROM -> {
+                        syncTrackedFileCount.decrementAndGet()
+                        scheduleSafDelete(relPath, safTreeUri)
+                    }
+                    FileObserver.MOVED_TO -> {
+                        if (file.isDirectory) {
+                            watchDirectoryRecursive(file, basePath, safTreeUri, fileCount)
+                        } else {
+                            syncTrackedFileCount.incrementAndGet()
+                            Log.d(TAG, "[SyncWatcher] File moved in: $relPath")
+                            try {
+                                syncFileToSaf(File(basePath), relPath, safTreeUri)
+                                Log.d(TAG, "[SyncWatcher] Synced: $relPath")
+                            } catch (e: Exception) {
+                                Log.e(TAG, "[SyncWatcher] Error syncing moved file $relPath: ${e.message}")
+                            }
                         }
                     }
                 }
             }
-            Log.d(TAG, "[SyncWatcher] Stopped for: $localPath")
-        }.apply {
-            isDaemon = true
-            name = "SyncWatcher"
-            start()
+        }
+
+        observer.startWatching()
+        synchronized(syncFileObservers) {
+            syncFileObservers.add(observer)
+        }
+
+        // Recurse into subdirectories and count existing files
+        dir.listFiles()?.forEach { child ->
+            if (child.isDirectory) {
+                watchDirectoryRecursive(child, basePath, safTreeUri, fileCount)
+            } else {
+                fileCount.incrementAndGet()
+            }
         }
     }
 
     /**
-     * Stop the SyncWatcher thread.
+     * Schedule a SAF deletion with debouncing. DELETE events are batched for 500ms
+     * so we can detect mass-deletion (directory clear) and skip it.
+     */
+    private fun scheduleSafDelete(relPath: String, safTreeUri: Uri) {
+        pendingSyncDeletes.add(relPath)
+        syncDeleteHandler?.removeCallbacksAndMessages(null)
+        syncDeleteHandler?.postDelayed({
+            flushPendingDeletes(safTreeUri)
+        }, 500)
+    }
+
+    /**
+     * Process batched DELETE events. If a large fraction of tracked files were deleted
+     * at once, this is almost certainly a directory clear — skip to avoid wiping SAF.
+     */
+    private fun flushPendingDeletes(safTreeUri: Uri) {
+        val deletes = mutableListOf<String>()
+        synchronized(pendingSyncDeletes) {
+            deletes.addAll(pendingSyncDeletes)
+            pendingSyncDeletes.clear()
+        }
+        if (deletes.isEmpty()) return
+
+        // Safety: if most tracked files disappeared at once, skip SAF deletion
+        val total = deletes.size + syncTrackedFileCount.get()
+        if (deletes.size > 5 && total > 2 && deletes.size >= total) {
+            Log.w(TAG, "[SyncWatcher] Mass deletion detected (${deletes.size}/$total files) — skipping SAF deletion (likely directory clear)")
+            return
+        }
+
+        Log.d(TAG, "[SyncWatcher] ${deletes.size} files deleted locally, removing from SAF...")
+        Thread {
+            for (relPath in deletes) {
+                if (!syncWatcherRunning) break
+                try {
+                    deleteFileFromSaf(relPath, safTreeUri)
+                    Log.d(TAG, "[SyncWatcher] Deleted from SAF: $relPath")
+                } catch (e: Exception) {
+                    Log.e(TAG, "[SyncWatcher] Error deleting $relPath: ${e.message}")
+                }
+            }
+        }.start()
+    }
+
+    /**
+     * Stop the SyncWatcher and all FileObservers.
      */
     private fun stopSyncWatcher() {
         syncWatcherRunning = false
-        syncWatcherThread?.interrupt()
-        syncWatcherThread = null
-    }
-
-    /**
-     * Recursively scan a directory, producing a map of relative path -> lastModified.
-     */
-    private fun scanDirectory(dir: File, basePath: String, result: MutableMap<String, Long>) {
-        val files = dir.listFiles() ?: return
-        for (f in files) {
-            val relPath = f.absolutePath.removePrefix(basePath).trimStart('/')
-            if (f.isDirectory) {
-                scanDirectory(f, basePath, result)
-            } else {
-                result[relPath] = f.lastModified()
+        synchronized(syncFileObservers) {
+            for (observer in syncFileObservers) {
+                observer.stopWatching()
             }
+            syncFileObservers.clear()
         }
+        syncDeleteHandler?.removeCallbacksAndMessages(null)
+        syncDeleteHandler = null
+        pendingSyncDeletes.clear()
     }
 
     /**

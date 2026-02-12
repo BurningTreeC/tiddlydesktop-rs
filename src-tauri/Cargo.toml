@@ -1,6 +1,6 @@
 [package]
 name = "tiddlydesktop-rs"
-version = "0.3.59"
+version = "0.3.60"
 description = "A TiddlyWiki Tauri App"
 authors = ["BurningTreeC"]
 license = "MIT"

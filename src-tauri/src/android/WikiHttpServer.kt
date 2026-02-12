@@ -33,7 +33,8 @@ class WikiHttpServer(
     private val isFolder: Boolean = false,
     private val folderHtmlPath: String? = null,  // Path to pre-rendered HTML for folder wikis
     private val backupsEnabled: Boolean = true,  // Whether to create backups on save
-    private val backupCount: Int = 20  // Max backups to keep (0 = unlimited)
+    private val backupCount: Int = 20,  // Max backups to keep (0 = unlimited)
+    private val customBackupDirUri: String? = null  // Custom backup directory URI (SAF content:// URI)
 ) {
     companion object {
         private const val TAG = "WikiHttpServer"
@@ -101,7 +102,34 @@ class WikiHttpServer(
 
         backupDirectoryChecked = true
 
-        // Need tree access to create backup folder
+        // If custom backup directory is set, use it directly
+        if (customBackupDirUri != null) {
+            try {
+                // The backup dir may be stored as JSON ({"uri":"content://...","documentTopTreeUri":"..."})
+                // or as a plain content:// URI string
+                val actualUri = if (customBackupDirUri.trimStart().startsWith("{")) {
+                    val json = org.json.JSONObject(customBackupDirUri)
+                    // Prefer documentTopTreeUri for tree access, fall back to uri
+                    val treeUriStr = json.optString("documentTopTreeUri", null)
+                    val uriStr = json.optString("uri", null)
+                    Uri.parse(if (!treeUriStr.isNullOrEmpty()) treeUriStr else uriStr)
+                } else {
+                    Uri.parse(customBackupDirUri)
+                }
+                backupDirectory = DocumentFile.fromTreeUri(context, actualUri)
+                if (backupDirectory != null && backupDirectory!!.isDirectory) {
+                    Log.d(TAG, "Using custom backup directory: $actualUri")
+                    return backupDirectory
+                }
+                Log.e(TAG, "Custom backup directory not accessible: $actualUri")
+                // Fall through to default behavior
+            } catch (e: Exception) {
+                Log.e(TAG, "Error accessing custom backup directory: ${e.message}")
+                // Fall through to default behavior
+            }
+        }
+
+        // Default: create .backups folder next to wiki file
         val tree = treeUri ?: run {
             Log.d(TAG, "No tree URI - backups disabled")
             return null

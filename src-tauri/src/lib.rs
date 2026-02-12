@@ -3332,6 +3332,7 @@ fn open_wiki_folder_blocking(app: tauri::AppHandle, path: String) -> Result<Wiki
         false, // backups not applicable for folder wikis
         0, // backup_count not applicable
         folder_local_path.as_deref(), // Local path for SAF wikis (Node.js reads from here)
+        None, // No backup dir for folder wikis
     )?;
 
     // Create wiki entry for the recent files list
@@ -3844,6 +3845,7 @@ async fn init_wiki_folder(app: tauri::AppHandle, path: String, edition: String, 
         false, // backups not applicable for folder wikis
         0, // backup_count not applicable
         None, // No local path needed - server already running
+        None, // No backup dir for folder wikis
     )?;
 
     // Create wiki entry for the recent files list
@@ -5073,6 +5075,7 @@ fn open_wiki_window_blocking(
     // Get backup settings - use provided values or defaults
     let use_backups = backups_enabled.unwrap_or(true); // Default: enabled
     let use_backup_count = backup_count.unwrap_or(20); // Default: 20 backups
+    let custom_backup_dir = get_wiki_backup_dir(&app, &path);
 
     // Launch WikiActivity - it will start its own server in the :wiki process
     android::wiki_activity::launch_wiki_activity(
@@ -5083,6 +5086,7 @@ fn open_wiki_window_blocking(
         use_backups,
         use_backup_count,
         None, // Not a folder wiki
+        custom_backup_dir.as_deref(),
     )?;
 
     let entry = WikiEntry {
@@ -5491,7 +5495,7 @@ async fn check_for_updates() -> Result<UpdateCheckResult, String> {
 
 /// Android version - separate from desktop versioning (must match build.gradle.kts versionName)
 #[cfg(target_os = "android")]
-const ANDROID_VERSION: &str = "0.0.10";
+const ANDROID_VERSION: &str = "0.0.11";
 
 /// Check for updates on Android via version file on GitHub, linking to Play Store
 #[cfg(target_os = "android")]

@@ -1123,7 +1123,8 @@ class CaptureActivity : AppCompatActivity() {
     /**
      * Extract structured data from JSON-LD (<script type="application/ld+json">).
      * Returns a map with keys: description, author, datePublished, image.
-     * Prefers the LAST JSON-LD block (often the most specific on multi-content pages).
+     * Handles top-level objects, arrays, and @graph arrays.
+     * Prioritizes content types (Article, NewsArticle, etc.) over structural types.
      */
     private fun extractJsonLd(html: String): Map<String, String> {
         val result = mutableMapOf<String, String>()
@@ -1132,56 +1133,129 @@ class CaptureActivity : AppCompatActivity() {
             setOf(RegexOption.DOT_MATCHES_ALL, RegexOption.IGNORE_CASE)
         ).findAll(html)
 
+        // Content types we care about (prioritized over structural types)
+        val contentTypes = setOf(
+            "Article", "NewsArticle", "BlogPosting", "TechArticle", "ScholarlyArticle",
+            "WebPage", "ItemPage", "FAQPage", "HowTo", "Recipe", "Review",
+            "Product", "SocialMediaPosting", "DiscussionForumPosting", "Report"
+        )
+        // Structural types we skip when better alternatives exist
+        val structuralTypes = setOf(
+            "Organization", "BreadcrumbList", "WebSite", "SearchAction",
+            "SiteNavigationElement", "WPHeader", "WPFooter", "ImageObject"
+        )
+
+        // Collect all JSON-LD objects, flattening @graph arrays
+        val allObjects = mutableListOf<JSONObject>()
+
         for (match in blocks) {
             try {
                 val jsonStr = match.groupValues[1].trim()
-                val json = org.json.JSONObject(jsonStr)
-
-                // Description: text > articleBody > description
-                val desc = json.optString("text", "").ifBlank {
-                    json.optString("articleBody", "").ifBlank {
-                        json.optString("description", "")
+                if (jsonStr.startsWith("[")) {
+                    // Top-level JSONArray
+                    val arr = JSONArray(jsonStr)
+                    for (i in 0 until arr.length()) {
+                        arr.optJSONObject(i)?.let { allObjects.add(it) }
+                    }
+                } else {
+                    val json = JSONObject(jsonStr)
+                    // Check for @graph array
+                    val graph = json.optJSONArray("@graph")
+                    if (graph != null) {
+                        for (i in 0 until graph.length()) {
+                            graph.optJSONObject(i)?.let { allObjects.add(it) }
+                        }
+                    } else {
+                        allObjects.add(json)
                     }
                 }
-                if (desc.isNotBlank()) {
-                    // Strip HTML tags and limit length
-                    val clean = Regex("<[^>]+>").replace(desc, "")
-                        .replace(Regex("\\s+"), " ").trim().take(500)
-                    if (clean.isNotBlank()) result["description"] = clean
-                }
-
-                // Author — can be a string, object, or array of objects
-                val authorName = when {
-                    json.has("author") && json.opt("author") is org.json.JSONArray -> {
-                        val arr = json.getJSONArray("author")
-                        (0 until arr.length()).mapNotNull { i ->
-                            arr.optJSONObject(i)?.optString("name", "")?.takeIf { it.isNotBlank() }
-                        }.joinToString(", ")
-                    }
-                    json.optJSONObject("author") != null -> {
-                        json.getJSONObject("author").optString("name", "")
-                    }
-                    else -> json.optString("author", "")
-                }
-                if (authorName.isNotBlank()) result["author"] = authorName
-
-                // Date
-                val date = json.optString("datePublished", "").ifBlank {
-                    json.optString("dateCreated", "")
-                }
-                if (date.isNotBlank()) result["datePublished"] = date
-
-                // Image
-                val imageObj = json.optJSONObject("image")
-                val imageUrl = imageObj?.optString("url", "")
-                    ?: json.optString("image", "")
-                if (imageUrl.isNotBlank() && imageUrl.startsWith("http")) result["image"] = imageUrl
-
             } catch (e: Exception) {
                 // Skip malformed JSON-LD blocks
             }
         }
+
+        // Sort: content types first, then unknown types, structural types last
+        val sorted = allObjects.sortedBy { obj ->
+            val type = obj.optString("@type", "")
+            when {
+                contentTypes.any { type.contains(it, ignoreCase = true) } -> 0
+                structuralTypes.any { type.contains(it, ignoreCase = true) } -> 2
+                else -> 1
+            }
+        }
+
+        // Extract from each object, later (higher-priority) values overwrite earlier ones
+        for (json in sorted) {
+            extractFromJsonLdObject(json, result)
+        }
+
         return result
+    }
+
+    /**
+     * Extract metadata fields from a single JSON-LD object into the result map.
+     * Only overwrites existing values if the new value is longer (better quality).
+     */
+    private fun extractFromJsonLdObject(json: JSONObject, result: MutableMap<String, String>) {
+        // Description: text > articleBody > description
+        val desc = json.optString("text", "").ifBlank {
+            json.optString("articleBody", "").ifBlank {
+                json.optString("description", "")
+            }
+        }
+        if (desc.isNotBlank()) {
+            val clean = Regex("<[^>]+>").replace(desc, "")
+                .replace(Regex("\\s+"), " ").trim().take(800)
+            if (clean.isNotBlank()) {
+                val existing = result["description"] ?: ""
+                if (clean.length > existing.length) result["description"] = clean
+            }
+        }
+
+        // Author — can be a string, object, or array of objects
+        val authorName = when {
+            json.has("author") && json.opt("author") is JSONArray -> {
+                val arr = json.getJSONArray("author")
+                (0 until arr.length()).mapNotNull { i ->
+                    arr.optJSONObject(i)?.optString("name", "")?.takeIf { it.isNotBlank() }
+                }.joinToString(", ")
+            }
+            json.optJSONObject("author") != null -> {
+                json.getJSONObject("author").optString("name", "")
+            }
+            else -> json.optString("author", "")
+        }
+        if (authorName.isNotBlank()) result["author"] = authorName
+
+        // Date
+        val date = json.optString("datePublished", "").ifBlank {
+            json.optString("dateCreated", "")
+        }
+        if (date.isNotBlank()) result["datePublished"] = date
+
+        // Image — can be a string, object with url, or array
+        val imageUrl = when {
+            json.optJSONArray("image") != null -> {
+                val arr = json.getJSONArray("image")
+                // Array of strings or objects
+                var url = ""
+                for (i in 0 until arr.length()) {
+                    val item = arr.opt(i)
+                    url = when (item) {
+                        is String -> item
+                        is JSONObject -> item.optString("url", "")
+                        else -> ""
+                    }
+                    if (url.startsWith("http")) break
+                }
+                url
+            }
+            json.optJSONObject("image") != null -> {
+                json.getJSONObject("image").optString("url", "")
+            }
+            else -> json.optString("image", "")
+        }
+        if (imageUrl.isNotBlank() && imageUrl.startsWith("http")) result["image"] = imageUrl
     }
 
     /**
@@ -1284,7 +1358,88 @@ class CaptureActivity : AppCompatActivity() {
         return null
     }
 
+    /**
+     * Detect Wikipedia URLs (including mobile) and fetch metadata via REST API.
+     * Returns Pair(title, wikitextContent) or null if not Wikipedia or API fails.
+     */
+    private fun fetchWikipediaMetadata(urlString: String): Pair<String, String>? {
+        // Match *.wikipedia.org/wiki/Title URLs (desktop and mobile)
+        val wikiMatch = Regex(
+            """https?://([a-z]{2,3}(?:\.[a-z]+)?)(\.m)?\.wikipedia\.org/wiki/([^#?]+)""",
+            RegexOption.IGNORE_CASE
+        ).find(urlString) ?: return null
+
+        val lang = wikiMatch.groupValues[1]  // e.g. "en", "de", "simple"
+        val titleEncoded = wikiMatch.groupValues[3]  // URL-encoded title
+
+        return try {
+            val apiUrl = URL("https://$lang.wikipedia.org/api/rest_v1/page/summary/$titleEncoded")
+            val conn = apiUrl.openConnection() as HttpURLConnection
+            conn.connectTimeout = 8000
+            conn.readTimeout = 8000
+            conn.setRequestProperty("Accept", "application/json")
+            conn.setRequestProperty("User-Agent",
+                "TiddlyDesktopRS/1.0 (Android; mailto:burningtreec@gmail.com)")
+
+            if (conn.responseCode != 200) {
+                conn.disconnect()
+                return null
+            }
+
+            val json = JSONObject(conn.inputStream.bufferedReader().readText())
+            conn.disconnect()
+
+            val title = json.optString("displaytitle", "")
+                .replace(Regex("<[^>]+>"), "")  // Strip HTML formatting
+                .ifBlank { json.optString("title", "").replace("_", " ") }
+            val tagline = json.optString("description", "")  // Short tagline
+            val extract = json.optString("extract", "")      // First paragraph
+            val imageUrl = json.optJSONObject("thumbnail")?.optString("source", "")
+                ?: json.optJSONObject("originalimage")?.optString("source", "")
+                ?: ""
+
+            if (title.isBlank()) return null
+
+            // Any selected text the user shared
+            val selectedText = sharedText?.trim()
+
+            val wikitext = buildString {
+                if (imageUrl.isNotBlank() && imageUrl.startsWith("http")) {
+                    appendLine("[img[$imageUrl]]")
+                    appendLine()
+                }
+                // Use extract (first paragraph) as the blockquote, fall back to tagline
+                val desc = extract.ifBlank { tagline }
+                if (desc.isNotBlank()) {
+                    appendLine("<<<")
+                    appendLine(desc)
+                    appendLine("<<<")
+                    appendLine()
+                }
+                append("Source: [[$urlString]]")
+                appendLine(" (Wikipedia)")
+                if (tagline.isNotBlank() && extract.isNotBlank()) {
+                    appendLine("//~$tagline//")
+                }
+                if (!selectedText.isNullOrBlank()) {
+                    appendLine()
+                    appendLine("---")
+                    appendLine()
+                    append(selectedText)
+                }
+            }.trim()
+
+            Pair(title, wikitext)
+        } catch (e: Exception) {
+            Log.d(TAG, "Wikipedia API failed: ${e.message}, falling back to HTML scraping")
+            null
+        }
+    }
+
     private fun fetchAndParseWebPage(urlString: String): Pair<String, String>? {
+        // Try Wikipedia REST API first (cleaner data than HTML scraping)
+        fetchWikipediaMetadata(urlString)?.let { return it }
+
         return try {
             val (finalUrl, rawBytes, httpCharset) = fetchUrl(urlString) ?: return null
 
@@ -1308,11 +1463,18 @@ class CaptureActivity : AppCompatActivity() {
                 ?: finalUrl
 
             // Prefer JSON-LD data over OG tags (JSON-LD is often page-specific)
-            val description = jsonLd["description"]
+            var description = jsonLd["description"]
                 ?: extractHtmlTag(html, "og:description")
                 ?: extractHtmlTag(html, "twitter:description")
                 ?: extractMetaDescription(html)
                 ?: ""
+            // Fall back to first substantial <p> tag if description is too short
+            if (description.length < 50) {
+                val firstPara = extractFirstParagraph(html)
+                if (firstPara != null && firstPara.length > description.length) {
+                    description = firstPara
+                }
+            }
             val ogImage = jsonLd["image"]
                 ?: extractHtmlTag(html, "og:image")
                 ?: extractHtmlTag(html, "twitter:image")
@@ -1489,6 +1651,41 @@ class CaptureActivity : AppCompatActivity() {
 
     private fun extractMetaDescription(html: String): String? {
         return extractHtmlTag(html, "description")
+    }
+
+    /**
+     * Extract the first substantial <p> tag from HTML body as a fallback description.
+     * Strips boilerplate sections (nav, header, footer, aside, script, style) first.
+     * Returns cleaned text or null if no substantial paragraph found.
+     */
+    private fun extractFirstParagraph(html: String, minLength: Int = 50): String? {
+        // Strip non-content blocks to avoid cookie banners, nav, etc.
+        val stripped = html
+            .replace(Regex("<script[^>]*>.*?</script>", setOf(RegexOption.DOT_MATCHES_ALL, RegexOption.IGNORE_CASE)), "")
+            .replace(Regex("<style[^>]*>.*?</style>", setOf(RegexOption.DOT_MATCHES_ALL, RegexOption.IGNORE_CASE)), "")
+            .replace(Regex("<nav[^>]*>.*?</nav>", setOf(RegexOption.DOT_MATCHES_ALL, RegexOption.IGNORE_CASE)), "")
+            .replace(Regex("<header[^>]*>.*?</header>", setOf(RegexOption.DOT_MATCHES_ALL, RegexOption.IGNORE_CASE)), "")
+            .replace(Regex("<footer[^>]*>.*?</footer>", setOf(RegexOption.DOT_MATCHES_ALL, RegexOption.IGNORE_CASE)), "")
+            .replace(Regex("<aside[^>]*>.*?</aside>", setOf(RegexOption.DOT_MATCHES_ALL, RegexOption.IGNORE_CASE)), "")
+
+        // Find all <p> tags and return the first one with enough content
+        val paragraphs = Regex(
+            """<p[^>]*>(.*?)</p>""",
+            setOf(RegexOption.DOT_MATCHES_ALL, RegexOption.IGNORE_CASE)
+        ).findAll(stripped)
+
+        for (p in paragraphs) {
+            val text = p.groupValues[1]
+                .replace(Regex("<[^>]+>"), "")  // Strip inner HTML tags
+                .replace(Regex("\\s+"), " ")
+                .trim()
+            // Skip short fragments, cookie notices, login prompts
+            if (text.length < minLength) continue
+            if (text.contains("cookie", ignoreCase = true) && text.contains("accept", ignoreCase = true)) continue
+            if (text.contains("sign in", ignoreCase = true) || text.contains("log in", ignoreCase = true)) continue
+            return decodeHtmlEntities(text).take(500)
+        }
+        return null
     }
 
     private fun decodeHtmlEntities(text: String): String {

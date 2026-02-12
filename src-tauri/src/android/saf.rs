@@ -675,7 +675,232 @@ pub fn reveal_in_file_manager(path_json: &str) -> Result<(), String> {
         .map_err(|e| format!("Failed to open file manager: {:?}", e))
 }
 
-/// Get the display name of a file from its URI.
+/// Query ContentResolver _data column for the full filesystem path.
+/// Tries the original document URI first, then if the document ID is msf:N,
+/// queries MediaStore directly. Returns a clean display path.
+fn query_data_column(uri_str: &str) -> Result<String, String> {
+    use crate::android::wiki_activity::get_java_vm;
+
+    let vm = get_java_vm()?;
+    let mut env = vm.attach_current_thread()
+        .map_err(|e| format!("JNI attach failed: {}", e))?;
+
+    // Get application context → ContentResolver
+    let activity_thread_class = env.find_class("android/app/ActivityThread")
+        .map_err(|e| format!("ActivityThread class: {}", e))?;
+    let app_context = env.call_static_method(
+        &activity_thread_class,
+        "currentApplication",
+        "()Landroid/app/Application;",
+        &[],
+    ).map_err(|e| format!("currentApplication: {}", e))?
+     .l().map_err(|e| format!("Application result: {}", e))?;
+    if app_context.is_null() {
+        return Err("No application context".to_string());
+    }
+    let resolver = env.call_method(
+        &app_context,
+        "getContentResolver",
+        "()Landroid/content/ContentResolver;",
+        &[],
+    ).map_err(|e| format!("getContentResolver: {}", e))?
+     .l().map_err(|e| format!("ContentResolver: {}", e))?;
+
+    // Extract MediaStore ID from the document URI
+    let decoded = urlencoding::decode(uri_str).unwrap_or(uri_str.into());
+    let media_id: Option<i64> = if let Some(doc_idx) = decoded.find("/document/") {
+        let after_doc = &decoded[doc_idx + 10..];
+        if after_doc.starts_with("msf:") {
+            after_doc[4..].parse::<i64>().ok()
+        } else if after_doc.starts_with("document:") {
+            after_doc[9..].parse::<i64>().ok()
+        } else if after_doc.starts_with("document%3A") || after_doc.starts_with("document%3a") {
+            after_doc[11..].parse::<i64>().ok()
+        } else if after_doc.chars().all(|c| c.is_ascii_digit()) && !after_doc.is_empty() {
+            after_doc.parse::<i64>().ok()
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    // Columns to try, in order of preference
+    let columns_to_try: &[(&str, &str)] = &[
+        ("_data", "_data"),
+        ("relative_path", "relative_path"),
+    ];
+
+    // URIs to try for each column
+    let mut uris_to_try = vec![uri_str.to_string()];
+    if let Some(id) = media_id {
+        uris_to_try.push(format!("content://media/external/file/{}", id));
+    }
+
+    let string_class = env.find_class("java/lang/String")
+        .map_err(|e| format!("String class: {}", e))?;
+
+    // For MediaStore URI, try to get relative_path + _display_name combined
+    if let Some(id) = media_id {
+        let ms_uri = format!("content://media/external/file/{}", id);
+        eprintln!("[SAF] query_data_column: trying MediaStore URI {} with relative_path+_display_name", ms_uri);
+
+        let j_uri_str = env.new_string(&ms_uri)
+            .map_err(|e| format!("JNI string: {}", e))?;
+        let uri_obj = env.call_static_method(
+            "android/net/Uri",
+            "parse",
+            "(Ljava/lang/String;)Landroid/net/Uri;",
+            &[(&j_uri_str).into()],
+        ).map_err(|e| format!("Uri.parse: {}", e))?
+         .l().map_err(|e| format!("Uri.parse result: {}", e))?;
+
+        // Projection: [relative_path, _display_name, _data]
+        let j_rp = env.new_string("relative_path").map_err(|e| format!("JNI: {}", e))?;
+        let j_dn = env.new_string("_display_name").map_err(|e| format!("JNI: {}", e))?;
+        let j_data = env.new_string("_data").map_err(|e| format!("JNI: {}", e))?;
+        let projection = env.new_object_array(3, &string_class, &j_rp)
+            .map_err(|e| format!("Array: {}", e))?;
+        env.set_object_array_element(&projection, 1, &j_dn).map_err(|e| format!("Array set: {}", e))?;
+        env.set_object_array_element(&projection, 2, &j_data).map_err(|e| format!("Array set: {}", e))?;
+
+        let null_obj = jni::objects::JObject::null();
+        let cursor_result = env.call_method(
+            &resolver,
+            "query",
+            "(Landroid/net/Uri;[Ljava/lang/String;Ljava/lang/String;[Ljava/lang/String;Ljava/lang/String;)Landroid/database/Cursor;",
+            &[(&uri_obj).into(), (&projection).into(), (&null_obj).into(), (&null_obj).into(), (&null_obj).into()],
+        );
+
+        if env.exception_check().unwrap_or(false) {
+            let exc = env.exception_occurred().ok();
+            if let Some(ref exc_obj) = exc {
+                let msg = env.call_method(exc_obj, "getMessage", "()Ljava/lang/String;", &[])
+                    .ok().and_then(|v| v.l().ok())
+                    .and_then(|o| if o.is_null() { None } else { env.get_string((&o).into()).ok().map(|s| String::from(s)) });
+                eprintln!("[SAF] query_data_column: exception on MediaStore: {:?}", msg);
+            }
+            env.exception_clear().ok();
+        } else if let Ok(v) = cursor_result {
+            if let Ok(cursor) = v.l() {
+                if !cursor.is_null() {
+                    let has_row = env.call_method(&cursor, "moveToFirst", "()Z", &[])
+                        .ok().and_then(|v| v.z().ok()).unwrap_or(false);
+                    if has_row {
+                        // Try _data first (column index 2)
+                        let data_val = env.call_method(&cursor, "getString", "(I)Ljava/lang/String;", &[jni::objects::JValue::Int(2)])
+                            .ok().and_then(|v| v.l().ok())
+                            .and_then(|o| if o.is_null() { None } else { env.get_string((&o).into()).ok().map(|s| String::from(s)) });
+                        eprintln!("[SAF] query_data_column: _data={:?}", data_val);
+
+                        if let Some(ref dp) = data_val {
+                            if !dp.is_empty() {
+                                let _ = env.call_method(&cursor, "close", "()V", &[]);
+                                let display = dp
+                                    .strip_prefix("/storage/emulated/0/")
+                                    .or_else(|| dp.strip_prefix("/storage/self/primary/"))
+                                    .or_else(|| dp.strip_prefix("/sdcard/"))
+                                    .unwrap_or(dp);
+                                return Ok(display.to_string());
+                            }
+                        }
+
+                        // Try relative_path (column index 0) + _display_name (column index 1)
+                        let rp_val = env.call_method(&cursor, "getString", "(I)Ljava/lang/String;", &[jni::objects::JValue::Int(0)])
+                            .ok().and_then(|v| v.l().ok())
+                            .and_then(|o| if o.is_null() { None } else { env.get_string((&o).into()).ok().map(|s| String::from(s)) });
+                        let dn_val = env.call_method(&cursor, "getString", "(I)Ljava/lang/String;", &[jni::objects::JValue::Int(1)])
+                            .ok().and_then(|v| v.l().ok())
+                            .and_then(|o| if o.is_null() { None } else { env.get_string((&o).into()).ok().map(|s| String::from(s)) });
+                        eprintln!("[SAF] query_data_column: relative_path={:?}, _display_name={:?}", rp_val, dn_val);
+
+                        let _ = env.call_method(&cursor, "close", "()V", &[]);
+
+                        if let Some(rp) = rp_val {
+                            if !rp.is_empty() {
+                                if let Some(dn) = dn_val {
+                                    let combined = format!("{}{}", rp.trim_end_matches('/'), if dn.is_empty() { String::new() } else { format!("/{}", dn) });
+                                    return Ok(combined);
+                                }
+                                return Ok(rp);
+                            }
+                        }
+                    } else {
+                        eprintln!("[SAF] query_data_column: MediaStore cursor has no rows");
+                        let _ = env.call_method(&cursor, "close", "()V", &[]);
+                    }
+                } else {
+                    eprintln!("[SAF] query_data_column: MediaStore cursor is null");
+                }
+            }
+        }
+    }
+
+    // Fallback: try _data on original document URI
+    {
+        eprintln!("[SAF] query_data_column: fallback trying _data on original URI: {}", uri_str);
+        let j_uri_str = env.new_string(uri_str)
+            .map_err(|e| format!("JNI string: {}", e))?;
+        let uri_obj = env.call_static_method(
+            "android/net/Uri",
+            "parse",
+            "(Ljava/lang/String;)Landroid/net/Uri;",
+            &[(&j_uri_str).into()],
+        ).map_err(|e| format!("Uri.parse: {}", e))?
+         .l().map_err(|e| format!("Uri.parse result: {}", e))?;
+
+        let j_data = env.new_string("_data")
+            .map_err(|e| format!("JNI string: {}", e))?;
+        let projection = env.new_object_array(1, &string_class, &j_data)
+            .map_err(|e| format!("Array: {}", e))?;
+
+        let null_obj = jni::objects::JObject::null();
+        let cursor_result = env.call_method(
+            &resolver,
+            "query",
+            "(Landroid/net/Uri;[Ljava/lang/String;Ljava/lang/String;[Ljava/lang/String;Ljava/lang/String;)Landroid/database/Cursor;",
+            &[(&uri_obj).into(), (&projection).into(), (&null_obj).into(), (&null_obj).into(), (&null_obj).into()],
+        );
+
+        if !env.exception_check().unwrap_or(false) {
+            if let Ok(v) = cursor_result {
+                if let Ok(cursor) = v.l() {
+                    if !cursor.is_null() {
+                        let has_row = env.call_method(&cursor, "moveToFirst", "()Z", &[])
+                            .ok().and_then(|v| v.z().ok()).unwrap_or(false);
+                        if has_row {
+                            let data_obj = env.call_method(&cursor, "getString", "(I)Ljava/lang/String;", &[jni::objects::JValue::Int(0)])
+                                .ok().and_then(|v| v.l().ok());
+                            let _ = env.call_method(&cursor, "close", "()V", &[]);
+                            if let Some(ref o) = data_obj {
+                                if !o.is_null() {
+                                    if let Ok(s) = env.get_string(o.into()) {
+                                        let data_path = String::from(s);
+                                        if !data_path.is_empty() {
+                                            let display = data_path
+                                                .strip_prefix("/storage/emulated/0/")
+                                                .or_else(|| data_path.strip_prefix("/storage/self/primary/"))
+                                                .or_else(|| data_path.strip_prefix("/sdcard/"))
+                                                .unwrap_or(&data_path);
+                                            return Ok(display.to_string());
+                                        }
+                                    }
+                                }
+                            }
+                        } else {
+                            let _ = env.call_method(&cursor, "close", "()V", &[]);
+                        }
+                    }
+                }
+            }
+        } else {
+            env.exception_clear().ok();
+        }
+    }
+
+    Err("_data not available from any URI".to_string())
+}
+
 pub fn get_display_name(uri: &str) -> Result<String, String> {
     let app = get_app()?;
     let api = app.android_fs();
@@ -696,25 +921,55 @@ pub fn get_display_name(uri: &str) -> Result<String, String> {
 /// Returns a user-friendly path string for display purposes.
 pub fn get_display_path(uri_json: &str) -> String {
     // Try to parse as JSON first
-    let uri_str = if uri_json.starts_with('{') {
+    let (uri_str, tree_uri) = if uri_json.starts_with('{') {
         if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(uri_json) {
-            parsed.get("uri")
+            let uri = parsed.get("uri")
                 .and_then(|v| v.as_str())
                 .unwrap_or(uri_json)
-                .to_string()
+                .to_string();
+            let tree = parsed.get("documentTopTreeUri")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+            (uri, tree)
         } else {
-            uri_json.to_string()
+            (uri_json.to_string(), None)
         }
     } else {
-        uri_json.to_string()
+        (uri_json.to_string(), None)
     };
+
+    eprintln!("[SAF] get_display_path: uri_str={}", uri_str);
 
     // Try to extract path from common SAF URI patterns
     if let Some(path) = extract_path_from_saf_uri(&uri_str) {
+        eprintln!("[SAF] get_display_path: from URI pattern: {}", path);
         return path;
     }
 
-    // Fallback: try to get display name
+    // If main URI is opaque but we have a tree URI, combine tree path + filename
+    if let Some(ref tree) = tree_uri {
+        if let Some(tree_path) = extract_path_from_saf_uri(tree) {
+            // Get the filename from the document provider
+            if let Ok(name) = get_display_name(uri_json) {
+                let combined = format!("{}/{}", tree_path.trim_end_matches('/'), name);
+                eprintln!("[SAF] get_display_path: from tree+name: {}", combined);
+                return combined;
+            }
+        }
+    }
+
+    // Fallback: query ContentResolver for _data (full filesystem path)
+    match query_data_column(&uri_str) {
+        Ok(path) => {
+            eprintln!("[SAF] get_display_path: from _data query: {}", path);
+            return path;
+        }
+        Err(e) => {
+            eprintln!("[SAF] get_display_path: _data query failed: {}", e);
+        }
+    }
+
+    // Fallback: try to get display name only
     if let Ok(name) = get_display_name(uri_json) {
         return name;
     }
@@ -735,13 +990,14 @@ fn extract_path_from_saf_uri(uri: &str) -> Option<String> {
     let decoded = urlencoding::decode(uri).ok()?.into_owned();
 
     // Pattern 1: .../document/primary:path or .../document/home:path
+    // Skips opaque numeric IDs (e.g. msf:12345 from recents picker)
     if let Some(doc_idx) = decoded.find("/document/") {
         let after_doc = &decoded[doc_idx + 10..]; // Skip "/document/"
         if let Some(colon_idx) = after_doc.find(':') {
             let path = &after_doc[colon_idx + 1..];
             // Clean up any remaining encoded characters and normalize slashes
             let clean_path = path.replace("%2F", "/").replace("%20", " ");
-            if !clean_path.is_empty() {
+            if !clean_path.is_empty() && !clean_path.chars().all(|c| c.is_ascii_digit()) {
                 return Some(clean_path);
             }
         }

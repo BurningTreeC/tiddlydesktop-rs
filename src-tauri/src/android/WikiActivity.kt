@@ -73,6 +73,7 @@ class WikiActivity : AppCompatActivity() {
         const val EXTRA_IS_FOLDER = "is_folder"
         const val EXTRA_BACKUPS_ENABLED = "backups_enabled"
         const val EXTRA_BACKUP_COUNT = "backup_count"
+        const val EXTRA_BACKUP_DIR = "backup_dir"
         const val EXTRA_TIDDLER_TITLE = "tiddler_title"  // For tm-open-window: navigate to specific tiddler
         const val EXTRA_FOLDER_LOCAL_PATH = "folder_local_path"  // Local filesystem path for SAF folder wikis
         private const val TAG = "WikiActivity"
@@ -2230,6 +2231,7 @@ class WikiActivity : AppCompatActivity() {
         folderLocalPath = intent.getStringExtra(EXTRA_FOLDER_LOCAL_PATH)  // Local path for SAF folder wikis
         val backupsEnabled = intent.getBooleanExtra(EXTRA_BACKUPS_ENABLED, true)  // Default: enabled
         val backupCount = intent.getIntExtra(EXTRA_BACKUP_COUNT, 20)  // Default: 20 backups
+        val customBackupDir = intent.getStringExtra(EXTRA_BACKUP_DIR)  // Custom backup directory URI
 
         Log.d(TAG, "WikiActivity onCreate - path: $wikiPath, title: $wikiTitle, isFolder: $isFolder, folderUrl: $folderServerUrl, localPath: $folderLocalPath, backupsEnabled: $backupsEnabled, backupCount: $backupCount")
 
@@ -2311,7 +2313,7 @@ class WikiActivity : AppCompatActivity() {
             }
 
             // Start local HTTP server in this process (independent of Tauri/landing page)
-            httpServer = WikiHttpServer(this, wikiUri!!, parsedTreeUri, false, null, backupsEnabled, backupCount)
+            httpServer = WikiHttpServer(this, wikiUri!!, parsedTreeUri, false, null, backupsEnabled, backupCount, customBackupDir)
             wikiUrl = try {
                 httpServer!!.start()            } catch (e: Exception) {
                 Log.e(TAG, "Failed to start HTTP server: ${e.message}")

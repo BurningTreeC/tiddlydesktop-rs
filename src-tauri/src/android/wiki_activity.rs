@@ -227,6 +227,7 @@ pub fn launch_wiki_activity(
     backups_enabled: bool,
     backup_count: u32,
     folder_local_path: Option<&str>,
+    backup_dir: Option<&str>,
 ) -> Result<(), String> {
     eprintln!("[WikiActivity] launch_wiki_activity called:");
     eprintln!("[WikiActivity]   wiki_path: {}", wiki_path);
@@ -369,6 +370,20 @@ pub fn launch_wiki_activity(
         "(Ljava/lang/String;I)Landroid/content/Intent;",
         &[(&extra_backup_count).into(), jni::objects::JValue::Int(backup_count as i32)],
     ).map_err(|e| format!("Failed to putExtra backup_count: {}", e))?;
+
+    // Add custom backup directory if set
+    if let Some(dir) = backup_dir {
+        let extra_backup_dir = env.new_string("backup_dir")
+            .map_err(|e| format!("Failed to create string: {}", e))?;
+        let value_backup_dir = env.new_string(dir)
+            .map_err(|e| format!("Failed to create string: {}", e))?;
+        env.call_method(
+            &intent,
+            "putExtra",
+            "(Ljava/lang/String;Ljava/lang/String;)Landroid/content/Intent;",
+            &[(&extra_backup_dir).into(), (&value_backup_dir).into()],
+        ).map_err(|e| format!("Failed to putExtra backup_dir: {}", e))?;
+    }
 
     // Start the activity
     eprintln!("[WikiActivity] Calling startActivity...");

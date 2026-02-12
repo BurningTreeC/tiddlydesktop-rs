@@ -48,14 +48,15 @@ exports.startup = function(callback) {
 		try {
 			var decoded = decodeURIComponent(uri);
 			// document/storage:path (single file) — storage can be primary, home, SD card ID, etc.
+			// Skip opaque numeric IDs (e.g. msf:12345 from recents picker)
 			var docMatch = decoded.match(/\/document\/[^/:]+:(.+)$/);
-			if (docMatch) return docMatch[1];
+			if (docMatch && !/^\d+$/.test(docMatch[1])) return docMatch[1];
 			// tree/.../document/storage:path (file inside tree)
 			var treeDocMatch = decoded.match(/\/tree\/[^/]+\/document\/[^/:]+:(.+)$/);
-			if (treeDocMatch) return treeDocMatch[1];
+			if (treeDocMatch && !/^\d+$/.test(treeDocMatch[1])) return treeDocMatch[1];
 			// tree/storage:path (folder)
 			var treeMatch = decoded.match(/\/tree\/[^/:]+:(.+)$/);
-			if (treeMatch) return treeMatch[1];
+			if (treeMatch && !/^\d+$/.test(treeMatch[1])) return treeMatch[1];
 			// Downloads provider
 			if (decoded.indexOf("downloads") !== -1) {
 				var dlMatch = decoded.match(/\/document\/(.+)$/);

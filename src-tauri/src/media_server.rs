@@ -270,6 +270,12 @@ fn serve_one_request(
         return Ok(false);
     }
 
+    // Handle /embed?url={encoded_url} — proxy page for external iframes
+    if req.path.starts_with("/embed") {
+        serve_embed(writer, &req, conn_value)?;
+        return Ok(keep_alive);
+    }
+
     // Parse /media/{token}
     let token = match req.path.strip_prefix("/media/") {
         Some(rest) => rest.split('?').next().unwrap_or(rest),
@@ -512,4 +518,129 @@ fn send_error(
         http_version, status, reason, conn_value
     );
     stream.write_all(resp.as_bytes())
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Embed proxy for external iframes
+// ──────────────────────────────────────────────────────────────────────────────
+
+/// Serve `/embed?url={encoded_url}` — a minimal HTML page that wraps an external
+/// URL in a full-viewport iframe. This gives external services (YouTube, SoundCloud)
+/// a valid HTTP origin instead of the custom wikifile:// scheme they reject.
+fn serve_embed(stream: &mut TcpStream, req: &Request, conn_value: &str) -> io::Result<()> {
+    // Extract url= query parameter
+    let url = req.path.split_once("url=")
+        .map(|(_, v)| v.split('&').next().unwrap_or(v))
+        .and_then(|encoded| percent_decode(encoded));
+
+    let url = match url {
+        Some(u) => u,
+        None => {
+            return send_error(stream, &req.http_version, 400, "Bad Request", conn_value);
+        }
+    };
+
+    // Validate: must be http:// or https://, must not be localhost/loopback
+    if !is_safe_external_url(&url) {
+        return send_error(stream, &req.http_version, 403, "Forbidden", conn_value);
+    }
+
+    // HTML-escape the URL for safe embedding in the src attribute
+    let escaped_url = html_escape_attr(&url);
+
+    let html = format!(
+        "<!DOCTYPE html>\n\
+         <html><head><meta charset=\"utf-8\">\n\
+         <style>*{{margin:0;padding:0}}html,body{{width:100%;height:100%;overflow:hidden}}\n\
+         iframe{{width:100%;height:100%;border:none}}</style>\n\
+         </head><body>\n\
+         <iframe src=\"{}\" \
+         allow=\"accelerometer;autoplay;clipboard-write;encrypted-media;gyroscope;picture-in-picture;web-share\" \
+         allowfullscreen></iframe>\n\
+         </body></html>",
+        escaped_url
+    );
+
+    let body = html.as_bytes();
+    let resp = format!(
+        "{} 200 OK\r\n\
+         Content-Type: text/html; charset=utf-8\r\n\
+         Content-Length: {}\r\n\
+         Access-Control-Allow-Origin: *\r\n\
+         Connection: {}\r\n\
+         \r\n",
+        req.http_version, body.len(), conn_value
+    );
+    stream.write_all(resp.as_bytes())?;
+    if req.method != "HEAD" {
+        stream.write_all(body)?;
+    }
+    Ok(())
+}
+
+/// Validate that a URL is a safe external HTTP(S) URL (not localhost/loopback).
+fn is_safe_external_url(url: &str) -> bool {
+    let lower = url.to_lowercase();
+    if !lower.starts_with("http://") && !lower.starts_with("https://") {
+        return false;
+    }
+    // Extract host portion (after scheme, before port/path)
+    let after_scheme = if lower.starts_with("https://") {
+        &lower[8..]
+    } else {
+        &lower[7..]
+    };
+    let host = after_scheme.split('/').next().unwrap_or("")
+        .split(':').next().unwrap_or("");
+    // Block localhost and loopback addresses
+    if host == "localhost" || host == "127.0.0.1" || host == "[::1]" || host == "::1" {
+        return false;
+    }
+    true
+}
+
+/// Percent-decode a URL-encoded string.
+fn percent_decode(input: &str) -> Option<String> {
+    let mut result = Vec::with_capacity(input.len());
+    let bytes = input.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            let hi = hex_digit(bytes[i + 1])?;
+            let lo = hex_digit(bytes[i + 2])?;
+            result.push(hi << 4 | lo);
+            i += 3;
+        } else if bytes[i] == b'+' {
+            result.push(b' ');
+            i += 1;
+        } else {
+            result.push(bytes[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8(result).ok()
+}
+
+fn hex_digit(b: u8) -> Option<u8> {
+    match b {
+        b'0'..=b'9' => Some(b - b'0'),
+        b'a'..=b'f' => Some(b - b'a' + 10),
+        b'A'..=b'F' => Some(b - b'A' + 10),
+        _ => None,
+    }
+}
+
+/// Escape a string for safe use inside an HTML attribute value (double-quoted).
+fn html_escape_attr(s: &str) -> String {
+    let mut result = String::with_capacity(s.len());
+    for ch in s.chars() {
+        match ch {
+            '&' => result.push_str("&amp;"),
+            '"' => result.push_str("&quot;"),
+            '<' => result.push_str("&lt;"),
+            '>' => result.push_str("&gt;"),
+            _ => result.push(ch),
+        }
+    }
+    result
 }

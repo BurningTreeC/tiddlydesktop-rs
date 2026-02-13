@@ -1380,9 +1380,29 @@ fn setup_webkit_drag_handlers_full(widget: &gtk::Widget, state: Rc<RefCell<DragS
                 gtk_window.drag_get_data(context, &target_atom, time);
                 true
             } else {
-                // Regular external drop (file manager, etc.) - let native handling work
-                eprintln!("[TiddlyDesktop] Linux: External drop - letting native handling work");
-                false
+                // Regular external drop (file manager, etc.)
+                // Request text/uri-list to extract file paths - we handle this ourselves
+                // because native WebKitGTK drops don't create File objects for text files
+                // (images/PDFs work natively but .txt/.tid/.csv etc. just paste as text)
+                let uri_list_atom = gdk::Atom::intern("text/uri-list");
+                let has_uri_list = targets.iter().any(|t| *t == uri_list_atom);
+
+                if has_uri_list {
+                    eprintln!("[TiddlyDesktop] Linux: External drop has text/uri-list - requesting file paths");
+                    {
+                        let mut s = state_drop_signal.borrow_mut();
+                        s.drop_requested = true;
+                        s.drop_in_progress = true;
+                        s.last_position = Some((x, y));
+                    }
+                    // Request from the WebKit widget (not GTK window) so data goes to
+                    // handle_drag_data_received which parses file:// URIs and emits td-file-drop
+                    widget.drag_get_data(context, &uri_list_atom, time);
+                    true
+                } else {
+                    eprintln!("[TiddlyDesktop] Linux: External drop - letting native handling work");
+                    false
+                }
             }
         }
     });

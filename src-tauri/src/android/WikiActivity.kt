@@ -372,6 +372,13 @@ class WikiActivity : AppCompatActivity() {
     // If true, back button returns to parent window instead of closing
     private var isChildWindow: Boolean = false
 
+    // Track whether the page has finished loading (set in onPageFinished).
+    // Used in onResume to detect stalled loads — if the page was backgrounded
+    // before finishing, it often won't resume loading and needs a reload.
+    @Volatile private var pageLoaded = false
+    // Track whether onPause was called — avoids false reload on initial onResume
+    private var wasPaused = false
+
     // WakeLock to keep the HTTP server alive when app is in background
     private var wakeLock: PowerManager.WakeLock? = null
 
@@ -2369,6 +2376,9 @@ class WikiActivity : AppCompatActivity() {
                 mediaPlaybackRequiresUserGesture = false
             }
 
+            // Enable third-party cookies for iframe embeds (YouTube, Vimeo, etc.)
+            android.webkit.CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
+
             // Custom WebChromeClient to handle file chooser and fullscreen video
             webChromeClient = object : WebChromeClient() {
                 override fun onConsoleMessage(consoleMessage: android.webkit.ConsoleMessage?): Boolean {
@@ -4172,9 +4182,11 @@ class WikiActivity : AppCompatActivity() {
                                 function renderAll() { pageCanvases.forEach(function(c, i) { renderPage(i + 1, c); }); }
                                 function fitWidth() {
                                     if (!pdfDoc) return;
+                                    var w = pagesWrap.clientWidth;
+                                    if (w <= 0) { iWin.requestAnimationFrame(function() { fitWidth(); }); return; }
                                     pdfDoc.getPage(1).then(function(page) {
                                         var vp = page.getViewport({ scale: 1 });
-                                        scale = Math.max(0.5, Math.min(5, (pagesWrap.clientWidth - 16) / vp.width));
+                                        scale = Math.max(0.5, Math.min(5, (w - 16) / vp.width));
                                         renderAll();
                                     });
                                 }
@@ -4189,6 +4201,10 @@ class WikiActivity : AppCompatActivity() {
                                         pageCanvases.push(canvas);
                                     }
                                     fitWidth();
+                                    if (typeof iWin.ResizeObserver !== 'undefined') {
+                                        var resizeTimer;
+                                        new iWin.ResizeObserver(function() { clearTimeout(resizeTimer); resizeTimer = setTimeout(fitWidth, 100); }).observe(container);
+                                    }
                                 }).catch(function(err) {
                                     pagesWrap.innerHTML = '<p style="color:#f88;padding:20px;text-align:center">Failed to load PDF: ' + err.message + '</p>';
                                 });
@@ -4713,9 +4729,11 @@ class WikiActivity : AppCompatActivity() {
 
                     function fitWidth() {
                         if (!pdfDoc) return;
+                        var w = pagesWrap.clientWidth;
+                        if (w <= 0) { requestAnimationFrame(function() { fitWidth(); }); return; }
                         pdfDoc.getPage(1).then(function(page) {
                             var vp = page.getViewport({ scale: 1 });
-                            var containerWidth = pagesWrap.clientWidth - 16;
+                            var containerWidth = w - 16;
                             scale = containerWidth / vp.width;
                             if (scale < 0.5) scale = 0.5;
                             if (scale > 5) scale = 5;
@@ -4739,6 +4757,12 @@ class WikiActivity : AppCompatActivity() {
 
                         // Initial fit-width render
                         fitWidth();
+
+                        // Re-fit when container resizes
+                        if (typeof ResizeObserver !== 'undefined') {
+                            var resizeTimer;
+                            new ResizeObserver(function() { clearTimeout(resizeTimer); resizeTimer = setTimeout(fitWidth, 100); }).observe(container);
+                        }
 
                         // Use IntersectionObserver for lazy rendering
                         if (typeof IntersectionObserver !== 'undefined') {
@@ -5279,6 +5303,15 @@ class WikiActivity : AppCompatActivity() {
             }
 
             override fun shouldOverrideUrlLoading(view: WebView, request: android.webkit.WebResourceRequest): Boolean {
+                // Allow subframe (iframe) navigations to http/https URLs.
+                // This enables YouTube, Vimeo, and other iframe-based embeds
+                // to load within the WebView instead of opening externally.
+                if (!request.isForMainFrame) {
+                    val scheme = request.url.scheme?.lowercase()
+                    if (scheme == "http" || scheme == "https") {
+                        return false
+                    }
+                }
                 return handleUrl(request.url.toString())
             }
 
@@ -5345,6 +5378,7 @@ class WikiActivity : AppCompatActivity() {
 
             override fun onPageFinished(view: WebView, url: String) {
                 super.onPageFinished(view, url)
+                pageLoaded = true
                 // Guard against duplicate onPageFinished calls (common for HTTP-served wikis).
                 // Check+set a JS flag atomically; only inject scripts on first call.
                 view.evaluateJavascript(
@@ -5701,6 +5735,7 @@ class WikiActivity : AppCompatActivity() {
 
     override fun onPause() {
         super.onPause()
+        wasPaused = true
         webView.onPause()
     }
 
@@ -5708,25 +5743,29 @@ class WikiActivity : AppCompatActivity() {
         super.onResume()
         webView.onResume()
 
+        // Detect stalled or dead WebView after returning from background.
+        // Two scenarios cause a black screen:
+        // 1. Android killed the renderer process while backgrounded (common on low memory)
+        // 2. WebView's HTTP connection pool (6 slots per origin) is exhausted by stalled
+        //    media requests, preventing even the page HTML from loading
+        // Check JS responsiveness with a timeout — if no response, restart server + reload.
+        if (wasPaused && ::webView.isInitialized && currentWikiUrl != null) {
+            var jsResponded = false
+            webView.evaluateJavascript("'alive'") { jsResponded = true }
+            webView.postDelayed({
+                if (!jsResponded && !isFinishing) {
+                    Log.w(TAG, "WebView not responding after resume, restarting server and reloading")
+                    reloadWikiAfterStall()
+                }
+            }, 3000)
+        }
+
         // Check if HTTP server needs restart (single-file wikis only)
         // This handles the case where the phone went to sleep and Android killed the socket
         if (!isFolder && httpServer != null) {
             if (!httpServer!!.isRunning()) {
                 Log.d(TAG, "HTTP server died while paused, restarting...")
-                try {
-                    val newUrl = httpServer!!.restart()
-                    Log.d(TAG, "Server restarted at: $newUrl")
-                    // Reload the page with the new server URL
-                    webView.loadUrl(newUrl)
-                } catch (e: Exception) {
-                    Log.e(TAG, "Failed to restart HTTP server: ${e.message}")
-                    // Show error to user
-                    webView.loadData(
-                        "<html><body><h1>Server Error</h1><p>Failed to restart wiki server: ${e.message}</p><p>Please close and reopen this wiki.</p></body></html>",
-                        "text/html",
-                        "UTF-8"
-                    )
-                }
+                reloadWikiAfterStall()
             } else {
                 Log.d(TAG, "HTTP server still running on port ${httpServer!!.port}")
             }
@@ -5751,6 +5790,36 @@ class WikiActivity : AppCompatActivity() {
                 webView.evaluateJavascript("typeof \$tw!=='undefined'&&\$tw.wiki?'ready':'no'") { r ->
                     if (r?.contains("ready") == true) importPendingCaptures()
                 }
+            }
+        }
+    }
+
+    /**
+     * Reload the wiki after detecting a stalled or dead WebView.
+     * For single-file wikis: restarts the HTTP server on a new port to clear stale
+     * connections (the old port's connections are stuck in the WebView's pool).
+     * For folder wikis: just reloads the page URL.
+     */
+    private fun reloadWikiAfterStall() {
+        pageLoaded = false
+        if (!isFolder && httpServer != null) {
+            try {
+                val newUrl = httpServer!!.restart()
+                Log.d(TAG, "Server restarted at: $newUrl")
+                currentWikiUrl = newUrl
+                webView.loadUrl(newUrl)
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to restart HTTP server: ${e.message}")
+                webView.loadData(
+                    "<html><body><h1>Server Error</h1><p>Failed to restart wiki server: ${e.message}</p><p>Please close and reopen this wiki.</p></body></html>",
+                    "text/html",
+                    "UTF-8"
+                )
+            }
+        } else {
+            val url = currentWikiUrl
+            if (url != null) {
+                webView.loadUrl(url)
             }
         }
     }

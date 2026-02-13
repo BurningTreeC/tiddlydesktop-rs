@@ -261,6 +261,58 @@
             }
 
             setupMediaInterceptor();
+
+            // Patch text-type parsers to support _canonical_uri lazy-loading.
+            // TW's WikiParser handles this for text/vnd.tiddlywiki (shows "Loading..."
+            // then fetches content via httpRequest). TextParser (used for text/plain,
+            // application/json, text/css, etc.) doesn't — so _canonical_uri text tiddlers
+            // render as empty. We wrap these parsers to add the same lazy-loading behavior.
+            // Uses invoke('read_file_as_binary') directly instead of httpRequest because
+            // our httpRequest override returns data URIs, not raw text content.
+            function patchTextParsersForCanonicalUri() {
+                if (!$tw.Wiki || !$tw.Wiki.parsers) return;
+                var types = ['text/plain', 'text/x-tiddlywiki', 'application/javascript',
+                             'application/json', 'text/css', 'application/x-tiddler-dictionary',
+                             'text/markdown', 'text/x-markdown'];
+                types.forEach(function(parserType) {
+                    var OrigParser = $tw.Wiki.parsers[parserType];
+                    if (!OrigParser) return;
+                    var PatchedParser = function(type, text, options) {
+                        if ((text || '') === '' && options && options._canonical_uri) {
+                            var uri = options._canonical_uri;
+                            var wiki = options.wiki;
+                            // Resolve relative path to absolute filesystem path
+                            var resolved = resolveFilesystemPath(uri);
+                            if (resolved) {
+                                invoke('read_file_as_binary', { path: resolved })
+                                    .then(function(bytes) {
+                                        var content = new TextDecoder('utf-8').decode(new Uint8Array(bytes));
+                                        if (wiki) {
+                                            wiki.each(function(tiddler, title) {
+                                                if (tiddler.fields._canonical_uri === uri &&
+                                                    (tiddler.fields.text || '') === '') {
+                                                    wiki.addTiddler(new $tw.Tiddler(tiddler, {text: content}));
+                                                }
+                                            });
+                                        }
+                                    })
+                                    .catch(function(err) {
+                                        console.error('[TiddlyDesktop] Failed to lazy-load _canonical_uri:', uri, err);
+                                    });
+                            }
+                            var placeholder = ($tw.language && $tw.language.getRawString('LazyLoadingWarning')) || 'Loading...';
+                            OrigParser.call(this, type, placeholder, options);
+                        } else {
+                            OrigParser.call(this, type, text, options);
+                        }
+                    };
+                    PatchedParser.prototype = OrigParser.prototype;
+                    $tw.Wiki.parsers[parserType] = PatchedParser;
+                });
+                console.log('[TiddlyDesktop] Text parser _canonical_uri lazy-loading installed');
+            }
+            patchTextParsersForCanonicalUri();
+
             console.log('[TiddlyDesktop] Filesystem support installed');
         }
 

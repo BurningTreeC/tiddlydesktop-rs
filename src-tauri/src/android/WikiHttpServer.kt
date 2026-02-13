@@ -493,12 +493,18 @@ class WikiHttpServer(
                 } ?: throw IOException("Failed to read wiki")
             }
 
+            // Inject iframe referrerpolicy fix — must run before any iframe is created.
+            // Sets referrerpolicy="no-referrer" on external iframes (YouTube, Vimeo, etc.)
+            // so the wiki server's origin (http://127.0.0.1) isn't sent as Referer,
+            // which can cause YouTube Error 153 (embedding denied).
+            val iframeFixScript = """<script>(function(){function x(u){if(!u||typeof u!=='string')return false;if(u.startsWith('http://127.0.0.1')||u.startsWith('http://localhost'))return false;return u.startsWith('http://')||u.startsWith('https://')||u.startsWith('//');}try{var d=Object.getOwnPropertyDescriptor(HTMLIFrameElement.prototype,'src');if(d&&d.set){Object.defineProperty(HTMLIFrameElement.prototype,'src',{set:function(v){if(x(v))this.referrerPolicy='no-referrer';d.set.call(this,v);},get:d.get,configurable:true,enumerable:true});}}catch(e){}var sa=HTMLIFrameElement.prototype.setAttribute;HTMLIFrameElement.prototype.setAttribute=function(n,v){if(n==='src'&&x(v))this.referrerPolicy='no-referrer';return sa.call(this,n,v);};})();</script>"""
+
             // Inject Plyr CSS/JS and video-hiding style into <head> so they load
             // as part of the page itself, eliminating the flash of native video controls.
             val plyrInjection = """<style id="td-plyr-hide-styles">video:not(.plyr__video-wrapper video){opacity:0!important;max-height:0!important;overflow:hidden!important;}audio{max-width:100%;box-sizing:border-box;}.plyr{width:100%;height:100%;}.plyr__video-wrapper{width:100%!important;height:100%!important;padding-bottom:0!important;background:#000;}.plyr video{opacity:1!important;width:100%!important;height:100%!important;object-fit:contain!important;}.plyr--compact .plyr__control--overlaid{padding:10px!important;}.plyr--compact .plyr__control--overlaid svg{width:18px!important;height:18px!important;}.plyr--compact .plyr__time--duration,.plyr--compact [data-plyr="settings"],.plyr--compact .plyr__volume{display:none!important;}.plyr--compact .plyr__controls{padding:2px 5px!important;}.plyr--compact .plyr__control{padding:3px!important;}.plyr--compact .plyr__control svg{width:14px!important;height:14px!important;}.plyr--compact .plyr__progress__container{margin-left:4px!important;}.plyr--tiny .plyr__time,.plyr--tiny [data-plyr="fullscreen"]{display:none!important;}.plyr--tiny .plyr__control--overlaid{padding:6px!important;}.plyr--tiny .plyr__control--overlaid svg{width:14px!important;height:14px!important;}.plyr--tiny .plyr__control svg{width:12px!important;height:12px!important;}</style><link rel="stylesheet" href="/_td/plyr/dist/plyr.css"><script src="/_td/plyr/dist/plyr.min.js"></script>"""
             val headIdx = content.indexOf("<head>", ignoreCase = true)
             if (headIdx >= 0) {
-                content = content.substring(0, headIdx + 6) + plyrInjection + content.substring(headIdx + 6)
+                content = content.substring(0, headIdx + 6) + iframeFixScript + plyrInjection + content.substring(headIdx + 6)
             }
 
             val bytes = content.toByteArray(Charsets.UTF_8)

@@ -1216,60 +1216,157 @@
         // Drop Processing Functions
         // ========================================
 
+        // TiddlyWiki-native file extensions that should always be deserialized
+        // (imported via TW's import mechanism, never stored as external attachments)
+        var TW_NATIVE_EXTS = {
+            '.tid': true, '.csv': true, '.json': true,
+            '.html': true, '.htm': true,
+            '.tiddler': true, '.multids': true
+        };
+
+        function isTwNativeFile(filename) {
+            var dotPos = filename.lastIndexOf('.');
+            if (dotPos === -1) return false;
+            return TW_NATIVE_EXTS[filename.substr(dotPos).toLowerCase()] === true;
+        }
+
+        // Import files from paths, with proper file type distinction:
+        //   - TW-native files (.tid, .csv, .json, .html) → deserialize via TW
+        //   - Other files + external attachments enabled → _canonical_uri tiddlers
+        //   - Other files + external attachments disabled → embed via TW readFile
+        function importFiles(fileInfos) {
+            // fileInfos: [{path, filename, mimeType}, ...]
+            if (!fileInfos || fileInfos.length === 0) return;
+            if (typeof $tw === "undefined" || !$tw.wiki) return;
+
+            invoke("js_log", { message: "importFiles: processing " + fileInfos.length + " files" });
+
+            var wikiPath = window.__WIKI_PATH__;
+            var externalEnabled = $tw.wiki.getTiddlerText(CONFIG_ENABLE, "yes") === "yes";
+            var useAbsDesc = $tw.wiki.getTiddlerText(CONFIG_ABS_DESC, "no") === "yes";
+            var useAbsNonDesc = $tw.wiki.getTiddlerText(CONFIG_ABS_NONDESC, "no") === "yes";
+
+            var allTiddlers = [];
+            var remaining = fileInfos.length;
+
+            // Find the NavigatorWidget (which handles tm-import-tiddlers).
+            // $tw.rootWidget.dispatchEvent() bubbles UP to parents, but rootWidget
+            // has no parent — so events dispatched there never reach child widgets.
+            // We search the widget tree to find the NavigatorWidget and dispatch from it.
+            function findWidgetWithHandler(widget, eventType) {
+                if (widget.eventListeners && widget.eventListeners[eventType]) {
+                    return widget;
+                }
+                if (widget.children) {
+                    for (var i = 0; i < widget.children.length; i++) {
+                        var found = findWidgetWithHandler(widget.children[i], eventType);
+                        if (found) return found;
+                    }
+                }
+                return null;
+            }
+
+            function done() {
+                remaining--;
+                if (remaining <= 0 && allTiddlers.length > 0) {
+                    invoke("js_log", { message: "importFiles: dispatching tm-import-tiddlers with " + allTiddlers.length + " tiddlers" });
+                    var target = findWidgetWithHandler($tw.rootWidget, "tm-import-tiddlers") || $tw.rootWidget;
+                    target.dispatchEvent({
+                        type: "tm-import-tiddlers",
+                        param: JSON.stringify(allTiddlers),
+                        autoOpenOnImport: "yes",
+                        importTitle: "$:/Import"
+                    });
+                }
+            }
+
+            fileInfos.forEach(function(info) {
+                var isNative = isTwNativeFile(info.filename);
+
+                if (isNative) {
+                    // TW-native file: read as text and deserialize
+                    invoke("js_log", { message: "importFiles: TW-native file '" + info.filename + "' — reading for deserialization" });
+                    invoke("read_file_as_binary", { path: info.path }).then(function(bytes) {
+                        var text = new TextDecoder('utf-8').decode(new Uint8Array(bytes));
+                        var tiddlers = $tw.wiki.deserializeTiddlers(info.mimeType, text, {title: info.filename});
+                        if (tiddlers && tiddlers.length) {
+                            allTiddlers.push.apply(allTiddlers, tiddlers);
+                        }
+                        done();
+                    }).catch(function(err) {
+                        console.error("[TiddlyDesktop] Failed to read TW-native file:", info.filename, err);
+                        done();
+                    });
+                } else if (externalEnabled && info.path) {
+                    // Non-native file with external attachments enabled: create _canonical_uri tiddler
+                    var canonicalUri = makePathRelative(info.path, wikiPath, {
+                        useAbsoluteForDescendents: useAbsDesc,
+                        useAbsoluteForNonDescendents: useAbsNonDesc
+                    });
+                    invoke("js_log", { message: "importFiles: external attachment '" + info.filename + "' → " + canonicalUri });
+                    allTiddlers.push({
+                        title: info.filename,
+                        type: info.mimeType,
+                        "_canonical_uri": canonicalUri
+                    });
+                    done();
+                } else {
+                    // Non-native file, no external attachments: embed content directly
+                    invoke("js_log", { message: "importFiles: embedding '" + info.filename + "' directly" });
+                    invoke("read_file_as_binary", { path: info.path }).then(function(bytes) {
+                        var uint8 = new Uint8Array(bytes);
+                        // Determine if this is a binary or text type
+                        var isBinary;
+                        if (info.mimeType.indexOf('text/') === 0) {
+                            isBinary = false;
+                        } else {
+                            var cti = $tw.config.contentTypeInfo && $tw.config.contentTypeInfo[info.mimeType];
+                            isBinary = cti ? cti.encoding === "base64" : true;
+                        }
+                        var tiddler = { title: info.filename, type: info.mimeType };
+                        if (isBinary) {
+                            // Binary: base64 encode
+                            var binary = '';
+                            for (var i = 0; i < uint8.length; i++) {
+                                binary += String.fromCharCode(uint8[i]);
+                            }
+                            tiddler.text = btoa(binary);
+                        } else {
+                            // Text: decode as UTF-8
+                            tiddler.text = new TextDecoder('utf-8').decode(uint8);
+                        }
+                        allTiddlers.push(tiddler);
+                        done();
+                    }).catch(function(err) {
+                        console.error("[TiddlyDesktop] Failed to read file:", info.filename, err);
+                        done();
+                    });
+                }
+            });
+        }
+
         function processGtkFileDrop() {
             if (!pendingGtkFileDrop) return;
 
             var paths = pendingGtkFileDrop;
-            var pos = pendingContentDropPos || { x: 100, y: 100 };
-            var dropTarget = nativeDragTarget || getTargetElement(pos);
-
             pendingGtkFileDrop = null;
             pendingContentDropPos = null;
 
-            var filePromises = paths.map(function(filepath) {
+            var fileInfos = [];
+            paths.forEach(function(filepath) {
                 if (filepath.startsWith("data:") || (!filepath.startsWith("/") && !filepath.match(/^[A-Za-z]:\\/))) {
-                    return Promise.resolve(null);
-                }
-
-                var filename = filepath.split(/[/\\]/).pop();
-                var mimeType = getMimeType(filename);
-
-                return invoke("read_file_as_binary", { path: filepath }).then(function(bytes) {
-                    window.__pendingExternalFiles[filename] = filepath;
-                    return new File([new Uint8Array(bytes)], filename, { type: mimeType });
-                }).catch(function(err) {
-                    console.error("[TiddlyDesktop] Failed to read file:", filepath, err);
-                    return null;
-                });
-            });
-
-            Promise.all(filePromises).then(function(files) {
-                var validFiles = files.filter(function(f) { return f !== null; });
-                if (validFiles.length === 0) {
-                    resetGtkDragState();
                     return;
                 }
-
-                var dt = new DataTransfer();
-                validFiles.forEach(function(file) { dt.items.add(file); });
-
-                if (nativeDragTarget) {
-                    var leaveEvent = createSyntheticDragEvent("dragleave", pos, dt, null);
-                    leaveEvent.__tiddlyDesktopSynthetic = true;
-                    nativeDragTarget.dispatchEvent(leaveEvent);
-                }
-
-                var dropEvent = createSyntheticDragEvent("drop", pos, dt);
-                dropEvent.__tiddlyDesktopSynthetic = true;
-                dropTarget.dispatchEvent(dropEvent);
-
-                var endEvent = createSyntheticDragEvent("dragend", pos, dt);
-                endEvent.__tiddlyDesktopSynthetic = true;
-                document.body.dispatchEvent(endEvent);
-
-                setTimeout(function() { window.__pendingExternalFiles = {}; }, 5000);
-                resetGtkDragState();
+                var filename = filepath.split(/[/\\]/).pop();
+                window.__pendingExternalFiles[filename] = filepath;
+                fileInfos.push({ path: filepath, filename: filename, mimeType: getMimeType(filename) });
             });
+
+            if (fileInfos.length > 0) {
+                importFiles(fileInfos);
+                setTimeout(function() { window.__pendingExternalFiles = {}; }, 5000);
+            }
+            resetGtkDragState();
         }
 
         // Helper to check if an element or its ancestors are editable
@@ -1695,6 +1792,19 @@
 
             if (nativeDragActive) return;
 
+            // On Linux, td-file-drop (from GTK) fires before tauri://drag-drop for
+            // the same file drop. If pendingGtkFileDrop is set, td-file-drop already
+            // scheduled processGtkFileDrop() to handle the import — skip here to
+            // avoid importing the same files twice.
+            if (pendingGtkFileDrop) {
+                invoke("js_log", { message: "tauri://drag-drop: skipping — td-file-drop already handling this drop" });
+                pendingFilePaths = [];
+                enteredTarget = null;
+                currentTarget = null;
+                isDragging = false;
+                return;
+            }
+
             var paths = event.payload.paths || [];
 
             if (contentDropTimeout) {
@@ -1757,51 +1867,23 @@
                 return;
             }
 
-            // Linux/macOS: Use synthetic events (native handling not reliable)
-            var dropTarget = getTargetElement(event.payload.position);
-            var pos = event.payload.position;
-
-            var filePromises = paths.map(function(filepath) {
+            // Linux/macOS: Import files with proper type distinction.
+            // WebKitGTK's DataTransfer.files is empty for programmatic DataTransfer
+            // objects, so we handle import directly from file paths.
+            var fileInfos = [];
+            paths.forEach(function(filepath) {
                 if (filepath.startsWith("data:") || (!filepath.startsWith("/") && !filepath.match(/^[A-Za-z]:\\/))) {
-                    return Promise.resolve(null);
+                    return;
                 }
-
                 var filename = filepath.split(/[/\\]/).pop();
-                var mimeType = getMimeType(filename);
-
-                return invoke("read_file_as_binary", { path: filepath }).then(function(bytes) {
-                    // Path already set above, but ensure it's still there
-                    window.__pendingExternalFiles[filename] = filepath;
-                    return new File([new Uint8Array(bytes)], filename, { type: mimeType });
-                }).catch(function(err) {
-                    console.error("[TiddlyDesktop] Failed to read file:", filepath, err);
-                    return null;
-                });
+                fileInfos.push({ path: filepath, filename: filename, mimeType: getMimeType(filename) });
             });
 
-            Promise.all(filePromises).then(function(files) {
-                var validFiles = files.filter(function(f) { return f !== null; });
-                if (validFiles.length === 0) return;
-
-                invoke("js_log", { message: "Processing " + validFiles.length + " files on window: " + windowLabel });
-
-                var dt = new DataTransfer();
-                validFiles.forEach(function(file) { dt.items.add(file); });
-
-                if (currentTarget) {
-                    var leaveEvent = createSyntheticDragEvent("dragleave", pos, dt, null);
-                    currentTarget.dispatchEvent(leaveEvent);
-                }
-
-                var dropEvent = createSyntheticDragEvent("drop", pos, dt);
-                invoke("js_log", { message: "Dispatching drop event on window: " + windowLabel + " to target: " + dropTarget.tagName });
-                dropTarget.dispatchEvent(dropEvent);
-
-                var endEvent = createSyntheticDragEvent("dragend", pos, dt);
-                document.body.dispatchEvent(endEvent);
-
+            if (fileInfos.length > 0) {
+                invoke("js_log", { message: "Processing " + fileInfos.length + " files on window: " + windowLabel });
+                importFiles(fileInfos);
                 setTimeout(function() { window.__pendingExternalFiles = {}; }, 5000);
-            });
+            }
 
             pendingFilePaths = [];
             enteredTarget = null;
@@ -1860,35 +1942,40 @@
                 invoke('pick_files_for_import', { multiple: multiple }).then(function(paths) {
                     if (paths.length === 0) return;
 
-                    var filePromises = paths.map(function(filepath) {
+                    var fileInfos = [];
+                    paths.forEach(function(filepath) {
                         var filename = filepath.split(/[/\\]/).pop();
-                        if (filename.toLowerCase().endsWith('.html') || filename.toLowerCase().endsWith('.htm')) {
-                            return Promise.resolve(null);
-                        }
-
                         window.__pendingExternalFiles[filename] = filepath;
-
-                        return invoke('read_file_as_binary', { path: filepath }).then(function(bytes) {
-                            var mimeType = getMimeType(filename);
-                            return new File([new Uint8Array(bytes)], filename, { type: mimeType });
-                        }).catch(function(err) {
-                            console.error('[TiddlyDesktop] Failed to read file:', filepath, err);
-                            return null;
-                        });
+                        fileInfos.push({ path: filepath, filename: filename, mimeType: getMimeType(filename) });
                     });
 
-                    Promise.all(filePromises).then(function(files) {
-                        var validFiles = files.filter(function(f) { return f !== null; });
-                        if (validFiles.length === 0) return;
-
-                        var dt = new DataTransfer();
-                        validFiles.forEach(function(file) { dt.items.add(file); });
-
-                        input.files = dt.files;
-                        input.dispatchEvent(new Event('change', { bubbles: true }));
-
+                    if (fileInfos.length > 0) {
+                        // On Windows, try setting input.files for native TW processing.
+                        // The th-importing-file hook handles external attachments.
+                        if (isWindows) {
+                            var filePromises = fileInfos.map(function(info) {
+                                return invoke('read_file_as_binary', { path: info.path }).then(function(bytes) {
+                                    return new File([new Uint8Array(bytes)], info.filename, { type: info.mimeType });
+                                }).catch(function() { return null; });
+                            });
+                            Promise.all(filePromises).then(function(files) {
+                                var validFiles = files.filter(function(f) { return f !== null; });
+                                if (validFiles.length === 0) return;
+                                var dt = new DataTransfer();
+                                validFiles.forEach(function(file) { dt.items.add(file); });
+                                if (dt.files.length > 0) {
+                                    input.files = dt.files;
+                                    input.dispatchEvent(new Event('change', { bubbles: true }));
+                                } else {
+                                    importFiles(fileInfos);
+                                }
+                            });
+                        } else {
+                            // Linux/macOS: import directly from paths
+                            importFiles(fileInfos);
+                        }
                         setTimeout(function() { window.__pendingExternalFiles = {}; }, 5000);
-                    });
+                    }
                 }).catch(function(err) {
                     console.error('[TiddlyDesktop] Failed to pick files:', err);
                 });
@@ -2051,36 +2138,10 @@
                     }).catch(function() {});
                 }
 
-                // Resolve type from filename extension (getFileExtensionInfo expects ".json", not "application/json")
-                var extType = null;
-                if (filename && $tw.utils.getFileExtensionInfo) {
-                    var dotPos = filename.lastIndexOf('.');
-                    if (dotPos !== -1) {
-                        var extInfo = $tw.utils.getFileExtensionInfo(filename.substr(dotPos));
-                        if (extInfo) {
-                            extType = extInfo.type;
-                        }
-                    }
-                }
-
-                var hasDeserializer = false;
-                if ($tw.Wiki.tiddlerDeserializerModules) {
-                    if ($tw.Wiki.tiddlerDeserializerModules[type]) {
-                        hasDeserializer = true;
-                    }
-                    if (!hasDeserializer && extType && $tw.Wiki.tiddlerDeserializerModules[extType]) {
-                        hasDeserializer = true;
-                    }
-                    if (!hasDeserializer && $tw.config.contentTypeInfo && $tw.config.contentTypeInfo[type]) {
-                        var deserializerType = $tw.config.contentTypeInfo[type].deserializerType;
-                        if (deserializerType && $tw.Wiki.tiddlerDeserializerModules[deserializerType]) {
-                            hasDeserializer = true;
-                        }
-                    }
-                }
-
-                if (hasDeserializer) {
-                    console.log("[TiddlyDesktop] Deserializer found for type '" + type + "', letting TiddlyWiki5 handle import");
+                // TW-native files should always be deserialized by TiddlyWiki
+                // (never stored as external attachments)
+                if (isTwNativeFile(filename)) {
+                    console.log("[TiddlyDesktop] TW-native file '" + filename + "', letting TiddlyWiki5 handle import");
                     return false;
                 }
 
@@ -2095,7 +2156,9 @@
                 var isAndroid = wikiPath && (wikiPath.indexOf("content://") !== -1 || (wikiPath.charAt(0) === '{' && wikiPath.indexOf("content://") !== -1));
                 invoke("js_log", { message: "th-importing-file: isAndroid=" + isAndroid });
 
-                if (originalPath && externalEnabled && info.isBinary) {
+                // For non-TW-native files: create external attachment if enabled
+                // (applies to both binary and text files — .txt, .md, images, etc.)
+                if (originalPath && externalEnabled) {
                     if (isAndroid) {
                         // Android: Copy attachment to ./attachments/ folder
                         // This is async, so we handle it differently
@@ -2139,9 +2202,9 @@
                     }
                 }
 
-                // Android fallback: If no originalPath but we're on Android with a binary file,
+                // Android fallback: If no originalPath but we're on Android,
                 // read the file content and save it to attachments folder
-                if (isAndroid && externalEnabled && info.isBinary && file) {
+                if (isAndroid && externalEnabled && file) {
                     invoke("js_log", { message: "th-importing-file: Android fallback - reading file content for " + filename });
 
                     var reader = new FileReader();

@@ -601,6 +601,13 @@ mod utils;
 #[cfg(target_os = "linux")]
 mod media_server;
 
+/// Chrome-like user agent for Linux WebKitGTK.
+/// WebKitGTK's default UA looks like Safari-on-Linux which triggers bot detection
+/// on services like YouTube (Error 153) and SoundCloud (CAPTCHA). Real Safari
+/// only runs on macOS/iOS, so the Linux+Safari combo is flagged as suspicious.
+#[cfg(target_os = "linux")]
+const LINUX_USER_AGENT: &str = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
+
 /// Wiki storage and recent files management
 mod wiki_storage;
 
@@ -5213,6 +5220,7 @@ async fn open_tiddler_window(
     let session_dir = get_wiki_session_dir(&app, &wiki_path);
 
     // Use full init script for tiddler windows too - they need __WIKI_PATH__ for external attachments
+    #[allow(unused_mut)] // mut needed on non-Linux; Linux shadows with user_agent()
     #[cfg(not(target_os = "android"))]
     let mut builder = WebviewWindowBuilder::new(&app, &label, WebviewUrl::External(wiki_url.parse().unwrap()))
         .title(&title)
@@ -5222,6 +5230,16 @@ async fn open_tiddler_window(
         .window_classname("tiddlydesktop-rs")
         .initialization_script(&init_script::get_wiki_init_script(&wiki_path, &label, false))
         .devtools(cfg!(debug_assertions)); // Only enable in debug builds
+
+    #[cfg(target_os = "linux")]
+    let mut builder = builder.user_agent(LINUX_USER_AGENT);
+
+    // Linux: Inject embed proxy port so external iframes can be proxied through HTTP
+    #[cfg(target_os = "linux")]
+    if let Some(state) = app.try_state::<MediaServerState>() {
+        let port = state.server.port();
+        builder = builder.initialization_script(&format!("window.__TD_EMBED_PORT__ = {};", port));
+    }
 
     #[cfg(target_os = "android")]
     let mut builder = WebviewWindowBuilder::new(&app, &label, WebviewUrl::External(wiki_url.parse().unwrap()))
@@ -6306,6 +6324,20 @@ fn wiki_protocol_handler(app: &tauri::AppHandle, request: Request<Vec<u8>>) -> R
         }
     }
 
+    // Handle tdlib asset requests: wikifile://localhost/__tdlib__/{path}
+    // WebKitGTK blocks cross-scheme fetch requests (wikifile:// → tdlib://),
+    // so we route bundled library assets through wikifile:// for same-origin access.
+    #[cfg(not(target_os = "android"))]
+    if path.starts_with("__tdlib__/") {
+        let tdlib_path = path.strip_prefix("__tdlib__/").unwrap();
+        let synthetic_uri = format!("tdlib://localhost/{}", tdlib_path);
+        let synthetic_request = Request::builder()
+            .uri(&synthetic_uri)
+            .body(Vec::new())
+            .unwrap();
+        return tdlib_protocol_handler(app, synthetic_request);
+    }
+
     // Look up the actual file path
     let state = app.state::<AppState>();
     let paths = state.wiki_paths.lock().unwrap();
@@ -6867,6 +6899,9 @@ fn reveal_or_create_main_window(app_handle: &tauri::AppHandle) {
             .expect("Failed to set icon")
             .initialization_script(&init_script::get_wiki_init_script_with_language(&main_wiki_path.to_string_lossy(), "main", true, Some(&language)));
 
+        #[cfg(target_os = "linux")]
+        let mut builder = builder.user_agent(LINUX_USER_AGENT);
+
         // Apply saved position if available, with monitor validation
         if let Some(ref state) = saved_state {
             let (x, y) = validate_window_position(app_handle, state);
@@ -7223,6 +7258,16 @@ fn run_wiki_mode(args: WikiModeArgs) {
                 .window_classname("tiddlydesktop-rs-wiki")
                 .initialization_script(&init_script::get_wiki_init_script(&wiki_path_clone.to_string_lossy(), &label, false))
                 .devtools(cfg!(debug_assertions)); // Only enable in debug builds
+
+            #[cfg(target_os = "linux")]
+            let mut builder = builder.user_agent(LINUX_USER_AGENT);
+
+            // Linux: Inject embed proxy port so external iframes can be proxied through HTTP
+            #[cfg(target_os = "linux")]
+            if let Some(state) = app.try_state::<MediaServerState>() {
+                let port = state.server.port();
+                builder = builder.initialization_script(&format!("window.__TD_EMBED_PORT__ = {};", port));
+            }
 
             // Apply saved position if available, with monitor validation on Windows/macOS
             if let Some(ref state) = saved_state {
@@ -7584,6 +7629,20 @@ fn run_wiki_folder_mode(args: WikiFolderModeArgs) {
                 (w, h)
             };
 
+            // Linux: Start localhost HTTP media server for GStreamer playback
+            // (must be before window builder so embed proxy port is available for init script)
+            #[cfg(target_os = "linux")]
+            {
+                match media_server::MediaServer::start() {
+                    Ok(server) => {
+                        app.manage(MediaServerState { server });
+                    }
+                    Err(e) => {
+                        eprintln!("[TiddlyDesktop] Failed to start media server: {}", e);
+                    }
+                }
+            }
+
             let mut builder = WebviewWindowBuilder::new(
                 app,
                 &label_for_state,
@@ -7599,6 +7658,13 @@ fn run_wiki_folder_mode(args: WikiFolderModeArgs) {
                 false
             ))
             .devtools(cfg!(debug_assertions)); // Only enable in debug builds
+
+            // Linux: Inject embed proxy port so external iframes can be proxied through HTTP
+            #[cfg(target_os = "linux")]
+            if let Some(state) = app.try_state::<MediaServerState>() {
+                let port = state.server.port();
+                builder = builder.initialization_script(&format!("window.__TD_EMBED_PORT__ = {};", port));
+            }
 
             // Apply saved position, with monitor validation on Windows/macOS
             if let Some(ref state) = saved_state {
@@ -7646,19 +7712,6 @@ fn run_wiki_folder_mode(args: WikiFolderModeArgs) {
                 tiddler_title: None,
                 ipc_client: ipc_client_for_wiki_state.clone(),
             });
-
-            // Linux: Start localhost HTTP media server for GStreamer playback
-            #[cfg(target_os = "linux")]
-            {
-                match media_server::MediaServer::start() {
-                    Ok(server) => {
-                        app.manage(MediaServerState { server });
-                    }
-                    Err(e) => {
-                        eprintln!("[TiddlyDesktop] Failed to start media server: {}", e);
-                    }
-                }
-            }
 
             // Start IPC listener for focus requests
             let client_guard = ipc_client_for_state.lock().unwrap();
@@ -8137,6 +8190,9 @@ pub fn run() {
                 .window_classname("tiddlydesktop-rs")
                 .initialization_script(&init_script::get_wiki_init_script_with_language(&main_wiki_path.to_string_lossy(), "main", true, Some(&language)))
                 .devtools(cfg!(debug_assertions)); // Only enable in debug builds
+
+            #[cfg(target_os = "linux")]
+            let mut builder = builder.user_agent(LINUX_USER_AGENT);
 
             // Android: Extract resources synchronously if needed (first run)
             // This takes ~1.5 seconds with ZIP extraction, so we do it before window creation

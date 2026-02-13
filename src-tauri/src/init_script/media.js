@@ -7,6 +7,49 @@
 
     var TD_LIB_BASE = 'tdlib://localhost/';
 
+    // Helper: check if a URL is an external (non-wiki-server) URL
+    function isExternalUrl(url) {
+        if (!url || typeof url !== 'string') return false;
+        if (url.startsWith('http://127.0.0.1')) return false;
+        if (url.startsWith('http://localhost')) return false;
+        return url.startsWith('http://') || url.startsWith('https://') || url.startsWith('//');
+    }
+
+    // Custom URI schemes (wikifile://) are rejected as invalid origins by
+    // external embed services (YouTube, SoundCloud, etc.). On Linux, the media
+    // server provides an /embed proxy endpoint that wraps external URLs in a
+    // valid HTTP page. External iframe src attributes are rewritten to point
+    // to the proxy so the embed loads from a proper HTTP origin.
+
+    function toProxyUrl(src) {
+        if (!window.__TD_EMBED_PORT__) return null;
+        var prefix = 'http://127.0.0.1:' + window.__TD_EMBED_PORT__ + '/embed';
+        if (src.indexOf(prefix) === 0) return null; // Already proxied
+        return prefix + '?url=' + encodeURIComponent(src);
+    }
+
+    // Early interception: patch setAttribute to proxy external src BEFORE load.
+    // This catches iframes created via JavaScript (setAttribute('src', ...)).
+    var _origIframeSetAttr = HTMLIFrameElement.prototype.setAttribute;
+    HTMLIFrameElement.prototype.setAttribute = function(name, value) {
+        if (name.toLowerCase() === 'src' && isExternalUrl(value)) {
+            var proxied = toProxyUrl(value);
+            if (proxied) {
+                return _origIframeSetAttr.call(this, name, proxied);
+            }
+        }
+        return _origIframeSetAttr.call(this, name, value);
+    };
+
+    function fixExternalIframe(iframe) {
+        var src = iframe.getAttribute('src') || '';
+        if (!isExternalUrl(src)) return;
+        var proxied = toProxyUrl(src);
+        if (proxied) {
+            _origIframeSetAttr.call(iframe, 'src', proxied);
+        }
+    }
+
     // ---- Section 0: Early CSS Injection ----
     // Inject Plyr CSS and video-hiding styles immediately (before body exists).
     // WebKitGTK doesn't load CSS from custom URI schemes via <link> tags,
@@ -91,6 +134,13 @@
         });
     }
 
+    // On wikifile:// origins (desktop single-file wikis), WebKitGTK blocks
+    // cross-scheme fetch to tdlib://. Route through wikifile://'s __tdlib__
+    // handler for same-origin access. Other origins (http:// folder wikis,
+    // Windows/macOS with non-WebKitGTK engines) use tdlib:// directly.
+    var TDLIB_FETCH_BASE = (location.protocol === 'wikifile:')
+        ? '/__tdlib__/' : TD_LIB_BASE;
+
     function ensurePdfJs(cb) {
         if (pdfjsLoaded || typeof pdfjsLib !== 'undefined') {
             pdfjsLoaded = true;
@@ -99,35 +149,52 @@
         }
         // WebKitGTK doesn't execute <script src="tdlib://..."> tags, so we
         // fetch the JS as text and execute it manually via new Function().
-        fetch(TD_LIB_BASE + 'pdfjs/build/pdf.min.js')
-            .then(function(r) {
+        // PDF.js 4.x uses import() for its fake worker fallback, which fails on
+        // WebKitGTK from wikifile:// origins. We create the Worker ourselves and
+        // pass it via workerPort to bypass both the Worker URL and import() paths.
+        Promise.all([
+            fetch(TDLIB_FETCH_BASE + 'pdfjs/build/pdf.min.js').then(function(r) {
+                if (!r.ok) throw new Error('HTTP ' + r.status);
+                return r.text();
+            }),
+            fetch(TDLIB_FETCH_BASE + 'pdfjs/build/pdf.worker.min.js').then(function(r) {
                 if (!r.ok) throw new Error('HTTP ' + r.status);
                 return r.text();
             })
-            .then(function(code) {
-                new Function(code)();
-                if (typeof pdfjsLib !== 'undefined') {
-                    // Worker also can't load from tdlib:// via new Worker(), so
-                    // fetch + blob URL to create a same-origin worker.
-                    fetch(TD_LIB_BASE + 'pdfjs/build/pdf.worker.min.js')
-                        .then(function(r) { return r.blob(); })
-                        .then(function(blob) {
-                            pdfjsLib.GlobalWorkerOptions.workerSrc = URL.createObjectURL(blob);
-                            pdfjsLoaded = true;
-                            console.log('[TD-PDF] PDF.js loaded (fetch+eval, blob worker)');
-                            if (cb) cb();
-                        })
-                        .catch(function() {
-                            // Fallback: no worker (runs on main thread)
-                            pdfjsLoaded = true;
-                            console.log('[TD-PDF] PDF.js loaded (fetch+eval, no worker)');
-                            if (cb) cb();
-                        });
-                }
-            })
-            .catch(function(err) {
-                console.error('[TD-PDF] Failed to load PDF.js:', err);
-            });
+        ]).then(function(results) {
+            var pdfCode = results[0];
+            var workerCode = results[1];
+
+            // Execute worker code FIRST on main thread. This sets
+            // globalThis.pdfjsWorker.WorkerMessageHandler which PDF.js's
+            // fake worker checks before trying import() (which fails on
+            // wikifile:// origins in WebKitGTK).
+            try { new Function(workerCode)(); } catch(e) {
+                console.warn('[TD-PDF] Worker code eval failed:', e);
+            }
+
+            new Function(pdfCode)();
+            if (typeof pdfjsLib === 'undefined') {
+                console.error('[TD-PDF] pdfjsLib not defined after eval');
+                return;
+            }
+
+            // Try blob URL Worker first (works on Chromium/Windows, Safari/macOS).
+            // Falls back to fake worker on main thread (WebKitGTK/Linux) using
+            // the pre-loaded globalThis.pdfjsWorker.WorkerMessageHandler.
+            try {
+                var workerBlob = new Blob([workerCode], { type: 'application/javascript' });
+                var workerUrl = URL.createObjectURL(workerBlob);
+                pdfjsLib.GlobalWorkerOptions.workerSrc = workerUrl;
+            } catch (e) {
+                console.warn('[TD-PDF] Worker blob creation failed:', e);
+            }
+            pdfjsLoaded = true;
+            console.log('[TD-PDF] PDF.js loaded (fetch+eval)');
+            if (cb) cb();
+        }).catch(function(err) {
+            console.error('[TD-PDF] Failed to load PDF.js:', err);
+        });
     }
 
     // ---- Section 1b: Source Readiness Check ----
@@ -318,21 +385,34 @@
         var src = el.getAttribute('src') || el.getAttribute('data') || '';
         if (tag === 'object') src = el.getAttribute('data') || src;
         if (!src) return null;
-        if (src.toLowerCase().indexOf('.pdf') === -1 &&
-            (el.getAttribute('type') || '').toLowerCase() !== 'application/pdf') return null;
+        var srcLower = src.toLowerCase();
+        if (srcLower.indexOf('.pdf') === -1 &&
+            (el.getAttribute('type') || '').toLowerCase() !== 'application/pdf' &&
+            srcLower.indexOf('data:application/pdf') !== 0) return null;
         return src;
     }
 
     function replacePdfElement(el) {
         if (el.__tdPdfDone) return;
+
+        if (typeof pdfjsLib === 'undefined' || !pdfjsLib.getDocument) {
+            return;
+        }
+
+        // Wait for filesystem.js to convert relative src to tdasset://
+        // (external attachment PDFs start with raw relative paths)
+        if (hasPendingSrcTransform(el)) {
+            if (!el.__tdPdfRetry) el.__tdPdfRetry = 0;
+            el.__tdPdfRetry++;
+            if (el.__tdPdfRetry < 100) { // Up to 10s
+                setTimeout(function() { replacePdfElement(el); }, 100);
+            }
+            return;
+        }
+
         el.__tdPdfDone = true;
         var src = getPdfSrc(el);
         if (!src) return;
-
-        if (typeof pdfjsLib === 'undefined' || !pdfjsLib.getDocument) {
-            el.__tdPdfDone = false;
-            return;
-        }
 
         var container = document.createElement('div');
         container.className = 'td-pdf-container';
@@ -394,9 +474,15 @@
 
         function fitWidth() {
             if (!pdfDoc) return;
+            var w = pagesWrap.clientWidth;
+            // Container not laid out yet — retry after layout
+            if (w <= 0) {
+                requestAnimationFrame(function() { fitWidth(); });
+                return;
+            }
             pdfDoc.getPage(1).then(function(page) {
                 var vp = page.getViewport({ scale: 1 });
-                var containerWidth = pagesWrap.clientWidth - 16;
+                var containerWidth = w - 16;
                 scale = containerWidth / vp.width;
                 if (scale < 0.5) scale = 0.5;
                 if (scale > 5) scale = 5;
@@ -404,7 +490,25 @@
             });
         }
 
-        pdfjsLib.getDocument({ url: src, cMapUrl: TD_LIB_BASE + 'pdfjs/cmaps/', cMapPacked: true }).promise.then(function(pdf) {
+        // On wikifile:// origin, WebKitGTK can't cross-scheme fetch from tdasset://.
+        // Read the file data via Tauri command and pass as ArrayBuffer instead.
+        var docOpts = { cMapUrl: TDLIB_FETCH_BASE + 'pdfjs/cmaps/', cMapPacked: true };
+        var docPromise;
+        if (src.startsWith('tdasset://localhost/') && location.protocol === 'wikifile:' &&
+            window.__TAURI__ && window.__TAURI__.core) {
+            var encoded = src.substring('tdasset://localhost/'.length);
+            var fsPath;
+            try { fsPath = decodeURIComponent(encoded); } catch(e) { fsPath = encoded; }
+            docPromise = window.__TAURI__.core.invoke('read_file_as_binary', { path: fsPath })
+                .then(function(bytes) {
+                    docOpts.data = new Uint8Array(bytes);
+                    return pdfjsLib.getDocument(docOpts).promise;
+                });
+        } else {
+            docOpts.url = src;
+            docPromise = pdfjsLib.getDocument(docOpts).promise;
+        }
+        docPromise.then(function(pdf) {
             pdfDoc = pdf;
             var total = pdf.numPages;
             pageInfo.textContent = total + ' page' + (total !== 1 ? 's' : '');
@@ -419,6 +523,16 @@
             }
 
             fitWidth();
+
+            // Re-fit when container resizes (sidebar toggle, window resize,
+            // tiddler becoming visible after being hidden/collapsed)
+            if (typeof ResizeObserver !== 'undefined') {
+                var resizeTimer;
+                new ResizeObserver(function() {
+                    clearTimeout(resizeTimer);
+                    resizeTimer = setTimeout(fitWidth, 100);
+                }).observe(container);
+            }
 
             // Lazy rendering with IntersectionObserver
             if (typeof IntersectionObserver !== 'undefined') {
@@ -618,6 +732,9 @@
                 if (getPdfSrc(el)) replacePdfElement(el);
             });
         }
+        // Rewrite external iframes that bypassed the prototype interception
+        // (e.g. from HTML parser) to use the embed proxy
+        document.querySelectorAll('iframe[src]').forEach(function(el) { fixExternalIframe(el); });
     }
 
     function setupObserver() {
@@ -636,6 +753,7 @@
                     } else if ((tag === 'embed' || tag === 'object' || tag === 'iframe') && pdfjsLoaded) {
                         if (getPdfSrc(node)) replacePdfElement(node);
                     }
+                    if (tag === 'iframe') fixExternalIframe(node);
                     if (node.querySelectorAll) {
                         if (plyrLoaded) {
                             node.querySelectorAll('video').forEach(function(el) { enhanceVideo(el); });
@@ -646,6 +764,7 @@
                                 if (getPdfSrc(el)) replacePdfElement(el);
                             });
                         }
+                        node.querySelectorAll('iframe[src]').forEach(function(el) { fixExternalIframe(el); });
                     }
                 });
             });

@@ -87,6 +87,7 @@ class CaptureActivity : AppCompatActivity() {
     private var detectedUrl: String? = null
     private var imageBitmap: Bitmap? = null
     private var sharedFileUri: Uri? = null
+    private var sharedTextFileUri: Uri? = null  // Original URI when text came from a shared .txt file
     private var fileThumbnail: Bitmap? = null
     private var importFileUri: Uri? = null
     private var importFileName: String? = null
@@ -135,7 +136,10 @@ class CaptureActivity : AppCompatActivity() {
             intent.type == "text/html" ||
             intent.type == "application/xhtml+xml" ||
             intent.type == "application/json" ||
-            intent.type == "text/csv" -> handleNativeImportIntent()
+            intent.type == "text/csv" ||
+            intent.type == "text/css" ||
+            intent.type == "application/javascript" ||
+            intent.type == "text/javascript" -> handleNativeImportIntent()
             else -> {
                 Log.w(TAG, "Unsupported type: ${intent.type}")
                 Toast.makeText(this, getString(R.string.capture_unsupported_type), Toast.LENGTH_SHORT).show()
@@ -153,6 +157,20 @@ class CaptureActivity : AppCompatActivity() {
     }
 
     private fun handleTextIntent() {
+        // Check for shared file URI first (.txt file shared from file manager etc.)
+        val fileUri = getStreamUri()
+        if (fileUri != null) {
+            val fileText = readTextFromUri(fileUri)
+            if (!fileText.isNullOrBlank()) {
+                sharedText = fileText
+                sharedTextFileUri = fileUri
+                captureType = "text/plain"
+                sharedSubject = getDisplayName(fileUri)?.substringBeforeLast(".")
+                    ?: intent.getStringExtra(Intent.EXTRA_SUBJECT)?.let { sanitizeTitle(it) }
+                return
+            }
+        }
+        // Fall back to text snippet (EXTRA_TEXT from browsers, share sheets, etc.)
         sharedText = intent.getStringExtra(Intent.EXTRA_TEXT)
         sharedSubject = intent.getStringExtra(Intent.EXTRA_SUBJECT)?.let { sanitizeTitle(it) }
 
@@ -301,6 +319,8 @@ class CaptureActivity : AppCompatActivity() {
             importFileName!!.endsWith(".json") -> "application/json"
             importFileName!!.endsWith(".csv") -> "text/csv"
             importFileName!!.endsWith(".html") || importFileName!!.endsWith(".htm") -> "text/html"
+            importFileName!!.endsWith(".css") -> "text/css"
+            importFileName!!.endsWith(".js") -> "application/javascript"
             else -> intent.type ?: contentResolver.getType(streamUri) ?: "text/plain"
         }
 
@@ -341,6 +361,7 @@ class CaptureActivity : AppCompatActivity() {
             return
         }
         sharedText = svgText
+        sharedTextFileUri = uri
         captureType = "image/svg+xml"
         sharedSubject = getDisplayName(uri)?.substringBeforeLast(".") ?: intent.getStringExtra(Intent.EXTRA_SUBJECT)
     }
@@ -359,6 +380,7 @@ class CaptureActivity : AppCompatActivity() {
             return
         }
         sharedText = mdText
+        sharedTextFileUri = uri
         captureType = "text/x-markdown"
         sharedSubject = getDisplayName(uri)?.substringBeforeLast(".") ?: intent.getStringExtra(Intent.EXTRA_SUBJECT)
     }
@@ -1890,6 +1912,29 @@ class CaptureActivity : AppCompatActivity() {
             captureJson.put("import_file", importFilename)
             captureJson.put("file_type", importFileMimeType)
             captureJson.put("text", "")
+        } else if (sharedTextFileUri != null) {
+            // Text-based file shared from file manager (.txt, .md, .svg) —
+            // keep external when attachments enabled, otherwise embed
+            val textUri = sharedTextFileUri!!
+            val ext = MimeTypeMap.getSingleton().getExtensionFromMimeType(captureType) ?: "txt"
+            val filename = getDisplayName(textUri) ?: "capture_${now}.${ext}"
+            val treeUri = extractTreeUri(wiki.path)
+            if (treeUri != null && wiki.externalAttachments) {
+                val relativePath = copyToAttachmentsFolder(textUri, treeUri, filename, captureType)
+                if (relativePath != null) {
+                    captureJson.put("type", captureType)
+                    captureJson.put("_canonical_uri", relativePath)
+                    captureJson.put("text", "")
+                } else {
+                    // Fallback to embedding text if copy fails
+                    captureJson.put("type", captureType)
+                    captureJson.put("text", sharedText ?: "")
+                }
+            } else {
+                // External attachments disabled — embed text directly
+                captureJson.put("type", captureType)
+                captureJson.put("text", sharedText ?: "")
+            }
         } else {
             // Text capture (plain text, markdown, SVG, contacts, calendar)
             captureJson.put("type", captureType)

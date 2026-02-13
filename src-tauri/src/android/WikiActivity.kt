@@ -1522,31 +1522,288 @@ class WikiActivity : AppCompatActivity() {
                     var wrapper = document.createElement('div');
                     wrapper.style.cssText = 'overflow:hidden;background:#ffffff;padding:8px;width:' + bodyEl.offsetWidth + 'px;';
                     var clone = bodyEl.cloneNode(true);
-                    // Reset outer margins on the clone so they become inner spacing
                     clone.style.margin = '0';
                     wrapper.appendChild(clone);
                     document.body.appendChild(wrapper);
-                    console.log('[TiddlyDesktop] shareAsImage: capturing element, size=' + wrapper.offsetWidth + 'x' + wrapper.offsetHeight);
-                    // 1px transparent PNG as fallback for broken/unloadable images
-                    var PLACEHOLDER = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVQI12NgAAIABQABNjN9GQAAAAlwSFlzAAAWJQAAFiUBSVIk8AAAAA0lEQVQI12P4z8BQDwAEgAF/QualzQAAAABJRU5ErkJggg==';
-                    htmlToImage.toJpeg(wrapper, {
+                    console.log('[TiddlyDesktop] shareAsImage: size=' + wrapper.offsetWidth + 'x' + wrapper.offsetHeight);
+
+                    // Gray placeholder for any resource that fails to load
+                    function placeholder(w, h) {
+                        var d = document.createElement('div');
+                        d.style.cssText = 'width:' + w + 'px;height:' + h + 'px;background:#e8e8e8;display:block;';
+                        return d;
+                    }
+
+                    // --- Pre-inline <img> elements using already-loaded pixel data ---
+                    // html-to-image re-fetches every image when it serialises the DOM
+                    // to SVG foreignObject. On the wiki HTTP server this exhausts the
+                    // browser's 6-connection-per-origin pool, causing blank images for
+                    // transcluded content. Drawing loaded images to a canvas and
+                    // converting to data-URLs avoids all network requests.
+                    function inlineImages() {
+                        var origImgs = bodyEl.querySelectorAll('img');
+                        var cloneImgs = clone.querySelectorAll('img');
+                        var promises = [];
+                        for (var i = 0; i < origImgs.length && i < cloneImgs.length; i++) {
+                            (function(origImg, cloneImg) {
+                                var src = origImg.src || '';
+                                if (!src || src.startsWith('data:')) return;
+                                var p = new Promise(function(resolve) {
+                                    function tryInline() {
+                                        if (origImg.naturalWidth > 0 && origImg.naturalHeight > 0) {
+                                            try {
+                                                var c = document.createElement('canvas');
+                                                c.width = origImg.naturalWidth;
+                                                c.height = origImg.naturalHeight;
+                                                c.getContext('2d').drawImage(origImg, 0, 0);
+                                                cloneImg.setAttribute('src', c.toDataURL());
+                                                cloneImg.removeAttribute('srcset');
+                                            } catch(e) { /* tainted canvas (cross-origin) */ }
+                                        } else if (cloneImg.parentNode) {
+                                            // Broken image — replace with placeholder
+                                            var w = origImg.offsetWidth || origImg.width || 100;
+                                            var h = origImg.offsetHeight || origImg.height || 100;
+                                            cloneImg.parentNode.replaceChild(placeholder(w, h), cloneImg);
+                                        }
+                                        resolve();
+                                    }
+                                    if (origImg.complete) {
+                                        tryInline();
+                                    } else {
+                                        var done = false;
+                                        origImg.addEventListener('load', function() {
+                                            if (!done) { done = true; tryInline(); }
+                                        });
+                                        origImg.addEventListener('error', function() {
+                                            if (!done) {
+                                                done = true;
+                                                // Failed to load — placeholder
+                                                if (cloneImg.parentNode) {
+                                                    var w = origImg.offsetWidth || origImg.width || 100;
+                                                    var h = origImg.offsetHeight || origImg.height || 100;
+                                                    cloneImg.parentNode.replaceChild(placeholder(w, h), cloneImg);
+                                                }
+                                                resolve();
+                                            }
+                                        });
+                                        setTimeout(function() {
+                                            if (!done) { done = true; tryInline(); }
+                                        }, 5000);
+                                    }
+                                });
+                                promises.push(p);
+                            })(origImgs[i], cloneImgs[i]);
+                        }
+                        return Promise.all(promises);
+                    }
+
+                    // --- Convert <canvas> elements to <img> (PDF.js, charts, etc.) ---
+                    // cloneNode produces blank canvases; capture the originals' pixels.
+                    function convertCanvases() {
+                        var origCanvases = bodyEl.querySelectorAll('canvas');
+                        var cloneCanvases = clone.querySelectorAll('canvas');
+                        for (var i = 0; i < origCanvases.length && i < cloneCanvases.length; i++) {
+                            var oc = origCanvases[i];
+                            var cc = cloneCanvases[i];
+                            if (!cc.parentNode) continue;
+                            try {
+                                if (oc.width > 0 && oc.height > 0) {
+                                    var img = document.createElement('img');
+                                    img.src = oc.toDataURL();
+                                    img.style.cssText = 'width:' + oc.offsetWidth + 'px;height:' + oc.offsetHeight + 'px;display:block;';
+                                    cc.parentNode.replaceChild(img, cc);
+                                } else {
+                                    cc.parentNode.replaceChild(placeholder(oc.offsetWidth || 100, oc.offsetHeight || 100), cc);
+                                }
+                            } catch(e) {
+                                cc.parentNode.replaceChild(placeholder(oc.offsetWidth || 100, oc.offsetHeight || 100), cc);
+                            }
+                        }
+                    }
+
+                    // --- Handle Plyr video/audio, raw <video>, and iframes ---
+                    // Show poster images only, no player chrome. Returns a Promise.
+                    function cleanupMedia() {
+                        // Hide all Plyr controls and big-play overlays
+                        clone.querySelectorAll('.plyr__controls, .plyr__control--overlaid').forEach(function(el) {
+                            el.style.display = 'none';
+                        });
+
+                        // Plyr video: hide the <video> wrapper, replace with poster <img>
+                        var origPlyrs = bodyEl.querySelectorAll('.plyr--video');
+                        var clonePlyrs = clone.querySelectorAll('.plyr--video');
+                        for (var i = 0; i < origPlyrs.length && i < clonePlyrs.length; i++) {
+                            var posterUrl = null;
+                            var origPosterDiv = origPlyrs[i].querySelector('.plyr__poster');
+                            if (origPosterDiv) {
+                                try {
+                                    var bg = window.getComputedStyle(origPosterDiv).backgroundImage;
+                                    var m = bg.match(/url\(["']?(.*?)["']?\)/);
+                                    if (m && m[1] && m[1] !== 'none') posterUrl = m[1];
+                                } catch(e) {}
+                            }
+                            if (!posterUrl) {
+                                var origVideo = origPlyrs[i].querySelector('video');
+                                if (origVideo && origVideo.poster) posterUrl = origVideo.poster;
+                            }
+                            if (!posterUrl) {
+                                var origVideo = origPlyrs[i].querySelector('video');
+                                if (origVideo && origVideo.readyState >= 2 && origVideo.videoWidth > 0) {
+                                    try {
+                                        var vc = document.createElement('canvas');
+                                        vc.width = origVideo.videoWidth;
+                                        vc.height = origVideo.videoHeight;
+                                        vc.getContext('2d').drawImage(origVideo, 0, 0);
+                                        posterUrl = vc.toDataURL();
+                                    } catch(e) {}
+                                }
+                            }
+
+                            // In clone: hide video wrapper + poster div
+                            var cVW = clonePlyrs[i].querySelector('.plyr__video-wrapper');
+                            if (cVW) cVW.style.display = 'none';
+                            var cPD = clonePlyrs[i].querySelector('.plyr__poster');
+                            if (cPD) cPD.style.display = 'none';
+
+                            clonePlyrs[i].style.position = 'relative';
+                            clonePlyrs[i].style.overflow = 'hidden';
+                            if (posterUrl) {
+                                var pImg = document.createElement('img');
+                                pImg.src = posterUrl;
+                                pImg.style.cssText = 'width:100%;height:100%;object-fit:contain;position:absolute;top:0;left:0;';
+                                clonePlyrs[i].insertBefore(pImg, clonePlyrs[i].firstChild);
+                            } else {
+                                // No poster available — gray placeholder
+                                var ph = placeholder(origPlyrs[i].offsetWidth || 320, origPlyrs[i].offsetHeight || 180);
+                                ph.style.position = 'absolute';
+                                ph.style.top = '0';
+                                ph.style.left = '0';
+                                clonePlyrs[i].insertBefore(ph, clonePlyrs[i].firstChild);
+                            }
+                        }
+
+                        // Raw <video> not wrapped by Plyr: replace with poster / frame / placeholder
+                        var origVideos = bodyEl.querySelectorAll('video');
+                        var cloneVideos = clone.querySelectorAll('video');
+                        for (var i = 0; i < origVideos.length && i < cloneVideos.length; i++) {
+                            if (cloneVideos[i].closest('.plyr')) continue;
+                            var ov = origVideos[i];
+                            var cv = cloneVideos[i];
+                            if (!cv.parentNode) continue;
+                            var vSrc = ov.poster || '';
+                            if (!vSrc && ov.readyState >= 2 && ov.videoWidth > 0) {
+                                try {
+                                    var vc2 = document.createElement('canvas');
+                                    vc2.width = ov.videoWidth;
+                                    vc2.height = ov.videoHeight;
+                                    vc2.getContext('2d').drawImage(ov, 0, 0);
+                                    vSrc = vc2.toDataURL();
+                                } catch(e) {}
+                            }
+                            if (vSrc) {
+                                var vImg = document.createElement('img');
+                                vImg.src = vSrc;
+                                vImg.style.cssText = 'width:' + ov.offsetWidth + 'px;height:' + ov.offsetHeight + 'px;object-fit:contain;display:block;';
+                                cv.parentNode.replaceChild(vImg, cv);
+                            } else {
+                                cv.parentNode.replaceChild(placeholder(ov.offsetWidth || 320, ov.offsetHeight || 180), cv);
+                            }
+                        }
+
+                        // Audio players have no visual content — hide entirely
+                        clone.querySelectorAll('.plyr--audio').forEach(function(el) {
+                            el.style.display = 'none';
+                        });
+
+                        // Replace cross-origin iframes with thumbnails / placeholders.
+                        // html-to-image cannot serialise cross-origin iframes and throws
+                        // on failed embeds (e.g. YouTube Error 153).
+                        var iframePromises = [];
+                        var origIframes = bodyEl.querySelectorAll('iframe');
+                        var cloneIframes = clone.querySelectorAll('iframe');
+                        for (var ii = 0; ii < origIframes.length && ii < cloneIframes.length; ii++) {
+                            (function(origIf, cloneIf) {
+                                var ifSrc = origIf.src || origIf.getAttribute('src') || '';
+                                if (!ifSrc || ifSrc.indexOf('http://127.0.0.1') === 0) return;
+                                var iw = origIf.offsetWidth || 480;
+                                var ih = origIf.offsetHeight || 360;
+                                // Extract YouTube video ID for thumbnail
+                                var ytMatch = ifSrc.match(/youtube(?:-nocookie)?\.com\/embed\/([a-zA-Z0-9_-]+)/);
+                                if (ytMatch && ytMatch[1]) {
+                                    var thumbUrl = 'https://img.youtube.com/vi/' + ytMatch[1] + '/hqdefault.jpg';
+                                    var rep = document.createElement('img');
+                                    rep.style.cssText = 'width:' + iw + 'px;height:' + ih + 'px;object-fit:cover;display:block;background:#000;';
+                                    if (cloneIf.parentNode) cloneIf.parentNode.replaceChild(rep, cloneIf);
+                                    var p = new Promise(function(resolve) {
+                                        var ti = new Image();
+                                        ti.crossOrigin = 'anonymous';
+                                        var done = false;
+                                        ti.onload = function() {
+                                            if (done) return; done = true;
+                                            try {
+                                                var tc = document.createElement('canvas');
+                                                tc.width = ti.naturalWidth;
+                                                tc.height = ti.naturalHeight;
+                                                tc.getContext('2d').drawImage(ti, 0, 0);
+                                                rep.src = tc.toDataURL();
+                                            } catch(e) {
+                                                // CORS failed — use placeholder
+                                                if (rep.parentNode) rep.parentNode.replaceChild(placeholder(iw, ih), rep);
+                                            }
+                                            resolve();
+                                        };
+                                        ti.onerror = function() {
+                                            if (done) return; done = true;
+                                            if (rep.parentNode) rep.parentNode.replaceChild(placeholder(iw, ih), rep);
+                                            resolve();
+                                        };
+                                        setTimeout(function() {
+                                            if (done) return; done = true;
+                                            if (rep.parentNode) rep.parentNode.replaceChild(placeholder(iw, ih), rep);
+                                            resolve();
+                                        }, 5000);
+                                        ti.src = thumbUrl;
+                                    });
+                                    iframePromises.push(p);
+                                } else {
+                                    // Other cross-origin iframe: replace with placeholder
+                                    if (cloneIf.parentNode) cloneIf.parentNode.replaceChild(placeholder(iw, ih), cloneIf);
+                                }
+                            })(origIframes[ii], cloneIframes[ii]);
+                        }
+                        return Promise.all(iframePromises);
+                    }
+
+                    var captureOpts = {
                         quality: 0.92,
                         backgroundColor: '#ffffff',
                         pixelRatio: 2,
-                        imagePlaceholder: PLACEHOLDER,
+                        imagePlaceholder: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVQI12NgAAIABQABNjN9GQAAAAlwSFlzAAAWJQAAFiUBSVIk8AAAAA0lEQVQI12P4z8BQDwAEgAF/QualzQAAAABJRU5ErkJggg==',
                         filter: function(node) {
-                            if (!(node instanceof HTMLElement)) return true;
-                            // Skip hidden elements
-                            if (node.hidden || node.getAttribute('hidden') === 'true' || node.getAttribute('hidden') === '') return false;
-                            var style = window.getComputedStyle(node);
-                            if (style.display === 'none' || style.visibility === 'hidden') return false;
-                            // Skip broken images
-                            if (node.tagName === 'IMG' && node.naturalWidth === 0 && node.complete) return false;
-                            return true;
+                            try {
+                                if (!(node instanceof HTMLElement)) return true;
+                                if (node.hidden || node.getAttribute('hidden') === 'true' || node.getAttribute('hidden') === '') return false;
+                                var style = window.getComputedStyle(node);
+                                if (style.display === 'none' || style.visibility === 'hidden') return false;
+                                if (node.tagName === 'IMG' && node.naturalWidth === 0 && node.complete) return false;
+                                // Safety net: skip any remaining iframes
+                                if (node.tagName === 'IFRAME') return false;
+                                return true;
+                            } catch(e) { return true; }
                         }
+                    };
+                    inlineImages().then(function() {
+                        convertCanvases();
+                        return cleanupMedia();
+                    }).then(function() {
+                        // Double-render: first pass warms up remaining resources
+                        // (web fonts, SVG refs), second pass produces reliable output
+                        return htmlToImage.toJpeg(wrapper, captureOpts);
+                    }).then(function() {
+                        return htmlToImage.toJpeg(wrapper, captureOpts);
                     }).then(function(dataUrl) {
                         wrapper.remove();
-                        console.log('[TiddlyDesktop] shareAsImage: captured, dataUrl length=' + dataUrl.length);
+                        console.log('[TiddlyDesktop] shareAsImage: captured, length=' + dataUrl.length);
                         TiddlyDesktopShareCapture.onImageReady(title, dataUrl);
                     }).catch(function(err) {
                         wrapper.remove();
@@ -3449,6 +3706,49 @@ class WikiActivity : AppCompatActivity() {
                         ${'$'}tw.rootWidget.refresh(changedTiddlers);
                     }
                 })();
+
+                // Patch text-type parsers to support _canonical_uri lazy-loading.
+                // Desktop uses invoke('read_file_as_binary') in filesystem.js but that
+                // requires __TAURI__ which isn't available in WikiActivity's WebView.
+                // Instead we use fetch() via the existing transformUrl() helper which
+                // converts relative paths to /_relative/ URLs served by WikiHttpServer.
+                (function patchTextParsersForCanonicalUri() {
+                    if (!${'$'}tw.Wiki || !${'$'}tw.Wiki.parsers) return;
+                    var textTypes = ['text/plain', 'text/x-tiddlywiki', 'application/javascript',
+                                     'application/json', 'text/css', 'application/x-tiddler-dictionary',
+                                     'text/markdown', 'text/x-markdown'];
+                    textTypes.forEach(function(parserType) {
+                        var OrigParser = ${'$'}tw.Wiki.parsers[parserType];
+                        if (!OrigParser) return;
+                        var PatchedParser = function(type, text, options) {
+                            if ((text || '') === '' && options && options._canonical_uri) {
+                                var uri = options._canonical_uri;
+                                var wiki = options.wiki;
+                                var fetchUrl = transformUrl(uri);
+                                fetch(fetchUrl).then(function(r) { return r.text(); }).then(function(content) {
+                                    if (wiki) {
+                                        wiki.each(function(tiddler, title) {
+                                            if (tiddler.fields._canonical_uri === uri &&
+                                                (tiddler.fields.text || '') === '') {
+                                                wiki.addTiddler(new ${'$'}tw.Tiddler(tiddler, {text: content}));
+                                            }
+                                        });
+                                    }
+                                }).catch(function(err) {
+                                    console.error('[TiddlyDesktop] Failed to lazy-load _canonical_uri:', uri, err);
+                                });
+                                var placeholder = (${'$'}tw.language && ${'$'}tw.language.getRawString('LazyLoadingWarning')) || 'Loading...';
+                                OrigParser.call(this, type, placeholder, options);
+                            } else {
+                                OrigParser.call(this, type, text, options);
+                            }
+                        };
+                        PatchedParser.prototype = OrigParser.prototype;
+                        ${'$'}tw.Wiki.parsers[parserType] = PatchedParser;
+                    });
+                    console.log('[TiddlyDesktop] Text parser _canonical_uri lazy-loading installed');
+                })();
+
                 injectSettingsUI();
                 injectSessionAuthUI();
                 registerPlugin();  // Register all shadow tiddlers as a plugin

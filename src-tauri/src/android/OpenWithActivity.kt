@@ -350,9 +350,11 @@ class OpenWithActivity : Activity() {
      */
     private fun isImportableFile(uri: Uri): Boolean {
         val name = getDisplayName(uri)?.lowercase() ?: ""
-        if (name.endsWith(".tid") || name.endsWith(".json") || name.endsWith(".csv")) return true
+        if (name.endsWith(".tid") || name.endsWith(".txt") || name.endsWith(".json")
+            || name.endsWith(".csv") || name.endsWith(".css") || name.endsWith(".js")) return true
         val mimeType = intent.type ?: contentResolver.getType(uri) ?: ""
-        return mimeType == "application/json" || mimeType == "text/csv"
+        return mimeType == "application/json" || mimeType == "text/csv" || mimeType == "text/plain"
+            || mimeType == "text/css" || mimeType == "application/javascript" || mimeType == "text/javascript"
     }
 
     /**

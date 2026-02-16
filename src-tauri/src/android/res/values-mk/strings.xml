@@ -31,4 +31,44 @@
     <string name="open_as_wiki">Отвори како вики</string>
     <string name="import_into_wiki">Увези во вики</string>
     <string name="no_app_for_link">Не е пронајдена апликација за отворање на овој линк</string>
+
+    <!-- WikiActivity -->
+    <string name="share_title">Сподели како\u2026</string>
+    <string name="share_image">Слика</string>
+    <string name="share_plain_text">Обичен текст</string>
+    <string name="share_json">JSON (.json)</string>
+    <string name="share_tid">TID (.tid)</string>
+    <string name="share_csv">CSV (.csv)</string>
+    <string name="unsaved_title">Незачувани промени</string>
+    <string name="unsaved_message">Имате %d незачувана/и промена/и. Што сакате да направите?</string>
+    <string name="unsaved_save_close">Зачувај &amp; Затвори</string>
+    <string name="unsaved_discard_close">Отфрли &amp; Затвори</string>
+
+    <!-- OpenWithActivity -->
+    <string name="open_unsupported_action">Неподдржана акција</string>
+    <string name="open_no_file">Не е наведена датотека</string>
+    <string name="open_no_file_uri">Внатрешна грешка: нема URI на датотека</string>
+    <string name="open_select_folder">Сега изберете ја папката што го содржи викито (за зачувување &amp; резервни копии)</string>
+    <string name="open_select_file">Ве молиме изберете ја вики-датотеката за да дозволите пристап</string>
+    <string name="open_file_cancelled">Изборот на датотека е откажан</string>
+    <string name="open_no_permission">Не може да се добие дозвола за пристап до датотеката</string>
+
+    <!-- WikiServerService -->
+    <string name="notif_channel_name">Wiki Server</string>
+    <string name="notif_channel_desc">Ги одржува вики-серверите активни во позадина</string>
+    <string name="notif_title">TiddlyDesktop-RS</string>
+    <string name="notif_text">Викито работи во позадина</string>
+
+    <string name="label_content">Содржина</string>
+    <string name="hint_content">Напишете ја вашата белешка тука…</string>
+
+    <!-- Widgets -->
+    <string name="widget_capture_label">Фаќање</string>
+    <string name="widget_capture_desc">Копче за брзо фаќање за TiddlyWiki</string>
+
+    <!-- LanSyncService -->
+    <string name="sync_notif_channel_name">LAN Sync</string>
+    <string name="sync_notif_channel_desc">Ја одржува LAN Sync активна за синхронизација на вики во реално време</string>
+    <string name="sync_notif_title">LAN Sync активна</string>
+    <string name="sync_notif_text">Синхронизирање на викиња со блискু уреди</string>
 </resources>

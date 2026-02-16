@@ -18,6 +18,7 @@ Buttons/CreateWikiFolder: Wiki-Ordner erstellen
 Buttons/ToFile: zu Datei
 Buttons/ToFolder: zu Ordner
 Buttons/Reauthorize: Re-authorize
+Buttons/Sync: Sync
 
 Tooltips/BackupsEnabled: Backups aktiviert - klicken zum Deaktivieren
 Tooltips/ConvertWiki: Wiki-Format konvertieren
@@ -30,6 +31,8 @@ Tooltips/SetBackupDir: Eigenes Backup-Verzeichnis festlegen
 Tooltips/RenameGroup: Gruppe umbenennen
 Tooltips/DeleteGroup: Gruppe löschen (Wikis werden zu Ungruppiert verschoben)
 Tooltips/SetBackupCount: Maximale Anzahl der Backups festlegen (0 = unbegrenzt)
+Tooltips/SyncEnabled: LAN-Sync aktiviert - klicken zum Deaktivieren
+Tooltips/SyncDisabled: LAN-Sync deaktiviert - klicken zum Aktivieren
 
 Labels/BackupFolder: Backup-Ordner:
 Labels/BackupCount: Backup-Limit:
@@ -65,3 +68,25 @@ EditionSelector/AdditionalPlugins: Zusätzliche Plugins
 EditionSelector/Optional: (optional)
 EditionSelector/CreatingFile: Wiki-Datei wird erstellt...
 EditionSelector/InitializingFolder: Wiki-Ordner wird initialisiert...
+
+LanSync/Title: LAN-Sync
+LanSync/Start: LAN-Sync starten
+LanSync/Stop: LAN-Sync stoppen
+LanSync/DeviceName: Dieses Gerät:
+LanSync/Pairing: Gerätekopplung
+LanSync/PinLabel: Geben Sie diese PIN auf dem anderen Gerät ein:
+LanSync/ShowPin: Neues Gerät koppeln
+LanSync/HidePairingCode: Ausblenden
+LanSync/PairedDevices: Gekoppelte Geräte
+LanSync/NoPairedDevices: Keine gekoppelten Geräte. Klicken Sie auf "Neues Gerät koppeln", um ein anderes Gerät zu verbinden.
+LanSync/Unpair: Entkoppeln
+LanSync/Connected: Verbunden
+LanSync/Disconnected: Offline
+LanSync/DiscoveredDevices: Geräte in Ihrem Netzwerk
+LanSync/PinPlaceholder: PIN
+LanSync/Pair: Koppeln
+LanSync/AvailableWikis: Von Geräten verfügbar
+LanSync/NoRemoteWikis: Keine neuen Wikis von verbundenen Geräten verfügbar.
+LanSync/From: von
+LanSync/GetWiki: Wiki holen
+LanSync/LinkWiki: Verknüpfen

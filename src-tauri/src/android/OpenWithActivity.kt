@@ -1,6 +1,5 @@
 package com.burningtreec.tiddlydesktop_rs
 
-import android.app.Activity
 import android.content.Intent
 import android.graphics.drawable.GradientDrawable
 import android.net.Uri
@@ -14,6 +13,7 @@ import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
+import androidx.appcompat.app.AppCompatActivity
 import com.google.android.material.button.MaterialButton
 
 /**
@@ -31,7 +31,7 @@ import com.google.android.material.button.MaterialButton
  * 1. Receive file URI from VIEW intent
  * 2. Forward to CaptureActivity with the URI (handles wiki selection + TW5 native import)
  */
-class OpenWithActivity : Activity() {
+class OpenWithActivity : AppCompatActivity() {
 
     companion object {
         private const val TAG = "OpenWithActivity"
@@ -39,14 +39,28 @@ class OpenWithActivity : Activity() {
         private const val REQUEST_CODE_PICK_FOLDER = 1002
     }
 
-    // Material Design 3 color palette
-    private val colorPrimary = 0xFF6750A4.toInt()
-    private val colorOnPrimary = 0xFFFFFFFF.toInt()
-    private val colorSurface = 0xFFFFFBFE.toInt()
-    private val colorOnSurface = 0xFF1C1B1F.toInt()
-    private val colorOnSurfaceVariant = 0xFF49454F.toInt()
-    private val colorOutline = 0xFF79747E.toInt()
-    private val colorScrim = 0x52000000.toInt()
+    // Material Design color palette (resolved from theme for DayNight support)
+    private var colorPrimary = 0
+    private var colorOnPrimary = 0
+    private var colorSurface = 0
+    private var colorOnSurface = 0
+    private var colorOnSurfaceVariant = 0
+    private var colorOutline = 0
+    private val colorScrim = 0x52000000.toInt()          // 32% black (works for both modes)
+
+    private fun resolveThemeColor(attr: Int, fallback: Int): Int {
+        val tv = TypedValue()
+        return if (theme.resolveAttribute(attr, tv, true)) tv.data else fallback
+    }
+
+    private fun resolveThemeColors() {
+        colorPrimary = resolveThemeColor(com.google.android.material.R.attr.colorPrimary, 0xFF6750A4.toInt())
+        colorOnPrimary = resolveThemeColor(com.google.android.material.R.attr.colorOnPrimary, 0xFFFFFFFF.toInt())
+        colorSurface = resolveThemeColor(com.google.android.material.R.attr.colorSurface, 0xFFFFFBFE.toInt())
+        colorOnSurface = resolveThemeColor(com.google.android.material.R.attr.colorOnSurface, 0xFF1C1B1F.toInt())
+        colorOnSurfaceVariant = resolveThemeColor(com.google.android.material.R.attr.colorOnSurfaceVariant, 0xFF49454F.toInt())
+        colorOutline = resolveThemeColor(com.google.android.material.R.attr.colorOutline, 0xFF79747E.toInt())
+    }
 
     private fun dp(value: Int): Int {
         return TypedValue.applyDimension(
@@ -59,6 +73,7 @@ class OpenWithActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        resolveThemeColors()
 
         Log.d(TAG, "OpenWithActivity onCreate")
         Log.d(TAG, "Intent action: ${intent.action}")
@@ -70,7 +85,7 @@ class OpenWithActivity : Activity() {
             Intent.ACTION_SEND -> handleSendIntent()
             else -> {
                 Log.w(TAG, "Unsupported action: ${intent.action}")
-                showError("Unsupported action")
+                showError(getString(R.string.open_unsupported_action))
                 finish()
             }
         }
@@ -80,7 +95,7 @@ class OpenWithActivity : Activity() {
         val uri = intent.data
         if (uri == null) {
             Log.e(TAG, "No URI in VIEW intent")
-            showError("No file specified")
+            showError(getString(R.string.open_no_file))
             finish()
             return
         }
@@ -126,7 +141,7 @@ class OpenWithActivity : Activity() {
 
         if (uri == null) {
             Log.e(TAG, "No URI in SEND intent")
-            showError("No file specified")
+            showError(getString(R.string.open_no_file))
             finish()
             return
         }
@@ -163,7 +178,7 @@ class OpenWithActivity : Activity() {
     private fun onFileAuthorized(fileUri: Uri) {
         authorizedFileUri = fileUri
         Log.d(TAG, "File authorized: $fileUri, now requesting folder access")
-        Toast.makeText(this, "Now select the folder containing the wiki (for saving & backups)", Toast.LENGTH_LONG).show()
+        Toast.makeText(this, getString(R.string.open_select_folder), Toast.LENGTH_LONG).show()
         launchFolderPicker()
     }
 
@@ -175,7 +190,7 @@ class OpenWithActivity : Activity() {
         val fileUri = authorizedFileUri
         if (fileUri == null) {
             Log.e(TAG, "No file URI when folder was authorized")
-            showError("Internal error: no file URI")
+            showError(getString(R.string.open_no_file_uri))
             finish()
             return
         }
@@ -218,7 +233,7 @@ class OpenWithActivity : Activity() {
     }
 
     private fun launchFilePicker() {
-        Toast.makeText(this, "Please select the wiki file to grant access", Toast.LENGTH_LONG).show()
+        Toast.makeText(this, getString(R.string.open_select_file), Toast.LENGTH_LONG).show()
         @Suppress("DEPRECATION")
         startActivityForResult(
             Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
@@ -245,7 +260,7 @@ class OpenWithActivity : Activity() {
             REQUEST_CODE_PICK_FILE -> {
                 if (resultCode != RESULT_OK || data?.data == null) {
                     Log.d(TAG, "File picker cancelled")
-                    showError("File selection cancelled")
+                    showError(getString(R.string.open_file_cancelled))
                     finish()
                     return
                 }
@@ -258,7 +273,7 @@ class OpenWithActivity : Activity() {
                     contentResolver.takePersistableUriPermission(uri, takeFlags)
                 } catch (e: SecurityException) {
                     Log.e(TAG, "Failed to take permission from file picker: ${e.message}")
-                    showError("Could not get file access permission")
+                    showError(getString(R.string.open_no_permission))
                     finish()
                     return
                 }

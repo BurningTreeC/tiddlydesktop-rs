@@ -18,6 +18,7 @@ Buttons/CreateWikiFolder: Создај вики папка
 Buttons/ToFile: во датотека
 Buttons/ToFolder: во папка
 Buttons/Reauthorize: Re-authorize
+Buttons/Sync: синхронизирај
 
 Tooltips/BackupsEnabled: Резервни копии вклучени - кликни за исклучување
 Tooltips/ConvertWiki: Конвертирај формат на вики
@@ -30,6 +31,8 @@ Tooltips/SetBackupDir: Постави приспособена папка за �
 Tooltips/RenameGroup: Преименувај група
 Tooltips/DeleteGroup: Избриши група (викијата ќе се преместат во Без група)
 Tooltips/SetBackupCount: Постави максимален број резервни копии (0 = неограничено)
+Tooltips/SyncEnabled: LAN синхронизацијата е вклучена - кликнете за да исклучите
+Tooltips/SyncDisabled: LAN синхронизацијата е исклучена - кликнете за да вклучите
 
 Labels/BackupFolder: Папка за резервни копии:
 Labels/BackupCount: Лимит на копии:
@@ -65,3 +68,25 @@ EditionSelector/AdditionalPlugins: Дополнителни приклучоци
 EditionSelector/Optional: (опционално)
 EditionSelector/CreatingFile: Се создава вики датотека...
 EditionSelector/InitializingFolder: Се иницијализира вики папка...
+
+LanSync/Title: LAN синхронизација
+LanSync/Start: Започни LAN синхронизација
+LanSync/Stop: Запри LAN синхронизација
+LanSync/DeviceName: Овој уред:
+LanSync/Pairing: Спарување на уреди
+LanSync/PinLabel: Внесете го овој PIN на другиот уред:
+LanSync/ShowPin: Спарувај нов уред
+LanSync/HidePairingCode: Сокриј
+LanSync/PairedDevices: Спарувани уреди
+LanSync/NoPairedDevices: Нема спарувани уреди. Кликнете на "Спарувај нов уред" за да поврзете друг уред.
+LanSync/Unpair: Отспарувај
+LanSync/Connected: Поврзано
+LanSync/Disconnected: Офлајн
+LanSync/DiscoveredDevices: Уреди на вашата мрежа
+LanSync/PinPlaceholder: PIN
+LanSync/Pair: Поврзи
+LanSync/AvailableWikis: Достапно од уреди
+LanSync/NoRemoteWikis: Нема нови вики-а достапни од поврзаните уреди.
+LanSync/From: од
+LanSync/GetWiki: Преземи вики
+LanSync/LinkWiki: Поврзи

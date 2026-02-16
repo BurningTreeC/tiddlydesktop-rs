@@ -31,4 +31,44 @@
     <string name="open_as_wiki">פתח כוויקי</string>
     <string name="import_into_wiki">ייבוא לוויקי</string>
     <string name="no_app_for_link">לא נמצאה אפליקציה לפתיחת קישור זה</string>
+
+    <!-- WikiActivity -->
+    <string name="share_title">שתף כ\u2026</string>
+    <string name="share_image">תמונה</string>
+    <string name="share_plain_text">טקסט רגיל</string>
+    <string name="share_json">JSON (.json)</string>
+    <string name="share_tid">TID (.tid)</string>
+    <string name="share_csv">CSV (.csv)</string>
+    <string name="unsaved_title">שינויים שלא נשמרו</string>
+    <string name="unsaved_message">יש לך %d שינוי/ים שלא נשמרו. מה תרצה לעשות?</string>
+    <string name="unsaved_save_close">שמור &amp; סגור</string>
+    <string name="unsaved_discard_close">בטל &amp; סגור</string>
+
+    <!-- OpenWithActivity -->
+    <string name="open_unsupported_action">פעולה לא נתמכת</string>
+    <string name="open_no_file">לא צוין קובץ</string>
+    <string name="open_no_file_uri">שגיאה פנימית: אין URI של קובץ</string>
+    <string name="open_select_folder">כעת בחר את התיקייה המכילה את הוויקי (לשמירה &amp; גיבויים)</string>
+    <string name="open_select_file">אנא בחר את קובץ הוויקי להענקת גישה</string>
+    <string name="open_file_cancelled">בחירת הקובץ בוטלה</string>
+    <string name="open_no_permission">לא ניתן לקבל הרשאת גישה לקובץ</string>
+
+    <!-- WikiServerService -->
+    <string name="notif_channel_name">Wiki Server</string>
+    <string name="notif_channel_desc">שומר על שרתי הוויקי פועלים ברקע</string>
+    <string name="notif_title">TiddlyDesktop-RS</string>
+    <string name="notif_text">הוויקי פועל ברקע</string>
+
+    <string name="label_content">תוכן</string>
+    <string name="hint_content">כתוב את ההערה שלך כאן…</string>
+
+    <!-- Widgets -->
+    <string name="widget_capture_label">לכידה</string>
+    <string name="widget_capture_desc">כפתור לכידה מהירה עבור TiddlyWiki</string>
+
+    <!-- LanSyncService -->
+    <string name="sync_notif_channel_name">LAN Sync</string>
+    <string name="sync_notif_channel_desc">שומר על LAN Sync פעיל לסנכרון ויקי בזמן אמת</string>
+    <string name="sync_notif_title">LAN Sync פעיל</string>
+    <string name="sync_notif_text">סנכרון ויקים עם מכשירים קרובים</string>
 </resources>

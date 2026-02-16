@@ -31,4 +31,44 @@
     <string name="open_as_wiki">Obre com a wiki</string>
     <string name="import_into_wiki">Importa a un wiki</string>
     <string name="no_app_for_link">No s\'ha trobat cap aplicació per obrir aquest enllaç</string>
+
+    <!-- WikiActivity -->
+    <string name="share_title">Comparteix com a\u2026</string>
+    <string name="share_image">Imatge</string>
+    <string name="share_plain_text">Text pla</string>
+    <string name="share_json">JSON (.json)</string>
+    <string name="share_tid">TID (.tid)</string>
+    <string name="share_csv">CSV (.csv)</string>
+    <string name="unsaved_title">Canvis sense desar</string>
+    <string name="unsaved_message">Tens %d canvi(s) sense desar. Què vols fer?</string>
+    <string name="unsaved_save_close">Desa &amp; tanca</string>
+    <string name="unsaved_discard_close">Descarta &amp; tanca</string>
+
+    <!-- OpenWithActivity -->
+    <string name="open_unsupported_action">Acció no compatible</string>
+    <string name="open_no_file">No s\'ha especificat cap fitxer</string>
+    <string name="open_no_file_uri">Error intern: no hi ha URI de fitxer</string>
+    <string name="open_select_folder">Ara selecciona la carpeta que conté el wiki (per desar &amp; còpies de seguretat)</string>
+    <string name="open_select_file">Selecciona el fitxer wiki per concedir accés</string>
+    <string name="open_file_cancelled">S\'ha cancel·lat la selecció del fitxer</string>
+    <string name="open_no_permission">No s\'ha pogut obtenir el permís d\'accés al fitxer</string>
+
+    <!-- WikiServerService -->
+    <string name="notif_channel_name">Wiki Server</string>
+    <string name="notif_channel_desc">Manté els servidors wiki en execució en segon pla</string>
+    <string name="notif_title">TiddlyDesktop-RS</string>
+    <string name="notif_text">El wiki s\'està executant en segon pla</string>
+
+    <string name="label_content">Contingut</string>
+    <string name="hint_content">Escriu la teva nota aquí…</string>
+
+    <!-- Widgets -->
+    <string name="widget_capture_label">Captura</string>
+    <string name="widget_capture_desc">Botó de captura ràpida per a TiddlyWiki</string>
+
+    <!-- LanSyncService -->
+    <string name="sync_notif_channel_name">LAN Sync</string>
+    <string name="sync_notif_channel_desc">Manté LAN Sync actiu per a la sincronització en temps real dels wikis</string>
+    <string name="sync_notif_title">LAN Sync Actiu</string>
+    <string name="sync_notif_text">Sincronitzant wikis amb dispositius propers</string>
 </resources>

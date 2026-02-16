@@ -9,6 +9,7 @@ import android.util.Log
 import androidx.documentfile.provider.DocumentFile
 import java.io.*
 import java.io.File
+import java.util.zip.GZIPOutputStream
 import java.net.ServerSocket
 import java.net.Socket
 import java.net.URLDecoder
@@ -40,6 +41,9 @@ class WikiHttpServer(
         private const val TAG = "WikiHttpServer"
         private var nextPort = 39000
         private val portLock = Any()
+        /** Number of extra ports for attachments. With 5 attachment ports + 1 main port,
+         *  Chromium gets 36 concurrent connections (6 per host:port). */
+        const val ATTACHMENT_PORT_COUNT = 5
 
         /**
          * Find an available port and bind a ServerSocket to it atomically.
@@ -67,9 +71,12 @@ class WikiHttpServer(
     }
 
     private var serverSocket: ServerSocket? = null
+    private var attachmentSockets: Array<ServerSocket?> = arrayOfNulls(ATTACHMENT_PORT_COUNT)
     private var executor: ExecutorService? = null
     private val running = AtomicBoolean(false)
     var port: Int = 0
+        private set
+    var attachmentPorts: IntArray = IntArray(ATTACHMENT_PORT_COUNT)
         private set
 
     // Cached backup directory (lazy-initialized)
@@ -271,59 +278,78 @@ class WikiHttpServer(
         // Bind atomically — port allocation + socket binding in one lock
         serverSocket = bindAvailablePort()
         port = serverSocket!!.localPort
+
+        // Multiple attachment ports (/_file/, /_relative/, /_td/).
+        // Chromium limits 6 connections per host:port — with N attachment ports,
+        // we get 6*(N+1) total concurrent connections, preventing video/image
+        // requests from blocking wiki boot.
+        for (i in 0 until ATTACHMENT_PORT_COUNT) {
+            attachmentSockets[i] = bindAvailablePort()
+            attachmentPorts[i] = attachmentSockets[i]!!.localPort
+        }
+
         executor = Executors.newCachedThreadPool()
         running.set(true)
 
-        Log.d(TAG, "Starting server on port $port for ${wikiUri}")
+        Log.d(TAG, "Starting server on port $port (attachments: ${attachmentPorts.joinToString(",")}) for ${wikiUri}")
 
-        Thread {
-            Log.d(TAG, "Server thread started for port $port")
-            while (running.get()) {
-                try {
-                    val sock = serverSocket
-                    if (sock == null || sock.isClosed) {
-                        Log.w(TAG, "ServerSocket is null or closed, server thread exiting")
-                        break
-                    }
-                    val socket = sock.accept()
-                    executor?.submit { handleConnection(socket) }
-                } catch (e: java.net.SocketTimeoutException) {
-                    // Timeout is fine, just continue to check if we should still be running
-                    continue
-                } catch (e: java.net.SocketException) {
-                    if (running.get()) {
-                        Log.e(TAG, "SocketException in accept: ${e.message}")
-                        // Socket might have been closed, try to recover
-                        if (serverSocket?.isClosed == true) {
-                            Log.e(TAG, "ServerSocket was closed unexpectedly")
-                            break
-                        }
-                    }
-                } catch (e: Exception) {
-                    if (running.get()) {
-                        Log.e(TAG, "Error accepting connection: ${e.message}", e)
-                    }
-                }
-            }
-            Log.d(TAG, "Server thread exiting for port $port, running=${running.get()}")
-        }.apply {
-            name = "WikiHttpServer-$port"
-            isDaemon = false  // Keep thread alive
-        }.start()
+        // Accept thread for main port (wiki HTML, saves, TiddlyWeb)
+        startAcceptThread(serverSocket!!, "WikiHttpServer-$port")
+
+        // Accept threads for attachment ports (media, files, tdlib)
+        for (i in 0 until ATTACHMENT_PORT_COUNT) {
+            startAcceptThread(attachmentSockets[i]!!, "WikiHttpServer-att-${attachmentPorts[i]}")
+        }
 
         return "http://127.0.0.1:$port"
     }
 
     /**
-     * Stop the HTTP server.
+     * Start an accept loop on the given ServerSocket, dispatching connections
+     * to the shared executor. Used for both main and attachment ports.
+     */
+    private fun startAcceptThread(sock: ServerSocket, threadName: String) {
+        Thread {
+            Log.d(TAG, "Accept thread started: $threadName")
+            while (running.get()) {
+                try {
+                    if (sock.isClosed) break
+                    val socket = sock.accept()
+                    executor?.submit { handleConnection(socket) }
+                } catch (e: java.net.SocketTimeoutException) {
+                    continue
+                } catch (e: java.net.SocketException) {
+                    if (running.get() && !sock.isClosed) {
+                        Log.e(TAG, "SocketException in $threadName: ${e.message}")
+                    }
+                    if (sock.isClosed) break
+                } catch (e: Exception) {
+                    if (running.get()) {
+                        Log.e(TAG, "Error in $threadName: ${e.message}", e)
+                    }
+                }
+            }
+            Log.d(TAG, "Accept thread exiting: $threadName")
+        }.apply {
+            name = threadName
+            isDaemon = false
+        }.start()
+    }
+
+    /**
+     * Stop the HTTP server (both main and attachment ports).
      */
     fun stop() {
-        Log.d(TAG, "Stopping server on port $port")
+        Log.d(TAG, "Stopping server on port $port (attachments: ${attachmentPorts.joinToString(",")})")
         running.set(false)
-        try {
-            serverSocket?.close()
-        } catch (e: Exception) {
+        try { serverSocket?.close() } catch (e: Exception) {
             Log.e(TAG, "Error closing server socket: ${e.message}")
+        }
+        for (i in 0 until ATTACHMENT_PORT_COUNT) {
+            try { attachmentSockets[i]?.close() } catch (e: Exception) {
+                Log.e(TAG, "Error closing attachment socket $i: ${e.message}")
+            }
+            attachmentSockets[i] = null
         }
         executor?.shutdownNow()
         backgroundExecutor.shutdown()
@@ -414,7 +440,7 @@ class WikiHttpServer(
                     if (!isMediaRoute) keepAlive = false
 
                     when {
-                        method == "GET" && path == "/" -> handleGetWiki(output)
+                        method == "GET" && path == "/" -> handleGetWiki(output, headers)
                         method == "HEAD" && path == "/" -> handleHead(output)
                         method == "PUT" && path == "/" -> handlePutWiki(input, output, headers)
                         method == "GET" && path.startsWith("/_file/") -> handleGetFile(output, path, headers, keepAlive)
@@ -476,43 +502,149 @@ class WikiHttpServer(
      * For single-file wikis: reads from wikiUri
      * For folder wikis: reads from folderHtmlPath (pre-rendered by Node.js)
      */
-    private fun handleGetWiki(output: OutputStream) {
+    private fun handleGetWiki(output: OutputStream, reqHeaders: Map<String, String> = emptyMap()) {
         try {
-            var content = if (isFolder && folderHtmlPath != null) {
-                // Folder wiki: serve pre-rendered HTML from temp file
+            val t0 = System.currentTimeMillis()
+            // Read wiki as raw bytes — avoids String conversion overhead for large wikis.
+            // String-based approach allocates ~6x the file size (UTF-16 String + substring
+            // concat + toByteArray). Byte-based approach keeps it at ~1x.
+            val wikiBytes = if (isFolder && folderHtmlPath != null) {
                 val file = File(folderHtmlPath)
-                if (file.exists()) {
-                    file.readText(Charsets.UTF_8)
-                } else {
-                    throw IOException("Pre-rendered HTML not found: $folderHtmlPath")
-                }
+                if (file.exists()) file.readBytes()
+                else throw IOException("Pre-rendered HTML not found: $folderHtmlPath")
             } else {
-                // Single-file wiki: read from SAF URI
                 context.contentResolver.openInputStream(wikiUri)?.use {
-                    it.bufferedReader().readText()
+                    it.readBytes()
                 } ?: throw IOException("Failed to read wiki")
             }
+            val t1 = System.currentTimeMillis()
+            Log.d(TAG, "Wiki read: ${wikiBytes.size} bytes in ${t1 - t0}ms")
 
-            // Inject iframe referrerpolicy fix — must run before any iframe is created.
-            // Sets referrerpolicy="no-referrer" on external iframes (YouTube, Vimeo, etc.)
-            // so the wiki server's origin (http://127.0.0.1) isn't sent as Referer,
-            // which can cause YouTube Error 153 (embedding denied).
-            val iframeFixScript = """<script>(function(){function x(u){if(!u||typeof u!=='string')return false;if(u.startsWith('http://127.0.0.1')||u.startsWith('http://localhost'))return false;return u.startsWith('http://')||u.startsWith('https://')||u.startsWith('//');}try{var d=Object.getOwnPropertyDescriptor(HTMLIFrameElement.prototype,'src');if(d&&d.set){Object.defineProperty(HTMLIFrameElement.prototype,'src',{set:function(v){if(x(v))this.referrerPolicy='no-referrer';d.set.call(this,v);},get:d.get,configurable:true,enumerable:true});}}catch(e){}var sa=HTMLIFrameElement.prototype.setAttribute;HTMLIFrameElement.prototype.setAttribute=function(n,v){if(n==='src'&&x(v))this.referrerPolicy='no-referrer';return sa.call(this,n,v);};})();</script>"""
+            // Build the early URL-transform script that intercepts src attributes on
+            // img/video/audio/source BEFORE TiddlyWiki renders them. This ensures attachment
+            // requests go to attachment ports from the very start, not the main wiki port.
+            val portsJs = attachmentPorts.joinToString(",")
+            val earlyTransformScript = """<script>(function(){""" +
+                // Attachment port pool
+                """var P=[${portsJs}];""" +
+                """if(!P.length||!P[0])return;""" +
+                // Hash function: same URL → same port (keep-alive friendly)
+                """function H(u){var h=0;for(var i=0;i<u.length;i++){h=((h<<5)-h+u.charCodeAt(i))|0;}return h<0?-h:h;}""" +
+                // Check if URL should be transformed (relative paths, not http/data/blob)
+                """function S(u){if(!u||u.startsWith('data:')||u.startsWith('blob:')||u.startsWith('http://')||u.startsWith('https://'))return false;return true;}""" +
+                // Transform: relative path → http://127.0.0.1:{port}/_relative/{encoded}
+                """function T(u){if(!S(u))return u;var p=P[H(u)%P.length];return 'http://127.0.0.1:'+p+'/_relative/'+encodeURIComponent(u);}""" +
+                // Intercept src property setter on img/video/audio/source
+                """['HTMLImageElement','HTMLVideoElement','HTMLAudioElement','HTMLSourceElement'].forEach(function(n){""" +
+                """try{var C=window[n];if(!C)return;""" +
+                """var d=Object.getOwnPropertyDescriptor(C.prototype,'src');""" +
+                """if(!d||!d.set)return;""" +
+                """Object.defineProperty(C.prototype,'src',{set:function(v){""" +
+                """if(typeof v==='string'&&S(v)){d.set.call(this,T(v));}else{d.set.call(this,v);}""" +
+                """},get:d.get,configurable:true,enumerable:true});""" +
+                """}catch(e){}});""" +
+                // Also intercept setAttribute('src', ...) calls
+                """['HTMLImageElement','HTMLVideoElement','HTMLAudioElement','HTMLSourceElement'].forEach(function(n){""" +
+                """try{var C=window[n];if(!C)return;""" +
+                """var orig=C.prototype.setAttribute;""" +
+                """C.prototype.setAttribute=function(a,v){""" +
+                """if(a==='src'&&typeof v==='string'&&S(v)){return orig.call(this,a,T(v));}""" +
+                """return orig.call(this,a,v);};""" +
+                """}catch(e){}});""" +
+                // Expose transform for overlay/other scripts
+                """window.__tdEarlyTransform=T;window.__tdEarlyTransformCheck=S;""" +
+                """})();</script>"""
 
-            // Inject Plyr CSS/JS and video-hiding style into <head> so they load
-            // as part of the page itself, eliminating the flash of native video controls.
-            val plyrInjection = """<style id="td-plyr-hide-styles">video:not(.plyr__video-wrapper video){opacity:0!important;max-height:0!important;overflow:hidden!important;}audio{max-width:100%;box-sizing:border-box;}.plyr{width:100%;height:100%;}.plyr__video-wrapper{width:100%!important;height:100%!important;padding-bottom:0!important;background:#000;}.plyr video{opacity:1!important;width:100%!important;height:100%!important;object-fit:contain!important;}.plyr--compact .plyr__control--overlaid{padding:10px!important;}.plyr--compact .plyr__control--overlaid svg{width:18px!important;height:18px!important;}.plyr--compact .plyr__time--duration,.plyr--compact [data-plyr="settings"],.plyr--compact .plyr__volume{display:none!important;}.plyr--compact .plyr__controls{padding:2px 5px!important;}.plyr--compact .plyr__control{padding:3px!important;}.plyr--compact .plyr__control svg{width:14px!important;height:14px!important;}.plyr--compact .plyr__progress__container{margin-left:4px!important;}.plyr--tiny .plyr__time,.plyr--tiny [data-plyr="fullscreen"]{display:none!important;}.plyr--tiny .plyr__control--overlaid{padding:6px!important;}.plyr--tiny .plyr__control--overlaid svg{width:14px!important;height:14px!important;}.plyr--tiny .plyr__control svg{width:12px!important;height:12px!important;}</style><link rel="stylesheet" href="/_td/plyr/dist/plyr.css"><script src="/_td/plyr/dist/plyr.min.js"></script>"""
-            val headIdx = content.indexOf("<head>", ignoreCase = true)
-            if (headIdx >= 0) {
-                content = content.substring(0, headIdx + 6) + iframeFixScript + plyrInjection + content.substring(headIdx + 6)
+            // Injection: early URL-transform + iframe referrerpolicy fix + media controls CSS
+            val injectionBytes = (
+                earlyTransformScript +
+                """<script>(function(){function x(u){if(!u||typeof u!=='string')return false;if(u.startsWith('http://127.0.0.1')||u.startsWith('http://localhost'))return false;return u.startsWith('http://')||u.startsWith('https://')||u.startsWith('//');}try{var d=Object.getOwnPropertyDescriptor(HTMLIFrameElement.prototype,'src');if(d&&d.set){Object.defineProperty(HTMLIFrameElement.prototype,'src',{set:function(v){if(x(v))this.referrerPolicy='no-referrer';d.set.call(this,v);},get:d.get,configurable:true,enumerable:true});}}catch(e){}var sa=HTMLIFrameElement.prototype.setAttribute;HTMLIFrameElement.prototype.setAttribute=function(n,v){if(n==='src'&&x(v))this.referrerPolicy='no-referrer';return sa.call(this,n,v);};})();</script>""" +
+                """<style id="td-media-controls-css">video{max-width:100%;height:auto;object-fit:contain;border-radius:4px;background:#000;}audio{max-width:100%;width:100%;box-sizing:border-box;}video::-webkit-media-controls-play-button,video::-webkit-media-controls-mute-button,video::-webkit-media-controls-fullscreen-button,video::-webkit-media-controls-overflow-button,video::-webkit-media-controls-timeline,video::-webkit-media-controls-volume-slider,video::-webkit-media-controls-overlay-play-button,audio::-webkit-media-controls-play-button,audio::-webkit-media-controls-mute-button,audio::-webkit-media-controls-timeline,audio::-webkit-media-controls-volume-slider,audio::-webkit-media-controls-overflow-button{cursor:pointer;}video::-webkit-media-controls-overlay-play-button{display:flex;align-items:center;justify-content:center;}</style>"""
+            ).toByteArray(Charsets.UTF_8)
+
+            // Find <head> in raw bytes (case-insensitive ASCII scan)
+            val headIdx = findTagIgnoreCase(wikiBytes, "<head>")
+            val hasInjection = headIdx >= 0
+
+            // Check if client accepts gzip (Android WebView always does)
+            val acceptEncoding = reqHeaders["accept-encoding"] ?: ""
+            val useGzip = acceptEncoding.contains("gzip")
+
+            if (useGzip) {
+                // Gzip: compress into buffer first to get Content-Length.
+                // HTML compresses ~80-90%, so a 30MB wiki becomes ~3-5MB.
+                val baos = ByteArrayOutputStream(wikiBytes.size / 6)
+                GZIPOutputStream(baos).use { gzip ->
+                    if (hasInjection) {
+                        val insertPos = headIdx + 6 // length of "<head>"
+                        gzip.write(wikiBytes, 0, insertPos)
+                        gzip.write(injectionBytes)
+                        gzip.write(wikiBytes, insertPos, wikiBytes.size - insertPos)
+                    } else {
+                        gzip.write(wikiBytes)
+                    }
+                }
+                val compressed = baos.toByteArray()
+                val t2 = System.currentTimeMillis()
+                Log.d(TAG, "Gzip: ${wikiBytes.size} -> ${compressed.size} bytes (${100 - compressed.size * 100 / wikiBytes.size}% saved) in ${t2 - t1}ms")
+
+                val headers = "HTTP/1.1 200 OK\r\n" +
+                    "Content-Type: text/html; charset=utf-8\r\n" +
+                    "Content-Encoding: gzip\r\n" +
+                    "Content-Length: ${compressed.size}\r\n" +
+                    "Vary: Accept-Encoding\r\n" +
+                    "Access-Control-Allow-Origin: *\r\n" +
+                    "Connection: close\r\n\r\n"
+                output.write(headers.toByteArray())
+                output.write(compressed)
+                val t3 = System.currentTimeMillis()
+                Log.d(TAG, "Wiki served: ${t3 - t0}ms total (read=${t1-t0}ms, gzip=${t2-t1}ms, write=${t3-t2}ms)")
+            } else {
+                // No gzip: stream uncompressed
+                val totalLength = wikiBytes.size + if (hasInjection) injectionBytes.size else 0
+                val headers = "HTTP/1.1 200 OK\r\n" +
+                    "Content-Type: text/html; charset=utf-8\r\n" +
+                    "Content-Length: $totalLength\r\n" +
+                    "Access-Control-Allow-Origin: *\r\n" +
+                    "Connection: close\r\n\r\n"
+                output.write(headers.toByteArray())
+
+                if (hasInjection) {
+                    val insertPos = headIdx + 6 // length of "<head>"
+                    output.write(wikiBytes, 0, insertPos)
+                    output.write(injectionBytes)
+                    output.write(wikiBytes, insertPos, wikiBytes.size - insertPos)
+                } else {
+                    output.write(wikiBytes)
+                }
             }
-
-            val bytes = content.toByteArray(Charsets.UTF_8)
-            sendResponse(output, 200, "OK", "text/html; charset=utf-8", bytes)
+            output.flush()
         } catch (e: Exception) {
             Log.e(TAG, "Error serving wiki: ${e.message}", e)
             sendError(output, 500, "Internal Server Error: ${e.message}")
         }
+    }
+
+    /**
+     * Find a tag in raw bytes using case-insensitive ASCII comparison.
+     * Returns the byte offset of the tag, or -1 if not found.
+     */
+    private fun findTagIgnoreCase(data: ByteArray, tag: String): Int {
+        val tagBytes = tag.lowercase().toByteArray(Charsets.US_ASCII)
+        val limit = data.size - tagBytes.size
+        var i = 0
+        outer@ while (i <= limit) {
+            for (j in tagBytes.indices) {
+                val b = data[i + j].toInt() and 0xFF
+                val lower = if (b in 65..90) (b + 32).toByte() else data[i + j]
+                if (lower != tagBytes[j]) {
+                    i++
+                    continue@outer
+                }
+            }
+            return i
+        }
+        return -1
     }
 
 

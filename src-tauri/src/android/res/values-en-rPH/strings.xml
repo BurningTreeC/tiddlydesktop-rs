@@ -31,4 +31,44 @@
     <string name="open_as_wiki">Open as Wiki</string>
     <string name="import_into_wiki">Import into Wiki</string>
     <string name="no_app_for_link">No app found to handle this link</string>
+
+    <!-- WikiActivity -->
+    <string name="share_title">Share as\u2026</string>
+    <string name="share_image">Image</string>
+    <string name="share_plain_text">Plain Text</string>
+    <string name="share_json">JSON (.json)</string>
+    <string name="share_tid">TID (.tid)</string>
+    <string name="share_csv">CSV (.csv)</string>
+    <string name="unsaved_title">Unsaved Changes</string>
+    <string name="unsaved_message">You have %d unsaved change(s). What would you like to do?</string>
+    <string name="unsaved_save_close">Save &amp; Close</string>
+    <string name="unsaved_discard_close">Discard &amp; Close</string>
+
+    <!-- OpenWithActivity -->
+    <string name="open_unsupported_action">Unsupported action</string>
+    <string name="open_no_file">No file specified</string>
+    <string name="open_no_file_uri">Internal error: no file URI</string>
+    <string name="open_select_folder">Now select the folder containing the wiki (for saving &amp; backups)</string>
+    <string name="open_select_file">Please select the wiki file to grant access</string>
+    <string name="open_file_cancelled">File selection cancelled</string>
+    <string name="open_no_permission">Could not get file access permission</string>
+
+    <!-- WikiServerService -->
+    <string name="notif_channel_name">Wiki Server</string>
+    <string name="notif_channel_desc">Keeps wiki servers running in the background</string>
+    <string name="notif_title">TiddlyDesktop-RS</string>
+    <string name="notif_text">Wiki is running in the background</string>
+
+    <string name="label_content">Content</string>
+    <string name="hint_content">Write your note here…</string>
+
+    <!-- Widgets -->
+    <string name="widget_capture_label">Capture</string>
+    <string name="widget_capture_desc">Quick capture button for TiddlyWiki</string>
+
+    <!-- LanSyncService -->
+    <string name="sync_notif_channel_name">LAN Sync</string>
+    <string name="sync_notif_channel_desc">Keeps LAN Sync active for real-time wiki synchronization</string>
+    <string name="sync_notif_title">LAN Sync Active</string>
+    <string name="sync_notif_text">Syncing wikis with nearby devices</string>
 </resources>

@@ -5,6 +5,7 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
 
     <!-- AndroidTV support -->
     <uses-feature android:name="android.software.leanback" android:required="false" />
@@ -44,7 +45,7 @@
         <activity
             android:name=".OpenWithActivity"
             android:label="TiddlyDesktopRS"
-            android:theme="@android:style/Theme.Translucent.NoTitleBar"
+            android:theme="@style/Theme.OpenWithDialog"
             android:exported="true">
             <!-- Handle VIEW intent for HTML files by MIME type -->
             <intent-filter>
@@ -99,6 +100,11 @@
             android:theme="@style/Theme.CaptureDialog"
             android:exported="true"
             android:excludeFromRecents="true">
+            <!-- Quick Capture widget action -->
+            <intent-filter>
+                <action android:name="com.burningtreec.tiddlydesktop_rs.ACTION_QUICK_CAPTURE" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
             <intent-filter>
                 <action android:name="android.intent.action.SEND" />
                 <category android:name="android.intent.category.DEFAULT" />
@@ -197,6 +203,28 @@
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="wiki_server" />
         </service>
+
+        <!-- Foreground service to keep LAN sync alive in background (main process) -->
+        <service
+            android:name=".LanSyncService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="lan_sync" />
+        </service>
+
+        <!-- Quick Capture home screen widget -->
+        <receiver
+            android:name=".QuickCaptureWidgetProvider"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/widget_quick_capture_info" />
+        </receiver>
 
     </application>
     <!-- ANDROID FS PLUGIN. AUTO-GENERATED. DO NOT REMOVE. -->

@@ -228,6 +228,7 @@ pub fn launch_wiki_activity(
     backup_count: u32,
     folder_local_path: Option<&str>,
     backup_dir: Option<&str>,
+    tiddler_title: Option<&str>,
 ) -> Result<(), String> {
     eprintln!("[WikiActivity] launch_wiki_activity called:");
     eprintln!("[WikiActivity]   wiki_path: {}", wiki_path);
@@ -383,6 +384,20 @@ pub fn launch_wiki_activity(
             "(Ljava/lang/String;Ljava/lang/String;)Landroid/content/Intent;",
             &[(&extra_backup_dir).into(), (&value_backup_dir).into()],
         ).map_err(|e| format!("Failed to putExtra backup_dir: {}", e))?;
+    }
+
+    // Add tiddler title for navigation (widget tap → open specific tiddler)
+    if let Some(title) = tiddler_title {
+        let extra_tiddler_title = env.new_string("tiddler_title")
+            .map_err(|e| format!("Failed to create string: {}", e))?;
+        let value_tiddler_title = env.new_string(title)
+            .map_err(|e| format!("Failed to create string: {}", e))?;
+        env.call_method(
+            &intent,
+            "putExtra",
+            "(Ljava/lang/String;Ljava/lang/String;)Landroid/content/Intent;",
+            &[(&extra_tiddler_title).into(), (&value_tiddler_title).into()],
+        ).map_err(|e| format!("Failed to putExtra tiddler_title: {}", e))?;
     }
 
     // Start the activity

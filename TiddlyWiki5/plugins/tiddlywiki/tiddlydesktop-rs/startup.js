@@ -418,6 +418,13 @@ exports.startup = function(callback) {
 			if (!entry.favicon && existingEntry.favicon) {
 				entry.favicon = existingEntry.favicon;
 			}
+			// Preserve LAN sync settings
+			if (existingEntry.sync_enabled) {
+				entry.sync_enabled = existingEntry.sync_enabled;
+			}
+			if (existingEntry.sync_id) {
+				entry.sync_id = existingEntry.sync_id;
+			}
 		}
 		// Remove if already exists
 		entries = entries.filter(function(e) { return e.path !== entry.path; });
@@ -436,7 +443,10 @@ exports.startup = function(callback) {
 		entries = entries.filter(function(e) { return e.path !== path; });
 		saveWikiList(entries);
 		// Also remove from the Rust backend (updates widget data file)
-		invoke("remove_recent_file", { path: path }).catch(function(err) {
+		invoke("remove_recent_file", { path: path }).then(function() {
+			// Broadcast updated manifest so peers no longer see this wiki
+			invoke("lan_sync_broadcast_manifest").catch(function() {});
+		}).catch(function(err) {
 			console.error("[TiddlyDesktop] Failed to remove from recent files:", err);
 		});
 	}
@@ -481,6 +491,8 @@ exports.startup = function(callback) {
 				backup_dir_display: entry.backup_dir ? getDisplayPath(entry.backup_dir) : "",
 				backup_count: entry.backup_count !== undefined ? String(entry.backup_count) : "",
 				group: entry.group || "",
+				sync_enabled: entry.sync_enabled ? "true" : "false",
+				sync_id: entry.sync_id || "",
 				needs_reauth: "checking", // Will be updated by permission check on Android
 				text: ""
 			});
@@ -977,6 +989,32 @@ exports.startup = function(callback) {
 		}
 	});
 
+	// Message handler: toggle LAN sync for a wiki
+	$tw.rootWidget.addEventListener("tm-tiddlydesktop-rs-set-wiki-sync", function(event) {
+		var path = event.paramObject && event.paramObject.path;
+		var enabled = event.paramObject && event.paramObject.enabled === "true";
+		if (path) {
+			invoke("set_wiki_sync", { path: path, enabled: enabled }).then(function(syncId) {
+				var entries = getWikiListEntries();
+				for (var i = 0; i < entries.length; i++) {
+					if (entries[i].path === path) {
+						entries[i].sync_enabled = enabled;
+						if (syncId) entries[i].sync_id = syncId;
+						var tempTitle = "$:/temp/tiddlydesktop-rs/wikis/" + i;
+						$tw.wiki.setText(tempTitle, "sync_enabled", null, enabled ? "true" : "false");
+						$tw.wiki.setText(tempTitle, "sync_id", null, syncId || "");
+						break;
+					}
+				}
+				saveWikiList(entries);
+				// Broadcast updated wiki manifest to connected peers
+				invoke("lan_sync_broadcast_manifest").catch(function() {});
+			}).catch(function(err) {
+				console.error("Failed to set wiki sync:", err);
+			});
+		}
+	});
+
 	// Message handler: set custom backup directory for a wiki
 	$tw.rootWidget.addEventListener("tm-tiddlydesktop-rs-set-backup-dir", function(event) {
 		var path = event.paramObject && event.paramObject.path;
@@ -1390,6 +1428,7 @@ exports.startup = function(callback) {
 				console.log("[TiddlyDesktop] Opening pending wiki: " + pendingWiki.path);
 				var path = pendingWiki.path;
 				var isFolder = !!pendingWiki.is_folder;
+				var navigateToTiddler = pendingWiki.navigate_to_tiddler || null;
 
 				// Look up backup settings from the wiki list
 				var entries = getWikiListEntries();
@@ -1406,6 +1445,9 @@ exports.startup = function(callback) {
 				if (!isFolder && entry) {
 					params.backupsEnabled = entry.backups_enabled !== false;
 					params.backupCount = entry.backup_count !== undefined ? entry.backup_count : null;
+				}
+				if (navigateToTiddler) {
+					params.tiddlerTitle = navigateToTiddler;
 				}
 
 				invoke(command, params).then(function(resultEntry) {
@@ -1439,6 +1481,301 @@ exports.startup = function(callback) {
 		// Don't show update button on error
 		$tw.wiki.setText("$:/temp/tiddlydesktop-rs/update-available", "text", null, "no");
 	});
+
+	// ── LAN Sync message handlers ──────────────────────────────────────
+
+	// Start LAN sync
+	$tw.rootWidget.addEventListener("tm-tiddlydesktop-rs-lan-sync-start", function(event) {
+		invoke("lan_sync_start").then(function() {
+			refreshSyncStatus();
+			refreshDiscoveredPeers();
+			// Broadcast wiki manifest (peers may auto-connect from previous pairing)
+			invoke("lan_sync_broadcast_manifest").catch(function() {});
+		}).catch(function(err) {
+			console.error("Failed to start LAN sync:", err);
+		});
+	});
+
+	// Stop LAN sync
+	$tw.rootWidget.addEventListener("tm-tiddlydesktop-rs-lan-sync-stop", function(event) {
+		invoke("lan_sync_stop").then(function() {
+			$tw.wiki.setText("$:/temp/tiddlydesktop-rs/lan-sync-running", "text", null, "no");
+			$tw.wiki.setText("$:/temp/tiddlydesktop-rs/lan-sync-pin", "text", null, "");
+			// Clear discovered peers from UI
+			$tw.wiki.filterTiddlers("[prefix[$:/temp/tiddlydesktop-rs/discovered-peers/]]").forEach(function(title) {
+				$tw.wiki.deleteTiddler(title);
+			});
+		}).catch(function(err) {
+			console.error("Failed to stop LAN sync:", err);
+		});
+	});
+
+	// Generate and display pairing PIN
+	$tw.rootWidget.addEventListener("tm-tiddlydesktop-rs-lan-sync-show-pin", function(event) {
+		invoke("lan_sync_start_pairing").then(function(pin) {
+			$tw.wiki.setText("$:/temp/tiddlydesktop-rs/lan-sync-pin", "text", null, pin);
+		}).catch(function(err) {
+			console.error("Failed to generate PIN:", err);
+		});
+	});
+
+	// Cancel pairing
+	$tw.rootWidget.addEventListener("tm-tiddlydesktop-rs-lan-sync-cancel-pairing", function(event) {
+		invoke("lan_sync_cancel_pairing").then(function() {
+			$tw.wiki.setText("$:/temp/tiddlydesktop-rs/lan-sync-pin", "text", null, "");
+		}).catch(function(err) {
+			console.error("Failed to cancel pairing:", err);
+		});
+	});
+
+	// Unpair device
+	$tw.rootWidget.addEventListener("tm-tiddlydesktop-rs-unpair-device", function(event) {
+		var deviceId = event.paramObject ? event.paramObject.deviceId : "";
+		if (!deviceId) return;
+		invoke("lan_sync_unpair_device", { deviceId: deviceId }).then(function() {
+			refreshSyncStatus();
+		}).catch(function(err) {
+			console.error("Failed to unpair device:", err);
+		});
+	});
+
+	// Pair with a discovered device by entering PIN
+	$tw.rootWidget.addEventListener("tm-tiddlydesktop-rs-lan-sync-pair", function(event) {
+		var deviceId = event.paramObject ? event.paramObject.deviceId : "";
+		var pin = event.paramObject ? event.paramObject.pin : "";
+		if (!deviceId || !pin) return;
+
+		invoke("lan_sync_pair_with_device", { deviceId: deviceId, pin: pin }).then(function() {
+			console.log("[LAN Sync] Pairing initiated with device:", deviceId);
+			refreshSyncStatus();
+			refreshDiscoveredPeers();
+			// Broadcast wiki manifest to newly paired device
+			invoke("lan_sync_broadcast_manifest").catch(function() {});
+		}).catch(function(err) {
+			console.error("Failed to pair with device:", err);
+			alert("Pairing failed: " + err);
+		});
+	});
+
+	// Request a wiki from a peer
+	$tw.rootWidget.addEventListener("tm-tiddlydesktop-rs-request-wiki", function(event) {
+		var wikiId = event.paramObject ? event.paramObject.wikiId : "";
+		var fromDeviceId = event.paramObject ? event.paramObject.fromDeviceId : "";
+		var wikiName = event.paramObject ? event.paramObject.wikiName : "";
+		if (!wikiId || !fromDeviceId) return;
+
+		function doRequest(targetDir) {
+			if (!targetDir) return; // User cancelled
+			invoke("lan_sync_request_wiki", {
+				wikiId: wikiId,
+				fromDeviceId: fromDeviceId,
+				targetDir: targetDir
+			}).then(function() {
+				console.log("[LAN Sync] Requested wiki " + wikiName + " from peer");
+			}).catch(function(err) {
+				console.error("Failed to request wiki:", err);
+				alert("Failed to request wiki: " + err);
+			});
+		}
+
+		// Open folder picker for target directory
+		if (isAndroid) {
+			invoke("android_pick_directory").then(function(targetDir) {
+				doRequest(targetDir);
+			}).catch(function(err) {
+				console.error("Failed to open folder picker:", err);
+			});
+		} else {
+			openDialog({
+				directory: true,
+				multiple: false,
+				title: "Choose save location for " + wikiName
+			}).then(function(targetDir) {
+				doRequest(targetDir);
+			}).catch(function(err) {
+				console.error("Failed to open folder picker:", err);
+			});
+		}
+	});
+
+	// Populate candidate tiddlers for the link-wiki dropdown
+	$tw.rootWidget.addEventListener("tm-tiddlydesktop-rs-prepare-link-wiki", function() {
+		// Clear old candidates
+		$tw.wiki.each(function(t, title) {
+			if (title.indexOf("$:/temp/tiddlydesktop-rs/link-candidate/") === 0) {
+				$tw.wiki.deleteTiddler(title);
+			}
+		});
+
+		// Build list of local wikis that don't have sync enabled yet
+		var entries = getWikiListEntries();
+		var candidates = entries.filter(function(e) { return !e.sync_enabled; });
+
+		candidates.forEach(function(e, i) {
+			$tw.wiki.addTiddler({
+				title: "$:/temp/tiddlydesktop-rs/link-candidate/" + i,
+				"candidate-path": e.path,
+				text: e.filename + (e.display_path ? " (" + e.display_path + ")" : "")
+			});
+		});
+	});
+
+	// Link a remote wiki to an existing local wiki (called from dropdown selection)
+	$tw.rootWidget.addEventListener("tm-tiddlydesktop-rs-do-link-wiki", function(event) {
+		var wikiId = event.paramObject ? event.paramObject.wikiId : "";
+		var path = event.paramObject ? event.paramObject.path : "";
+		if (!wikiId || !path) return;
+
+		invoke("lan_sync_link_wiki", { path: path, syncId: wikiId }).then(function() {
+			console.log("[LAN Sync] Linked wiki to sync ID " + wikiId);
+			refreshWikiList();
+			invoke("lan_sync_get_available_wikis").then(function(wikis) {
+				refreshRemoteWikis(wikis);
+			}).catch(function() {});
+			invoke("lan_sync_broadcast_manifest").catch(function() {});
+		}).catch(function(err) {
+			console.error("Failed to link wiki:", err);
+			alert("Failed to link wiki: " + err);
+		});
+	});
+
+	// Refresh sync status and update tiddlers
+	function refreshSyncStatus() {
+		invoke("lan_sync_get_status").then(function(status) {
+			$tw.wiki.setText("$:/temp/tiddlydesktop-rs/lan-sync-running", "text", null, status.running ? "yes" : "no");
+			var displayName = status.device_name + (status.device_id ? " (" + status.device_id + ")" : "");
+			$tw.wiki.setText("$:/temp/tiddlydesktop-rs/lan-sync-device-name", "text", null, displayName);
+			if (status.active_pin) {
+				$tw.wiki.setText("$:/temp/tiddlydesktop-rs/lan-sync-pin", "text", null, status.active_pin);
+			}
+
+			// Update paired devices list
+			if (status.paired_devices && status.paired_devices.length > 0) {
+				$tw.wiki.setText("$:/temp/tiddlydesktop-rs/lan-sync-paired-devices", "text", null, "yes");
+				var listTitles = [];
+				status.paired_devices.forEach(function(device) {
+					var tiddlerTitle = "$:/temp/tiddlydesktop-rs/lan-sync-device/" + device.device_id;
+					listTitles.push(tiddlerTitle);
+					$tw.wiki.addTiddler(new $tw.Tiddler({
+						title: tiddlerTitle,
+						device_id: device.device_id,
+						device_name: device.device_name,
+						paired_at: device.paired_at,
+						is_connected: device.is_connected ? "true" : "false"
+					}));
+				});
+				$tw.wiki.setText("$:/temp/tiddlydesktop-rs/lan-sync-paired-devices-list", "list", null, listTitles.join(" "));
+			} else {
+				$tw.wiki.setText("$:/temp/tiddlydesktop-rs/lan-sync-paired-devices", "text", null, "");
+			}
+		}).catch(function(err) {
+			// Sync not initialized yet — set defaults
+			$tw.wiki.setText("$:/temp/tiddlydesktop-rs/lan-sync-running", "text", null, "no");
+		});
+	}
+
+	// Refresh available remote wikis and update tiddlers
+	// Refresh discovered peers (unpaired devices on LAN)
+	function refreshDiscoveredPeers() {
+		invoke("lan_sync_get_discovered_peers").then(function(peers) {
+			// Build set of current peer device_ids
+			var currentIds = {};
+			if (peers && peers.length > 0) {
+				peers.forEach(function(peer) {
+					currentIds[peer.device_id] = peer;
+				});
+			}
+
+			// Remove tiddlers for peers that are no longer discovered
+			$tw.wiki.filterTiddlers("[prefix[$:/temp/tiddlydesktop-rs/discovered-peers/]]").forEach(function(title) {
+				var tiddler = $tw.wiki.getTiddler(title);
+				if (tiddler) {
+					var existingId = tiddler.fields.device_id;
+					if (!currentIds[existingId]) {
+						$tw.wiki.deleteTiddler(title);
+					}
+				}
+			});
+
+			// Add or update tiddlers for current peers
+			if (peers && peers.length > 0) {
+				peers.forEach(function(peer) {
+					var tiddlerTitle = "$:/temp/tiddlydesktop-rs/discovered-peers/" + peer.device_id;
+					$tw.wiki.addTiddler(new $tw.Tiddler({
+						title: tiddlerTitle,
+						device_id: peer.device_id,
+						device_name: peer.device_name,
+						addr: peer.addr,
+						port: String(peer.port)
+					}));
+				});
+			}
+		}).catch(function() {});
+	}
+
+	function refreshRemoteWikis(wikis) {
+		// Remove old remote wiki tiddlers
+		$tw.wiki.filterTiddlers("[prefix[$:/temp/tiddlydesktop-rs/remote-wikis/]]").forEach(function(title) {
+			$tw.wiki.deleteTiddler(title);
+		});
+
+		if (wikis && wikis.length > 0) {
+			wikis.forEach(function(wiki, index) {
+				var tiddlerTitle = "$:/temp/tiddlydesktop-rs/remote-wikis/" + wiki.wiki_id;
+				$tw.wiki.addTiddler(new $tw.Tiddler({
+					title: tiddlerTitle,
+					wiki_id: wiki.wiki_id,
+					wiki_name: wiki.wiki_name,
+					is_folder: wiki.is_folder ? "true" : "false",
+					from_device_id: wiki.from_device_id,
+					from_device_name: wiki.from_device_name
+				}));
+			});
+		}
+	}
+
+	// Listen for peer connection/disconnection events
+	if (listen) {
+		listen("lan-sync-peer-connected", function(event) {
+			refreshSyncStatus();
+			// Send our wiki manifest to the newly connected peer
+			invoke("lan_sync_broadcast_manifest").catch(function() {});
+		});
+		listen("lan-sync-peer-disconnected", function(event) {
+			refreshSyncStatus();
+		});
+		listen("lan-sync-discovered-peers-changed", function(event) {
+			refreshDiscoveredPeers();
+		});
+		listen("lan-sync-remote-wikis-updated", function(event) {
+			refreshRemoteWikis(event.payload);
+		});
+		listen("lan-sync-wiki-received", function(event) {
+			var data = event.payload;
+			console.log("[LAN Sync] Wiki received:", data.wiki_name, "at", data.wiki_path);
+			// Open the received wiki
+			var command = data.is_folder ? "open_wiki_folder" : "open_wiki_window";
+			invoke(command, { path: data.wiki_path }).then(function(entry) {
+				addToWikiList(entry);
+				refreshWikiList();
+			}).catch(function(err) {
+				console.error("[LAN Sync] Failed to open received wiki:", err);
+				// Still refresh wiki list even if open failed
+				refreshWikiList();
+			});
+			// Also refresh remote wikis (it should be removed from available list now)
+			invoke("lan_sync_get_available_wikis").then(function(wikis) {
+				refreshRemoteWikis(wikis);
+			}).catch(function() {});
+		});
+	}
+
+	// Initial status check
+	refreshSyncStatus();
+	refreshDiscoveredPeers();
+
+	// Periodically refresh discovered peers (mDNS events can be missed)
+	setInterval(refreshDiscoveredPeers, 5000);
 
 	callback();
 };

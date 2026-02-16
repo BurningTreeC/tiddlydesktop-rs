@@ -18,6 +18,7 @@ Buttons/CreateWikiFolder: Crear dossier wiki
 Buttons/ToFile: a file
 Buttons/ToFolder: a dossier
 Buttons/Reauthorize: Re-authorize
+Buttons/Sync: synchronisar
 
 Tooltips/BackupsEnabled: Copias de securitate activate - clicca pro disactivar
 Tooltips/ConvertWiki: Converter formato de wiki
@@ -30,6 +31,8 @@ Tooltips/SetBackupDir: Definir directorio de copias de securitate personalisate
 Tooltips/RenameGroup: Renominar gruppo
 Tooltips/DeleteGroup: Deler gruppo (wikis se movera a Sin gruppo)
 Tooltips/SetBackupCount: Definir numero maxime de copias a retener (0 = illimitate)
+Tooltips/SyncEnabled: Synchronisation LAN activate - clic pro disactivar
+Tooltips/SyncDisabled: Synchronisation LAN disactivate - clic pro activar
 
 Labels/BackupFolder: Dossier de copias de securitate:
 Labels/BackupCount: Limite de copias:
@@ -65,3 +68,25 @@ EditionSelector/AdditionalPlugins: Plugins additional
 EditionSelector/Optional: (optional)
 EditionSelector/CreatingFile: Creante file wiki...
 EditionSelector/InitializingFolder: Initialisante dossier wiki...
+
+LanSync/Title: Synchronisation LAN
+LanSync/Start: Initiar synchronisation LAN
+LanSync/Stop: Arrestar synchronisation LAN
+LanSync/DeviceName: Iste dispositivo:
+LanSync/Pairing: Appariamento de dispositivos
+LanSync/PinLabel: Entra iste PIN in le altere dispositivo:
+LanSync/ShowPin: Appariar nove dispositivo
+LanSync/HidePairingCode: Celar
+LanSync/PairedDevices: Dispositivos appariate
+LanSync/NoPairedDevices: Nulle dispositivos appariate. Clicca "Appariar nove dispositivo" pro connecter un altere dispositivo.
+LanSync/Unpair: Disappariar
+LanSync/Connected: Connectite
+LanSync/Disconnected: Fora de linea
+LanSync/DiscoveredDevices: Dispositivos in vostre rete
+LanSync/PinPlaceholder: PIN
+LanSync/Pair: Appariar
+LanSync/AvailableWikis: Disponibile ab dispositivos
+LanSync/NoRemoteWikis: Nulle nove wikis disponibile ab dispositivos connectite.
+LanSync/From: ab
+LanSync/GetWiki: Obtener wiki
+LanSync/LinkWiki: Ligar

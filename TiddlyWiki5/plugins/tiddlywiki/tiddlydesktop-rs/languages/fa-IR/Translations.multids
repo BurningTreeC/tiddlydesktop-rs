@@ -18,6 +18,7 @@ Buttons/CreateWikiFolder: ایجاد پوشه ویکی
 Buttons/ToFile: به فایل
 Buttons/ToFolder: به پوشه
 Buttons/Reauthorize: Re-authorize
+Buttons/Sync: همگام‌سازی
 
 Tooltips/BackupsEnabled: پشتیبان‌گیری فعال است - برای غیرفعال کردن کلیک کنید
 Tooltips/ConvertWiki: تبدیل فرمت ویکی
@@ -30,6 +31,8 @@ Tooltips/SetBackupDir: تنظیم پوشه پشتیبان سفارشی
 Tooltips/RenameGroup: تغییر نام گروه
 Tooltips/DeleteGroup: حذف گروه (ویکی‌ها به بدون گروه منتقل می‌شوند)
 Tooltips/SetBackupCount: تنظیم حداکثر تعداد پشتیبان‌ها (0 = نامحدود)
+Tooltips/SyncEnabled: همگام‌سازی شبکه محلی فعال است - برای غیرفعال کردن کلیک کنید
+Tooltips/SyncDisabled: همگام‌سازی شبکه محلی غیرفعال است - برای فعال کردن کلیک کنید
 
 Labels/BackupFolder: پوشه پشتیبان:
 Labels/BackupCount: محدودیت پشتیبان:
@@ -65,3 +68,25 @@ EditionSelector/AdditionalPlugins: افزونه‌های اضافی
 EditionSelector/Optional: (اختیاری)
 EditionSelector/CreatingFile: در حال ایجاد فایل ویکی...
 EditionSelector/InitializingFolder: در حال آماده‌سازی پوشه ویکی...
+
+LanSync/Title: همگام‌سازی شبکه محلی
+LanSync/Start: شروع همگام‌سازی شبکه محلی
+LanSync/Stop: توقف همگام‌سازی شبکه محلی
+LanSync/DeviceName: این دستگاه:
+LanSync/Pairing: جفت‌سازی دستگاه
+LanSync/PinLabel: این پین را در دستگاه دیگر وارد کنید:
+LanSync/ShowPin: جفت‌سازی دستگاه جدید
+LanSync/HidePairingCode: پنهان
+LanSync/PairedDevices: دستگاه‌های جفت‌شده
+LanSync/NoPairedDevices: دستگاه جفت‌شده‌ای وجود ندارد. روی "جفت‌سازی دستگاه جدید" کلیک کنید تا دستگاه دیگری متصل شود.
+LanSync/Unpair: لغو جفت‌سازی
+LanSync/Connected: متصل
+LanSync/Disconnected: آفلاین
+LanSync/DiscoveredDevices: دستگاه‌ها در شبکه
+LanSync/PinPlaceholder: PIN
+LanSync/Pair: جفت‌سازی
+LanSync/AvailableWikis: موجود از دستگاه‌ها
+LanSync/NoRemoteWikis: ویکی جدیدی از دستگاه‌های متصل موجود نیست.
+LanSync/From: از
+LanSync/GetWiki: دریافت ویکی
+LanSync/LinkWiki: پیوند

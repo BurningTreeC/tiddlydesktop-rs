@@ -1,5 +1,5 @@
 // TiddlyDesktop Initialization Script - Media Enhancement Module
-// Handles: Plyr video/audio player, PDF.js renderer, extra media type registration, video poster extraction
+// Handles: native video/audio styling, PDF.js renderer, extra media type registration, video poster extraction
 
 (function(TD) {
     'use strict';
@@ -51,26 +51,17 @@
     }
 
     // ---- Section 0: Early CSS Injection ----
-    // Inject Plyr CSS and video-hiding styles immediately (before body exists).
+    // Inject media controls CSS immediately (before body exists).
     // WebKitGTK doesn't load CSS from custom URI schemes via <link> tags,
-    // so we inline it like we do for Plyr JS.
+    // so we inline it.
     (function() {
         var head = document.head || document.documentElement;
-        // Plyr CSS (inlined from init_script.rs)
-        if (window.__PLYR_CSS__) {
+        if (window.__MEDIA_CONTROLS_CSS__) {
             var style = document.createElement('style');
-            style.id = 'td-plyr-css';
-            style.textContent = window.__PLYR_CSS__;
+            style.id = 'td-media-controls-css';
+            style.textContent = window.__MEDIA_CONTROLS_CSS__;
             head.appendChild(style);
         }
-        // Video-hiding CSS: prevent flash of native controls before Plyr takes over
-        // (same pattern as Android's WikiHttpServer injection)
-        // Also ensure videos/Plyr containers fit within their parent container
-        // (e.g. when transcluded into a smaller div)
-        var hideStyle = document.createElement('style');
-        hideStyle.id = 'td-plyr-hide-styles';
-        hideStyle.textContent = 'video:not(.plyr__video-wrapper video){opacity:0!important;max-height:0!important;overflow:hidden!important;}audio{max-width:100%;box-sizing:border-box;}.plyr{width:100%;height:100%;}.plyr__video-wrapper{width:100%!important;height:100%!important;padding-bottom:0!important;will-change:transform;background:#000;}.plyr video{opacity:1!important;width:100%!important;height:100%!important;object-fit:contain!important;-webkit-transform:translateZ(0);transform:translateZ(0);-webkit-backface-visibility:hidden;backface-visibility:hidden;}.plyr--compact .plyr__control--overlaid{padding:10px!important;}.plyr--compact .plyr__control--overlaid svg{width:18px!important;height:18px!important;}.plyr--compact .plyr__time--duration,.plyr--compact [data-plyr="settings"],.plyr--compact .plyr__volume{display:none!important;}.plyr--compact .plyr__controls{padding:2px 5px!important;}.plyr--compact .plyr__control{padding:3px!important;}.plyr--compact .plyr__control svg{width:14px!important;height:14px!important;}.plyr--compact .plyr__progress__container{margin-left:4px!important;}.plyr--tiny .plyr__time,.plyr--tiny [data-plyr="fullscreen"]{display:none!important;}.plyr--tiny .plyr__control--overlaid{padding:6px!important;}.plyr--tiny .plyr__control--overlaid svg{width:14px!important;height:14px!important;}.plyr--tiny .plyr__control svg{width:12px!important;height:12px!important;}';
-        head.appendChild(hideStyle);
     })();
 
     // ---- Section 1: Dynamic Library Loading ----
@@ -83,56 +74,7 @@
         document.head.appendChild(s);
     }
 
-    function loadCSS(href) {
-        var l = document.createElement('link');
-        l.rel = 'stylesheet';
-        l.href = href;
-        document.head.appendChild(l);
-    }
-
-    var plyrLoaded = false;
     var pdfjsLoaded = false;
-
-    // Inject Plyr SVG sprite into DOM so inline icon references (#plyr-play etc.) work
-    function injectPlyrSvg() {
-        if (document.getElementById('td-plyr-sprite')) return;
-        var svgContent = window.__PLYR_SVG_SPRITE__;
-        if (!svgContent) return;
-        // Strip XML declaration and DOCTYPE, keep only the <svg> element
-        svgContent = svgContent.replace(/<\?xml[^?]*\?>/, '').replace(/<!DOCTYPE[^>]*>/, '');
-        // Add hidden style and ID to the outer <svg>
-        svgContent = svgContent.replace('<svg ', '<svg id="td-plyr-sprite" style="display:none;position:absolute;width:0;height:0;" ');
-        if (document.body) {
-            document.body.insertAdjacentHTML('afterbegin', svgContent);
-        }
-    }
-
-    function ensurePlyr(cb) {
-        // Plyr JS is included inline in the initialization script, so it should
-        // be available immediately. Fall back to dynamic loading for folder wikis.
-        if (plyrLoaded || typeof Plyr !== 'undefined') {
-            plyrLoaded = true;
-            console.log('[TD-Plyr] Plyr available');
-            if (cb) cb();
-            return;
-        }
-        // CSS is injected inline via Section 0 above. Load Plyr CSS dynamically
-        // only if inline injection didn't happen (shouldn't occur in practice).
-        if (!document.getElementById('td-plyr-css') && !document.querySelector('link[href*="plyr.css"]')) {
-            loadCSS(TD_LIB_BASE + 'plyr/dist/plyr.css');
-        }
-        // Dynamic fallback (e.g. folder wikis where init script might differ)
-        console.log('[TD-Plyr] Loading Plyr dynamically from:', TD_LIB_BASE + 'plyr/dist/plyr.min.js');
-        loadScript(TD_LIB_BASE + 'plyr/dist/plyr.min.js', function() {
-            if (typeof Plyr !== 'undefined') {
-                plyrLoaded = true;
-                console.log('[TD-Plyr] Plyr loaded (dynamic)');
-                if (cb) cb();
-            } else {
-                console.error('[TD-Plyr] Failed to load Plyr');
-            }
-        });
-    }
 
     // On wikifile:// origins (desktop single-file wikis), WebKitGTK blocks
     // cross-scheme fetch to tdlib://. Route through wikifile://'s __tdlib__
@@ -199,15 +141,16 @@
 
     // ---- Section 1b: Source Readiness Check ----
     // External attachments start with raw relative paths (e.g. "video.mp4") that
-    // filesystem.js later converts to tdasset:// or HTTP URLs. Plyr must not initialize
-    // until the src is valid, otherwise it captures the broken URL.
+    // filesystem.js later converts to tdasset:// or HTTP URLs. Media enhancement must not
+    // initialize until the src is valid, otherwise it captures the broken URL.
     function hasPendingSrcTransform(el) {
+        // Check prototype intercept pending status first — element may have no
+        // src attribute yet because the intercept prevented the original setAttribute
+        if (el.__tdMediaPending) return true;
         var src = el.getAttribute('src') || '';
         if (!src) return false;
         // Already a valid protocol — no conversion needed
         if (/^(data:|tdasset:|https?:|blob:|tdlib:)/.test(src)) return false;
-        // Element is waiting for async media server registration
-        if (el.__tdMediaPending) return true;
 
         // src needs conversion — try to do it ourselves using filesystem.js's path resolver
         var TD = window.TiddlyDesktop;
@@ -227,60 +170,26 @@
         return true; // Still pending — resolver not ready yet
     }
 
-    // ---- Section 2: Plyr Video Enhancement ----
+    // ---- Section 2: Video Enhancement ----
 
     function applyPoster(el, posterUrl) {
         el.setAttribute('poster', posterUrl);
-        var plyrContainer = el.closest('.plyr');
-        if (plyrContainer) {
-            var posterDiv = plyrContainer.querySelector('.plyr__poster');
-            if (posterDiv) {
-                posterDiv.style.backgroundImage = 'url(' + posterUrl + ')';
-                posterDiv.removeAttribute('hidden');
-            }
-        }
-        if (el.plyr) el.plyr.poster = posterUrl;
     }
-
-    // Add compact/tiny classes based on Plyr container's rendered size.
-    // Actual sizing is CSS-only: .plyr fills parent, object-fit:contain on video.
-    function fitPlyrToParent(video) {
-        var plyrEl = video.closest('.plyr');
-        if (!plyrEl) return;
-        plyrEl.classList.remove('plyr--compact', 'plyr--tiny');
-        var w = plyrEl.clientWidth, h = plyrEl.clientHeight;
-        if (w < 350 || h < 250) {
-            plyrEl.classList.add('plyr--compact');
-        }
-        if (w < 200 || h < 150) {
-            plyrEl.classList.add('plyr--tiny');
-        }
-    }
-
-    var plyrOpts = {
-        controls: ['play-large','play','progress','current-time','duration','mute','volume','settings','fullscreen'],
-        settings: ['speed'],
-        speed: { selected: 1, options: [0.5, 0.75, 1, 1.25, 1.5, 2] },
-        iconUrl: '',
-        blankVideo: ''
-    };
 
     function enhanceVideo(el) {
-        if (el.__tdPlyrDone) return;
-
-        if (typeof Plyr === 'undefined') return;
+        if (el.__tdMediaDone) return;
 
         // Wait for filesystem.js to convert relative src to tdasset://
         if (hasPendingSrcTransform(el)) {
-            if (!el.__tdPlyrRetry) el.__tdPlyrRetry = 0;
-            el.__tdPlyrRetry++;
-            if (el.__tdPlyrRetry < 100) { // Up to 10s
+            if (!el.__tdMediaRetry) el.__tdMediaRetry = 0;
+            el.__tdMediaRetry++;
+            if (el.__tdMediaRetry < 100) { // Up to 10s
                 setTimeout(function() { enhanceVideo(el); }, 100);
             }
             return;
         }
 
-        el.__tdPlyrDone = true;
+        el.__tdMediaDone = true;
 
         // Small delay to ensure DOM is settled
         setTimeout(function() {
@@ -289,45 +198,26 @@
 
             var videoSrc = el.src || (el.querySelector('source') ? el.querySelector('source').src : null);
 
-            // On desktop, allow full preloading so GStreamer buffers aggressively.
-            // This prevents flicker after seeking — with "metadata" only the moov atom
-            // is fetched, leaving GStreamer with an empty buffer after each seek.
-            // "auto" tells the browser to download as much as possible ahead of playback.
-            el.setAttribute('preload', 'auto');
+            // Start with "metadata" — downloads just the moov atom (~50-100KB),
+            // enabling duration display and fast play start without downloading
+            // the full video. Critical for galleries with many videos.
+            // Upgrade to "auto" once playback starts so GStreamer buffers
+            // aggressively (prevents flicker after seeking on Linux).
+            el.setAttribute('preload', 'metadata');
+            el.addEventListener('playing', function onPlay() {
+                el.removeEventListener('playing', onPlay);
+                el.setAttribute('preload', 'auto');
+            });
 
-            try {
-                new Plyr(el, plyrOpts);
-                // Plyr dispatches CustomEvent({type:'error', bubbles:true}) on its wrapper
-                // when the video source fails. Stop these from bubbling to TW's error handler.
-                var plyrWrap = el.closest('.plyr');
-                if (plyrWrap) {
-                    plyrWrap.addEventListener('error', function(e) {
-                        if (e instanceof CustomEvent) e.stopPropagation();
-                    });
+            // Fix GStreamer replay flicker on Linux: after playback ends,
+            // re-load the video source so the pipeline is flushed cleanly.
+            el.addEventListener('ended', function() {
+                var src = el.currentSrc || el.src;
+                if (src) {
+                    el.src = src;
+                    el.load();
                 }
-
-                // Fit Plyr within parent constraints (respects both width + height)
-                if (el.videoWidth && el.videoHeight) {
-                    requestAnimationFrame(function() { fitPlyrToParent(el); });
-                } else {
-                    el.addEventListener('loadedmetadata', function() {
-                        requestAnimationFrame(function() { fitPlyrToParent(el); });
-                    }, { once: true });
-                }
-
-                // Fix GStreamer replay flicker on Linux: after playback ends,
-                // re-load the video source so the pipeline is flushed cleanly.
-                el.addEventListener('ended', function() {
-                    var src = el.currentSrc || el.src;
-                    if (src) {
-                        el.src = src;
-                        el.load();
-                    }
-                });
-
-} catch(err) {
-                console.error('[TD-Plyr] Error:', err && err.message ? err.message : err);
-            }
+            });
 
             // Queue poster extraction via ffmpeg
             if (videoSrc) {
@@ -341,44 +231,7 @@
         }, 50);
     }
 
-    // ---- Section 3: Plyr Audio Enhancement ----
-
-    function enhanceAudio(el) {
-        if (el.__tdPlyrDone) return;
-
-        if (typeof Plyr === 'undefined') return;
-
-        // Wait for filesystem.js to convert relative src to tdasset://
-        if (hasPendingSrcTransform(el)) {
-            if (!el.__tdPlyrRetry) el.__tdPlyrRetry = 0;
-            el.__tdPlyrRetry++;
-            if (el.__tdPlyrRetry < 100) { // Up to 10s
-                setTimeout(function() { enhanceAudio(el); }, 100);
-            }
-            return;
-        }
-
-        el.__tdPlyrDone = true;
-
-        try {
-            new Plyr(el, {
-                controls: ['play','progress','current-time','duration','mute','volume','settings'],
-                settings: ['speed'],
-                speed: { selected: 1, options: [0.5, 0.75, 1, 1.25, 1.5, 2] },
-                iconUrl: ''
-            });
-            var plyrWrap = el.closest('.plyr');
-            if (plyrWrap) {
-                plyrWrap.addEventListener('error', function(e) {
-                    if (e instanceof CustomEvent) e.stopPropagation();
-                });
-            }
-        } catch(err) {
-            console.error('[TD-Plyr] Audio error:', err && err.message ? err.message : err);
-        }
-    }
-
-    // ---- Section 4: PDF.js Renderer ----
+    // ---- Section 3: PDF.js Renderer ----
 
     function getPdfSrc(el) {
         var tag = el.tagName.toLowerCase();
@@ -451,6 +304,8 @@
         var pdfDoc = null;
         var pageCanvases = [];
         var pageInfo = toolbar.querySelector('.td-pdf-pageinfo');
+        var userZoomed = false; // Track manual zoom vs auto-fit
+        var lastContainerWidth = 0; // Track external width changes
 
         function renderPage(num, canvas) {
             pdfDoc.getPage(num).then(function(page) {
@@ -480,6 +335,8 @@
                 requestAnimationFrame(function() { fitWidth(); });
                 return;
             }
+            userZoomed = false;
+            lastContainerWidth = w;
             pdfDoc.getPage(1).then(function(page) {
                 var vp = page.getViewport({ scale: 1 });
                 var containerWidth = w - 16;
@@ -524,13 +381,25 @@
 
             fitWidth();
 
-            // Re-fit when container resizes (sidebar toggle, window resize,
-            // tiddler becoming visible after being hidden/collapsed)
+            // Re-fit when container width changes externally (sidebar toggle,
+            // window resize, tiddler becoming visible). Skip if user has
+            // manually zoomed — only fitWidth resets this flag.
             if (typeof ResizeObserver !== 'undefined') {
                 var resizeTimer;
                 new ResizeObserver(function() {
-                    clearTimeout(resizeTimer);
-                    resizeTimer = setTimeout(fitWidth, 100);
+                    var w = pagesWrap.clientWidth;
+                    if (w > 0 && w !== lastContainerWidth) {
+                        lastContainerWidth = w;
+                        if (!userZoomed) {
+                            clearTimeout(resizeTimer);
+                            resizeTimer = setTimeout(fitWidth, 100);
+                        } else {
+                            // Container width changed but user zoomed — re-render
+                            // at current scale without resetting zoom
+                            clearTimeout(resizeTimer);
+                            resizeTimer = setTimeout(renderAll, 100);
+                        }
+                    }
                 }).observe(container);
             }
 
@@ -555,15 +424,15 @@
             var btn = e.target.closest('[data-action]');
             if (!btn) return;
             var action = btn.getAttribute('data-action');
-            if (action === 'zoomin') { scale = Math.min(scale * 1.25, 5); renderAll(); }
-            else if (action === 'zoomout') { scale = Math.max(scale / 1.25, 0.5); renderAll(); }
+            if (action === 'zoomin') { userZoomed = true; scale = Math.min(scale * 1.25, 5); renderAll(); }
+            else if (action === 'zoomout') { userZoomed = true; scale = Math.max(scale / 1.25, 0.5); renderAll(); }
             else if (action === 'fitwidth') { fitWidth(); }
             else if (action === 'prev') { pagesWrap.scrollBy(0, -pagesWrap.clientHeight * 0.8); }
             else if (action === 'next') { pagesWrap.scrollBy(0, pagesWrap.clientHeight * 0.8); }
         });
     }
 
-    // ---- Section 5: Video Poster Extraction (via ffmpeg) ----
+    // ---- Section 4: Video Poster Extraction (via ffmpeg) ----
 
     function resolveVideoPath(src) {
         // HTTP media server URLs: look up filesystem path via token map
@@ -599,7 +468,7 @@
                 done();
             })
             .catch(function(err) {
-                console.warn('[TD-Plyr] Poster extraction failed:', err);
+                console.warn('[TD-Media] Poster extraction failed:', err);
                 done();
             });
     }
@@ -612,7 +481,7 @@
         videoQueue.push(work);
         if (!videoQueueRunning) {
             videoQueueRunning = true;
-            setTimeout(drainVideoQueue, 2000);
+            setTimeout(drainVideoQueue, 500);
         }
     }
 
@@ -623,7 +492,7 @@
         task(function() { drainVideoQueue(); });
     }
 
-    // ---- Section 6: Extra Audio/Video Type Registration ----
+    // ---- Section 5: Extra Audio/Video Type Registration ----
 
     function registerExtraMediaTypes() {
         if (typeof $tw === 'undefined' || !$tw.Wiki || !$tw.Wiki.parsers || !$tw.utils || !$tw.utils.registerFileType) {
@@ -650,7 +519,7 @@
                 tag: "audio",
                 attributes: {
                     controls: {type: "string", value: "controls"},
-                    preload: {type: "string", value: "auto"},
+                    preload: {type: "string", value: "metadata"},
                     style: {type: "string", value: "width: 100%; object-fit: contain"}
                 }
             };
@@ -671,7 +540,7 @@
                 tag: "video",
                 attributes: {
                     controls: {type: "string", value: "controls"},
-                    preload: {type: "string", value: "auto"},
+                    preload: {type: "string", value: "metadata"},
                     style: {type: "string", value: "width: 100%; object-fit: contain"}
                 }
             };
@@ -720,13 +589,10 @@
         console.log('[TD-Media] Extra media types registered');
     }
 
-    // ---- Section 7: MutationObserver + Scan ----
+    // ---- Section 6: MutationObserver + Scan ----
 
     function scanAll() {
-        if (plyrLoaded && typeof Plyr !== 'undefined') {
-            document.querySelectorAll('video').forEach(function(el) { enhanceVideo(el); });
-            document.querySelectorAll('audio').forEach(function(el) { enhanceAudio(el); });
-        }
+        document.querySelectorAll('video').forEach(function(el) { enhanceVideo(el); });
         if (pdfjsLoaded && typeof pdfjsLib !== 'undefined') {
             document.querySelectorAll('embed, object, iframe').forEach(function(el) {
                 if (getPdfSrc(el)) replacePdfElement(el);
@@ -746,19 +612,14 @@
                 m.addedNodes.forEach(function(node) {
                     if (node.nodeType !== 1) return;
                     var tag = node.tagName ? node.tagName.toLowerCase() : '';
-                    if (tag === 'video' && plyrLoaded) {
+                    if (tag === 'video') {
                         enhanceVideo(node);
-                    } else if (tag === 'audio' && plyrLoaded) {
-                        enhanceAudio(node);
                     } else if ((tag === 'embed' || tag === 'object' || tag === 'iframe') && pdfjsLoaded) {
                         if (getPdfSrc(node)) replacePdfElement(node);
                     }
                     if (tag === 'iframe') fixExternalIframe(node);
                     if (node.querySelectorAll) {
-                        if (plyrLoaded) {
-                            node.querySelectorAll('video').forEach(function(el) { enhanceVideo(el); });
-                            node.querySelectorAll('audio').forEach(function(el) { enhanceAudio(el); });
-                        }
+                        node.querySelectorAll('video').forEach(function(el) { enhanceVideo(el); });
                         if (pdfjsLoaded) {
                             node.querySelectorAll('embed, object, iframe').forEach(function(el) {
                                 if (getPdfSrc(el)) replacePdfElement(el);
@@ -773,7 +634,7 @@
         obs.observe(document.body, { childList: true, subtree: true });
     }
 
-    // ---- Section 8: Init ----
+    // ---- Section 7: Init ----
 
     function init() {
         if (!document.body) {
@@ -781,12 +642,10 @@
             return;
         }
 
-        injectPlyrSvg();
         setupObserver();
 
-        ensurePlyr(function() {
-            scanAll();
-        });
+        // Scan for existing video elements
+        scanAll();
 
         ensurePdfJs(function() {
             scanAll();

@@ -1,7 +1,7 @@
 title: $:/plugins/tiddlywiki/tiddlydesktop-rs/WikiList
 
 \define render-wiki-item()
-<$let path={{!!path}} displayPath={{!!display_path}} filename={{!!filename}} favicon={{!!favicon}} isFolder={{!!is_folder}} backupsEnabled={{!!backups_enabled}} backupDir={{!!backup_dir}} backupDirDisplay={{!!backup_dir_display}} backupCount={{!!backup_count}} wikiGroup={{!!group}} needsReauth={{!!needs_reauth}}>
+<$let path={{!!path}} displayPath={{!!display_path}} filename={{!!filename}} favicon={{!!favicon}} isFolder={{!!is_folder}} backupsEnabled={{!!backups_enabled}} backupDir={{!!backup_dir}} backupDirDisplay={{!!backup_dir_display}} backupCount={{!!backup_count}} wikiGroup={{!!group}} syncEnabled={{!!sync_enabled}} syncId={{!!sync_id}} needsReauth={{!!needs_reauth}}>
 <div class={{{ [<needsReauth>match[yes]then[td-wikilist-item td-needs-reauth]else[td-wikilist-item]] }}}>
 <div class="td-wikilist-thumbnail">
 <$button class="tc-btn-invisible">
@@ -115,6 +115,21 @@ title: $:/plugins/tiddlywiki/tiddlydesktop-rs/WikiList
 </div>
 </$reveal>
 </$let>
+<!-- LAN Sync toggle (only shown when LAN sync is running) -->
+<$list filter="[{$:/temp/tiddlydesktop-rs/lan-sync-running}match[yes]]" variable="ignore">
+<$list filter="[<syncEnabled>match[true]]" variable="ignore">
+<$button class="tc-btn-invisible td-button td-button-sync td-sync-on" tooltip=<<td-lingo Tooltips/SyncEnabled>>>
+<$action-sendmessage $message="tm-tiddlydesktop-rs-set-wiki-sync" path=<<path>> enabled="false"/>
+{{$:/core/images/done-button}} <<td-lingo Buttons/Sync>>
+</$button>
+</$list>
+<$list filter="[<syncEnabled>!match[true]]" variable="ignore">
+<$button class="tc-btn-invisible td-button td-button-sync td-sync-off" tooltip=<<td-lingo Tooltips/SyncDisabled>>>
+<$action-sendmessage $message="tm-tiddlydesktop-rs-set-wiki-sync" path=<<path>> enabled="true"/>
+{{$:/core/images/close-button}} <<td-lingo Buttons/Sync>>
+</$button>
+</$list>
+</$list>
 </div>
 <$list filter="[<isFolder>!match[true]]" variable="ignore">
 <div class="td-wiki-backup-dir">
@@ -468,3 +483,164 @@ title: $:/plugins/tiddlywiki/tiddlydesktop-rs/WikiList
 </div>
 </div>
 </$reveal>
+
+<!-- ── LAN Sync Panel (persistent at bottom) ──────────────────────── -->
+<div class="td-sync-panel">
+
+<div class="td-sync-header">
+<h2><<td-lingo LanSync/Title>></h2>
+<div class="td-sync-toggle">
+<$list filter="[{$:/temp/tiddlydesktop-rs/lan-sync-running}match[yes]]" variable="ignore">
+<$button class="tc-btn-invisible td-button td-button-danger">
+<$action-sendmessage $message="tm-tiddlydesktop-rs-lan-sync-stop"/>
+<<td-lingo LanSync/Stop>>
+</$button>
+</$list>
+<$list filter="[{$:/temp/tiddlydesktop-rs/lan-sync-running}!match[yes]]" variable="ignore">
+<$button class="tc-btn-invisible td-button td-button-primary">
+<$action-sendmessage $message="tm-tiddlydesktop-rs-lan-sync-start"/>
+<<td-lingo LanSync/Start>>
+</$button>
+</$list>
+</div>
+</div>
+
+<!-- Device Identity -->
+<div class="td-sync-section">
+<div class="td-sync-info-row">
+<span class="td-sync-label"><<td-lingo LanSync/DeviceName>></span>
+<span class="td-sync-value"><$text text={{$:/temp/tiddlydesktop-rs/lan-sync-device-name}}/></span>
+</div>
+</div>
+
+<!-- Pairing & Devices (only when running) -->
+<$list filter="[{$:/temp/tiddlydesktop-rs/lan-sync-running}match[yes]]" variable="ignore">
+
+<!-- Pairing -->
+<div class="td-sync-section">
+<h3><<td-lingo LanSync/Pairing>></h3>
+<$list filter="[{$:/temp/tiddlydesktop-rs/lan-sync-pin}!is[blank]]" variable="pin">
+<div class="td-sync-pin-display">
+<div class="td-sync-pin-label"><<td-lingo LanSync/PinLabel>></div>
+<div class="td-sync-pin-code"><$text text=<<pin>>/></div>
+<$button class="tc-btn-invisible td-button">
+<$action-sendmessage $message="tm-tiddlydesktop-rs-lan-sync-cancel-pairing"/>
+<<td-lingo LanSync/HidePairingCode>>
+</$button>
+</div>
+</$list>
+<$list filter="[{$:/temp/tiddlydesktop-rs/lan-sync-pin}is[blank]]" variable="ignore">
+<div class="td-sync-pairing-actions">
+<$button class="tc-btn-invisible td-button td-button-primary">
+<$action-sendmessage $message="tm-tiddlydesktop-rs-lan-sync-show-pin"/>
+<<td-lingo LanSync/ShowPin>>
+</$button>
+</div>
+</$list>
+
+<!-- Discovered devices on the LAN -->
+<$list filter="[prefix[$:/temp/tiddlydesktop-rs/discovered-peers/]limit[1]]" variable="ignore">
+<div class="td-sync-discovered">
+<h4><<td-lingo LanSync/DiscoveredDevices>></h4>
+<$list filter="[prefix[$:/temp/tiddlydesktop-rs/discovered-peers/]]">
+<$let discDeviceId={{!!device_id}} discDeviceName={{!!device_name}} pinInputTiddler={{{ [<currentTiddler>addprefix[$:/temp/pin-input/]] }}}>
+<div class="td-sync-discovered-device">
+<div class="td-sync-discovered-info">
+<span class="td-sync-discovered-name"><$text text=<<discDeviceName>>/> <span class="td-sync-fingerprint">(<$text text={{{ [<discDeviceId>split[]first[8]join[]] }}}/>)</span></span>
+</div>
+<div class="td-sync-discovered-pair">
+<$keyboard key="enter" actions="""<$action-sendmessage $message="tm-tiddlydesktop-rs-lan-sync-pair" deviceId=<<discDeviceId>> pin={{{ [<pinInputTiddler>get[text]] }}}/><$action-deletetiddler $tiddler=<<pinInputTiddler>>/>""">
+<$edit-text tiddler=<<pinInputTiddler>> tag="input" placeholder=<<td-lingo LanSync/PinPlaceholder>> class="td-sync-pin-input" inputMode="numeric"/>
+</$keyboard>
+<$button class="tc-btn-invisible td-button td-button-primary td-button-small">
+<$action-sendmessage $message="tm-tiddlydesktop-rs-lan-sync-pair" deviceId=<<discDeviceId>> pin={{{ [<pinInputTiddler>get[text]] }}}/>
+<$action-deletetiddler $tiddler=<<pinInputTiddler>>/>
+<<td-lingo LanSync/Pair>>
+</$button>
+</div>
+</div>
+</$let>
+</$list>
+</div>
+</$list>
+
+</div>
+
+<!-- Paired Devices -->
+<div class="td-sync-section">
+<h3><<td-lingo LanSync/PairedDevices>></h3>
+<$list filter="[{$:/temp/tiddlydesktop-rs/lan-sync-paired-devices}match[yes]]" variable="ignore">
+<$list filter="[list[$:/temp/tiddlydesktop-rs/lan-sync-paired-devices-list]]">
+<div class={{{ [{!!is_connected}match[true]then[td-sync-device td-sync-device-connected]else[td-sync-device]] }}}>
+<div class="td-sync-device-info">
+<div class="td-sync-device-name"><$text text={{!!device_name}}/> <span class="td-sync-fingerprint">(<$text text={{{ [{!!device_id}split[]first[8]join[]] }}}/>)</span></div>
+<div class="td-sync-device-status">
+<$list filter="[{!!is_connected}match[true]]" variable="ignore">
+<span class="td-sync-status-dot td-sync-connected"></span> <<td-lingo LanSync/Connected>>
+</$list>
+<$list filter="[{!!is_connected}!match[true]]" variable="ignore">
+<span class="td-sync-status-dot td-sync-disconnected"></span> <<td-lingo LanSync/Disconnected>>
+</$list>
+</div>
+</div>
+<div class="td-sync-device-actions">
+<$button class="tc-btn-invisible td-button td-button-small">
+<$action-sendmessage $message="tm-tiddlydesktop-rs-unpair-device" deviceId={{!!device_id}}/>
+<<td-lingo LanSync/Unpair>>
+</$button>
+</div>
+</div>
+</$list>
+</$list>
+<$list filter="[{$:/temp/tiddlydesktop-rs/lan-sync-paired-devices}!match[yes]]" variable="ignore">
+<div class="td-sync-empty"><<td-lingo LanSync/NoPairedDevices>></div>
+</$list>
+</div>
+
+<!-- Available Wikis from Peers -->
+<div class="td-sync-section">
+<h3><<td-lingo LanSync/AvailableWikis>></h3>
+<$list filter="[prefix[$:/temp/tiddlydesktop-rs/remote-wikis/]limit[1]]" emptyMessage="""<div class="td-sync-empty"><<td-lingo LanSync/NoRemoteWikis>></div>""" variable="ignore">
+<$list filter="[prefix[$:/temp/tiddlydesktop-rs/remote-wikis/]]">
+<$let remoteWikiId={{!!wiki_id}} remoteWikiName={{!!wiki_name}} remoteIsFolder={{!!is_folder}} remoteFromDevice={{!!from_device_name}} remoteFromDeviceId={{!!from_device_id}}>
+<div class="td-sync-remote-wiki">
+<div class="td-sync-remote-wiki-info">
+<div class="td-sync-remote-wiki-name">
+<$list filter="[<remoteIsFolder>match[true]]" variable="ignore">{{$:/core/images/folder}}</$list>
+<$list filter="[<remoteIsFolder>!match[true]]" variable="ignore">{{$:/core/images/file}}</$list>
+<$text text=<<remoteWikiName>>/>
+</div>
+<div class="td-sync-remote-wiki-from"><<td-lingo LanSync/From>> <$text text=<<remoteFromDevice>>/></div>
+</div>
+<div class="td-sync-remote-wiki-actions">
+<$button class="tc-btn-invisible td-button td-button-primary td-button-small">
+<$action-sendmessage $message="tm-tiddlydesktop-rs-request-wiki" wikiId=<<remoteWikiId>> fromDeviceId=<<remoteFromDeviceId>> wikiName=<<remoteWikiName>>/>
+{{$:/core/images/download-button}} <<td-lingo LanSync/GetWiki>>
+</$button>
+<$let linkPopupState=<<qualify "$:/state/link-wiki-popup">>>
+<$button popup=<<linkPopupState>> class="tc-btn-invisible td-button td-button-small">
+<$action-sendmessage $message="tm-tiddlydesktop-rs-prepare-link-wiki"/>
+{{$:/core/images/link}} <<td-lingo LanSync/LinkWiki>>
+</$button>
+<$reveal state=<<linkPopupState>> type="popup" position="below" animate="yes" class="tc-drop-down td-link-wiki-dropdown tc-popup-keep">
+<div class="td-link-wiki-dropdown-content">
+<$list filter="[prefix[$:/temp/tiddlydesktop-rs/link-candidate/]sort[title]]" emptyMessage="<div class='td-link-wiki-empty'>No unsynced wikis available</div>">
+<$button class="tc-btn-invisible td-link-wiki-option">
+<$action-sendmessage $message="tm-tiddlydesktop-rs-do-link-wiki" wikiId=<<remoteWikiId>> path={{!!candidate-path}}/>
+<$action-deletetiddler $tiddler=<<linkPopupState>>/>
+<$text text={{!!text}}/>
+</$button>
+</$list>
+</div>
+</$reveal>
+</$let>
+</div>
+</div>
+</$let>
+</$list>
+</$list>
+</div>
+
+</$list>
+
+</div>

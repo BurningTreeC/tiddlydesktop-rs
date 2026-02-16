@@ -18,6 +18,7 @@ Buttons/CreateWikiFolder: Wiki-map maken
 Buttons/ToFile: naar bestand
 Buttons/ToFolder: naar map
 Buttons/Reauthorize: Re-authorize
+Buttons/Sync: synchroniseren
 
 Tooltips/BackupsEnabled: Back-ups ingeschakeld - klik om uit te schakelen
 Tooltips/ConvertWiki: Wiki-formaat converteren
@@ -30,6 +31,8 @@ Tooltips/SetBackupDir: Aangepaste back-upmap instellen
 Tooltips/RenameGroup: Groep hernoemen
 Tooltips/DeleteGroup: Groep verwijderen (wiki's worden verplaatst naar Niet-gegroepeerd)
 Tooltips/SetBackupCount: Maximaal aantal te bewaren back-ups instellen (0 = onbeperkt)
+Tooltips/SyncEnabled: LAN-synchronisatie ingeschakeld - klik om uit te schakelen
+Tooltips/SyncDisabled: LAN-synchronisatie uitgeschakeld - klik om in te schakelen
 
 Labels/BackupFolder: Back-upmap:
 Labels/BackupCount: Back-uplimiet:
@@ -65,3 +68,25 @@ EditionSelector/AdditionalPlugins: Extra plugins
 EditionSelector/Optional: (optioneel)
 EditionSelector/CreatingFile: Wiki-bestand wordt gemaakt...
 EditionSelector/InitializingFolder: Wiki-map wordt geïnitialiseerd...
+
+LanSync/Title: LAN-synchronisatie
+LanSync/Start: LAN-synchronisatie starten
+LanSync/Stop: LAN-synchronisatie stoppen
+LanSync/DeviceName: Dit apparaat:
+LanSync/Pairing: Apparaatkoppeling
+LanSync/PinLabel: Voer deze PIN in op het andere apparaat:
+LanSync/ShowPin: Nieuw apparaat koppelen
+LanSync/HidePairingCode: Verbergen
+LanSync/PairedDevices: Gekoppelde apparaten
+LanSync/NoPairedDevices: Geen gekoppelde apparaten. Klik op "Nieuw apparaat koppelen" om een ander apparaat te verbinden.
+LanSync/Unpair: Ontkoppelen
+LanSync/Connected: Verbonden
+LanSync/Disconnected: Offline
+LanSync/DiscoveredDevices: Apparaten op uw netwerk
+LanSync/PinPlaceholder: PIN
+LanSync/Pair: Koppelen
+LanSync/AvailableWikis: Beschikbaar van apparaten
+LanSync/NoRemoteWikis: Geen nieuwe wiki's beschikbaar van verbonden apparaten.
+LanSync/From: van
+LanSync/GetWiki: Wiki ophalen
+LanSync/LinkWiki: Koppelen

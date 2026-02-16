@@ -78,6 +78,23 @@ class WikiActivity : AppCompatActivity() {
         const val EXTRA_FOLDER_LOCAL_PATH = "folder_local_path"  // Local filesystem path for SAF folder wikis
         private const val TAG = "WikiActivity"
 
+        // 1x1 transparent GIF (43 bytes) — served as placeholder during boot to prevent
+        // heavy SAF I/O from blocking TiddlyWiki startup. MutationObserver replaces with
+        // real images via attachment ports after onPageFinished.
+        private val TRANSPARENT_GIF = byteArrayOf(
+            0x47, 0x49, 0x46, 0x38, 0x39, 0x61,  // GIF89a
+            0x01, 0x00, 0x01, 0x00,                // 1x1
+            0x80.toByte(), 0x00, 0x00,             // GCT flag
+            0x00, 0x00, 0x00,                       // color 0: black (transparent)
+            0x00, 0x00, 0x00,                       // color 1: black
+            0x21, 0xF9.toByte(), 0x04, 0x01,       // GCE: dispose, transparent
+            0x00, 0x00, 0x00, 0x00,                 // delay=0, transparent idx=0
+            0x2C, 0x00, 0x00, 0x00, 0x00,          // image descriptor
+            0x01, 0x00, 0x01, 0x00, 0x00,          // 1x1, no LCT
+            0x02, 0x02, 0x44, 0x01, 0x00,          // LZW min=2, block
+            0x3B                                    // trailer
+        )
+
         init {
             // Load the native library for JNI calls
             try {
@@ -412,6 +429,20 @@ class WikiActivity : AppCompatActivity() {
     private var authOverlayContainer: FrameLayout? = null
     private var authWebView: WebView? = null
 
+    // Watchdog: ensures main process (LAN sync) stays alive while wiki is open.
+    // The main process can be killed by Android's memory management even when
+    // LanSyncService is running as a foreground service (OEM battery optimizations).
+    // This watchdog detects the death and restarts the main process.
+    private val mainProcessWatchdog = Handler(Looper.getMainLooper())
+    private val mainProcessCheckRunnable = object : Runnable {
+        override fun run() {
+            if (!isDestroyed && !isFinishing) {
+                checkMainProcessAlive()
+                mainProcessWatchdog.postDelayed(this, 250L)
+            }
+        }
+    }
+
 
     /**
      * JavaScript interface for receiving palette color updates from TiddlyWiki.
@@ -544,7 +575,7 @@ class WikiActivity : AppCompatActivity() {
 
         /**
          * Exit video fullscreen (onShowCustomView/onHideCustomView).
-         * Called from the exitFullscreen stub when Plyr or other players
+         * Called from the exitFullscreen stub when video players
          * request exiting fullscreen via the Fullscreen API.
          */
         @JavascriptInterface
@@ -558,12 +589,23 @@ class WikiActivity : AppCompatActivity() {
         }
 
         /**
-         * Get the current attachment server URL.
-         * Used by JavaScript to dynamically resolve attachment URLs after server restart.
+         * Get the current attachment server URL (for folder wikis — single port).
          */
         @JavascriptInterface
         fun getAttachmentServerUrl(): String {
-            return if (httpServer != null) "http://127.0.0.1:${httpServer!!.port}" else ""
+            if (httpServer == null) return ""
+            return "http://127.0.0.1:${httpServer!!.port}"
+        }
+
+        /**
+         * Get the attachment port list as comma-separated string.
+         * JS hashes the URL to pick a port, distributing requests across ports.
+         * With 5 attachment ports + 1 main port = 36 concurrent connections.
+         */
+        @JavascriptInterface
+        fun getAttachmentPorts(): String {
+            if (httpServer == null) return ""
+            return httpServer!!.attachmentPorts.joinToString(",")
         }
     }
 
@@ -980,117 +1022,6 @@ class WikiActivity : AppCompatActivity() {
             }
         }
 
-        /**
-         * Generate thumbnail sprite + VTT for a video.
-         * Returns VTT text with embedded sprite data URL, or empty string on failure.
-         * Results are cached to disk.
-         */
-        @JavascriptInterface
-        fun getThumbnails(relativePath: String): String {
-            return try {
-                val thumbsDir = File(applicationContext.filesDir, "posters")
-                if (!thumbsDir.exists()) thumbsDir.mkdirs()
-
-                val pathHash = md5Hash(relativePath)
-                val cacheFile = File(thumbsDir, "${pathHash}_vtt.txt")
-
-                // Check disk cache
-                if (cacheFile.exists() && cacheFile.length() > 0) {
-                    Log.d(TAG, "Thumbnail VTT cache hit: $relativePath")
-                    return cacheFile.readText()
-                }
-
-                val uri = resolveRelativePath(relativePath) ?: run {
-                    Log.w(TAG, "Thumbnails: could not resolve path: $relativePath")
-                    return ""
-                }
-
-                val retriever = MediaMetadataRetriever()
-                try {
-                    contentResolver.openFileDescriptor(uri, "r")?.use { pfd ->
-                        retriever.setDataSource(pfd.fileDescriptor)
-                    } ?: return ""
-
-                    val durationStr = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION) ?: return ""
-                    val durationMs = durationStr.toLongOrNull() ?: return ""
-                    val durationSec = durationMs / 1000.0
-                    if (durationSec < 2.0) return ""
-
-                    val thumbWidth = 160
-                    val thumbHeight = 90
-                    val maxThumbs = 60
-                    val interval = maxOf(5.0, durationSec / maxThumbs)
-
-                    // Calculate timestamps
-                    val timestamps = mutableListOf<Double>()
-                    var t = 0.0
-                    while (t < durationSec) {
-                        timestamps.add(t)
-                        t += interval
-                    }
-                    if (timestamps.isEmpty()) return ""
-
-                    Log.d(TAG, "Generating ${timestamps.size} thumbnails for ${durationSec.toInt()}s video: $relativePath")
-
-                    // Extract frames and create sprite sheet
-                    val spriteWidth = thumbWidth * timestamps.size
-                    val sprite = Bitmap.createBitmap(spriteWidth, thumbHeight, Bitmap.Config.RGB_565)
-                    val canvas = android.graphics.Canvas(sprite)
-
-                    for ((i, ts) in timestamps.withIndex()) {
-                        val frame = retriever.getFrameAtTime(
-                            (ts * 1_000_000).toLong(),
-                            MediaMetadataRetriever.OPTION_CLOSEST_SYNC
-                        )
-                        if (frame != null) {
-                            val scaled = Bitmap.createScaledBitmap(frame, thumbWidth, thumbHeight, true)
-                            canvas.drawBitmap(scaled, (i * thumbWidth).toFloat(), 0f, null)
-                            if (scaled !== frame) scaled.recycle()
-                            frame.recycle()
-                        }
-                    }
-
-                    // Encode sprite as JPEG
-                    val baos = java.io.ByteArrayOutputStream()
-                    sprite.compress(Bitmap.CompressFormat.JPEG, 70, baos)
-                    sprite.recycle()
-                    val spriteB64 = Base64.encodeToString(baos.toByteArray(), Base64.NO_WRAP)
-                    val spriteUrl = "data:image/jpeg;base64,$spriteB64"
-
-                    // Generate VTT
-                    val vtt = StringBuilder("WEBVTT\n\n")
-                    for (i in timestamps.indices) {
-                        val startTime = timestamps[i]
-                        val endTime = if (i + 1 < timestamps.size) timestamps[i + 1] else durationSec
-                        vtt.append(formatVttTime(startTime))
-                        vtt.append(" --> ")
-                        vtt.append(formatVttTime(endTime))
-                        vtt.append("\n")
-                        vtt.append(spriteUrl)
-                        vtt.append("#xywh=${i * thumbWidth},0,$thumbWidth,$thumbHeight\n\n")
-                    }
-
-                    val vttText = vtt.toString()
-                    cacheFile.writeText(vttText)
-                    Log.d(TAG, "Thumbnails generated: $relativePath (${timestamps.size} frames)")
-                    vttText
-                } finally {
-                    retriever.release()
-                }
-            } catch (e: Exception) {
-                Log.e(TAG, "Thumbnail generation failed: $relativePath: ${e.message}")
-                ""
-            }
-        }
-
-        private fun formatVttTime(seconds: Double): String {
-            val h = (seconds / 3600).toInt()
-            val m = ((seconds % 3600) / 60).toInt()
-            val s = (seconds % 60).toInt()
-            val ms = ((seconds % 1) * 1000).toInt()
-            return "%02d:%02d:%02d.%03d".format(h, m, s, ms)
-        }
-
         private fun resolveRelativePath(relativePath: String): Uri? {
             val parentDoc = if (treeUri != null) {
                 DocumentFile.fromTreeUri(this@WikiActivity, treeUri!!)
@@ -1462,14 +1393,14 @@ class WikiActivity : AppCompatActivity() {
 
     private fun showShareFormatDialog(title: String, fieldsJson: String, renderedHtml: String, plainText: String) {
         val formats = arrayOf(
-            "Image",
-            "Plain Text",
-            "JSON (.json)",
-            "TID (.tid)",
-            "CSV (.csv)"
+            getString(R.string.share_image),
+            getString(R.string.share_plain_text),
+            getString(R.string.share_json),
+            getString(R.string.share_tid),
+            getString(R.string.share_csv)
         )
         AlertDialog.Builder(this)
-            .setTitle("Share as\u2026")
+            .setTitle(getString(R.string.share_title))
             .setItems(formats) { _, which ->
                 when (which) {
                     0 -> shareAsImage(title)
@@ -1479,7 +1410,7 @@ class WikiActivity : AppCompatActivity() {
                     4 -> shareAsFile(title, generateCsv(fieldsJson), "csv", "text/csv")
                 }
             }
-            .setNegativeButton("Cancel", null)
+            .setNegativeButton(getString(R.string.btn_cancel), null)
             .show()
     }
 
@@ -1521,6 +1452,28 @@ class WikiActivity : AppCompatActivity() {
                     // forces proper margin rendering.
                     var wrapper = document.createElement('div');
                     wrapper.style.cssText = 'overflow:hidden;background:#ffffff;padding:8px;width:' + bodyEl.offsetWidth + 'px;';
+
+                    // Embed document stylesheets into the wrapper so html-to-image's
+                    // SVG foreignObject has access to all CSS rules (pseudo-elements,
+                    // CSS custom properties, complex selectors, etc.) that per-element
+                    // getComputedStyle inlining may miss.
+                    try {
+                        var cssText = '';
+                        for (var si = 0; si < document.styleSheets.length; si++) {
+                            try {
+                                var rules = document.styleSheets[si].cssRules;
+                                for (var ri = 0; ri < rules.length; ri++) {
+                                    cssText += rules[ri].cssText + '\n';
+                                }
+                            } catch(e) { /* cross-origin stylesheet */ }
+                        }
+                        if (cssText) {
+                            var styleEl = document.createElement('style');
+                            styleEl.textContent = cssText;
+                            wrapper.appendChild(styleEl);
+                        }
+                    } catch(e) {}
+
                     var clone = bodyEl.cloneNode(true);
                     clone.style.margin = '0';
                     wrapper.appendChild(clone);
@@ -1532,6 +1485,49 @@ class WikiActivity : AppCompatActivity() {
                         var d = document.createElement('div');
                         d.style.cssText = 'width:' + w + 'px;height:' + h + 'px;background:#e8e8e8;display:block;';
                         return d;
+                    }
+
+                    // --- Preserve margins/padding on block-level children ---
+                    // html-to-image renders DOM in SVG foreignObject where margin
+                    // collapsing behaves differently. Inline the computed margins
+                    // and paddings on direct block-level children so spacing after
+                    // tags (before images, audio, etc.) is preserved.
+                    function fixBlockSpacing() {
+                        var origChildren = bodyEl.children;
+                        var cloneChildren = clone.children;
+                        for (var bi = 0; bi < origChildren.length && bi < cloneChildren.length; bi++) {
+                            var ocs = window.getComputedStyle(origChildren[bi]);
+                            var display = ocs.display;
+                            if (display === 'block' || display === 'flex' || display === 'grid' ||
+                                display === 'list-item' || display === 'flow-root') {
+                                cloneChildren[bi].style.marginTop = ocs.marginTop;
+                                cloneChildren[bi].style.marginBottom = ocs.marginBottom;
+                                cloneChildren[bi].style.paddingTop = ocs.paddingTop;
+                                cloneChildren[bi].style.paddingBottom = ocs.paddingBottom;
+                            }
+                        }
+                    }
+
+                    // --- Fix inline element layout for SVG foreignObject ---
+                    // html-to-image renders the DOM inside an SVG foreignObject where
+                    // inline-block/inline-flex elements (buttons, tags, pills) lose
+                    // their computed dimensions and wrap text or overlap. Pre-inlining
+                    // explicit widths and white-space on these elements fixes the layout.
+                    function fixLayout() {
+                        var origAll = bodyEl.querySelectorAll('*');
+                        var cloneAll = clone.querySelectorAll('*');
+                        for (var i = 0; i < origAll.length && i < cloneAll.length; i++) {
+                            var orig = origAll[i];
+                            var cl = cloneAll[i];
+                            var cs = window.getComputedStyle(orig);
+                            var display = cs.display;
+                            if (display === 'inline-block' || display === 'inline-flex' ||
+                                display === 'inline-grid' || orig.tagName === 'BUTTON') {
+                                cl.style.minWidth = orig.offsetWidth + 'px';
+                                cl.style.minHeight = orig.offsetHeight + 'px';
+                                if (cs.whiteSpace === 'normal') cl.style.whiteSpace = 'nowrap';
+                            }
+                        }
                     }
 
                     // --- Pre-inline <img> elements using already-loaded pixel data ---
@@ -1621,99 +1617,73 @@ class WikiActivity : AppCompatActivity() {
                         }
                     }
 
-                    // --- Handle Plyr video/audio, raw <video>, and iframes ---
+                    // --- Handle <video>, <audio>, and iframes ---
                     // Show poster images only, no player chrome. Returns a Promise.
                     function cleanupMedia() {
-                        // Hide all Plyr controls and big-play overlays
-                        clone.querySelectorAll('.plyr__controls, .plyr__control--overlaid').forEach(function(el) {
-                            el.style.display = 'none';
-                        });
-
-                        // Plyr video: hide the <video> wrapper, replace with poster <img>
-                        var origPlyrs = bodyEl.querySelectorAll('.plyr--video');
-                        var clonePlyrs = clone.querySelectorAll('.plyr--video');
-                        for (var i = 0; i < origPlyrs.length && i < clonePlyrs.length; i++) {
-                            var posterUrl = null;
-                            var origPosterDiv = origPlyrs[i].querySelector('.plyr__poster');
-                            if (origPosterDiv) {
-                                try {
-                                    var bg = window.getComputedStyle(origPosterDiv).backgroundImage;
-                                    var m = bg.match(/url\(["']?(.*?)["']?\)/);
-                                    if (m && m[1] && m[1] !== 'none') posterUrl = m[1];
-                                } catch(e) {}
-                            }
-                            if (!posterUrl) {
-                                var origVideo = origPlyrs[i].querySelector('video');
-                                if (origVideo && origVideo.poster) posterUrl = origVideo.poster;
-                            }
-                            if (!posterUrl) {
-                                var origVideo = origPlyrs[i].querySelector('video');
-                                if (origVideo && origVideo.readyState >= 2 && origVideo.videoWidth > 0) {
-                                    try {
-                                        var vc = document.createElement('canvas');
-                                        vc.width = origVideo.videoWidth;
-                                        vc.height = origVideo.videoHeight;
-                                        vc.getContext('2d').drawImage(origVideo, 0, 0);
-                                        posterUrl = vc.toDataURL();
-                                    } catch(e) {}
-                                }
-                            }
-
-                            // In clone: hide video wrapper + poster div
-                            var cVW = clonePlyrs[i].querySelector('.plyr__video-wrapper');
-                            if (cVW) cVW.style.display = 'none';
-                            var cPD = clonePlyrs[i].querySelector('.plyr__poster');
-                            if (cPD) cPD.style.display = 'none';
-
-                            clonePlyrs[i].style.position = 'relative';
-                            clonePlyrs[i].style.overflow = 'hidden';
-                            if (posterUrl) {
-                                var pImg = document.createElement('img');
-                                pImg.src = posterUrl;
-                                pImg.style.cssText = 'width:100%;height:100%;object-fit:contain;position:absolute;top:0;left:0;';
-                                clonePlyrs[i].insertBefore(pImg, clonePlyrs[i].firstChild);
-                            } else {
-                                // No poster available — gray placeholder
-                                var ph = placeholder(origPlyrs[i].offsetWidth || 320, origPlyrs[i].offsetHeight || 180);
-                                ph.style.position = 'absolute';
-                                ph.style.top = '0';
-                                ph.style.left = '0';
-                                clonePlyrs[i].insertBefore(ph, clonePlyrs[i].firstChild);
-                            }
-                        }
-
-                        // Raw <video> not wrapped by Plyr: replace with poster / frame / placeholder
+                        // Replace <video> elements with poster / frame / placeholder
                         var origVideos = bodyEl.querySelectorAll('video');
                         var cloneVideos = clone.querySelectorAll('video');
+                        var posterPromises = [];
                         for (var i = 0; i < origVideos.length && i < cloneVideos.length; i++) {
-                            if (cloneVideos[i].closest('.plyr')) continue;
                             var ov = origVideos[i];
                             var cv = cloneVideos[i];
                             if (!cv.parentNode) continue;
-                            var vSrc = ov.poster || '';
-                            if (!vSrc && ov.readyState >= 2 && ov.videoWidth > 0) {
+                            var posterUrl = ov.poster || '';
+                            if (!posterUrl && ov.readyState >= 2 && ov.videoWidth > 0) {
                                 try {
-                                    var vc2 = document.createElement('canvas');
-                                    vc2.width = ov.videoWidth;
-                                    vc2.height = ov.videoHeight;
-                                    vc2.getContext('2d').drawImage(ov, 0, 0);
-                                    vSrc = vc2.toDataURL();
+                                    var vc = document.createElement('canvas');
+                                    vc.width = ov.videoWidth;
+                                    vc.height = ov.videoHeight;
+                                    vc.getContext('2d').drawImage(ov, 0, 0);
+                                    posterUrl = vc.toDataURL();
                                 } catch(e) {}
                             }
-                            if (vSrc) {
+                            if (posterUrl) {
                                 var vImg = document.createElement('img');
-                                vImg.src = vSrc;
-                                vImg.style.cssText = 'width:' + ov.offsetWidth + 'px;height:' + ov.offsetHeight + 'px;object-fit:contain;display:block;';
+                                vImg.style.cssText = 'width:' + (ov.offsetWidth || 320) + 'px;height:' + (ov.offsetHeight || 180) + 'px;object-fit:contain;display:block;';
+                                if (posterUrl.indexOf('data:') === 0) {
+                                    vImg.src = posterUrl;
+                                } else {
+                                    (function(img, url) {
+                                        posterPromises.push(new Promise(function(resolve) {
+                                            var ti = new Image();
+                                            ti.crossOrigin = 'anonymous';
+                                            var done = false;
+                                            ti.onload = function() {
+                                                if (done) return; done = true;
+                                                try {
+                                                    var tc = document.createElement('canvas');
+                                                    tc.width = ti.naturalWidth;
+                                                    tc.height = ti.naturalHeight;
+                                                    tc.getContext('2d').drawImage(ti, 0, 0);
+                                                    img.src = tc.toDataURL('image/jpeg', 0.9);
+                                                } catch(e) {
+                                                    img.src = url;
+                                                }
+                                                resolve();
+                                            };
+                                            ti.onerror = function() {
+                                                if (done) return; done = true;
+                                                img.src = url;
+                                                resolve();
+                                            };
+                                            setTimeout(function() {
+                                                if (done) return; done = true;
+                                                img.src = url;
+                                                resolve();
+                                            }, 5000);
+                                            ti.src = url;
+                                        }));
+                                    })(vImg, posterUrl);
+                                }
                                 cv.parentNode.replaceChild(vImg, cv);
                             } else {
                                 cv.parentNode.replaceChild(placeholder(ov.offsetWidth || 320, ov.offsetHeight || 180), cv);
                             }
                         }
 
-                        // Audio players have no visual content — hide entirely
-                        clone.querySelectorAll('.plyr--audio').forEach(function(el) {
-                            el.style.display = 'none';
-                        });
+                        // Audio: hide the <audio> element to prevent html-to-image errors
+                        clone.querySelectorAll('audio').forEach(function(a) { a.style.display = 'none'; });
 
                         // Replace cross-origin iframes with thumbnails / placeholders.
                         // html-to-image cannot serialise cross-origin iframes and throws
@@ -1771,7 +1741,7 @@ class WikiActivity : AppCompatActivity() {
                                 }
                             })(origIframes[ii], cloneIframes[ii]);
                         }
-                        return Promise.all(iframePromises);
+                        return Promise.all(iframePromises.concat(posterPromises));
                     }
 
                     var captureOpts = {
@@ -1782,6 +1752,9 @@ class WikiActivity : AppCompatActivity() {
                         filter: function(node) {
                             try {
                                 if (!(node instanceof HTMLElement)) return true;
+                                // Always include <style> — they have display:none by default
+                                // but are needed for CSS rules in SVG foreignObject
+                                if (node.tagName === 'STYLE') return true;
                                 if (node.hidden || node.getAttribute('hidden') === 'true' || node.getAttribute('hidden') === '') return false;
                                 var style = window.getComputedStyle(node);
                                 if (style.display === 'none' || style.visibility === 'hidden') return false;
@@ -1792,6 +1765,8 @@ class WikiActivity : AppCompatActivity() {
                             } catch(e) { return true; }
                         }
                     };
+                    fixBlockSpacing();
+                    fixLayout();
                     inlineImages().then(function() {
                         convertCanvases();
                         return cleanupMedia();
@@ -1953,6 +1928,146 @@ class WikiActivity : AppCompatActivity() {
             Thread {
                 updateRecentWikisExternalAttachments(applicationContext, path, enabled)
             }.start()
+        }
+    }
+
+    inner class SyncInterface {
+        private fun bridgePort(): Int {
+            try {
+                val dataDir = applicationContext.dataDir
+                val portFile = java.io.File(dataDir, "sync_bridge_port")
+                if (portFile.exists()) {
+                    return portFile.readText().trim().toIntOrNull() ?: 0
+                }
+            } catch (_: Exception) {}
+            return 0
+        }
+
+        @JavascriptInterface
+        fun getBridgePort(): Int = bridgePort()
+
+        @JavascriptInterface
+        fun getSyncId(wikiPath: String): String {
+            val port = bridgePort()
+            if (port <= 0) return ""
+            return try {
+                val url = java.net.URL("http://127.0.0.1:$port/_bridge/sync-id?path=${java.net.URLEncoder.encode(wikiPath, "UTF-8")}")
+                val conn = url.openConnection() as java.net.HttpURLConnection
+                conn.connectTimeout = 2000
+                conn.readTimeout = 2000
+                val body = conn.inputStream.bufferedReader().readText()
+                conn.disconnect()
+                org.json.JSONObject(body).optString("sync_id", "")
+            } catch (_: Exception) { "" }
+        }
+
+        @JavascriptInterface
+        fun tiddlerChanged(wikiId: String, title: String, tiddlerJson: String) {
+            Thread {
+                bridgePost("/_bridge/tiddler-changed", org.json.JSONObject().apply {
+                    put("wiki_id", wikiId)
+                    put("title", title)
+                    put("tiddler_json", tiddlerJson)
+                })
+            }.start()
+        }
+
+        @JavascriptInterface
+        fun tiddlerDeleted(wikiId: String, title: String) {
+            Thread {
+                bridgePost("/_bridge/tiddler-deleted", org.json.JSONObject().apply {
+                    put("wiki_id", wikiId)
+                    put("title", title)
+                })
+            }.start()
+        }
+
+        @JavascriptInterface
+        fun wikiOpened(wikiId: String) {
+            Thread {
+                bridgePost("/_bridge/wiki-opened", org.json.JSONObject().apply {
+                    put("wiki_id", wikiId)
+                })
+            }.start()
+        }
+
+        @JavascriptInterface
+        fun sendFullSyncBatch(wikiId: String, toDeviceId: String, tiddlersJson: String, isLastBatch: Boolean) {
+            android.util.Log.i("TiddlyDesktopSync", "sendFullSyncBatch called: tiddlersJson.length=${tiddlersJson.length}, isLastBatch=$isLastBatch, toDeviceId=$toDeviceId")
+            Thread {
+                try {
+                    val payload = org.json.JSONObject().apply {
+                        put("wiki_id", wikiId)
+                        put("to_device_id", toDeviceId)
+                        put("tiddlers", org.json.JSONArray(tiddlersJson))
+                        put("is_last_batch", isLastBatch)
+                    }
+                    android.util.Log.i("TiddlyDesktopSync", "sendFullSyncBatch: payload.toString().length=${payload.toString().length}")
+                    bridgePost("/_bridge/full-sync-batch", payload)
+                    android.util.Log.i("TiddlyDesktopSync", "sendFullSyncBatch: bridgePost completed")
+                } catch (e: Exception) {
+                    android.util.Log.e("TiddlyDesktopSync", "sendFullSyncBatch thread error: ${e.message}", e)
+                }
+            }.start()
+        }
+
+        @JavascriptInterface
+        fun sendFingerprints(wikiId: String, toDeviceId: String, fingerprintsJson: String) {
+            Thread {
+                bridgePost("/_bridge/send-fingerprints", org.json.JSONObject().apply {
+                    put("wiki_id", wikiId)
+                    put("to_device_id", toDeviceId)
+                    put("fingerprints", org.json.JSONArray(fingerprintsJson))
+                })
+            }.start()
+        }
+
+        @JavascriptInterface
+        fun broadcastFingerprints(wikiId: String, fingerprintsJson: String) {
+            Thread {
+                bridgePost("/_bridge/broadcast-fingerprints", org.json.JSONObject().apply {
+                    put("wiki_id", wikiId)
+                    put("fingerprints", org.json.JSONArray(fingerprintsJson))
+                })
+            }.start()
+        }
+
+        @JavascriptInterface
+        fun pollChanges(wikiId: String): String {
+            val port = bridgePort()
+            if (port <= 0) return "[]"
+            return try {
+                val url = java.net.URL("http://127.0.0.1:$port/_bridge/poll?wiki_id=${java.net.URLEncoder.encode(wikiId, "UTF-8")}")
+                val conn = url.openConnection() as java.net.HttpURLConnection
+                conn.connectTimeout = 1000
+                conn.readTimeout = 1000
+                val body = conn.inputStream.bufferedReader().readText()
+                conn.disconnect()
+                body
+            } catch (_: Exception) { "[]" }
+        }
+
+        private fun bridgePost(endpoint: String, payload: org.json.JSONObject) {
+            val port = bridgePort()
+            if (port <= 0) return
+            try {
+                val url = java.net.URL("http://127.0.0.1:$port$endpoint")
+                val conn = url.openConnection() as java.net.HttpURLConnection
+                conn.requestMethod = "POST"
+                conn.setRequestProperty("Content-Type", "application/json")
+                conn.doOutput = true
+                conn.connectTimeout = 30000
+                conn.readTimeout = 30000
+                val body = payload.toString()
+                conn.outputStream.bufferedWriter().use { it.write(body) }
+                val code = conn.responseCode
+                if (code != 200) {
+                    android.util.Log.e("TiddlyDesktopSync", "bridgePost $endpoint: HTTP $code (body ${body.length} bytes)")
+                }
+                conn.disconnect()
+            } catch (e: Exception) {
+                android.util.Log.e("TiddlyDesktopSync", "bridgePost $endpoint failed: ${e.message} (payload ${payload.toString().length} bytes)")
+            }
         }
     }
 
@@ -2509,6 +2624,9 @@ class WikiActivity : AppCompatActivity() {
             Log.e(TAG, "Failed to start foreground service: ${e.message}")
         }
 
+        // Notify LAN sync service (main process) that a wiki is open
+        LanSyncService.notifyWikiOpened(applicationContext)
+
         if (wikiPath.isNullOrEmpty()) {
             Log.e(TAG, "No wiki path provided!")
             finish()
@@ -2584,20 +2702,21 @@ class WikiActivity : AppCompatActivity() {
                 finish()
                 return
             }
-            // For single-file wikis, the wiki server also serves attachments
-            attachmentServerUrl = wikiUrl
+            // For single-file wikis, use attachment ports for media/files.
+            // JS distributes requests across ports via getAttachmentPorts() interface.
+            // Fallback URL uses the first attachment port.
+            attachmentServerUrl = "http://127.0.0.1:${httpServer!!.attachmentPorts[0]}"
             Log.d(TAG, "Single-file wiki using local server at: $wikiUrl")
 
             // Acquire WakeLock to keep server alive when app is in background
             acquireWakeLock()
         }
 
-        // Handle tm-open-window: append tiddler title as URL fragment for navigation
+        // Handle widget navigation: append tiddler title as URL fragment for navigation
         val tiddlerTitle = intent.getStringExtra(EXTRA_TIDDLER_TITLE)
         if (!tiddlerTitle.isNullOrEmpty()) {
-            wikiUrl = "$wikiUrl#${URLEncoder.encode(tiddlerTitle, "UTF-8")}"
-            isChildWindow = true  // Mark as child window so back button returns to parent
-            Log.d(TAG, "Navigating to tiddler: $tiddlerTitle (child window)")
+            wikiUrl = "$wikiUrl#${Uri.encode(tiddlerTitle)}"
+            Log.d(TAG, "Navigating to tiddler: $tiddlerTitle")
         }
 
         Log.d(TAG, "Wiki opened: path=$wikiPath, url=$wikiUrl, taskId=$taskId")
@@ -2766,6 +2885,9 @@ class WikiActivity : AppCompatActivity() {
 
             // Add JavaScript interface for persisting wiki config
             addJavascriptInterface(ConfigInterface(), "TiddlyDesktopConfig")
+
+            // Add JavaScript interface for LAN sync bridge
+            addJavascriptInterface(SyncInterface(), "TiddlyDesktopSync")
 
         }
 
@@ -3037,15 +3159,41 @@ class WikiActivity : AppCompatActivity() {
                 // This preserves the original _canonical_uri (relative path) in the tiddler
                 // while displaying images via the local attachment server
 
-                // Get the attachment base URL dynamically.
-                // For single-file wikis: use location.origin (always the current server).
-                // For folder wikis: use the Kotlin attachment server URL via JS interface.
-                // Using dynamic resolution means URLs survive server restarts.
-                function getAttachmentBaseUrl() {
-                    if (window.__IS_FOLDER_WIKI__) {
-                        return window.TiddlyDesktopServer.getAttachmentServerUrl();
+                // Attachment port pool — distributes requests across multiple ports.
+                // Chromium limits 6 connections per host:port; with N attachment ports
+                // we get 6*N concurrent attachment connections that don't compete with
+                // wiki HTML loading on the main port.
+                var __attachmentPorts = null;
+                function _getAttachmentPorts() {
+                    if (__attachmentPorts) return __attachmentPorts;
+                    try {
+                        var csv = window.TiddlyDesktopServer.getAttachmentPorts();
+                        if (csv) __attachmentPorts = csv.split(',');
+                    } catch(e) {}
+                    return __attachmentPorts;
+                }
+                // Simple string hash → port index (deterministic: same URL always
+                // maps to same port for connection reuse / keep-alive).
+                function _hashUrl(url) {
+                    var h = 0;
+                    for (var i = 0; i < url.length; i++) {
+                        h = ((h << 5) - h + url.charCodeAt(i)) | 0;
                     }
-                    return location.origin;
+                    return h < 0 ? -h : h;
+                }
+                function getAttachmentBaseUrl(url) {
+                    // Folder wikis: single attachment server
+                    if (window.__IS_FOLDER_WIKI__) {
+                        try { return window.TiddlyDesktopServer.getAttachmentServerUrl(); } catch(e) {}
+                        return window.__TD_ATTACHMENT_SERVER_URL__ || location.origin;
+                    }
+                    // Single-file wikis: distribute across attachment ports
+                    var ports = _getAttachmentPorts();
+                    if (ports && ports.length > 0) {
+                        var idx = url ? _hashUrl(url) % ports.length : 0;
+                        return 'http://127.0.0.1:' + ports[idx];
+                    }
+                    return window.__TD_ATTACHMENT_SERVER_URL__ || location.origin;
                 }
 
                 function transformUrl(url) {
@@ -3054,7 +3202,7 @@ class WikiActivity : AppCompatActivity() {
                     if (url.startsWith('data:') || url.startsWith('blob:')) {
                         return url;
                     }
-                    var baseUrl = getAttachmentBaseUrl();
+                    var baseUrl = getAttachmentBaseUrl(url);
                     // For folder wikis: transform Node.js server URLs to use Kotlin attachment server
                     // This is needed because Node.js TiddlyWiki server may not support range requests
                     // for video seeking/thumbnail generation
@@ -3629,7 +3777,7 @@ class WikiActivity : AppCompatActivity() {
                             tag: "audio",
                             attributes: {
                                 controls: {type: "string", value: "controls"},
-                                preload: {type: "string", value: "auto"},
+                                preload: {type: "string", value: "metadata"},
                                 style: {type: "string", value: "width: 100%; object-fit: contain"}
                             }
                         };
@@ -3882,7 +4030,7 @@ class WikiActivity : AppCompatActivity() {
 
                     var xhr = new XMLHttpRequest();
                     xhr.timeout = 60000;
-                    xhr.open('PUT', '$wikiUrl', true);
+                    xhr.open('PUT', window.location.origin, true);
                     xhr.setRequestHeader('Content-Type', 'text/html;charset=UTF-8');
 
                     xhr.onload = function() {
@@ -4092,7 +4240,7 @@ class WikiActivity : AppCompatActivity() {
                         console.log('[TiddlyDesktop] webkitRequestFullscreen blocked (handled natively)');
                     };
                 }
-                // Stub exitFullscreen to exit video fullscreen (Plyr etc.) via Kotlin,
+                // Stub exitFullscreen to exit video fullscreen via Kotlin,
                 // while also preventing TiddlyWiki's toggle logic from erroring
                 if (document.exitFullscreen) {
                     document.exitFullscreen = function() {
@@ -4363,80 +4511,31 @@ class WikiActivity : AppCompatActivity() {
                             }).observe(srcDocument.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['src', 'data'] });
                         }
 
-                        // Inject media enhancement (Plyr + PDF.js) into the overlay iframe
+                        // Inject media enhancement (PDF.js + poster extraction) into the overlay iframe
                         (function(iDoc, iWin) {
                             var TD = '/_td/';
-                            // Plyr CSS
-                            var plyrCss = iDoc.createElement('link');
-                            plyrCss.rel = 'stylesheet'; plyrCss.href = TD + 'plyr/dist/plyr.css';
-                            iDoc.head.appendChild(plyrCss);
-                            // Hide raw videos until Plyr loads
-                            var hideStyle = iDoc.createElement('style');
-                            hideStyle.textContent = 'video:not(.plyr__video-wrapper video){opacity:0!important;max-height:0!important;overflow:hidden!important}audio{max-width:100%;box-sizing:border-box;}.plyr{width:100%;height:100%;}.plyr__video-wrapper{width:100%!important;height:100%!important;padding-bottom:0!important;background:#000;}.plyr video{opacity:1!important;width:100%!important;height:100%!important;object-fit:contain!important;}.plyr--compact .plyr__control--overlaid{padding:10px!important;}.plyr--compact .plyr__control--overlaid svg{width:18px!important;height:18px!important;}.plyr--compact .plyr__time--duration,.plyr--compact [data-plyr="settings"],.plyr--compact .plyr__volume{display:none!important;}.plyr--compact .plyr__controls{padding:2px 5px!important;}.plyr--compact .plyr__control{padding:3px!important;}.plyr--compact .plyr__control svg{width:14px!important;height:14px!important;}.plyr--compact .plyr__progress__container{margin-left:4px!important;}.plyr--tiny .plyr__time,.plyr--tiny [data-plyr="fullscreen"]{display:none!important;}.plyr--tiny .plyr__control--overlaid{padding:6px!important;}.plyr--tiny .plyr__control--overlaid svg{width:14px!important;height:14px!important;}.plyr--tiny .plyr__control svg{width:12px!important;height:12px!important;}';
-                            iDoc.head.appendChild(hideStyle);
+                            // Media controls CSS
+                            var mediaStyle = iDoc.createElement('style');
+                            mediaStyle.textContent = 'video{max-width:100%;height:auto;object-fit:contain;border-radius:4px;background:#000}audio{max-width:100%;width:100%;box-sizing:border-box}video::-webkit-media-controls-play-button,video::-webkit-media-controls-mute-button,video::-webkit-media-controls-fullscreen-button,video::-webkit-media-controls-overflow-button,video::-webkit-media-controls-timeline,video::-webkit-media-controls-volume-slider,video::-webkit-media-controls-overlay-play-button,audio::-webkit-media-controls-play-button,audio::-webkit-media-controls-mute-button,audio::-webkit-media-controls-timeline,audio::-webkit-media-controls-volume-slider,audio::-webkit-media-controls-overflow-button{cursor:pointer}video::-webkit-media-controls-overlay-play-button{display:flex;align-items:center;justify-content:center}';
+                            iDoc.head.appendChild(mediaStyle);
                             // PDF viewer styles
                             var pdfStyle = iDoc.createElement('style');
                             pdfStyle.textContent = '.td-pdf-btn{background:#555;color:#fff;border:none;border-radius:3px;padding:4px 10px;font-size:14px;cursor:pointer;min-width:32px}.td-pdf-btn:active{background:#777}.td-pdf-page-wrap{display:flex;justify-content:center;padding:8px 0}.td-pdf-page-wrap canvas{background:#fff;box-shadow:0 2px 8px rgba(0,0,0,.3);display:block;max-width:none}';
                             iDoc.head.appendChild(pdfStyle);
 
-                            var plyrOpts = {
-                                controls: ['play-large','play','progress','current-time','duration','mute','volume','settings','fullscreen'],
-                                settings: ['speed'],
-                                speed: { selected: 1, options: [0.5, 0.75, 1, 1.25, 1.5, 2] },
-                                iconUrl: TD + 'plyr/dist/plyr.svg',
-                                blankVideo: ''
-                            };
-
-                            function applyPoster(el, posterUrl) {
-                                el.setAttribute('poster', posterUrl);
-                                var plyrContainer = el.closest('.plyr');
-                                if (plyrContainer) {
-                                    var posterDiv = plyrContainer.querySelector('.plyr__poster');
-                                    if (posterDiv) {
-                                        posterDiv.style.backgroundImage = 'url(' + posterUrl + ')';
-                                        posterDiv.removeAttribute('hidden');
-                                    }
-                                }
-                                if (el.plyr) el.plyr.poster = posterUrl;
-                            }
-
-                            function fitPlyrToParent(video) {
-                                var plyrEl = video.closest('.plyr');
-                                if (!plyrEl) return;
-                                plyrEl.classList.remove('plyr--compact', 'plyr--tiny');
-                                var w = plyrEl.clientWidth, h = plyrEl.clientHeight;
-                                if (w < 350 || h < 250) plyrEl.classList.add('plyr--compact');
-                                if (w < 200 || h < 150) plyrEl.classList.add('plyr--tiny');
-                            }
-
                             function enhanceVideo(el) {
-                                if (el.__tdPlyrDone || typeof iWin.Plyr === 'undefined') return;
-                                el.__tdPlyrDone = true;
+                                if (el.__tdMediaDone) return;
+                                el.__tdMediaDone = true;
                                 setTimeout(function() {
                                     var src = el.src || (el.querySelector('source') ? el.querySelector('source').src : null);
-                                    el.setAttribute('preload', 'none');
-                                    try {
-                                        new iWin.Plyr(el, plyrOpts);
-                                        if (el.videoWidth && el.videoHeight) {
-                                            requestAnimationFrame(function() { fitPlyrToParent(el); });
-                                        } else {
-                                            el.addEventListener('loadedmetadata', function() {
-                                                requestAnimationFrame(function() { fitPlyrToParent(el); });
-                                            }, { once: true });
-                                        }
-                                    } catch(e) { console.warn('[TD-Plyr] overlay error:', e); }
+                                    el.setAttribute('preload', 'metadata');
                                     if (src && typeof TiddlyDesktopPoster !== 'undefined') {
                                         try {
                                             var url = new URL(src);
                                             var relPath = decodeURIComponent(url.pathname).replace(/^\/_relative\//, '');
                                             var posterUrl = TiddlyDesktopPoster.getPoster(relPath);
-                                            if (posterUrl) applyPoster(el, posterUrl);
-                                            var vttText = TiddlyDesktopPoster.getThumbnails(relPath);
-                                            if (vttText && el.plyr) {
-                                                var vttBlob = new Blob([vttText], { type: 'text/vtt' });
-                                                el.plyr.config.previewThumbnails = { enabled: true, src: URL.createObjectURL(vttBlob) };
-                                            }
-                                        } catch(e) { console.warn('[TD-Plyr] overlay poster/thumbnails failed:', e.message); }
+                                            if (posterUrl) el.setAttribute('poster', posterUrl);
+                                        } catch(e) { console.warn('[TD-Media] overlay poster failed:', e.message); }
                                     }
                                 }, 50);
                             }
@@ -4468,6 +4567,7 @@ class WikiActivity : AppCompatActivity() {
                                 el.parentNode.replaceChild(container, el);
                                 var scale = 1.5, pdfDoc = null, pageCanvases = [];
                                 var pageInfo = toolbar.querySelector('.td-pdf-pageinfo');
+                                var userZoomed = false, lastContainerWidth = 0;
                                 function renderPage(num, canvas) {
                                     pdfDoc.getPage(num).then(function(page) {
                                         var dpr = iWin.devicePixelRatio || 1;
@@ -4484,6 +4584,7 @@ class WikiActivity : AppCompatActivity() {
                                     if (!pdfDoc) return;
                                     var w = pagesWrap.clientWidth;
                                     if (w <= 0) { iWin.requestAnimationFrame(function() { fitWidth(); }); return; }
+                                    userZoomed = false; lastContainerWidth = w;
                                     pdfDoc.getPage(1).then(function(page) {
                                         var vp = page.getViewport({ scale: 1 });
                                         scale = Math.max(0.5, Math.min(5, (w - 16) / vp.width));
@@ -4503,7 +4604,14 @@ class WikiActivity : AppCompatActivity() {
                                     fitWidth();
                                     if (typeof iWin.ResizeObserver !== 'undefined') {
                                         var resizeTimer;
-                                        new iWin.ResizeObserver(function() { clearTimeout(resizeTimer); resizeTimer = setTimeout(fitWidth, 100); }).observe(container);
+                                        new iWin.ResizeObserver(function() {
+                                            var w = pagesWrap.clientWidth;
+                                            if (w > 0 && w !== lastContainerWidth) {
+                                                lastContainerWidth = w;
+                                                clearTimeout(resizeTimer);
+                                                resizeTimer = setTimeout(userZoomed ? renderAll : fitWidth, 100);
+                                            }
+                                        }).observe(container);
                                     }
                                 }).catch(function(err) {
                                     pagesWrap.innerHTML = '<p style="color:#f88;padding:20px;text-align:center">Failed to load PDF: ' + err.message + '</p>';
@@ -4512,8 +4620,8 @@ class WikiActivity : AppCompatActivity() {
                                     var btn = e.target.closest('[data-action]');
                                     if (!btn) return;
                                     var a = btn.getAttribute('data-action');
-                                    if (a === 'zoomin') { scale = Math.min(scale * 1.25, 5); renderAll(); }
-                                    else if (a === 'zoomout') { scale = Math.max(scale / 1.25, 0.5); renderAll(); }
+                                    if (a === 'zoomin') { userZoomed = true; scale = Math.min(scale * 1.25, 5); renderAll(); }
+                                    else if (a === 'zoomout') { userZoomed = true; scale = Math.max(scale / 1.25, 0.5); renderAll(); }
                                     else if (a === 'fitwidth') fitWidth();
                                     else if (a === 'prev') pagesWrap.scrollBy(0, -pagesWrap.clientHeight * 0.8);
                                     else if (a === 'next') pagesWrap.scrollBy(0, pagesWrap.clientHeight * 0.8);
@@ -4521,15 +4629,12 @@ class WikiActivity : AppCompatActivity() {
                             }
 
                             function scanAll() {
-                                if (typeof iWin.Plyr !== 'undefined') iDoc.querySelectorAll('video').forEach(enhanceVideo);
+                                iDoc.querySelectorAll('video').forEach(enhanceVideo);
                                 if (typeof iWin.pdfjsLib !== 'undefined') iDoc.querySelectorAll('embed, object, iframe').forEach(function(el) { if (getPdfSrc(el)) replacePdfElement(el); });
                             }
 
-                            // Load Plyr JS
-                            var plyrJs = iDoc.createElement('script');
-                            plyrJs.src = TD + 'plyr/dist/plyr.min.js';
-                            plyrJs.onload = function() { scanAll(); };
-                            iDoc.head.appendChild(plyrJs);
+                            // Scan videos immediately (poster extraction doesn't need external libs)
+                            scanAll();
 
                             // Load PDF.js
                             var pdfJs = iDoc.createElement('script');
@@ -4919,12 +5024,11 @@ class WikiActivity : AppCompatActivity() {
             })();
         """.trimIndent()
 
-        // Inline PDF.js renderer and Plyr video enhancement script
+        // Inline PDF.js renderer and video poster extraction script
         val inlineMediaScript = """
             (function() {
                 var TD_BASE = '/_td/';
                 var pdfjsLoaded = false;
-                var plyrLoaded = false;
 
                 // ---- Helper: dynamically load a script ----
                 function loadScript(src, cb) {
@@ -4933,14 +5037,6 @@ class WikiActivity : AppCompatActivity() {
                     s.onload = cb || function(){};
                     s.onerror = function(){ console.error('[TD] Failed to load ' + src); };
                     document.head.appendChild(s);
-                }
-
-                // ---- Helper: dynamically load CSS ----
-                function loadCSS(href) {
-                    var l = document.createElement('link');
-                    l.rel = 'stylesheet';
-                    l.href = href;
-                    document.head.appendChild(l);
                 }
 
                 // ---- PDF.js inline renderer ----
@@ -5008,6 +5104,8 @@ class WikiActivity : AppCompatActivity() {
                     var pdfDoc = null;
                     var pageCanvases = [];
                     var pageInfo = toolbar.querySelector('.td-pdf-pageinfo');
+                    var userZoomed = false;
+                    var lastContainerWidth = 0;
 
                     function renderPage(num, canvas) {
                         pdfDoc.getPage(num).then(function(page) {
@@ -5031,6 +5129,8 @@ class WikiActivity : AppCompatActivity() {
                         if (!pdfDoc) return;
                         var w = pagesWrap.clientWidth;
                         if (w <= 0) { requestAnimationFrame(function() { fitWidth(); }); return; }
+                        userZoomed = false;
+                        lastContainerWidth = w;
                         pdfDoc.getPage(1).then(function(page) {
                             var vp = page.getViewport({ scale: 1 });
                             var containerWidth = w - 16;
@@ -5058,10 +5158,22 @@ class WikiActivity : AppCompatActivity() {
                         // Initial fit-width render
                         fitWidth();
 
-                        // Re-fit when container resizes
+                        // Re-fit only on external container width changes
                         if (typeof ResizeObserver !== 'undefined') {
                             var resizeTimer;
-                            new ResizeObserver(function() { clearTimeout(resizeTimer); resizeTimer = setTimeout(fitWidth, 100); }).observe(container);
+                            new ResizeObserver(function() {
+                                var w = pagesWrap.clientWidth;
+                                if (w > 0 && w !== lastContainerWidth) {
+                                    lastContainerWidth = w;
+                                    if (!userZoomed) {
+                                        clearTimeout(resizeTimer);
+                                        resizeTimer = setTimeout(fitWidth, 100);
+                                    } else {
+                                        clearTimeout(resizeTimer);
+                                        resizeTimer = setTimeout(renderAll, 100);
+                                    }
+                                }
+                            }).observe(container);
                         }
 
                         // Use IntersectionObserver for lazy rendering
@@ -5086,40 +5198,27 @@ class WikiActivity : AppCompatActivity() {
                         var btn = e.target.closest('[data-action]');
                         if (!btn) return;
                         var action = btn.getAttribute('data-action');
-                        if (action === 'zoomin') { scale = Math.min(scale * 1.25, 5); renderAll(); }
-                        else if (action === 'zoomout') { scale = Math.max(scale / 1.25, 0.5); renderAll(); }
+                        if (action === 'zoomin') { userZoomed = true; scale = Math.min(scale * 1.25, 5); renderAll(); }
+                        else if (action === 'zoomout') { userZoomed = true; scale = Math.max(scale / 1.25, 0.5); renderAll(); }
                         else if (action === 'fitwidth') { fitWidth(); }
                         else if (action === 'prev') { pagesWrap.scrollBy(0, -pagesWrap.clientHeight * 0.8); }
                         else if (action === 'next') { pagesWrap.scrollBy(0, pagesWrap.clientHeight * 0.8); }
                     });
                 }
 
-                // ---- Plyr video enhancement ----
+                // ---- Video poster extraction ----
                 function applyPoster(el, posterUrl) {
-                    // Set on the video element
                     el.setAttribute('poster', posterUrl);
-                    // Update Plyr's poster overlay directly
-                    var plyrContainer = el.closest('.plyr');
-                    if (plyrContainer) {
-                        var posterDiv = plyrContainer.querySelector('.plyr__poster');
-                        if (posterDiv) {
-                            posterDiv.style.backgroundImage = 'url(' + posterUrl + ')';
-                            posterDiv.removeAttribute('hidden');
-                        }
-                    }
-                    if (el.plyr) el.plyr.poster = posterUrl;
-                    console.log('[TD-Plyr] Applied poster');
                 }
 
-                // Queue for sequential video processing (poster + thumbnails)
+                // Queue for sequential video processing (poster extraction)
                 var videoQueue = [];
                 var videoQueueRunning = false;
                 function enqueueVideoWork(work) {
                     videoQueue.push(work);
                     if (!videoQueueRunning) {
-                        // Delay first drain to let page finish initial resource loading
                         videoQueueRunning = true;
-                        setTimeout(drainVideoQueue, 2000);
+                        setTimeout(drainVideoQueue, 500);
                     }
                 }
                 function drainVideoQueue() {
@@ -5129,67 +5228,21 @@ class WikiActivity : AppCompatActivity() {
                     task(function() { drainVideoQueue(); });
                 }
 
-                function fitPlyrToParent(video) {
-                    var plyrEl = video.closest('.plyr');
-                    if (!plyrEl) return;
-                    plyrEl.classList.remove('plyr--compact', 'plyr--tiny');
-                    var w = plyrEl.clientWidth, h = plyrEl.clientHeight;
-                    if (w < 350 || h < 250) plyrEl.classList.add('plyr--compact');
-                    if (w < 200 || h < 150) plyrEl.classList.add('plyr--tiny');
-                }
-
                 function enhanceVideo(el) {
-                    if (el.__tdPlyrDone) return;
-                    el.__tdPlyrDone = true;
-
-                    // Verify Plyr is available
-                    if (typeof Plyr === 'undefined') {
-                        console.warn('[TD-Plyr] Plyr not ready, skipping video');
-                        el.__tdPlyrDone = false; // Allow retry
-                        return;
-                    }
+                    if (el.__tdMediaDone) return;
+                    el.__tdMediaDone = true;
 
                     // Small delay to let URL-transform complete
                     setTimeout(function() {
                         var videoSrc = el.src || (el.querySelector('source') ? el.querySelector('source').src : null);
-                        console.log('[TD-Plyr] enhanceVideo videoSrc:', videoSrc);
 
-                        function initPlyr(vttUrl) {
-                            try {
-                                var opts = {
-                                    controls: ['play-large','play','progress','current-time','duration','mute','volume','settings','fullscreen'],
-                                    settings: ['speed'],
-                                    speed: { selected: 1, options: [0.5, 0.75, 1, 1.25, 1.5, 2] },
-                                    iconUrl: TD_BASE + 'plyr/dist/plyr.svg',
-                                    blankVideo: ''
-                                };
-                                if (vttUrl) {
-                                    opts.previewThumbnails = { enabled: true, src: vttUrl };
-                                }
-                                var player = new Plyr(el, opts);
+                        // "metadata" downloads just the header (~50-100KB per video),
+                        // enabling duration display and fast play start without
+                        // downloading the full video. Much better than "none" (which
+                        // delays play start) or "auto" (which downloads everything).
+                        el.setAttribute('preload', 'metadata');
 
-                                // Fit within parent constraints
-                                if (el.videoWidth && el.videoHeight) {
-                                    requestAnimationFrame(function() { fitPlyrToParent(el); });
-                                } else {
-                                    el.addEventListener('loadedmetadata', function() {
-                                        requestAnimationFrame(function() { fitPlyrToParent(el); });
-                                    }, { once: true });
-                                }
-
-                                console.log('[TD-Plyr] Enhanced video:', videoSrc || '(no src)', vttUrl ? '(with thumbnails)' : '');
-                            } catch(err) {
-                                console.error('[TD-Plyr] Error:', err && err.message ? err.message : JSON.stringify(err));
-                            }
-                        }
-
-                        // Prevent Plyr from preloading video data
-                        el.setAttribute('preload', 'none');
-
-                        // Initialize Plyr immediately
-                        initPlyr(null);
-
-                        // Queue poster extraction (native) + thumbnail generation
+                        // Queue poster extraction (native)
                         if (videoSrc) {
                             enqueueVideoWork(function(done) {
                                 try {
@@ -5198,27 +5251,13 @@ class WikiActivity : AppCompatActivity() {
                                     var relPath = pathPart.replace(/^\/_relative\//, '');
 
                                     if (typeof TiddlyDesktopPoster !== 'undefined') {
-                                        // Extract poster via native MediaMetadataRetriever
                                         var posterUrl = TiddlyDesktopPoster.getPoster(relPath);
                                         if (posterUrl) {
                                             applyPoster(el, posterUrl);
                                         }
-
-                                        // Generate thumbnails natively
-                                        var vttText = TiddlyDesktopPoster.getThumbnails(relPath);
-                                        if (vttText && el.plyr) {
-                                            var vttBlob = new Blob([vttText], { type: 'text/vtt' });
-                                            var vttUrl = URL.createObjectURL(vttBlob);
-                                            try {
-                                                el.plyr.config.previewThumbnails = { enabled: true, src: vttUrl };
-                                                console.log('[TD-Plyr] Added thumbnails to player');
-                                            } catch(e) {
-                                                console.warn('[TD-Plyr] Could not add thumbnails:', e);
-                                            }
-                                        }
                                     }
                                 } catch(e) {
-                                    console.warn('[TD-Plyr] Native poster/thumbnails failed:', e.message);
+                                    console.warn('[TD-Media] Native poster extraction failed:', e.message);
                                 }
                                 done();
                             });
@@ -5228,16 +5267,14 @@ class WikiActivity : AppCompatActivity() {
 
                 // ---- Scan and enhance existing elements ----
                 function scanAll() {
-                    // Only process PDFs if PDF.js is loaded
+                    // Process PDFs if PDF.js is loaded
                     if (pdfjsLoaded && typeof pdfjsLib !== 'undefined') {
                         document.querySelectorAll('embed, object, iframe').forEach(function(el) {
                             if (getPdfSrc(el)) replacePdfElement(el);
                         });
                     }
-                    // Only process videos if Plyr is loaded
-                    if (plyrLoaded && typeof Plyr !== 'undefined') {
-                        document.querySelectorAll('video').forEach(function(el) { enhanceVideo(el); });
-                    }
+                    // Process videos for poster extraction
+                    document.querySelectorAll('video').forEach(function(el) { enhanceVideo(el); });
                 }
 
                 // ---- MutationObserver to catch dynamically added elements ----
@@ -5254,9 +5291,7 @@ class WikiActivity : AppCompatActivity() {
                                         replacePdfElement(node);
                                     }
                                 } else if (tag === 'video') {
-                                    if (plyrLoaded && typeof Plyr !== 'undefined') {
-                                        enhanceVideo(node);
-                                    }
+                                    enhanceVideo(node);
                                 }
                                 // Check children
                                 if (node.querySelectorAll) {
@@ -5265,9 +5300,7 @@ class WikiActivity : AppCompatActivity() {
                                             if (getPdfSrc(el)) replacePdfElement(el);
                                         });
                                     }
-                                    if (plyrLoaded && typeof Plyr !== 'undefined') {
-                                        node.querySelectorAll('video').forEach(function(el) { enhanceVideo(el); });
-                                    }
+                                    node.querySelectorAll('video').forEach(function(el) { enhanceVideo(el); });
                                 }
                             });
                         });
@@ -5283,7 +5316,23 @@ class WikiActivity : AppCompatActivity() {
                     });
                 }
 
-                // ---- Load libraries then scan ----
+                // ---- Blur active element on video/audio interaction ----
+                // Clicking native media controls doesn't blur focused inputs,
+                // so the browser scrolls back to the focused element on layout
+                // changes (poster removal, metadata load). Capture-phase
+                // mousedown on video/audio blurs the active element to prevent this.
+                if (!window.__tdMediaBlurSet) {
+                    window.__tdMediaBlurSet = true;
+                    document.addEventListener('mousedown', function(e) {
+                        var t = e.target;
+                        if (t && (t.tagName === 'VIDEO' || t.tagName === 'AUDIO')) {
+                            var ae = document.activeElement;
+                            if (ae && ae !== t) ae.blur();
+                        }
+                    }, true);
+                }
+
+                // ---- Load PDF.js then scan ----
                 function loadPdfJs() {
                     if (pdfjsLoaded || typeof pdfjsLib !== 'undefined') {
                         pdfjsLoaded = true;
@@ -5300,39 +5349,9 @@ class WikiActivity : AppCompatActivity() {
                     });
                 }
 
-                function loadPlyr() {
-                    if (plyrLoaded || typeof Plyr !== 'undefined') {
-                        plyrLoaded = true;
-                        scanAll();
-                        return;
-                    }
-                    // CSS and JS may already be preloaded by onPageStarted
-                    if (!document.querySelector('link[href*="plyr.css"]')) {
-                        loadCSS(TD_BASE + 'plyr/dist/plyr.css');
-                    }
-                    if (document.querySelector('script[src*="plyr.min.js"]')) {
-                        // Already preloaded — wait for it to finish loading
-                        var check = setInterval(function() {
-                            if (typeof Plyr !== 'undefined') {
-                                clearInterval(check);
-                                plyrLoaded = true;
-                                console.log('[TD-Plyr] Plyr loaded (preloaded)');
-                                scanAll();
-                            }
-                        }, 20);
-                    } else {
-                        loadScript(TD_BASE + 'plyr/dist/plyr.min.js', function() {
-                            if (typeof Plyr !== 'undefined') {
-                                plyrLoaded = true;
-                                console.log('[TD-Plyr] Plyr loaded');
-                                scanAll();
-                            }
-                        });
-                    }
-                }
-
                 loadPdfJs();
-                loadPlyr();
+                // Scan for videos immediately (poster extraction doesn't need external libs)
+                scanAll();
 
                 console.log('[TiddlyDesktop] Inline media enhancement initialized');
             })();
@@ -5537,6 +5556,179 @@ class WikiActivity : AppCompatActivity() {
             "}catch(e){console.error('[TiddlyDesktop] Share plugin error:',e);}" +
             "})()"
 
+        // LAN sync script: hooks into TiddlyWiki change events and polls bridge for inbound
+        val lanSyncScript = "(function(){" +
+            "var S=window.TiddlyDesktopSync;if(!S)return;" +
+            // Don't exit when bridge not running (port<=0) — init()'s 500ms getSyncId
+            // polling handles waiting for the bridge to come online. This allows wikis
+            // opened before LAN sync is started to activate sync when it starts later.
+            "var wp=window.__WIKI_PATH__||'';if(!wp)return;" +
+            "function init(){" +
+            "if(typeof \$tw==='undefined'||!\$tw.wiki||!\$tw.wiki.addEventListener||!\$tw.rootWidget){setTimeout(init,100);return;}" +
+            "var sid=S.getSyncId(wp);" +
+            "if(sid){activate(sid);}else{" +
+            // Re-check every 500ms in case user enables sync from landing page
+            "var iv=setInterval(function(){var id=S.getSyncId(wp);if(id){clearInterval(iv);activate(id);}},500);" +
+            "}" +
+            "}" +
+            // Serialize tiddler fields, converting Date objects to TW date strings
+            "function serFields(fields){var o={};var ks=Object.keys(fields);for(var i=0;i<ks.length;i++){var k=ks[i];var v=fields[k];o[k]=v instanceof Date?\$tw.utils.stringifyDate(v):Array.isArray(v)?\$tw.utils.stringifyList(v):String(v);}return JSON.stringify(o);}" +
+            // Check if title is a draft tiddler (including numbered drafts)
+            "function isDraft(t){if(t.indexOf(\"Draft of '\")==0)return true;" +
+            "if(t.indexOf('Draft ')==0){var r=t.substring(6);var p=r.indexOf(\" of '\");if(p>0){var n=r.substring(0,p);if(/^\\d+\$/.test(n))return true;}}return false;}" +
+            "function activate(syncId){" +
+            "console.log('[LAN Sync] Activated for wiki: '+syncId);" +
+            "S.wikiOpened(syncId);" +
+            // Proactively broadcast fingerprints to all connected peers for catch-up
+            "var all=\$tw.wiki.allTitles();var fps=[];" +
+            "for(var i=0;i<all.length;i++){var t=all[i];" +
+            "if(t==='\$:/StoryList'||t==='\$:/HistoryList'||t==='\$:/library/sjcl.js')continue;" +
+            "if(isDraft(t))continue;" +
+            "if(t.indexOf('\$:/TiddlyDesktopRS/Conflicts/')==0)continue;" +
+            "if(t.indexOf('\$:/state/')==0||t.indexOf('\$:/status/')==0||t.indexOf('\$:/temp/')==0)continue;" +
+            "if(t.indexOf('\$:/plugins/tiddlydesktop-rs/')==0||t.indexOf('\$:/plugins/tiddlydesktop/')==0)continue;" +
+            "if(t.indexOf('\$:/config/ViewToolbarButtons/Visibility/\$:/plugins/tiddlydesktop-rs/')==0)continue;" +
+            "if(\$tw.wiki.isShadowTiddler(t)&&!\$tw.wiki.tiddlerExists(t))continue;" +
+            "var td=\$tw.wiki.getTiddler(t);if(td){var m=td.fields.modified;fps.push({title:t,modified:m?fts(m):''});}}" +
+            "console.log('[LAN Sync] Broadcasting '+fps.length+' fingerprints for catch-up');" +
+            "S.broadcastFingerprints(syncId,JSON.stringify(fps));" +
+            // Use a Set to suppress re-broadcasting received changes.
+            // TiddlyWiki dispatches change events asynchronously via $tw.utils.nextTick(),
+            // so a boolean flag would already be cleared when the change listener fires.
+            "var suppress=new Set();" +
+            "var kst={};" +  // knownSyncTitles: title→modified for tiddlers received but skipped as identical
+            "var conflicts={};" +
+            "var saveTimer=null;" +
+            "var isSingle=!\$tw.syncer;" +
+            "function scheduleSave(){if(!isSingle)return;if(saveTimer)clearTimeout(saveTimer);" +
+            "saveTimer=setTimeout(function(){saveTimer=null;\$tw.rootWidget.dispatchEvent({type:'tm-save-wiki'});},500);}" +
+            // Outbound: detect local changes
+            "\$tw.wiki.addEventListener('change',function(ch){" +
+            "var keys=Object.keys(ch);" +
+            "for(var i=0;i<keys.length;i++){" +
+            "var t=keys[i];" +
+            "if(suppress.delete(t))continue;" +
+            "if(t==='\$:/StoryList'||t==='\$:/HistoryList'||t==='\$:/library/sjcl.js')continue;" +
+            "if(isDraft(t))continue;" +
+            "if(t.indexOf('\$:/TiddlyDesktopRS/Conflicts/')==0)continue;" +
+            "if(t.indexOf('\$:/state/')==0)continue;" +
+            "if(t.indexOf('\$:/status/')==0)continue;" +
+            "if(t.indexOf('\$:/temp/')==0)continue;" +
+            "if(t.indexOf('\$:/plugins/tiddlydesktop-rs/')==0)continue;" +
+            "if(t.indexOf('\$:/plugins/tiddlydesktop/')==0)continue;" +
+            "if(t.indexOf('\$:/config/ViewToolbarButtons/Visibility/\$:/plugins/tiddlydesktop-rs/')==0)continue;" +
+            "if(conflicts[t])continue;" +
+            "var td=\$tw.wiki.getTiddler(t);" +
+            "if(ch[t].deleted){console.log('[LAN Sync] Outbound delete: '+t);S.tiddlerDeleted(syncId,t);}" +
+            "else if(td){console.log('[LAN Sync] Outbound change: '+t);S.tiddlerChanged(syncId,t,serFields(td.fields));}" +
+            "}" +
+            "});" +
+            // Inbound: poll bridge for changes (batched application)
+            "var queue=[];var batchTimer=null;" +
+            // fieldToString: normalize field values (Date→TW date string, Array→TW list) for comparison
+            "function fts(v){if(v instanceof Date)return \$tw.utils.stringifyDate(v);if(Array.isArray(v))return \$tw.utils.stringifyList(v);return String(v);}" +
+            // tiddlerDiffers: compare incoming fields with local (includes modified for convergence)
+            "function tiddlerDiffers(f){var ex=\$tw.wiki.getTiddler(f.title);if(!ex)return true;var ef=ex.fields;" +
+            "var rm=f.modified?String(f.modified):'';var lm=ef.modified?fts(ef.modified):'';if(rm!==lm)return true;" +
+            "var ks=Object.keys(f);for(var i=0;i<ks.length;i++){var k=ks[i];if(k==='created'||k==='modified')continue;if(ef[k]===undefined||String(f[k])!==fts(ef[k]))return true;}" +
+            "var eks=Object.keys(ef);for(var j=0;j<eks.length;j++){var ek=eks[j];if(ek==='created'||ek==='modified')continue;if(f[ek]===undefined)return true;}return false;}" +
+            // collectFingerprints: includes knownSyncTitles for convergence
+            "function cfps(){var all=\$tw.wiki.allTitles();var seen={};var fps=[];" +
+            "for(var i=0;i<all.length;i++){var t=all[i];" +
+            "if(t==='\$:/StoryList'||t==='\$:/HistoryList'||t==='\$:/library/sjcl.js')continue;" +
+            "if(isDraft(t))continue;" +
+            "if(t.indexOf('\$:/TiddlyDesktopRS/Conflicts/')==0)continue;" +
+            "if(t.indexOf('\$:/state/')==0||t.indexOf('\$:/status/')==0||t.indexOf('\$:/temp/')==0)continue;" +
+            "if(t.indexOf('\$:/plugins/tiddlydesktop-rs/')==0||t.indexOf('\$:/plugins/tiddlydesktop/')==0)continue;" +
+            "if(t.indexOf('\$:/config/ViewToolbarButtons/Visibility/\$:/plugins/tiddlydesktop-rs/')==0)continue;" +
+            "if(\$tw.wiki.isShadowTiddler(t)&&!\$tw.wiki.tiddlerExists(t))continue;" +
+            "var td=\$tw.wiki.getTiddler(t);if(td){var m=td.fields.modified;fps.push({title:t,modified:m?fts(m):''});seen[t]=1;}}" +
+            "var ks=Object.keys(kst);for(var j=0;j<ks.length;j++){if(!seen[ks[j]])fps.push({title:ks[j],modified:kst[ks[j]]});}" +
+            "return fps;}" +
+            "function queueChange(d){" +
+            "if(d.wiki_id!==syncId)return;" +
+            "if(d.type==='dump-tiddlers'){dumpTiddlers(d.to_device_id);return;}" +
+            "if(d.type==='send-fingerprints'){sendFingerprints(d.to_device_id);return;}" +
+            "if(d.type==='compare-fingerprints'){compareFingerprints(d.from_device_id,d.fingerprints);return;}" +
+            "if(d.type==='attachment-received'){reloadAttachment(d.filename);return;}" +
+            "queue.push(d);if(!batchTimer)batchTimer=setTimeout(applyBatch,50);" +
+            "}" +
+            "function applyBatch(){batchTimer=null;var b=queue;queue=[];if(!b.length)return;" +
+            "console.log('[LAN Sync] Applying batch of '+b.length+' changes');" +
+            "var ns=false;" +
+            "for(var i=0;i<b.length;i++){var d=b[i];" +
+            "if(d.type==='apply-change'){try{var f=JSON.parse(d.tiddler_json);if(tiddlerDiffers(f)){if(f.created)f.created=\$tw.utils.parseDate(f.created);if(f.modified)f.modified=\$tw.utils.parseDate(f.modified);suppress.add(f.title);\$tw.wiki.addTiddler(new \$tw.Tiddler(f));ns=true;}else{kst[f.title]=f.modified?String(f.modified):'';}}catch(e){}}" +
+            "else if(d.type==='apply-deletion'){try{if(\$tw.wiki.tiddlerExists(d.title)){suppress.add(d.title);\$tw.wiki.deleteTiddler(d.title);ns=true;}}catch(e){}}" +
+            "else if(d.type==='conflict'){var lt=\$tw.wiki.getTiddler(d.title);if(lt){var ct='\$:/TiddlyDesktopRS/Conflicts/'+d.title;" +
+            "conflicts[ct]=1;var cf=Object.assign({},lt.fields,{title:ct,'conflict-original-title':d.title,'conflict-timestamp':new Date().toISOString(),'conflict-source':'local'});" +
+            "\$tw.wiki.addTiddler(new \$tw.Tiddler(cf));delete conflicts[ct];}}" +
+            "}" +
+            "if(ns)scheduleSave();}" +
+            // Fingerprint-based diff sync
+            "function sendFingerprints(toDevId){var fps=cfps();S.sendFingerprints(syncId,toDevId,JSON.stringify(fps));}" +
+            "function compareFingerprints(fromDevId,fps){" +
+            "console.log('[LAN Sync] compareFingerprints: received '+fps.length+' fingerprints from '+fromDevId);" +
+            "var remote={};for(var i=0;i<fps.length;i++)remote[fps[i].title]=fps[i].modified;" +
+            "var all=\$tw.wiki.allTitles();var diffs=[];" +
+            "for(var j=0;j<all.length;j++){var t=all[j];" +
+            "if(t==='\$:/StoryList'||t==='\$:/HistoryList'||t==='\$:/library/sjcl.js')continue;" +
+            "if(isDraft(t))continue;" +
+            "if(t.indexOf('\$:/TiddlyDesktopRS/Conflicts/')==0)continue;" +
+            "if(t.indexOf('\$:/state/')==0||t.indexOf('\$:/status/')==0||t.indexOf('\$:/temp/')==0)continue;" +
+            "if(t.indexOf('\$:/plugins/tiddlydesktop-rs/')==0||t.indexOf('\$:/plugins/tiddlydesktop/')==0)continue;" +
+            "if(t.indexOf('\$:/config/ViewToolbarButtons/Visibility/\$:/plugins/tiddlydesktop-rs/')==0)continue;" +
+            "if(\$tw.wiki.isShadowTiddler(t)&&!\$tw.wiki.tiddlerExists(t))continue;" +
+            "var td=\$tw.wiki.getTiddler(t);if(!td)continue;" +
+            "var localMod=td.fields.modified?fts(td.fields.modified):'';" +
+            "if(!(t in remote)){diffs.push({title:t,tiddler_json:serFields(td.fields)});}" +
+            "else if(localMod&&remote[t]&&localMod>remote[t]){diffs.push({title:t,tiddler_json:serFields(td.fields)});}" +
+            "delete remote[t];}" +
+            "console.log('[LAN Sync] compareFingerprints: '+diffs.length+' diffs to send (of '+all.length+' local, peer has '+fps.length+')');" +
+            "if(diffs.length>0){var MAX_BYTES=500000;" +
+            "function sendBatch(si){var batch=[];var bytes=0;var i=si;" +
+            "while(i<diffs.length&&(batch.length===0||bytes<MAX_BYTES)){bytes+=diffs[i].tiddler_json.length;batch.push(diffs[i]);i++;}" +
+            "var last=i>=diffs.length;" +
+            "console.log('[LAN Sync] sendBatch: sending '+batch.length+' tiddlers ('+Math.round(bytes/1024)+'KB, last='+last+') to '+fromDevId);" +
+            "S.sendFullSyncBatch(syncId,fromDevId,JSON.stringify(batch),last);" +
+            "if(!last)setTimeout(function(){sendBatch(i);},100);else console.log('[LAN Sync] compareFingerprints: diff sync complete');}sendBatch(0);" +
+            "}else{console.log('[LAN Sync] compareFingerprints: no diffs, sending empty batch');S.sendFullSyncBatch(syncId,fromDevId,'[]',true);}}" +
+            // Reload attachment elements when file received
+            "function reloadAttachment(fn){" +
+            "var els=document.querySelectorAll('img,video,audio,source');var ts='?t='+Date.now();" +
+            "for(var i=0;i<els.length;i++){var el=els[i];var src=el.getAttribute('src')||'';" +
+            "if(src.indexOf(fn)!==-1){el.src=src.split('?')[0]+ts;}}}" +
+            // Full sync dump
+            "function dumpTiddlers(toDevId){" +
+            "var all=\$tw.wiki.allTitles();var MX=500000;" +
+            "console.log('[LAN Sync] Dumping '+all.length+' tiddlers to '+toDevId);" +
+            "function send(si){var batch=[];var bytes=0;var i=si;" +
+            "while(i<all.length&&(batch.length===0||bytes<MX)){var t=all[i];i++;" +
+            "if(t==='\$:/StoryList'||t==='\$:/HistoryList'||t==='\$:/library/sjcl.js')continue;" +
+            "if(isDraft(t))continue;" +
+            "if(t.indexOf('\$:/TiddlyDesktopRS/Conflicts/')==0)continue;" +
+            "if(t.indexOf('\$:/state/')==0||t.indexOf('\$:/status/')==0||t.indexOf('\$:/temp/')==0)continue;" +
+            "if(t.indexOf('\$:/plugins/tiddlydesktop-rs/')==0||t.indexOf('\$:/plugins/tiddlydesktop/')==0)continue;" +
+            "if(t.indexOf('\$:/config/ViewToolbarButtons/Visibility/\$:/plugins/tiddlydesktop-rs/')==0)continue;" +
+            "if(\$tw.wiki.isShadowTiddler(t)&&!\$tw.wiki.tiddlerExists(t))continue;" +
+            "var td=\$tw.wiki.getTiddler(t);if(td){var j=serFields(td.fields);bytes+=j.length;batch.push({title:t,tiddler_json:j});}}" +
+            "var last=i>=all.length;S.sendFullSyncBatch(syncId,toDevId,JSON.stringify(batch),last);" +
+            "if(!last)setTimeout(function(){send(i);},100);" +
+            "else console.log('[LAN Sync] Full sync dump complete');" +
+            "}" +
+            "if(all.length>0)send(0);}" +
+            // Poll loop — fast polling (20ms) for first 5s to speed up initial sync
+            "var pollStart=Date.now();" +
+            "function pollIv(){return(Date.now()-pollStart<5000)?20:100;}" +
+            "function poll(){try{var j=S.pollChanges(syncId);var c=JSON.parse(j);" +
+            "if(c&&c.length)for(var i=0;i<c.length;i++)queueChange(c[i]);" +
+            "}catch(e){}setTimeout(poll,pollIv());}" +
+            "setTimeout(poll,0);" +
+            // Periodic fingerprint re-broadcast (5s safety net for convergence)
+            "setInterval(function(){try{var fps2=cfps();S.broadcastFingerprints(syncId,JSON.stringify(fps2));}catch(e){}},5000);" +
+            "}" +
+            "setTimeout(init,100);" +
+            "})()"
+
         // Add a WebViewClient that injects the script after page load
         webView.webViewClient = object : WebViewClient() {
             private fun handleUrl(url: String): Boolean {
@@ -5619,6 +5811,12 @@ class WikiActivity : AppCompatActivity() {
                 val url = request.url
                 val path = url.path ?: return super.shouldInterceptRequest(view, request)
 
+                // Only intercept requests to our local server — let external requests
+                // (YouTube embeds, CDN assets, etc.) go through normally.
+                if (url.host != "127.0.0.1") {
+                    return super.shouldInterceptRequest(view, request)
+                }
+
                 // Serve attachment files directly, bypassing HTTP server.
                 // EXCEPT: Range requests must go through the HTTP server because
                 // WebView's shouldInterceptRequest doesn't properly support 206
@@ -5664,6 +5862,21 @@ class WikiActivity : AppCompatActivity() {
                 if (!hasRangeHeader && (treeUri != null || wikiUri != null) && !path.startsWith("/_") && path != "/" &&
                     !path.startsWith("/recipes/") && !path.startsWith("/bags/") &&
                     !path.startsWith("/status")) {
+                    // During boot (before onPageFinished), serve a tiny transparent placeholder
+                    // for media files instead of reading full files from SAF. This prevents
+                    // 100+ image reads from contending with TiddlyWiki boot. After boot, the
+                    // MutationObserver rewrites URLs to attachment ports and images load properly.
+                    // Only apply to known media extensions — other paths (e.g. /embed/xxx for
+                    // YouTube iframes) must not be replaced with a fake GIF.
+                    if (!pageLoaded && isMediaPath(path)) {
+                        Log.d(TAG, "Boot placeholder for: $path")
+                        return WebResourceResponse(
+                            "image/gif", null,
+                            200, "OK",
+                            mapOf("Cache-Control" to "no-store"),
+                            java.io.ByteArrayInputStream(TRANSPARENT_GIF)
+                        )
+                    }
                     val relativePath = "./" + path.trimStart('/')
                     val encodedPath = "/_relative/" + java.net.URLEncoder.encode(relativePath, "UTF-8")
                     val response = serveRelativeRequest(encodedPath, request.requestHeaders)
@@ -5700,7 +5913,6 @@ class WikiActivity : AppCompatActivity() {
                     }
                     // Inject the fullscreen toggle handler
                     view.evaluateJavascript(fullscreenScript, null)
-                    // Clipboard override is now in the main settings script (settingsScript)
                     // Inject the print handler
                     view.evaluateJavascript(printScript, null)
                     // Inject the external window handler (open URLs in external browser)
@@ -5713,13 +5925,30 @@ class WikiActivity : AppCompatActivity() {
                     view.evaluateJavascript(exportScript, null)
                     // Inject server health check for single-file wikis
                     injectServerHealthCheck()
-                    // Inject inline PDF.js and Plyr enhancement
+                    // Inject inline PDF.js and video poster extraction
                     view.evaluateJavascript(inlineMediaScript, null)
                     // Inject Android Share toolbar button (ephemeral plugin)
                     view.evaluateJavascript(sharePluginScript, null)
+                    // Inject LAN sync script (change hooks + inbound polling)
+                    view.evaluateJavascript(lanSyncScript, null)
                     // Import pending Quick Captures
                     importPendingCaptures()
                 }
+            }
+
+            override fun onRenderProcessGone(view: WebView, detail: android.webkit.RenderProcessGoneDetail): Boolean {
+                Log.e(TAG, "WebView render process gone! didCrash=${detail.didCrash()}, " +
+                    "rendererPriorityAtExit=${detail.rendererPriorityAtExit()}")
+                // Return true to prevent AwBrowserTerminator from killing the entire app.
+                // The wiki WebView is dead — finish this activity gracefully.
+                try {
+                    (view.parent as? android.view.ViewGroup)?.removeView(view)
+                    view.destroy()
+                } catch (e: Exception) {
+                    Log.e(TAG, "Error cleaning up dead WebView: ${e.message}")
+                }
+                finish()
+                return true
             }
 
             override fun onReceivedError(view: WebView, request: WebResourceRequest, error: android.webkit.WebResourceError) {
@@ -5859,6 +6088,10 @@ class WikiActivity : AppCompatActivity() {
                 startSyncWatcher(folderLocalPath!!)
             }
         }
+
+        // Start watchdog to keep main process (LAN sync) alive.
+        // If Android kills the main process, this detects it and restarts.
+        mainProcessWatchdog.postDelayed(mainProcessCheckRunnable, 250L)
     }
 
     // Flag to track if we're waiting for unsaved changes check
@@ -5989,9 +6222,9 @@ class WikiActivity : AppCompatActivity() {
                 // Show confirmation dialog
                 runOnUiThread {
                     android.app.AlertDialog.Builder(this)
-                        .setTitle("Unsaved Changes")
-                        .setMessage("You have $changeCount unsaved change(s). What would you like to do?")
-                        .setPositiveButton("Save & Close") { _, _ ->
+                        .setTitle(getString(R.string.unsaved_title))
+                        .setMessage(getString(R.string.unsaved_message, changeCount))
+                        .setPositiveButton(getString(R.string.unsaved_save_close)) { _, _ ->
                             // Save changes to localStorage and close
                             webView.evaluateJavascript("""
                                 (function() {
@@ -6021,10 +6254,10 @@ class WikiActivity : AppCompatActivity() {
                                 finish()
                             }
                         }
-                        .setNegativeButton("Discard & Close") { _, _ ->
+                        .setNegativeButton(getString(R.string.unsaved_discard_close)) { _, _ ->
                             finish()
                         }
-                        .setNeutralButton("Cancel", null)
+                        .setNeutralButton(getString(R.string.btn_cancel), null)
                         .show()
                 }
             } else {
@@ -6092,6 +6325,7 @@ class WikiActivity : AppCompatActivity() {
                 }
             }
         }
+
     }
 
     /**
@@ -6851,6 +7085,9 @@ class WikiActivity : AppCompatActivity() {
     override fun onDestroy() {
         Log.d(TAG, "Wiki closed: path=$wikiPath, isFolder=$isFolder")
 
+        // Stop main process watchdog
+        mainProcessWatchdog.removeCallbacks(mainProcessCheckRunnable)
+
         // Stop folder server watchdog
         stopFolderServerWatchdog()
 
@@ -6859,6 +7096,9 @@ class WikiActivity : AppCompatActivity() {
 
         // Clean up auth overlay if present
         dismissAuthOverlay()
+
+        // Notify LAN sync service (main process) that a wiki closed
+        LanSyncService.notifyWikiClosed(applicationContext)
 
         // Notify foreground service that wiki is closed
         WikiServerService.wikiClosed(applicationContext)
@@ -6924,13 +7164,64 @@ class WikiActivity : AppCompatActivity() {
     }
 
     /**
+     * Check if the main process (which runs LAN sync) is alive.
+     * If it has been killed by the system, restart it by starting
+     * LanSyncService (creates the main process) and MainActivity
+     * (initializes Tauri runtime → LAN sync re-enables on landing page load).
+     */
+    private fun checkMainProcessAlive() {
+        try {
+            val am = getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
+            val processes = am.runningAppProcesses ?: return
+            val mainProcessAlive = processes.any { it.processName == packageName }
+            if (!mainProcessAlive) {
+                Log.w(TAG, "Main process is dead — restarting for LAN sync")
+                // Start LanSyncService to create the main process with foreground priority
+                try {
+                    val serviceIntent = Intent(applicationContext, LanSyncService::class.java)
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                        applicationContext.startForegroundService(serviceIntent)
+                    } else {
+                        applicationContext.startService(serviceIntent)
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "Failed to restart LanSyncService: ${e.message}")
+                }
+                // Start MainActivity to initialize the Tauri runtime — LAN sync
+                // re-enables automatically when the landing page JS loads.
+                try {
+                    val activityIntent = Intent(applicationContext, MainActivity::class.java).apply {
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_NO_ANIMATION)
+                        putExtra("RESTART_FOR_SYNC", true)
+                    }
+                    applicationContext.startActivity(activityIntent)
+                } catch (e: Exception) {
+                    Log.e(TAG, "Failed to restart MainActivity: ${e.message}")
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error checking main process: ${e.message}")
+        }
+    }
+
+    /**
      * Serve a bundled asset from the td/ directory in Android assets.
-     * Used for PDF.js and Plyr library files accessed via /_td/ URL prefix.
+     * Used for PDF.js library files accessed via /_td/ URL prefix.
      */
     /**
      * Serve /_file/{base64path} requests directly via WebView interception.
      * Bypasses the HTTP server for better reliability and performance.
      */
+    /** Check if a URL path looks like a file (has an extension like .jpg, .mp4, etc).
+     *  Paths without extensions (e.g. /embed/9aBcBGqFBWY) are routes, not files. */
+    private fun isMediaPath(path: String): Boolean {
+        val lastSlash = path.lastIndexOf('/')
+        val filename = if (lastSlash >= 0) path.substring(lastSlash + 1) else path
+        val dot = filename.lastIndexOf('.')
+        // Has a dot that's not at the start (hidden files) and has chars after it
+        return dot > 0 && dot < filename.length - 1
+    }
+
     private fun serveFileRequest(path: String, requestHeaders: Map<String, String>): WebResourceResponse? {
         return try {
             val encoded = path.removePrefix("/_file/")

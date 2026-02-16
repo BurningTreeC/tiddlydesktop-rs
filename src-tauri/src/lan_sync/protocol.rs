@@ -1,0 +1,408 @@
+//! LAN Sync protocol message types and encryption/decryption.
+//!
+//! All messages are JSON-serialized. After pairing, every WebSocket frame is
+//! encrypted with ChaCha20-Poly1305 using a per-session key derived from
+//! the long-term shared secret via HKDF-SHA256.
+
+use chacha20poly1305::{
+    aead::{Aead, KeyInit},
+    ChaCha20Poly1305, Nonce,
+};
+use hkdf::Hkdf;
+use serde::{Deserialize, Serialize};
+use sha2::Sha256;
+
+/// Maximum chunk size for file transfer (1MB).
+/// Larger chunks reduce per-message overhead (JSON framing, encryption,
+/// base64 expansion) and improve throughput for large file transfers.
+pub const ATTACHMENT_CHUNK_SIZE: usize = 1024 * 1024;
+
+/// Port range for LAN sync WebSocket server
+pub const LAN_SYNC_PORT_START: u16 = 45700;
+pub const LAN_SYNC_PORT_END: u16 = 45710;
+
+// ── Pairing Phase Messages (cleartext) ──────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type")]
+pub enum PairingMessage {
+    /// Initial SPAKE2 message from the device requesting pairing
+    PairingInit {
+        device_id: String,
+        device_name: String,
+        #[serde(with = "base64_bytes")]
+        spake2_msg: Vec<u8>,
+    },
+    /// SPAKE2 response from the device displaying the PIN
+    PairingResponse {
+        device_id: String,
+        device_name: String,
+        #[serde(with = "base64_bytes")]
+        spake2_msg: Vec<u8>,
+    },
+    /// Confirmation HMAC to verify both sides derived the same key
+    PairingConfirm {
+        #[serde(with = "base64_bytes")]
+        confirmation_hmac: Vec<u8>,
+    },
+    /// Pairing result
+    PairingResult {
+        success: bool,
+        message: Option<String>,
+    },
+}
+
+// ── Sync Phase Messages (encrypted after pairing) ───────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type")]
+pub enum SyncMessage {
+    /// Announce which wikis this device has available for sync
+    WikiManifest {
+        wikis: Vec<WikiInfo>,
+    },
+    /// A tiddler was created or modified
+    TiddlerChanged {
+        wiki_id: String,
+        title: String,
+        tiddler_json: String,
+        vector_clock: VectorClock,
+        timestamp: u64,
+    },
+    /// A tiddler was deleted
+    TiddlerDeleted {
+        wiki_id: String,
+        title: String,
+        vector_clock: VectorClock,
+        timestamp: u64,
+    },
+    /// Request a full sync of a wiki (sent on initial connection)
+    RequestFullSync {
+        wiki_id: String,
+        /// Our known vector clocks so the peer can send only what we're missing
+        known_clocks: std::collections::HashMap<String, VectorClock>,
+    },
+    /// Batch of tiddlers for full sync
+    FullSyncBatch {
+        wiki_id: String,
+        tiddlers: Vec<SyncTiddler>,
+        is_last_batch: bool,
+    },
+    /// An attachment file was added or modified
+    AttachmentChanged {
+        wiki_id: String,
+        filename: String,
+        file_size: u64,
+        #[serde(with = "base64_bytes")]
+        sha256: Vec<u8>,
+        chunk_count: u32,
+    },
+    /// A chunk of attachment data
+    AttachmentChunk {
+        wiki_id: String,
+        filename: String,
+        chunk_index: u32,
+        data_base64: String,
+    },
+    /// An attachment file was deleted
+    AttachmentDeleted {
+        wiki_id: String,
+        filename: String,
+    },
+    /// Notify peer of a conflict
+    ConflictNotification {
+        wiki_id: String,
+        title: String,
+    },
+    /// Request a wiki file transfer. Includes a list of files we already have
+    /// (with SHA-256 hashes) so the sender can skip unchanged files.
+    RequestWikiFile {
+        wiki_id: String,
+        /// Files we already have: (relative_path, sha256_hex).
+        /// Sender should skip files whose hash matches.
+        #[serde(default)]
+        have_files: Vec<AttachmentFileInfo>,
+    },
+    /// A chunk of wiki file data (response to RequestWikiFile)
+    WikiFileChunk {
+        wiki_id: String,
+        wiki_name: String,
+        is_folder: bool,
+        /// For folder wikis: relative path within the folder (e.g. "tiddlywiki.info", "tiddlers/foo.tid")
+        /// For single-file wikis: the filename (e.g. "mywiki.html")
+        filename: String,
+        chunk_index: u32,
+        chunk_count: u32,
+        data_base64: String,
+    },
+    /// Signals the end of a wiki file transfer
+    WikiFileComplete {
+        wiki_id: String,
+        wiki_name: String,
+        is_folder: bool,
+    },
+    /// Attachment manifest — sent after WikiManifest for shared wikis.
+    /// Lists all files in the attachments directory with their SHA-256 hashes
+    /// so the peer can detect missing or outdated files after an interrupted sync.
+    AttachmentManifest {
+        wiki_id: String,
+        /// (relative_path, sha256_hex) pairs
+        files: Vec<AttachmentFileInfo>,
+    },
+    /// Request specific attachment files that are missing or outdated
+    RequestAttachments {
+        wiki_id: String,
+        /// Relative paths of files that need to be (re-)sent
+        files: Vec<String>,
+    },
+    /// Lightweight tiddler fingerprints for diff-based sync.
+    /// Sent instead of a full dump — the receiver compares with local state
+    /// and only sends back tiddlers that are missing or newer.
+    TiddlerFingerprints {
+        wiki_id: String,
+        from_device_id: String,
+        /// (title, modified_timestamp) pairs for all non-shadow tiddlers
+        fingerprints: Vec<TiddlerFingerprint>,
+        /// True when these fingerprints are a reciprocal reply.
+        /// Receiver should compare and send diffs but NOT reply with
+        /// its own fingerprints (prevents infinite ping-pong).
+        #[serde(default)]
+        is_reply: bool,
+    },
+    /// Notify peer that we have unpaired them
+    DeviceUnpaired {
+        device_id: String,
+    },
+    /// Request a peer to send their tiddler fingerprints for a specific wiki.
+    /// Sent when a wiki window is about to open and needs catch-up sync.
+    /// The peer responds with TiddlerFingerprints so we can compare locally.
+    RequestFingerprints {
+        wiki_id: String,
+    },
+    /// Keepalive
+    Ping,
+    Pong,
+}
+
+impl SyncMessage {
+    /// Returns true for bulk-data messages (attachments, wiki file transfers)
+    /// that should use the low-priority channel so they don't block tiddler sync.
+    pub fn is_bulk_data(&self) -> bool {
+        matches!(
+            self,
+            SyncMessage::AttachmentChunk { .. }
+                | SyncMessage::AttachmentChanged { .. }
+                | SyncMessage::AttachmentDeleted { .. }
+                | SyncMessage::AttachmentManifest { .. }
+                | SyncMessage::RequestAttachments { .. }
+                | SyncMessage::WikiFileChunk { .. }
+                | SyncMessage::WikiFileComplete { .. }
+                | SyncMessage::RequestWikiFile { .. }
+        )
+    }
+}
+
+/// Lightweight fingerprint of a tiddler for diff-based sync
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TiddlerFingerprint {
+    pub title: String,
+    pub modified: String,
+}
+
+/// Info about a single file in an attachment manifest
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AttachmentFileInfo {
+    pub rel_path: String,
+    pub sha256_hex: String,
+    pub file_size: u64,
+}
+
+/// Information about a wiki available for sync
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WikiInfo {
+    pub wiki_id: String,
+    pub wiki_name: String,
+    pub is_folder: bool,
+}
+
+/// A tiddler being sent in a full sync batch
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SyncTiddler {
+    pub title: String,
+    pub tiddler_json: String,
+    pub vector_clock: VectorClock,
+}
+
+/// Vector clock for conflict detection
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct VectorClock {
+    /// Maps device_id → counter
+    pub clocks: std::collections::HashMap<String, u64>,
+}
+
+impl VectorClock {
+    pub fn new() -> Self {
+        Self {
+            clocks: std::collections::HashMap::new(),
+        }
+    }
+
+    /// Increment this device's counter
+    pub fn increment(&mut self, device_id: &str) {
+        let counter = self.clocks.entry(device_id.to_string()).or_insert(0);
+        *counter += 1;
+    }
+
+    /// Check if self is strictly newer than other (self dominates)
+    pub fn dominates(&self, other: &VectorClock) -> bool {
+        // self dominates if every entry in other is <= self,
+        // and at least one entry in self is > other
+        let mut dominated = false;
+        for (id, &other_val) in &other.clocks {
+            let self_val = self.clocks.get(id).copied().unwrap_or(0);
+            if self_val < other_val {
+                return false;
+            }
+            if self_val > other_val {
+                dominated = true;
+            }
+        }
+        // Also check entries in self that aren't in other
+        if !dominated {
+            for (id, &self_val) in &self.clocks {
+                if !other.clocks.contains_key(id) && self_val > 0 {
+                    dominated = true;
+                    break;
+                }
+            }
+        }
+        dominated
+    }
+
+    /// Merge another vector clock into this one (take max of each entry)
+    pub fn merge(&mut self, other: &VectorClock) {
+        for (id, &val) in &other.clocks {
+            let entry = self.clocks.entry(id.clone()).or_insert(0);
+            if val > *entry {
+                *entry = val;
+            }
+        }
+    }
+
+    /// Check if two vector clocks are concurrent (neither dominates)
+    pub fn is_concurrent_with(&self, other: &VectorClock) -> bool {
+        !self.dominates(other) && !other.dominates(self) && self != other
+    }
+}
+
+impl PartialEq for VectorClock {
+    fn eq(&self, other: &Self) -> bool {
+        // Equal if all entries match (treating missing as 0)
+        let all_keys: std::collections::HashSet<&String> =
+            self.clocks.keys().chain(other.clocks.keys()).collect();
+        for key in all_keys {
+            let a = self.clocks.get(key).copied().unwrap_or(0);
+            let b = other.clocks.get(key).copied().unwrap_or(0);
+            if a != b {
+                return false;
+            }
+        }
+        true
+    }
+}
+
+// ── Encryption ──────────────────────────────────────────────────────────────
+
+/// Per-connection encryption state
+pub struct SessionCipher {
+    cipher: ChaCha20Poly1305,
+    /// Counter for outgoing nonces (avoids nonce reuse)
+    send_counter: u64,
+}
+
+impl SessionCipher {
+    /// Derive a session key from the long-term shared secret and a random nonce
+    pub fn new(long_term_key: &[u8], session_nonce: &[u8]) -> Result<Self, String> {
+        let hk = Hkdf::<Sha256>::new(Some(session_nonce), long_term_key);
+        let mut session_key = [0u8; 32];
+        hk.expand(b"tiddlydesktop-lan-sync-session-key", &mut session_key)
+            .map_err(|e| format!("HKDF expand failed: {}", e))?;
+
+        let cipher = ChaCha20Poly1305::new_from_slice(&session_key)
+            .map_err(|e| format!("ChaCha20 init failed: {}", e))?;
+
+        Ok(Self {
+            cipher,
+            send_counter: 0,
+        })
+    }
+
+    /// Encrypt a message for sending
+    pub fn encrypt(&mut self, plaintext: &[u8]) -> Result<Vec<u8>, String> {
+        let nonce_bytes = self.send_counter.to_le_bytes();
+        self.send_counter += 1;
+
+        // ChaCha20-Poly1305 nonce is 12 bytes, we use 8 bytes of counter + 4 zero bytes
+        let mut nonce_arr = [0u8; 12];
+        nonce_arr[..8].copy_from_slice(&nonce_bytes);
+        let nonce = Nonce::from(nonce_arr);
+
+        let ciphertext = self
+            .cipher
+            .encrypt(&nonce, plaintext)
+            .map_err(|e| format!("Encryption failed: {}", e))?;
+
+        // Prepend the 8-byte nonce counter so receiver knows which nonce to use
+        let mut frame = Vec::with_capacity(8 + ciphertext.len());
+        frame.extend_from_slice(&nonce_bytes);
+        frame.extend_from_slice(&ciphertext);
+        Ok(frame)
+    }
+
+    /// Decrypt a received message
+    pub fn decrypt(&self, frame: &[u8]) -> Result<Vec<u8>, String> {
+        if frame.len() < 8 {
+            return Err("Frame too short".to_string());
+        }
+        let nonce_bytes = &frame[..8];
+        let ciphertext = &frame[8..];
+
+        let mut nonce_arr = [0u8; 12];
+        nonce_arr[..8].copy_from_slice(nonce_bytes);
+        let nonce = Nonce::from(nonce_arr);
+
+        self.cipher
+            .decrypt(&nonce, ciphertext)
+            .map_err(|e| format!("Decryption failed: {}", e))
+    }
+}
+
+/// Encrypt a SyncMessage for sending over WebSocket
+pub fn encrypt_message(cipher: &mut SessionCipher, msg: &SyncMessage) -> Result<Vec<u8>, String> {
+    let json = serde_json::to_string(msg).map_err(|e| format!("Serialize failed: {}", e))?;
+    cipher.encrypt(json.as_bytes())
+}
+
+/// Decrypt a WebSocket frame into a SyncMessage
+pub fn decrypt_message(cipher: &SessionCipher, frame: &[u8]) -> Result<SyncMessage, String> {
+    let plaintext = cipher.decrypt(frame)?;
+    let json_str =
+        std::str::from_utf8(&plaintext).map_err(|e| format!("UTF-8 decode failed: {}", e))?;
+    serde_json::from_str(json_str).map_err(|e| format!("Deserialize failed: {}", e))
+}
+
+// ── Base64 serde helper for Vec<u8> fields ──────────────────────────────────
+
+mod base64_bytes {
+    use base64::{engine::general_purpose::STANDARD, Engine};
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    pub fn serialize<S: Serializer>(bytes: &Vec<u8>, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&STANDARD.encode(bytes))
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Vec<u8>, D::Error> {
+        let s = String::deserialize(deserializer)?;
+        STANDARD.decode(&s).map_err(serde::de::Error::custom)
+    }
+}

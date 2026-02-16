@@ -18,6 +18,7 @@ Buttons/CreateWikiFolder: 创建维基文件夹
 Buttons/ToFile: 转为文件
 Buttons/ToFolder: 转为文件夹
 Buttons/Reauthorize: Re-authorize
+Buttons/Sync: 同步
 
 Tooltips/BackupsEnabled: 备份已启用 - 点击禁用
 Tooltips/ConvertWiki: 转换维基格式
@@ -30,6 +31,8 @@ Tooltips/SetBackupDir: 设置自定义备份目录
 Tooltips/RenameGroup: 重命名分组
 Tooltips/DeleteGroup: 删除分组（维基将移至未分组）
 Tooltips/SetBackupCount: 设置保留的最大备份数量（0 = 无限制）
+Tooltips/SyncEnabled: 局域网同步已启用 - 点击禁用
+Tooltips/SyncDisabled: 局域网同步已禁用 - 点击启用
 
 Labels/BackupFolder: 备份文件夹：
 Labels/BackupCount: 备份限制：
@@ -65,3 +68,25 @@ EditionSelector/AdditionalPlugins: 附加插件
 EditionSelector/Optional: （可选）
 EditionSelector/CreatingFile: 正在创建维基文件...
 EditionSelector/InitializingFolder: 正在初始化维基文件夹...
+
+LanSync/Title: 局域网同步
+LanSync/Start: 开始局域网同步
+LanSync/Stop: 停止局域网同步
+LanSync/DeviceName: 此设备：
+LanSync/Pairing: 设备配对
+LanSync/PinLabel: 在另一设备上输入此 PIN：
+LanSync/ShowPin: 配对新设备
+LanSync/HidePairingCode: 隐藏
+LanSync/PairedDevices: 已配对设备
+LanSync/NoPairedDevices: 没有已配对的设备。点击"配对新设备"以连接另一设备。
+LanSync/Unpair: 取消配对
+LanSync/Connected: 已连接
+LanSync/Disconnected: 离线
+LanSync/DiscoveredDevices: 网络上的设备
+LanSync/PinPlaceholder: PIN
+LanSync/Pair: 配对
+LanSync/AvailableWikis: 可从设备获取
+LanSync/NoRemoteWikis: 已连接的设备没有可用的新维基。
+LanSync/From: 来自
+LanSync/GetWiki: 获取维基
+LanSync/LinkWiki: 关联

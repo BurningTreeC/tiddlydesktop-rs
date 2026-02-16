@@ -18,6 +18,7 @@ Buttons/CreateWikiFolder: ਵਿਕੀ ਫੋਲਡਰ ਬਣਾਓ
 Buttons/ToFile: ਫਾਈਲ ਵਿੱਚ
 Buttons/ToFolder: ਫੋਲਡਰ ਵਿੱਚ
 Buttons/Reauthorize: Re-authorize
+Buttons/Sync: ਸਿੰਕ
 
 Tooltips/BackupsEnabled: ਬੈਕਅੱਪ ਚਾਲੂ - ਬੰਦ ਕਰਨ ਲਈ ਕਲਿੱਕ ਕਰੋ
 Tooltips/ConvertWiki: ਵਿਕੀ ਫਾਰਮੈਟ ਬਦਲੋ
@@ -30,6 +31,8 @@ Tooltips/SetBackupDir: ਕਸਟਮ ਬੈਕਅੱਪ ਫੋਲਡਰ ਸੈੱ
 Tooltips/RenameGroup: ਗਰੁੱਪ ਦਾ ਨਾਮ ਬਦਲੋ
 Tooltips/DeleteGroup: ਗਰੁੱਪ ਹਟਾਓ (ਵਿਕੀ ਬਿਨਾਂ ਗਰੁੱਪ ਵਿੱਚ ਜਾਣਗੇ)
 Tooltips/SetBackupCount: ਰੱਖਣ ਲਈ ਵੱਧ ਤੋਂ ਵੱਧ ਬੈਕਅੱਪ ਸੈੱਟ ਕਰੋ (0 = ਅਸੀਮਿਤ)
+Tooltips/SyncEnabled: LAN ਸਿੰਕ ਸਮਰੱਥ - ਅਯੋਗ ਕਰਨ ਲਈ ਕਲਿੱਕ ਕਰੋ
+Tooltips/SyncDisabled: LAN ਸਿੰਕ ਅਯੋਗ - ਸਮਰੱਥ ਕਰਨ ਲਈ ਕਲਿੱਕ ਕਰੋ
 
 Labels/BackupFolder: ਬੈਕਅੱਪ ਫੋਲਡਰ:
 Labels/BackupCount: ਬੈਕਅੱਪ ਸੀਮਾ:
@@ -65,3 +68,25 @@ EditionSelector/AdditionalPlugins: ਹੋਰ ਪਲੱਗਇਨ
 EditionSelector/Optional: (ਵਿਕਲਪਿਕ)
 EditionSelector/CreatingFile: ਵਿਕੀ ਫ਼ਾਈਲ ਬਣਾ ਰਿਹਾ ਹੈ...
 EditionSelector/InitializingFolder: ਵਿਕੀ ਫੋਲਡਰ ਸ਼ੁਰੂ ਕਰ ਰਿਹਾ ਹੈ...
+
+LanSync/Title: LAN ਸਿੰਕ
+LanSync/Start: LAN ਸਿੰਕ ਸ਼ੁਰੂ ਕਰੋ
+LanSync/Stop: LAN ਸਿੰਕ ਬੰਦ ਕਰੋ
+LanSync/DeviceName: ਇਹ ਡਿਵਾਈਸ:
+LanSync/Pairing: ਡਿਵਾਈਸ ਪੇਅਰਿੰਗ
+LanSync/PinLabel: ਇਹ PIN ਦੂਜੇ ਡਿਵਾਈਸ ਤੇ ਦਰਜ ਕਰੋ:
+LanSync/ShowPin: ਨਵੀਂ ਡਿਵਾਈਸ ਪੇਅਰ ਕਰੋ
+LanSync/HidePairingCode: ਲੁਕਾਓ
+LanSync/PairedDevices: ਪੇਅਰ ਕੀਤੇ ਡਿਵਾਈਸ
+LanSync/NoPairedDevices: ਕੋਈ ਪੇਅਰ ਕੀਤੇ ਡਿਵਾਈਸ ਨਹੀਂ। ਹੋਰ ਡਿਵਾਈਸ ਜੋੜਨ ਲਈ "ਨਵੀਂ ਡਿਵਾਈਸ ਪੇਅਰ ਕਰੋ" ਤੇ ਕਲਿੱਕ ਕਰੋ।
+LanSync/Unpair: ਅਨਪੇਅਰ ਕਰੋ
+LanSync/Connected: ਜੁੜਿਆ ਹੋਇਆ
+LanSync/Disconnected: ਆਫ਼ਲਾਈਨ
+LanSync/DiscoveredDevices: ਤੁਹਾਡੇ ਨੈੱਟਵਰਕ ਤੇ ਡਿਵਾਈਸ
+LanSync/PinPlaceholder: PIN
+LanSync/Pair: ਜੋੜੋ
+LanSync/AvailableWikis: ਡਿਵਾਈਸਾਂ ਤੋਂ ਉਪਲਬਧ
+LanSync/NoRemoteWikis: ਜੁੜੇ ਡਿਵਾਈਸਾਂ ਤੋਂ ਕੋਈ ਨਵੀਂ ਵਿਕੀ ਉਪਲਬਧ ਨਹੀਂ।
+LanSync/From: ਤੋਂ
+LanSync/GetWiki: ਵਿਕੀ ਪ੍ਰਾਪਤ ਕਰੋ
+LanSync/LinkWiki: ਲਿੰਕ

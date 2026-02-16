@@ -18,6 +18,7 @@ Buttons/CreateWikiFolder: Utwórz folder wiki
 Buttons/ToFile: do pliku
 Buttons/ToFolder: do folderu
 Buttons/Reauthorize: Re-authorize
+Buttons/Sync: synchronizuj
 
 Tooltips/BackupsEnabled: Kopie zapasowe włączone - kliknij aby wyłączyć
 Tooltips/ConvertWiki: Konwertuj format wiki
@@ -30,6 +31,8 @@ Tooltips/SetBackupDir: Ustaw własny katalog kopii zapasowych
 Tooltips/RenameGroup: Zmień nazwę grupy
 Tooltips/DeleteGroup: Usuń grupę (wiki zostaną przeniesione do Bez grupy)
 Tooltips/SetBackupCount: Ustaw maksymalną liczbę kopii zapasowych (0 = bez limitu)
+Tooltips/SyncEnabled: Synchronizacja LAN włączona - kliknij, aby wyłączyć
+Tooltips/SyncDisabled: Synchronizacja LAN wyłączona - kliknij, aby włączyć
 
 Labels/BackupFolder: Folder kopii zapasowych:
 Labels/BackupCount: Limit kopii:
@@ -65,3 +68,25 @@ EditionSelector/AdditionalPlugins: Dodatkowe wtyczki
 EditionSelector/Optional: (opcjonalne)
 EditionSelector/CreatingFile: Tworzenie pliku wiki...
 EditionSelector/InitializingFolder: Inicjalizacja folderu wiki...
+
+LanSync/Title: Synchronizacja LAN
+LanSync/Start: Rozpocznij synchronizację LAN
+LanSync/Stop: Zatrzymaj synchronizację LAN
+LanSync/DeviceName: To urządzenie:
+LanSync/Pairing: Parowanie urządzeń
+LanSync/PinLabel: Wprowadź ten PIN na drugim urządzeniu:
+LanSync/ShowPin: Sparuj nowe urządzenie
+LanSync/HidePairingCode: Ukryj
+LanSync/PairedDevices: Sparowane urządzenia
+LanSync/NoPairedDevices: Brak sparowanych urządzeń. Kliknij "Sparuj nowe urządzenie", aby połączyć inne urządzenie.
+LanSync/Unpair: Rozparuj
+LanSync/Connected: Połączony
+LanSync/Disconnected: Offline
+LanSync/DiscoveredDevices: Urządzenia w sieci
+LanSync/PinPlaceholder: PIN
+LanSync/Pair: Sparuj
+LanSync/AvailableWikis: Dostępne z urządzeń
+LanSync/NoRemoteWikis: Brak nowych wiki dostępnych z połączonych urządzeń.
+LanSync/From: z
+LanSync/GetWiki: Pobierz wiki
+LanSync/LinkWiki: Połącz

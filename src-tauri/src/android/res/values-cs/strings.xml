@@ -31,4 +31,44 @@
     <string name="open_as_wiki">Otevřít jako wiki</string>
     <string name="import_into_wiki">Importovat do wiki</string>
     <string name="no_app_for_link">Nebyla nalezena žádná aplikace pro otevření tohoto odkazu</string>
+
+    <!-- WikiActivity -->
+    <string name="share_title">Sdílet jako\u2026</string>
+    <string name="share_image">Obrázek</string>
+    <string name="share_plain_text">Prostý text</string>
+    <string name="share_json">JSON (.json)</string>
+    <string name="share_tid">TID (.tid)</string>
+    <string name="share_csv">CSV (.csv)</string>
+    <string name="unsaved_title">Neuložené změny</string>
+    <string name="unsaved_message">Máte %d neuloženou změnu/změn. Co chcete udělat?</string>
+    <string name="unsaved_save_close">Uložit &amp; zavřít</string>
+    <string name="unsaved_discard_close">Zahodit &amp; zavřít</string>
+
+    <!-- OpenWithActivity -->
+    <string name="open_unsupported_action">Nepodporovaná akce</string>
+    <string name="open_no_file">Nebyl zadán žádný soubor</string>
+    <string name="open_no_file_uri">Interní chyba: chybí URI souboru</string>
+    <string name="open_select_folder">Nyní vyberte složku obsahující wiki (pro ukládání &amp; zálohy)</string>
+    <string name="open_select_file">Vyberte soubor wiki pro udělení přístupu</string>
+    <string name="open_file_cancelled">Výběr souboru zrušen</string>
+    <string name="open_no_permission">Nepodařilo se získat oprávnění k přístupu k souboru</string>
+
+    <!-- WikiServerService -->
+    <string name="notif_channel_name">Wiki Server</string>
+    <string name="notif_channel_desc">Udržuje servery wiki spuštěné na pozadí</string>
+    <string name="notif_title">TiddlyDesktop-RS</string>
+    <string name="notif_text">Wiki běží na pozadí</string>
+
+    <string name="label_content">Obsah</string>
+    <string name="hint_content">Napište svou poznámku zde…</string>
+
+    <!-- Widgets -->
+    <string name="widget_capture_label">Zachytit</string>
+    <string name="widget_capture_desc">Tlačítko rychlého zachycení pro TiddlyWiki</string>
+
+    <!-- LanSyncService -->
+    <string name="sync_notif_channel_name">LAN Sync</string>
+    <string name="sync_notif_channel_desc">Udržuje LAN Sync aktivní pro synchronizaci wiki v reálném čase</string>
+    <string name="sync_notif_title">LAN Sync Aktivní</string>
+    <string name="sync_notif_text">Synchronizace wiki s blízkými zařízeními</string>
 </resources>

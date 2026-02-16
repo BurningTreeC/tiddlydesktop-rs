@@ -18,6 +18,7 @@ Buttons/CreateWikiFolder: विकी फ़ोल्डर बनाएं
 Buttons/ToFile: फ़ाइल में
 Buttons/ToFolder: फ़ोल्डर में
 Buttons/Reauthorize: Re-authorize
+Buttons/Sync: सिंक
 
 Tooltips/BackupsEnabled: बैकअप सक्षम - अक्षम करने के लिए क्लिक करें
 Tooltips/ConvertWiki: विकी प्रारूप बदलें
@@ -30,6 +31,8 @@ Tooltips/SetBackupDir: कस्टम बैकअप फ़ोल्डर स
 Tooltips/RenameGroup: समूह का नाम बदलें
 Tooltips/DeleteGroup: समूह हटाएं (विकी असमूहित में जाएंगे)
 Tooltips/SetBackupCount: रखने के लिए अधिकतम बैकअप संख्या सेट करें (0 = असीमित)
+Tooltips/SyncEnabled: LAN सिंक सक्षम - अक्षम करने के लिए क्लिक करें
+Tooltips/SyncDisabled: LAN सिंक अक्षम - सक्षम करने के लिए क्लिक करें
 
 Labels/BackupFolder: बैकअप फ़ोल्डर:
 Labels/BackupCount: बैकअप सीमा:
@@ -65,3 +68,25 @@ EditionSelector/AdditionalPlugins: अतिरिक्त प्लगइन
 EditionSelector/Optional: (वैकल्पिक)
 EditionSelector/CreatingFile: विकी फ़ाइल बना रहे हैं...
 EditionSelector/InitializingFolder: विकी फ़ोल्डर प्रारंभ कर रहे हैं...
+
+LanSync/Title: LAN सिंक
+LanSync/Start: LAN सिंक शुरू करें
+LanSync/Stop: LAN सिंक बंद करें
+LanSync/DeviceName: यह उपकरण:
+LanSync/Pairing: उपकरण पेयरिंग
+LanSync/PinLabel: इस PIN को दूसरे उपकरण पर दर्ज करें:
+LanSync/ShowPin: नया उपकरण पेयर करें
+LanSync/HidePairingCode: छुपाएं
+LanSync/PairedDevices: पेयर किए गए उपकरण
+LanSync/NoPairedDevices: कोई पेयर किया गया उपकरण नहीं। किसी अन्य उपकरण को जोड़ने के लिए "नया उपकरण पेयर करें" पर क्लिक करें।
+LanSync/Unpair: अनपेयर करें
+LanSync/Connected: जुड़ा हुआ
+LanSync/Disconnected: ऑफ़लाइन
+LanSync/DiscoveredDevices: नेटवर्क पर डिवाइस
+LanSync/PinPlaceholder: PIN
+LanSync/Pair: जोड़ें
+LanSync/AvailableWikis: उपकरणों से उपलब्ध
+LanSync/NoRemoteWikis: जुड़े उपकरणों से कोई नई विकी उपलब्ध नहीं।
+LanSync/From: से
+LanSync/GetWiki: विकी प्राप्त करें
+LanSync/LinkWiki: लिंक

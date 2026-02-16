@@ -8,12 +8,16 @@ import android.os.Bundle
 import android.util.Log
 import android.view.Gravity
 import android.view.View
+import android.view.ViewGroup
 import android.view.WindowInsets
+import android.webkit.RenderProcessGoneDetail
+import android.webkit.WebResourceRequest
+import android.webkit.WebResourceResponse
+import android.webkit.WebView
+import android.webkit.WebViewClient
 import android.widget.FrameLayout
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
-import org.json.JSONObject
-import java.io.File
 
 class MainActivity : TauriActivity() {
 
@@ -39,7 +43,22 @@ class MainActivity : TauriActivity() {
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        // If we were started by WikiActivity to restart the main process for LAN sync,
+        // move to background immediately to avoid disrupting the user's wiki window.
+        val isRestartForSync = intent?.getBooleanExtra("RESTART_FOR_SYNC", false) == true
+
         super.onCreate(savedInstanceState)
+
+        if (isRestartForSync) {
+            Log.d(TAG, "Started for LAN sync process restart — moving to background")
+            window.decorView.post {
+                if (!isFinishing) {
+                    moveTaskToBack(true)
+                    @Suppress("DEPRECATION")
+                    overridePendingTransition(0, 0)
+                }
+            }
+        }
 
         // Android 15+ (API 35+): Edge-to-edge is enforced. Pad the content view
         // so it doesn't render behind the status bar and navigation bar.
@@ -79,7 +98,131 @@ class MainActivity : TauriActivity() {
         }
 
         requestNotificationPermission()
-        handleWidgetIntent(intent)
+
+        // Track that MainActivity is alive for LAN sync service lifecycle
+        LanSyncService.setMainActivityAlive(true)
+
+        // Protect Tauri's WebView from renderer crashes that would kill the whole app.
+        // Schedule after layout so Tauri has time to create the WebView.
+        window.decorView.post {
+            installRenderProcessCrashProtection()
+        }
+    }
+
+    /**
+     * Find Tauri's WebView and install crash protection:
+     * 1. Wrap the WebViewClient to handle onRenderProcessGone() (prevents app kill)
+     * 2. Set renderer priority to IMPORTANT even when not visible (prevents OOM kill
+     *    of the renderer when the landing page is in the background)
+     */
+    private fun installRenderProcessCrashProtection() {
+        val webView = findWebView(window.decorView) ?: run {
+            Log.w(TAG, "Could not find WebView for crash protection")
+            return
+        }
+
+        // Keep the renderer process alive even when the activity is in the background.
+        // This is critical for LAN sync — the main process must stay alive with its
+        // WebView renderer to maintain sync connections.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            webView.setRendererPriorityPolicy(
+                WebView.RENDERER_PRIORITY_IMPORTANT,
+                false // waivedWhenNotVisible=false → keep high priority even in background
+            )
+            Log.d(TAG, "Set WebView renderer priority to IMPORTANT (not waived when not visible)")
+        }
+
+        // Wrap the existing WebViewClient to add onRenderProcessGone() handling.
+        // Try to get the original client via reflection so we can delegate to it.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            var originalClient: WebViewClient? = null
+            try {
+                val method = WebView::class.java.getMethod("getWebViewClient")
+                originalClient = method.invoke(webView) as? WebViewClient
+                Log.d(TAG, "Got original WebViewClient: ${originalClient?.javaClass?.name}")
+            } catch (e: Exception) {
+                Log.w(TAG, "Could not get original WebViewClient via reflection: ${e.message}")
+            }
+
+            val activity = this
+            val orig = originalClient
+
+            webView.webViewClient = object : WebViewClient() {
+                @Deprecated("Deprecated in Java")
+                override fun shouldOverrideUrlLoading(view: WebView, url: String): Boolean {
+                    return orig?.shouldOverrideUrlLoading(view, url)
+                        ?: super.shouldOverrideUrlLoading(view, url)
+                }
+
+                override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
+                    return orig?.shouldOverrideUrlLoading(view, request)
+                        ?: super.shouldOverrideUrlLoading(view, request)
+                }
+
+                override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse? {
+                    return orig?.shouldInterceptRequest(view, request)
+                        ?: super.shouldInterceptRequest(view, request)
+                }
+
+                override fun onPageFinished(view: WebView, url: String) {
+                    if (orig != null) orig.onPageFinished(view, url)
+                    else super.onPageFinished(view, url)
+                }
+
+                override fun onPageStarted(view: WebView, url: String?, favicon: android.graphics.Bitmap?) {
+                    if (orig != null) orig.onPageStarted(view, url, favicon)
+                    else super.onPageStarted(view, url, favicon)
+                }
+
+                override fun onReceivedError(view: WebView, request: WebResourceRequest, error: android.webkit.WebResourceError) {
+                    if (orig != null) orig.onReceivedError(view, request, error)
+                    else super.onReceivedError(view, request, error)
+                }
+
+                override fun onReceivedSslError(view: WebView, handler: android.webkit.SslErrorHandler, error: android.net.http.SslError) {
+                    if (orig != null) orig.onReceivedSslError(view, handler, error)
+                    else super.onReceivedSslError(view, handler, error)
+                }
+
+                override fun onReceivedHttpError(view: WebView, request: WebResourceRequest, errorResponse: WebResourceResponse) {
+                    if (orig != null) orig.onReceivedHttpError(view, request, errorResponse)
+                    else super.onReceivedHttpError(view, request, errorResponse)
+                }
+
+                override fun onRenderProcessGone(view: WebView, detail: RenderProcessGoneDetail): Boolean {
+                    Log.e(TAG, "WebView render process gone! didCrash=${detail.didCrash()}, " +
+                        "rendererPriorityAtExit=${detail.rendererPriorityAtExit()}")
+                    // Return true to prevent AwBrowserTerminator from killing the whole app.
+                    // The landing page WebView is dead — recreate the activity to get a fresh one.
+                    try {
+                        // Remove the dead WebView from the hierarchy to avoid further crashes
+                        (view.parent as? ViewGroup)?.removeView(view)
+                        view.destroy()
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Error cleaning up dead WebView: ${e.message}")
+                    }
+                    // Recreate the activity to get a fresh Tauri WebView
+                    activity.recreate()
+                    return true
+                }
+            }
+
+            Log.d(TAG, "WebView crash protection installed (original client: ${orig != null})")
+        }
+    }
+
+    /**
+     * Recursively find the first WebView in the view hierarchy.
+     */
+    private fun findWebView(view: View): WebView? {
+        if (view is WebView) return view
+        if (view is ViewGroup) {
+            for (i in 0 until view.childCount) {
+                val result = findWebView(view.getChildAt(i))
+                if (result != null) return result
+            }
+        }
+        return null
     }
 
     /**
@@ -118,51 +261,21 @@ class MainActivity : TauriActivity() {
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
-        handleWidgetIntent(intent)
+        if (intent.getBooleanExtra("RESTART_FOR_SYNC", false)) {
+            Log.d(TAG, "New intent for LAN sync restart — moving to background")
+            moveTaskToBack(true)
+            @Suppress("DEPRECATION")
+            overridePendingTransition(0, 0)
+        }
     }
 
-    /**
-     * Handle intents from the home screen widget.
-     * If the wiki is already open, bring it to foreground.
-     * Otherwise, write a pending file so the Tauri frontend can open the wiki
-     * through the proper Rust commands (which start servers, etc.).
-     */
-    private fun handleWidgetIntent(intent: Intent) {
-        val wikiPath = intent.getStringExtra("open_wiki_path")
-        val wikiTitle = intent.getStringExtra("open_wiki_title")
-        val isFolder = intent.getBooleanExtra("open_wiki_is_folder", false)
-
-        if (!wikiPath.isNullOrEmpty()) {
-            Log.d(TAG, "Widget intent: opening wiki path=$wikiPath, title=$wikiTitle, isFolder=$isFolder")
-
-            // Try to bring existing wiki to foreground
-            if (WikiActivity.bringWikiToFront(this, wikiPath)) {
-                Log.d(TAG, "Wiki already open, brought to foreground")
-            } else {
-                // Write pending wiki info to a file that the Tauri frontend will read.
-                // We can't launch WikiActivity directly because:
-                // - Folder wikis need a Node.js server URL (started by Rust)
-                // - Single-file wikis need Rust to set up the entry properly
-                // The frontend startup.js checks for this file and opens the wiki.
-                Log.d(TAG, "Writing pending wiki open file for frontend")
-                try {
-                    val pendingFile = File(filesDir, "pending_widget_wiki.json")
-                    val json = JSONObject().apply {
-                        put("path", wikiPath)
-                        put("title", wikiTitle ?: "TiddlyWiki")
-                        put("is_folder", isFolder)
-                    }
-                    pendingFile.writeText(json.toString())
-                    Log.d(TAG, "Wrote pending wiki to: ${pendingFile.absolutePath}")
-                } catch (e: Exception) {
-                    Log.e(TAG, "Failed to write pending wiki file: ${e.message}")
-                }
-            }
-
-            // Clear the extras so we don't reopen on rotation
-            intent.removeExtra("open_wiki_path")
-            intent.removeExtra("open_wiki_title")
-            intent.removeExtra("open_wiki_is_folder")
+    override fun onDestroy() {
+        super.onDestroy()
+        // When the user presses Back (isFinishing=true), notify LAN sync service.
+        // It will stop if no wiki activities are open.
+        if (isFinishing) {
+            Log.d(TAG, "MainActivity finishing — notifying LAN sync service")
+            LanSyncService.setMainActivityAlive(false, applicationContext)
         }
     }
 }

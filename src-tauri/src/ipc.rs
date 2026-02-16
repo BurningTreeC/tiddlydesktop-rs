@@ -146,6 +146,48 @@ pub enum IpcMessage {
     /// Ping/keepalive
     Ping,
     Pong,
+
+    // ── LAN Sync IPC messages ────────────────────────────────────────
+
+    /// Wiki process → main process: notify that a sync-enabled wiki window opened
+    LanSyncWikiOpened {
+        wiki_id: String,
+    },
+    /// Wiki process → main process: tiddler changed in a sync-enabled wiki
+    LanSyncTiddlerChanged {
+        wiki_id: String,
+        title: String,
+        tiddler_json: String,
+    },
+    /// Wiki process → main process: tiddler deleted in a sync-enabled wiki
+    LanSyncTiddlerDeleted {
+        wiki_id: String,
+        title: String,
+    },
+    /// Wiki process → main process: batch of tiddlers for full sync dump
+    LanSyncFullSyncBatch {
+        wiki_id: String,
+        to_device_id: String,
+        tiddlers_json: String,
+        is_last_batch: bool,
+    },
+    /// Wiki process → main process: tiddler fingerprints for diff-based sync
+    LanSyncSendFingerprints {
+        wiki_id: String,
+        to_device_id: String,
+        fingerprints_json: String,
+    },
+    /// Wiki process → main process: broadcast fingerprints to ALL peers sharing this wiki
+    LanSyncBroadcastFingerprints {
+        wiki_id: String,
+        fingerprints_json: String,
+    },
+
+    /// Main process → wiki process: apply a remote tiddler change
+    LanSyncApplyChange {
+        wiki_id: String,
+        payload_json: String,
+    },
 }
 
 /// A connected wiki process
@@ -185,6 +227,59 @@ impl IpcServer {
             update_favicon_callback: Arc::new(Mutex::new(None)),
             auth_token: token,
         }
+    }
+
+    /// Send a LAN sync message to all connected wiki processes.
+    /// Used by the main process to push inbound sync changes to wiki windows.
+    /// Send a LAN sync message to all connected IPC clients.
+    /// Returns the number of clients that received the message.
+    pub fn send_lan_sync_to_all(&self, wiki_id: &str, payload_json: &str) -> usize {
+        let msg = IpcMessage::LanSyncApplyChange {
+            wiki_id: wiki_id.to_string(),
+            payload_json: payload_json.to_string(),
+        };
+        if let Ok(json) = serde_json::to_string(&msg) {
+            let mut broken_pids = Vec::new();
+            let client_count;
+            {
+                let clients = self.clients_by_pid.lock().unwrap();
+                client_count = clients.len();
+                eprintln!("[IPC] send_lan_sync_to_all: wiki_id={}, {} clients, payload_len={}", wiki_id, client_count, payload_json.len());
+                for (pid, stream) in clients.iter() {
+                    let mut s = stream;
+                    if let Err(e) = writeln!(s, "{}", json) {
+                        eprintln!("[IPC] Failed to send LAN sync to pid {}: {}", pid, e);
+                        broken_pids.push(*pid);
+                        continue;
+                    }
+                    if let Err(e) = s.flush() {
+                        eprintln!("[IPC] Failed to flush LAN sync to pid {}: {}", pid, e);
+                        broken_pids.push(*pid);
+                    }
+                }
+            }
+            // Remove broken streams and their wiki group entries
+            if !broken_pids.is_empty() {
+                let mut clients = self.clients_by_pid.lock().unwrap();
+                let mut groups = self.wiki_groups.lock().unwrap();
+                for pid in &broken_pids {
+                    clients.remove(pid);
+                    // Also clean up wiki_groups
+                    groups.retain(|_, group| {
+                        group.retain(|c| c.pid != *pid);
+                        !group.is_empty()
+                    });
+                }
+                eprintln!("[IPC] Cleaned up {} broken client(s)", broken_pids.len());
+            }
+            return client_count - broken_pids.len();
+        }
+        0
+    }
+
+    /// Get a reference to clients_by_pid for sending targeted messages
+    pub fn clients_by_pid(&self) -> &Arc<Mutex<HashMap<u32, TcpStream>>> {
+        &self.clients_by_pid
     }
 
     /// Set callback for when a wiki open is requested
@@ -509,6 +604,140 @@ fn handle_client(
                                 let _ = writeln!(write_stream, "{}", serde_json::to_string(&pong)?);
                             }
 
+                            // ── LAN Sync: wiki process → main process ─────────
+                            IpcMessage::LanSyncWikiOpened { wiki_id } => {
+                                if !client_authenticated {
+                                    continue;
+                                }
+                                #[cfg(not(target_os = "android"))]
+                                {
+                                    if let Some(mgr) = crate::lan_sync::get_sync_manager() {
+                                        let mgr = mgr.clone();
+                                        let wiki_id_owned = wiki_id.clone();
+                                        tauri::async_runtime::spawn(async move {
+                                            mgr.on_wiki_opened(&wiki_id_owned).await;
+                                        });
+                                    }
+                                }
+                            }
+
+                            IpcMessage::LanSyncTiddlerChanged { wiki_id, title, tiddler_json } => {
+                                if !client_authenticated {
+                                    continue;
+                                }
+                                #[cfg(not(target_os = "android"))]
+                                {
+                                    if let Some(mgr) = crate::lan_sync::get_sync_manager() {
+                                        mgr.notify_tiddler_changed(wiki_id, title, tiddler_json);
+                                    }
+                                }
+                            }
+
+                            IpcMessage::LanSyncTiddlerDeleted { wiki_id, title } => {
+                                if !client_authenticated {
+                                    continue;
+                                }
+                                #[cfg(not(target_os = "android"))]
+                                {
+                                    if let Some(mgr) = crate::lan_sync::get_sync_manager() {
+                                        mgr.notify_tiddler_deleted(wiki_id, title);
+                                    }
+                                }
+                            }
+
+                            IpcMessage::LanSyncFullSyncBatch { wiki_id, to_device_id, tiddlers_json, is_last_batch } => {
+                                if !client_authenticated {
+                                    continue;
+                                }
+                                #[cfg(not(target_os = "android"))]
+                                {
+                                    if let Some(mgr) = crate::lan_sync::get_sync_manager() {
+                                        let tiddlers: Vec<crate::lan_sync::TiddlerBatch> =
+                                            serde_json::from_str(tiddlers_json).unwrap_or_default();
+                                        let mgr = mgr.clone();
+                                        let wiki_id_owned = wiki_id.clone();
+                                        let to_device_id_owned = to_device_id.clone();
+                                        let is_last = *is_last_batch;
+                                        tauri::async_runtime::spawn(async move {
+                                            if let Err(e) = mgr
+                                                .send_full_sync_batch(
+                                                    &wiki_id_owned,
+                                                    &to_device_id_owned,
+                                                    tiddlers,
+                                                    is_last,
+                                                )
+                                                .await
+                                            {
+                                                eprintln!(
+                                                    "[IPC] Full sync batch error: {}",
+                                                    e
+                                                );
+                                            }
+                                        });
+                                    }
+                                }
+                            }
+
+                            IpcMessage::LanSyncSendFingerprints { wiki_id, to_device_id, fingerprints_json } => {
+                                if !client_authenticated {
+                                    continue;
+                                }
+                                #[cfg(not(target_os = "android"))]
+                                {
+                                    if let Some(mgr) = crate::lan_sync::get_sync_manager() {
+                                        let fingerprints: Vec<crate::lan_sync::protocol::TiddlerFingerprint> =
+                                            serde_json::from_str(fingerprints_json).unwrap_or_default();
+                                        let mgr = mgr.clone();
+                                        let wiki_id_owned = wiki_id.clone();
+                                        let to_device_id_owned = to_device_id.clone();
+                                        tauri::async_runtime::spawn(async move {
+                                            if let Err(e) = mgr
+                                                .send_tiddler_fingerprints(
+                                                    &wiki_id_owned,
+                                                    &to_device_id_owned,
+                                                    fingerprints,
+                                                )
+                                                .await
+                                            {
+                                                eprintln!(
+                                                    "[IPC] Send fingerprints error: {}",
+                                                    e
+                                                );
+                                            }
+                                        });
+                                    }
+                                }
+                            }
+
+                            IpcMessage::LanSyncBroadcastFingerprints { wiki_id, fingerprints_json } => {
+                                if !client_authenticated {
+                                    continue;
+                                }
+                                #[cfg(not(target_os = "android"))]
+                                {
+                                    if let Some(mgr) = crate::lan_sync::get_sync_manager() {
+                                        let fingerprints: Vec<crate::lan_sync::protocol::TiddlerFingerprint> =
+                                            serde_json::from_str(fingerprints_json).unwrap_or_default();
+                                        let mgr = mgr.clone();
+                                        let wiki_id_owned = wiki_id.clone();
+                                        tauri::async_runtime::spawn(async move {
+                                            if let Err(e) = mgr
+                                                .broadcast_tiddler_fingerprints(
+                                                    &wiki_id_owned,
+                                                    fingerprints,
+                                                )
+                                                .await
+                                            {
+                                                eprintln!(
+                                                    "[IPC] Broadcast fingerprints error: {}",
+                                                    e
+                                                );
+                                            }
+                                        });
+                                    }
+                                }
+                            }
+
                             _ => {}
                         }
                     }
@@ -664,6 +893,59 @@ impl IpcClient {
             favicon,
         };
         self.send(&msg)
+    }
+
+    // ── LAN Sync helpers ─────────────────────────────────────────────
+
+    /// Notify main process that a sync-enabled wiki window opened
+    pub fn send_lan_sync_wiki_opened(&mut self, wiki_id: &str) -> std::io::Result<()> {
+        self.send(&IpcMessage::LanSyncWikiOpened {
+            wiki_id: wiki_id.to_string(),
+        })
+    }
+
+    /// Notify main process of a tiddler change for LAN sync
+    pub fn send_lan_sync_tiddler_changed(&mut self, wiki_id: &str, title: &str, tiddler_json: &str) -> std::io::Result<()> {
+        self.send(&IpcMessage::LanSyncTiddlerChanged {
+            wiki_id: wiki_id.to_string(),
+            title: title.to_string(),
+            tiddler_json: tiddler_json.to_string(),
+        })
+    }
+
+    /// Notify main process of a tiddler deletion for LAN sync
+    pub fn send_lan_sync_tiddler_deleted(&mut self, wiki_id: &str, title: &str) -> std::io::Result<()> {
+        self.send(&IpcMessage::LanSyncTiddlerDeleted {
+            wiki_id: wiki_id.to_string(),
+            title: title.to_string(),
+        })
+    }
+
+    /// Send a batch of tiddlers for full sync dump
+    pub fn send_lan_sync_full_batch(&mut self, wiki_id: &str, to_device_id: &str, tiddlers_json: &str, is_last_batch: bool) -> std::io::Result<()> {
+        self.send(&IpcMessage::LanSyncFullSyncBatch {
+            wiki_id: wiki_id.to_string(),
+            to_device_id: to_device_id.to_string(),
+            tiddlers_json: tiddlers_json.to_string(),
+            is_last_batch,
+        })
+    }
+
+    /// Send tiddler fingerprints for diff-based sync
+    pub fn send_lan_sync_fingerprints(&mut self, wiki_id: &str, to_device_id: &str, fingerprints_json: &str) -> std::io::Result<()> {
+        self.send(&IpcMessage::LanSyncSendFingerprints {
+            wiki_id: wiki_id.to_string(),
+            to_device_id: to_device_id.to_string(),
+            fingerprints_json: fingerprints_json.to_string(),
+        })
+    }
+
+    /// Broadcast tiddler fingerprints to all connected peers sharing this wiki
+    pub fn send_lan_sync_broadcast_fingerprints(&mut self, wiki_id: &str, fingerprints_json: &str) -> std::io::Result<()> {
+        self.send(&IpcMessage::LanSyncBroadcastFingerprints {
+            wiki_id: wiki_id.to_string(),
+            fingerprints_json: fingerprints_json.to_string(),
+        })
     }
 }
 

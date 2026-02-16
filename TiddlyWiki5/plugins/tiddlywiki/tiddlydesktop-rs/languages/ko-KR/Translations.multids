@@ -18,6 +18,7 @@ Buttons/CreateWikiFolder: 위키 폴더 만들기
 Buttons/ToFile: 파일로
 Buttons/ToFolder: 폴더로
 Buttons/Reauthorize: Re-authorize
+Buttons/Sync: 동기화
 
 Tooltips/BackupsEnabled: 백업 활성화됨 - 클릭하여 비활성화
 Tooltips/ConvertWiki: 위키 형식 변환
@@ -30,6 +31,8 @@ Tooltips/SetBackupDir: 사용자 지정 백업 디렉터리 설정
 Tooltips/RenameGroup: 그룹 이름 변경
 Tooltips/DeleteGroup: 그룹 삭제 (위키가 미분류로 이동됨)
 Tooltips/SetBackupCount: 유지할 최대 백업 수 설정 (0 = 무제한)
+Tooltips/SyncEnabled: LAN 동기화 활성화됨 - 클릭하여 비활성화
+Tooltips/SyncDisabled: LAN 동기화 비활성화됨 - 클릭하여 활성화
 
 Labels/BackupFolder: 백업 폴더:
 Labels/BackupCount: 백업 제한:
@@ -65,3 +68,25 @@ EditionSelector/AdditionalPlugins: 추가 플러그인
 EditionSelector/Optional: (선택 사항)
 EditionSelector/CreatingFile: 위키 파일 생성 중...
 EditionSelector/InitializingFolder: 위키 폴더 초기화 중...
+
+LanSync/Title: LAN 동기화
+LanSync/Start: LAN 동기화 시작
+LanSync/Stop: LAN 동기화 중지
+LanSync/DeviceName: 이 기기:
+LanSync/Pairing: 기기 페어링
+LanSync/PinLabel: 다른 기기에서 이 PIN을 입력하세요:
+LanSync/ShowPin: 새 기기 페어링
+LanSync/HidePairingCode: 숨기기
+LanSync/PairedDevices: 페어링된 기기
+LanSync/NoPairedDevices: 페어링된 기기가 없습니다. "새 기기 페어링"을 클릭하여 다른 기기를 연결하세요.
+LanSync/Unpair: 페어링 해제
+LanSync/Connected: 연결됨
+LanSync/Disconnected: 오프라인
+LanSync/DiscoveredDevices: 네트워크의 기기
+LanSync/PinPlaceholder: PIN
+LanSync/Pair: 페어링
+LanSync/AvailableWikis: 피어에서 사용 가능
+LanSync/NoRemoteWikis: 연결된 피어에서 사용 가능한 새 위키가 없습니다.
+LanSync/From: 출처:
+LanSync/GetWiki: 위키 가져오기
+LanSync/LinkWiki: 연결

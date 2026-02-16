@@ -18,6 +18,7 @@ Buttons/CreateWikiFolder: Vytvořit wiki složku
 Buttons/ToFile: do souboru
 Buttons/ToFolder: do složky
 Buttons/Reauthorize: Re-authorize
+Buttons/Sync: synchronizovat
 
 Tooltips/BackupsEnabled: Zálohy povoleny - klikněte pro zakázání
 Tooltips/ConvertWiki: Převést formát wiki
@@ -30,6 +31,8 @@ Tooltips/SetBackupDir: Nastavit vlastní adresář záloh
 Tooltips/RenameGroup: Přejmenovat skupinu
 Tooltips/DeleteGroup: Smazat skupinu (wiki budou přesunuty do Bez skupiny)
 Tooltips/SetBackupCount: Nastavit maximální počet záloh k uchování (0 = neomezeno)
+Tooltips/SyncEnabled: Synchronizace LAN povolena - kliknutím zakážete
+Tooltips/SyncDisabled: Synchronizace LAN zakázána - kliknutím povolíte
 
 Labels/BackupFolder: Složka záloh:
 Labels/BackupCount: Limit záloh:
@@ -65,3 +68,25 @@ EditionSelector/AdditionalPlugins: Další pluginy
 EditionSelector/Optional: (volitelné)
 EditionSelector/CreatingFile: Vytváření wiki souboru...
 EditionSelector/InitializingFolder: Inicializace wiki složky...
+
+LanSync/Title: Synchronizace LAN
+LanSync/Start: Spustit synchronizaci LAN
+LanSync/Stop: Zastavit synchronizaci LAN
+LanSync/DeviceName: Toto zařízení:
+LanSync/Pairing: Párování zařízení
+LanSync/PinLabel: Zadejte tento PIN na druhém zařízení:
+LanSync/ShowPin: Spárovat nové zařízení
+LanSync/HidePairingCode: Skrýt
+LanSync/PairedDevices: Spárovaná zařízení
+LanSync/NoPairedDevices: Žádná spárovaná zařízení. Klikněte na "Spárovat nové zařízení" pro připojení dalšího zařízení.
+LanSync/Unpair: Zrušit párování
+LanSync/Connected: Připojeno
+LanSync/Disconnected: Offline
+LanSync/DiscoveredDevices: Zařízení ve vaší síti
+LanSync/PinPlaceholder: PIN
+LanSync/Pair: Spárovat
+LanSync/AvailableWikis: Dostupné ze zařízení
+LanSync/NoRemoteWikis: Žádné nové wiki nejsou dostupné z připojených zařízení.
+LanSync/From: z
+LanSync/GetWiki: Získat wiki
+LanSync/LinkWiki: Propojit

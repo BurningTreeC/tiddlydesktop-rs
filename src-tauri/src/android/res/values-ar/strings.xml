@@ -31,4 +31,44 @@
     <string name="open_as_wiki">فتح كويكي</string>
     <string name="import_into_wiki">استيراد إلى ويكي</string>
     <string name="no_app_for_link">لا يوجد تطبيق لفتح هذا الرابط</string>
+
+    <!-- WikiActivity -->
+    <string name="share_title">مشاركة كـ\u2026</string>
+    <string name="share_image">صورة</string>
+    <string name="share_plain_text">نص عادي</string>
+    <string name="share_json">JSON (.json)</string>
+    <string name="share_tid">TID (.tid)</string>
+    <string name="share_csv">CSV (.csv)</string>
+    <string name="unsaved_title">تغييرات غير محفوظة</string>
+    <string name="unsaved_message">لديك %d تغيير(ات) غير محفوظة. ماذا تريد أن تفعل؟</string>
+    <string name="unsaved_save_close">حفظ &amp; إغلاق</string>
+    <string name="unsaved_discard_close">تجاهل &amp; إغلاق</string>
+
+    <!-- OpenWithActivity -->
+    <string name="open_unsupported_action">إجراء غير مدعوم</string>
+    <string name="open_no_file">لم يتم تحديد ملف</string>
+    <string name="open_no_file_uri">خطأ داخلي: لا يوجد معرّف ملف</string>
+    <string name="open_select_folder">الآن اختر المجلد الذي يحتوي على الويكي (للحفظ &amp; النسخ الاحتياطية)</string>
+    <string name="open_select_file">يرجى اختيار ملف الويكي لمنح صلاحية الوصول</string>
+    <string name="open_file_cancelled">تم إلغاء اختيار الملف</string>
+    <string name="open_no_permission">تعذر الحصول على إذن الوصول إلى الملف</string>
+
+    <!-- WikiServerService -->
+    <string name="notif_channel_name">Wiki Server</string>
+    <string name="notif_channel_desc">يحافظ على تشغيل خوادم الويكي في الخلفية</string>
+    <string name="notif_title">TiddlyDesktop-RS</string>
+    <string name="notif_text">الويكي يعمل في الخلفية</string>
+
+    <string name="label_content">المحتوى</string>
+    <string name="hint_content">اكتب ملاحظتك هنا…</string>
+
+    <!-- Widgets -->
+    <string name="widget_capture_label">التقاط</string>
+    <string name="widget_capture_desc">زر التقاط سريع لـ TiddlyWiki</string>
+
+    <!-- LanSyncService -->
+    <string name="sync_notif_channel_name">LAN Sync</string>
+    <string name="sync_notif_channel_desc">يحافظ على LAN Sync نشطًا لمزامنة الويكي في الوقت الفعلي</string>
+    <string name="sync_notif_title">LAN Sync نشط</string>
+    <string name="sync_notif_text">مزامنة الويكي مع الأجهزة القريبة</string>
 </resources>

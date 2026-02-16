@@ -46,6 +46,33 @@ class CaptureActivity : AppCompatActivity() {
     companion object {
         private const val TAG = "CaptureActivity"
         private val URL_PATTERN: Pattern = Pattern.compile("""https?://\S+""")
+        private val TRAIL_PUNCT = charArrayOf('.', ',', ';', '!', '?')
+
+        /**
+         * Trim trailing punctuation from a URL, but preserve balanced parentheses.
+         * Wikipedia URLs like https://en.wikipedia.org/wiki/Android_(Betriebssystem)
+         * have a meaningful closing ')' that must not be stripped.
+         */
+        fun trimUrlPunctuation(url: String): String {
+            var end = url.length
+            while (end > 0) {
+                val ch = url[end - 1]
+                if (ch in TRAIL_PUNCT) {
+                    end--
+                } else if (ch == ')') {
+                    // Only strip closing paren if unbalanced (more ')' than '(')
+                    val sub = url.substring(0, end)
+                    if (sub.count { it == ')' } > sub.count { it == '(' }) {
+                        end--
+                    } else {
+                        break
+                    }
+                } else {
+                    break
+                }
+            }
+            return if (end == url.length) url else url.substring(0, end)
+        }
 
         /**
          * Sanitize a title string from external apps.
@@ -97,9 +124,12 @@ class CaptureActivity : AppCompatActivity() {
     private var captureType: String = "text/vnd.tiddlywiki"
     private var wikiList: List<WikiEntry> = emptyList()
 
+    private var isBlankCapture: Boolean = false
+
     // UI references
     private var titleEdit: EditText? = null
     private var tagsEdit: EditText? = null
+    private var contentEdit: EditText? = null
     private var wikiSpinner: Spinner? = null
     private var clipProgress: ProgressBar? = null
     private var clippedContent: String? = null
@@ -108,9 +138,23 @@ class CaptureActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        resolveThemeColors()
 
         // Clean up stale captures on every launch
         cleanupStaleCaptureFiles()
+
+        // Handle Quick Capture widget action (blank capture)
+        if (intent.action == QuickCaptureWidgetProvider.ACTION_QUICK_CAPTURE) {
+            wikiList = loadRecentWikis()
+            if (wikiList.isEmpty()) {
+                Toast.makeText(this, getString(R.string.capture_no_wikis), Toast.LENGTH_SHORT).show()
+                finish()
+                return
+            }
+            isBlankCapture = true
+            buildUI()
+            return
+        }
 
         if (intent.action != Intent.ACTION_SEND && intent.action != Intent.ACTION_SEND_MULTIPLE) {
             Log.w(TAG, "Unsupported action: ${intent.action}")
@@ -198,7 +242,7 @@ class CaptureActivity : AppCompatActivity() {
         if (allUrls.isNotEmpty()) {
             Log.d(TAG, "Found ${allUrls.size} URL(s) in EXTRA_TEXT: ${allUrls.map { it.first }}")
             // Strip trailing punctuation that isn't part of the URL
-            val cleaned = allUrls.map { it.first.trimEnd('.', ',', ')', ';', '!', '?') }
+            val cleaned = allUrls.map { trimUrlPunctuation(it.first) }
             // Use the last URL (browser-appended page URL), but if a longer URL
             // shares the same domain, prefer it (handles root-vs-subpage).
             // Also include subjectUrl as a candidate.
@@ -206,7 +250,7 @@ class CaptureActivity : AppCompatActivity() {
             val lastDomain = try { URL(lastUrl).host } catch (_: Exception) { "" }
             val candidates = cleaned.toMutableList()
             if (subjectUrl != null) {
-                val cleanedSubjectUrl = subjectUrl.trimEnd('.', ',', ')', ';', '!', '?')
+                val cleanedSubjectUrl = trimUrlPunctuation(subjectUrl)
                 candidates.add(cleanedSubjectUrl)
             }
             val bestUrl = candidates.filter {
@@ -226,7 +270,7 @@ class CaptureActivity : AppCompatActivity() {
             }
             sharedText = remaining.trim().ifBlank { null }
             // If the best URL came from EXTRA_SUBJECT, remove it from the subject too
-            if (subjectUrl != null && detectedUrl == subjectUrl.trimEnd('.', ',', ')', ';', '!', '?').replace(Regex("#:~:.*$"), "")) {
+            if (subjectUrl != null && detectedUrl == trimUrlPunctuation(subjectUrl).replace(Regex("#:~:.*$"), "")) {
                 sharedSubject = sharedSubject?.replace(subjectUrl, "")?.let { sanitizeTitle(it) }?.ifBlank { null }
             }
         }
@@ -694,19 +738,38 @@ class CaptureActivity : AppCompatActivity() {
         ).toInt()
     }
 
-    // Material Design color palette
-    private val colorPrimary = 0xFF6750A4.toInt()       // M3 primary
-    private val colorOnPrimary = 0xFFFFFFFF.toInt()
-    private val colorPrimaryContainer = 0xFFEADDFF.toInt()
-    private val colorOnPrimaryContainer = 0xFF21005D.toInt()
-    private val colorSurface = 0xFFFFFBFE.toInt()
-    private val colorSurfaceVariant = 0xFFE7E0EC.toInt()
-    private val colorOnSurface = 0xFF1C1B1F.toInt()
-    private val colorOnSurfaceVariant = 0xFF49454F.toInt()
-    private val colorOutline = 0xFF79747E.toInt()
-    private val colorOutlineVariant = 0xFFCAC4D0.toInt()
-    private val colorError = 0xFFB3261E.toInt()
-    private val colorScrim = 0x52000000.toInt()          // 32% black
+    // Material Design color palette (resolved from theme for DayNight support)
+    private var colorPrimary = 0
+    private var colorOnPrimary = 0
+    private var colorPrimaryContainer = 0
+    private var colorOnPrimaryContainer = 0
+    private var colorSurface = 0
+    private var colorSurfaceVariant = 0
+    private var colorOnSurface = 0
+    private var colorOnSurfaceVariant = 0
+    private var colorOutline = 0
+    private var colorOutlineVariant = 0
+    private var colorError = 0
+    private val colorScrim = 0x52000000.toInt()          // 32% black (works for both modes)
+
+    private fun resolveThemeColor(attr: Int, fallback: Int): Int {
+        val tv = TypedValue()
+        return if (theme.resolveAttribute(attr, tv, true)) tv.data else fallback
+    }
+
+    private fun resolveThemeColors() {
+        colorPrimary = resolveThemeColor(com.google.android.material.R.attr.colorPrimary, 0xFF6750A4.toInt())
+        colorOnPrimary = resolveThemeColor(com.google.android.material.R.attr.colorOnPrimary, 0xFFFFFFFF.toInt())
+        colorSurface = resolveThemeColor(com.google.android.material.R.attr.colorSurface, 0xFFFFFBFE.toInt())
+        colorOnSurface = resolveThemeColor(com.google.android.material.R.attr.colorOnSurface, 0xFF1C1B1F.toInt())
+        colorError = resolveThemeColor(com.google.android.material.R.attr.colorError, 0xFFB3261E.toInt())
+        colorSurfaceVariant = resolveThemeColor(com.google.android.material.R.attr.colorSurfaceVariant, 0xFFE7E0EC.toInt())
+        colorOnSurfaceVariant = resolveThemeColor(com.google.android.material.R.attr.colorOnSurfaceVariant, 0xFF49454F.toInt())
+        colorOutline = resolveThemeColor(com.google.android.material.R.attr.colorOutline, 0xFF79747E.toInt())
+        colorOutlineVariant = resolveThemeColor(com.google.android.material.R.attr.colorOutlineVariant, 0xFFCAC4D0.toInt())
+        colorPrimaryContainer = resolveThemeColor(com.google.android.material.R.attr.colorPrimaryContainer, 0xFFEADDFF.toInt())
+        colorOnPrimaryContainer = resolveThemeColor(com.google.android.material.R.attr.colorOnPrimaryContainer, 0xFF21005D.toInt())
+    }
 
     private fun makeOutlinedFieldBg(): GradientDrawable {
         return GradientDrawable().apply {
@@ -779,6 +842,35 @@ class CaptureActivity : AppCompatActivity() {
                 setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
                 setLineSpacing(0f, 1.3f)
             }, LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { bottomMargin = dp(16) })
+        }
+
+        // Editable content field for blank captures (from Quick Capture widget)
+        if (isBlankCapture) {
+            card.addView(TextView(this).apply {
+                text = getString(R.string.label_content)
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+                setTextColor(colorOnSurfaceVariant)
+            }, LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { bottomMargin = dp(4) })
+
+            contentEdit = EditText(this).apply {
+                hint = getString(R.string.hint_content)
+                background = makeOutlinedFieldBg()
+                setPadding(dp(16), dp(12), dp(16), dp(12))
+                setTextColor(colorOnSurface)
+                setHintTextColor(colorOnSurfaceVariant)
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
+                inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE
+                minLines = 3
+                maxLines = 8
+                gravity = Gravity.TOP
+            }
+            card.addView(contentEdit, LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT
             ).apply { bottomMargin = dp(16) })
@@ -1955,7 +2047,7 @@ class CaptureActivity : AppCompatActivity() {
                         link
                     }
                 }
-                else -> sharedText ?: ""
+                else -> contentEdit?.text?.toString()?.trim() ?: sharedText ?: ""
             }
             captureJson.put("text", text)
 

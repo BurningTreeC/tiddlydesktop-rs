@@ -56,6 +56,7 @@ pub mod saf;
 pub mod folder_wiki_server;
 pub mod node_bridge;
 pub mod wiki_activity;
+pub mod multicast;
 
 // Re-export commonly used items (for future integration)
 pub use saf::{

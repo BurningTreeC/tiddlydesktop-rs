@@ -126,6 +126,50 @@ fn x11_activate_window_impl(gtk_window: &gtk::ApplicationWindow, gdk_window: &gt
     }
 }
 
+/// Linux: Enable smooth (kinetic) scrolling on a WebKitGTK webview.
+/// WebKitGTK defaults to non-smooth scrolling; this enables momentum/inertial scrolling.
+#[cfg(target_os = "linux")]
+fn enable_smooth_scrolling(window: &tauri::WebviewWindow) {
+    use gtk::prelude::*;
+    fn find_webkit(widget: &impl IsA<gtk::Widget>) -> Option<gtk::Widget> {
+        let w = widget.upcast_ref::<gtk::Widget>();
+        if w.type_().name().contains("WebKit") {
+            return Some(w.clone());
+        }
+        if let Some(c) = w.downcast_ref::<gtk::Container>() {
+            for child in c.children() {
+                if let Some(found) = find_webkit(&child) {
+                    return Some(found);
+                }
+            }
+        }
+        None
+    }
+
+    extern "C" {
+        fn webkit_web_view_get_settings(
+            web_view: *mut gtk::glib::gobject_ffi::GObject,
+        ) -> *mut gtk::glib::gobject_ffi::GObject;
+        fn webkit_settings_set_enable_smooth_scrolling(
+            settings: *mut gtk::glib::gobject_ffi::GObject,
+            enabled: i32,
+        );
+    }
+
+    if let Ok(gtk_window) = window.gtk_window() {
+        if let Some(webview_widget) = find_webkit(&gtk_window) {
+            unsafe {
+                use gtk::glib::object::ObjectExt;
+                let wv_ptr = webview_widget.as_ptr() as *mut gtk::glib::gobject_ffi::GObject;
+                let settings = webkit_web_view_get_settings(wv_ptr);
+                if !settings.is_null() {
+                    webkit_settings_set_enable_smooth_scrolling(settings, 1);
+                }
+            }
+        }
+    }
+}
+
 /// Linux: Set up a GtkHeaderBar on a window for reliable title display
 /// This works around WebKitGTK's broken title propagation
 /// Title starts empty - JavaScript will set the real title once TiddlyWiki loads
@@ -621,6 +665,10 @@ mod fs_abstraction;
 /// Android-specific implementations (SAF, permissions, etc.)
 #[cfg(target_os = "android")]
 mod android;
+
+/// LAN Sync: real-time tiddler synchronization across devices on the same network
+#[allow(dead_code)]
+mod lan_sync;
 
 /// Helper trait to conditionally add platform-specific plugins to the Tauri builder.
 /// On Android, this adds the Android FS plugin for SAF support.
@@ -2168,11 +2216,6 @@ const FIND_BAR_JS: &str = r#"
             e.preventDefault();
             e.stopPropagation();
             closeBar();
-        } else if ((e.key === 'f' || e.key === 'F') && (e.ctrlKey || e.metaKey)) {
-            e.preventDefault();
-            e.stopPropagation();
-            input.focus();
-            input.select();
         }
     }
 
@@ -3123,7 +3166,7 @@ fn wait_for_server_ready(port: u16, process: &mut Child, timeout: std::time::Dur
 /// Returns WikiEntry so frontend can update its wiki list
 #[cfg(not(target_os = "android"))]
 #[tauri::command]
-async fn open_wiki_folder(app: tauri::AppHandle, path: String) -> Result<WikiEntry, String> {
+async fn open_wiki_folder(app: tauri::AppHandle, path: String, _tiddler_title: Option<String>) -> Result<WikiEntry, String> {
     // Security: Validate path is a user-accessible directory
     let path_buf = drag_drop::sanitize::validate_user_directory_path(&path)?;
     let state = app.state::<AppState>();
@@ -3163,6 +3206,8 @@ async fn open_wiki_folder(app: tauri::AppHandle, path: String) -> Result<WikiEnt
                 backup_dir: None,
                 backup_count: None,
                 group: None,
+                sync_enabled: false,
+                sync_id: None,
             });
         }
     }
@@ -3244,6 +3289,8 @@ async fn open_wiki_folder(app: tauri::AppHandle, path: String) -> Result<WikiEnt
         backup_dir: None,
         backup_count: None,
         group: None,
+        sync_enabled: false,
+        sync_id: None,
     };
 
     // Add to recent files list
@@ -3262,7 +3309,7 @@ async fn open_wiki_folder(app: tauri::AppHandle, path: String) -> Result<WikiEnt
 /// Each folder wiki opens in a separate WikiActivity (visible in recent apps)
 #[cfg(target_os = "android")]
 #[tauri::command]
-async fn open_wiki_folder(app: tauri::AppHandle, path: String) -> Result<WikiEntry, String> {
+async fn open_wiki_folder(app: tauri::AppHandle, path: String, _tiddler_title: Option<String>) -> Result<WikiEntry, String> {
     // Run the entire folder wiki opening on a blocking thread so it doesn't
     // hold up the Tauri async runtime (Node.js server startup polls for up to 5s).
     // This allows other commands (like open_wiki_window) to run concurrently.
@@ -3340,6 +3387,7 @@ fn open_wiki_folder_blocking(app: tauri::AppHandle, path: String) -> Result<Wiki
         0, // backup_count not applicable
         folder_local_path.as_deref(), // Local path for SAF wikis (Node.js reads from here)
         None, // No backup dir for folder wikis
+        None, // No tiddler title navigation
     )?;
 
     // Create wiki entry for the recent files list
@@ -3352,6 +3400,8 @@ fn open_wiki_folder_blocking(app: tauri::AppHandle, path: String) -> Result<Wiki
         backup_dir: None,
         backup_count: None,
         group: None,
+        sync_enabled: false,
+        sync_id: None,
         is_folder: true,
     };
 
@@ -3853,6 +3903,7 @@ async fn init_wiki_folder(app: tauri::AppHandle, path: String, edition: String, 
         0, // backup_count not applicable
         None, // No local path needed - server already running
         None, // No backup dir for folder wikis
+        None, // No tiddler title navigation
     )?;
 
     // Create wiki entry for the recent files list
@@ -3865,6 +3916,8 @@ async fn init_wiki_folder(app: tauri::AppHandle, path: String, edition: String, 
         backup_dir: None,
         backup_count: None,
         group: None,
+        sync_enabled: false,
+        sync_id: None,
         is_folder: true,
     };
 
@@ -4878,6 +4931,7 @@ async fn open_wiki_window(
     path: String,
     _backups_enabled: Option<bool>,
     _backup_count: Option<u32>,
+    _tiddler_title: Option<String>,
 ) -> Result<WikiEntry, String> {
     // Security: Validate path is a user-accessible wiki file
     let path_buf = drag_drop::sanitize::validate_user_file_path(&path)?;
@@ -4917,6 +4971,8 @@ async fn open_wiki_window(
                 backup_dir: None,
                 backup_count: None,
                 group: None,
+                sync_enabled: false,
+                sync_id: None,
             });
         }
     }
@@ -4998,6 +5054,19 @@ async fn open_wiki_window(
         }
     });
 
+    // Pre-request fingerprints from peers so sync data is ready when the wiki JS boots.
+    // Look up the sync_id for this wiki and ask peers to send their fingerprints now.
+    {
+        let sync_id = wiki_storage::get_wiki_sync_id(app.clone(), path.clone());
+        if !sync_id.is_empty() {
+            tokio::spawn(async move {
+                if let Some(mgr) = lan_sync::get_sync_manager() {
+                    mgr.pre_request_sync(&sync_id).await;
+                }
+            });
+        }
+    }
+
     // Create the wiki entry
     let entry = WikiEntry {
         path: path.clone(),
@@ -5009,6 +5078,8 @@ async fn open_wiki_window(
         backup_dir: None,
         backup_count: None,
         group: None,
+        sync_enabled: false,
+        sync_id: None,
     };
 
     // Add to recent files list
@@ -5028,13 +5099,14 @@ async fn open_wiki_window(
     path: String,
     backups_enabled: Option<bool>,
     backup_count: Option<u32>,
+    tiddler_title: Option<String>,
 ) -> Result<WikiEntry, String> {
     // Run on a blocking thread so SAF reads don't block the Tauri async runtime.
     // This allows concurrent wiki opening (e.g. single-file + folder wiki at the same time).
     let app_clone = app.clone();
     let path_clone = path.clone();
     tokio::task::spawn_blocking(move || {
-        open_wiki_window_blocking(app_clone, path_clone, backups_enabled, backup_count)
+        open_wiki_window_blocking(app_clone, path_clone, backups_enabled, backup_count, tiddler_title)
     })
     .await
     .map_err(|e| format!("Task join error: {}", e))?
@@ -5046,6 +5118,7 @@ fn open_wiki_window_blocking(
     path: String,
     backups_enabled: Option<bool>,
     backup_count: Option<u32>,
+    tiddler_title: Option<String>,
 ) -> Result<WikiEntry, String> {
     // Path is a content:// URI or JSON-serialized FileUri on Android
     let is_saf_uri = path.starts_with("content://") || path.starts_with("{");
@@ -5094,7 +5167,20 @@ fn open_wiki_window_blocking(
         use_backup_count,
         None, // Not a folder wiki
         custom_backup_dir.as_deref(),
+        tiddler_title.as_deref(),
     )?;
+
+    // Pre-request fingerprints from peers so sync data is ready when the wiki JS boots.
+    {
+        let sync_id = wiki_storage::get_wiki_sync_id(app.clone(), path.clone());
+        if !sync_id.is_empty() {
+            tokio::spawn(async move {
+                if let Some(mgr) = lan_sync::get_sync_manager() {
+                    mgr.pre_request_sync(&sync_id).await;
+                }
+            });
+        }
+    }
 
     let entry = WikiEntry {
         path: path.clone(),
@@ -5106,6 +5192,8 @@ fn open_wiki_window_blocking(
         backup_dir: None,
         backup_count: Some(use_backup_count),
         group: None,
+        sync_enabled: false,
+        sync_id: None,
     };
 
     // Add to recent files
@@ -5275,10 +5363,11 @@ async fn open_tiddler_window(
 
     // Note: Drag handlers are set up via the drag_drop plugin's on_webview_ready hook
 
-    // Linux: Set up HeaderBar and center window (tiddler windows don't save state)
+    // Linux: Set up HeaderBar, enable smooth scrolling, center window (tiddler windows don't save state)
     #[cfg(target_os = "linux")]
     {
         setup_header_bar(&window);
+        enable_smooth_scrolling(&window);
         linux_finalize_window_state(&window, &None);
     }
 
@@ -5513,7 +5602,7 @@ async fn check_for_updates() -> Result<UpdateCheckResult, String> {
 
 /// Android version - separate from desktop versioning (must match build.gradle.kts versionName)
 #[cfg(target_os = "android")]
-const ANDROID_VERSION: &str = "0.0.13";
+const ANDROID_VERSION: &str = "0.0.14";
 
 /// Check for updates on Android via version file on GitHub, linking to Play Store
 #[cfg(target_os = "android")]
@@ -5973,7 +6062,7 @@ fn tdasset_protocol_handler(request: Request<Vec<u8>>) -> Response<Vec<u8>> {
     }
 }
 
-/// Handle tdlib:// protocol requests - serves bundled library assets (Plyr, PDF.js)
+/// Handle tdlib:// protocol requests - serves bundled library assets (PDF.js)
 /// Separate from tdasset:// which validates user-accessible paths only
 #[cfg(not(target_os = "android"))]
 fn tdlib_protocol_handler(app: &tauri::AppHandle, request: Request<Vec<u8>>) -> Response<Vec<u8>> {
@@ -6528,12 +6617,12 @@ fn wiki_protocol_handler(app: &tauri::AppHandle, request: Request<Vec<u8>>) -> R
                 String::new()
             };
 
-            // Plyr CSS/JS are injected inline via the initialization script
-            // (WebKitGTK doesn't load CSS or scripts from custom URI schemes)
-            let plyr_injection = "";
+            // Media controls CSS is injected inline via the initialization script
+            // (WebKitGTK doesn't load CSS from custom URI schemes)
+            let media_css_injection = "";
 
             let script_injection = format!(
-                r##"{plyr_injection}{single_tiddler_preload}
+                r##"{media_css_injection}{single_tiddler_preload}
 <script>
 window.__SAVE_URL__ = "{save_url}";
 {single_tiddler_js}
@@ -6799,7 +6888,7 @@ window.__SAVE_URL__ = "{save_url}";
     // External attachments support is provided by the initialization script (get_dialog_init_script)
 }})();
 </script>"##,
-                plyr_injection = plyr_injection,
+                media_css_injection = media_css_injection,
                 single_tiddler_preload = single_tiddler_preload,
                 save_url = save_url,
                 single_tiddler_js = single_tiddler_js,
@@ -6916,10 +7005,11 @@ fn reveal_or_create_main_window(app_handle: &tauri::AppHandle) {
         {
             // Note: Drag handlers are set up via the drag_drop plugin's on_webview_ready hook
 
-            // Linux: Set up HeaderBar and finalize window state (centering, unmaximize workaround)
+            // Linux: Set up HeaderBar, enable smooth scrolling, finalize window state
             #[cfg(target_os = "linux")]
             {
                 setup_header_bar(&main_window);
+                enable_smooth_scrolling(&main_window);
                 linux_finalize_window_state(&main_window, &saved_state);
             }
 
@@ -7097,6 +7187,8 @@ fn run_wiki_mode(args: WikiModeArgs) {
 
     if ipc_client.lock().unwrap().is_some() {
         eprintln!("[TiddlyDesktop] Connected to IPC server");
+        // Register the IPC client for LAN sync commands to route through
+        lan_sync::set_ipc_client_for_sync(ipc_client.clone());
     } else {
         eprintln!("[TiddlyDesktop] Warning: Could not connect to IPC server (main process not running?)");
     }
@@ -7283,10 +7375,11 @@ fn run_wiki_mode(args: WikiModeArgs) {
 
             // Note: Drag handlers are set up via the drag_drop plugin's on_webview_ready hook
 
-            // Linux: Set up HeaderBar and finalize window state (centering, unmaximize workaround)
+            // Linux: Set up HeaderBar, enable smooth scrolling, finalize window state
             #[cfg(target_os = "linux")]
             {
                 setup_header_bar(&window);
+                enable_smooth_scrolling(&window);
                 linux_finalize_window_state(&window, &saved_state);
             }
 
@@ -7367,6 +7460,19 @@ fn run_wiki_mode(args: WikiModeArgs) {
                                             eprintln!("[IPC Listener] No windows found in process!");
                                         }
                                     });
+                                }
+                                // LAN Sync: main process → wiki process
+                                ipc::IpcMessage::LanSyncApplyChange { wiki_id, payload_json } => {
+                                    // Queue the message for JS to poll via lan_sync_poll_ipc.
+                                    // Neither Tauri emit() nor WebView eval() reliably deliver
+                                    // messages from IPC listener threads to JS on Linux/WebKitGTK.
+                                    if let Ok(payload) = serde_json::from_str::<serde_json::Value>(&payload_json) {
+                                        let event_type = payload["type"].as_str().unwrap_or("");
+                                        if !event_type.is_empty() {
+                                            eprintln!("[IPC Listener] LAN Sync {}: wiki_id={}", event_type, wiki_id);
+                                            lan_sync::queue_lan_sync_ipc(payload_json);
+                                        }
+                                    }
                                 }
                                 _ => {}
                             }
@@ -7455,7 +7561,15 @@ fn run_wiki_mode(args: WikiModeArgs) {
             ipc_update_favicon,
             show_find_in_page,
             extract_video_poster,
-            register_media_url
+            register_media_url,
+            // LAN sync commands (fall back to IPC when sync manager not in this process)
+            wiki_storage::get_wiki_sync_id,
+            lan_sync::lan_sync_wiki_opened,
+            lan_sync::lan_sync_tiddler_changed,
+            lan_sync::lan_sync_tiddler_deleted,
+            lan_sync::lan_sync_send_full_sync,
+            lan_sync::lan_sync_send_fingerprints,
+            lan_sync::lan_sync_poll_ipc,
         ])
         .build(tauri::generate_context!())
         .expect("error while building wiki-mode application")
@@ -7586,6 +7700,8 @@ fn run_wiki_folder_mode(args: WikiFolderModeArgs) {
     if let Some(client) = ipc::try_connect(&folder_path_str, false, None) {
         eprintln!("[TiddlyDesktop] Registered with IPC server");
         *ipc_client_for_setup.lock().unwrap() = Some(client);
+        // Register the IPC client for LAN sync commands to route through
+        lan_sync::set_ipc_client_for_sync(ipc_client_for_setup.clone());
     }
 
     let folder_path_for_state = folder_path.clone();
@@ -7676,10 +7792,11 @@ fn run_wiki_folder_mode(args: WikiFolderModeArgs) {
 
             // Note: Drag handlers are set up via the drag_drop plugin's on_webview_ready hook
 
-            // Linux: Set up HeaderBar and finalize window state (centering, unmaximize workaround)
+            // Linux: Set up HeaderBar, enable smooth scrolling, finalize window state
             #[cfg(target_os = "linux")]
             {
                 setup_header_bar(&window);
+                enable_smooth_scrolling(&window);
                 linux_finalize_window_state(&window, &saved_state);
             }
 
@@ -7713,38 +7830,51 @@ fn run_wiki_folder_mode(args: WikiFolderModeArgs) {
                 ipc_client: ipc_client_for_wiki_state.clone(),
             });
 
-            // Start IPC listener for focus requests
+            // Start IPC listener for focus requests and LAN sync messages
             let client_guard = ipc_client_for_state.lock().unwrap();
             if let Some(ref client) = *client_guard {
                 if let Some(listener_stream) = client.get_listener_stream() {
                     let app_handle = app.handle().clone();
                     std::thread::spawn(move || {
                         ipc::run_listener(listener_stream, |msg| {
-                            if let ipc::IpcMessage::FocusWiki { .. } = msg {
-                                eprintln!("[IPC Listener] Focus window request received");
-                                // Focus this window - must run on main thread for GTK
-                                let handle = app_handle.clone();
-                                let _ = app_handle.run_on_main_thread(move || {
-                                    // Get any window in this process (wiki processes have one window)
-                                    let windows = handle.webview_windows();
-                                    if let Some((label, window)) = windows.into_iter().next() {
-                                        eprintln!("[IPC Listener] Found window '{}', attempting to focus", label);
-                                        let _ = window.unminimize();
-                                        let _ = window.show();
-                                        #[cfg(target_os = "linux")]
-                                        {
-                                            if let Ok(gtk_window) = window.gtk_window() {
-                                                linux_activate_window(&gtk_window);
+                            match msg {
+                                ipc::IpcMessage::FocusWiki { .. } => {
+                                    eprintln!("[IPC Listener] Focus window request received");
+                                    // Focus this window - must run on main thread for GTK
+                                    let handle = app_handle.clone();
+                                    let _ = app_handle.run_on_main_thread(move || {
+                                        // Get any window in this process (wiki processes have one window)
+                                        let windows = handle.webview_windows();
+                                        if let Some((label, window)) = windows.into_iter().next() {
+                                            eprintln!("[IPC Listener] Found window '{}', attempting to focus", label);
+                                            let _ = window.unminimize();
+                                            let _ = window.show();
+                                            #[cfg(target_os = "linux")]
+                                            {
+                                                if let Ok(gtk_window) = window.gtk_window() {
+                                                    linux_activate_window(&gtk_window);
+                                                }
                                             }
+                                            #[cfg(not(target_os = "linux"))]
+                                            {
+                                                let _ = window.set_focus();
+                                            }
+                                        } else {
+                                            eprintln!("[IPC Listener] No windows found in process!");
                                         }
-                                        #[cfg(not(target_os = "linux"))]
-                                        {
-                                            let _ = window.set_focus();
+                                    });
+                                }
+                                // LAN Sync: main process → folder wiki process
+                                ipc::IpcMessage::LanSyncApplyChange { wiki_id, payload_json } => {
+                                    if let Ok(payload) = serde_json::from_str::<serde_json::Value>(&payload_json) {
+                                        let event_type = payload["type"].as_str().unwrap_or("");
+                                        if !event_type.is_empty() {
+                                            eprintln!("[IPC Listener] LAN Sync {}: wiki_id={}", event_type, wiki_id);
+                                            lan_sync::queue_lan_sync_ipc(payload_json);
                                         }
-                                    } else {
-                                        eprintln!("[IPC Listener] No windows found in process!");
                                     }
-                                });
+                                }
+                                _ => {}
                             }
                         });
                     });
@@ -7766,6 +7896,11 @@ fn run_wiki_folder_mode(args: WikiFolderModeArgs) {
         .register_uri_scheme_protocol("tdlib", |ctx, request| {
             tdlib_protocol_handler(ctx.app_handle(), request)
         })
+        .register_asynchronous_uri_scheme_protocol("tdasset", |_ctx, request, responder| {
+            std::thread::spawn(move || {
+                responder.respond(tdasset_protocol_handler(request));
+            });
+        })
         .invoke_handler(tauri::generate_handler![
             load_wiki,
             save_wiki,
@@ -7773,6 +7908,8 @@ fn run_wiki_folder_mode(args: WikiFolderModeArgs) {
             set_window_icon,
             set_headerbar_colors,
             get_window_label,
+            get_main_wiki_path,
+            reveal_in_folder,
             show_alert,
             show_confirm,
             close_window,
@@ -7782,12 +7919,20 @@ fn run_wiki_folder_mode(args: WikiFolderModeArgs) {
             is_directory,
             get_window_state_info,
             get_saved_window_state,
+            read_file_as_data_uri,
+            read_file_as_binary,
+            pick_files_for_import,
+            wiki_storage::get_external_attachments_config,
+            wiki_storage::set_external_attachments_config,
             wiki_storage::save_window_state,
             wiki_storage::js_log,
             clipboard::get_clipboard_content,
             clipboard::set_clipboard_content,
             show_find_in_page,
             extract_video_poster,
+            run_command,
+            request_run_command_permission,
+            check_run_command_permission,
             // Drag-drop commands
             start_native_drag,
             prepare_native_drag,
@@ -7803,6 +7948,14 @@ fn run_wiki_folder_mode(args: WikiFolderModeArgs) {
             register_media_url,
             // IPC commands for favicon sync
             ipc_update_favicon,
+            // LAN sync commands (fall back to IPC when sync manager not in this process)
+            wiki_storage::get_wiki_sync_id,
+            lan_sync::lan_sync_wiki_opened,
+            lan_sync::lan_sync_tiddler_changed,
+            lan_sync::lan_sync_tiddler_deleted,
+            lan_sync::lan_sync_send_full_sync,
+            lan_sync::lan_sync_send_fingerprints,
+            lan_sync::lan_sync_poll_ipc,
         ])
         .build(tauri::generate_context!())
         .expect("error while building wiki-folder-mode application")
@@ -8139,6 +8292,19 @@ pub fn run() {
                 }
             }
 
+            // Initialize LAN Sync manager
+            {
+                let data_dir = app.path().app_data_dir()
+                    .unwrap_or_else(|_| PathBuf::from("."));
+                let sync_data_dir = data_dir.join("lan_sync");
+                let _ = std::fs::create_dir_all(&sync_data_dir);
+
+                // Initialize the sync manager (creates device identity, loads paired devices)
+                // The actual server starts when the user enables LAN sync from the UI
+                let _sync_manager = lan_sync::SyncManager::init(&sync_data_dir);
+                eprintln!("[TiddlyDesktop] LAN Sync manager initialized");
+            }
+
             // Create a unique key for the main wiki path
             let path_key = utils::base64_url_encode(&main_wiki_path.to_string_lossy());
 
@@ -8237,10 +8403,11 @@ pub fn run() {
 
             // Note: Drag handlers are set up via the drag_drop plugin's on_webview_ready hook
 
-            // Linux: Set up HeaderBar and finalize window state (centering, unmaximize workaround)
+            // Linux: Set up HeaderBar, enable smooth scrolling, finalize window state
             #[cfg(target_os = "linux")]
             {
                 setup_header_bar(&main_window);
+                enable_smooth_scrolling(&main_window);
                 linux_finalize_window_state(&main_window, &saved_state);
             }
 
@@ -8270,7 +8437,7 @@ pub fn run() {
                             let app_handle = app.handle().clone();
                             let path_str = arg.clone();
                             tauri::async_runtime::spawn(async move {
-                                if let Ok(entry) = open_wiki_window(app_handle.clone(), path_str, None, None).await {
+                                if let Ok(entry) = open_wiki_window(app_handle.clone(), path_str, None, None, None).await {
                                     // Emit event to refresh wiki list in main window
                                     let _ = app_handle.emit("wiki-list-changed", entry);
                                 }
@@ -8332,6 +8499,9 @@ pub fn run() {
             wiki_storage::set_wiki_backup_count,
             wiki_storage::update_wiki_favicon,
             wiki_storage::get_wiki_backup_dir_setting,
+            wiki_storage::set_wiki_sync,
+            wiki_storage::get_wiki_sync_id,
+            wiki_storage::lan_sync_link_wiki,
             wiki_storage::set_wiki_group,
             wiki_storage::get_wiki_groups,
             wiki_storage::rename_wiki_group,
@@ -8389,7 +8559,27 @@ pub fn run() {
             android_save_attachment,
             get_pending_widget_wiki,
             extract_video_poster,
-            register_media_url
+            register_media_url,
+            // LAN Sync commands
+            lan_sync::lan_sync_start,
+            lan_sync::lan_sync_stop,
+            lan_sync::lan_sync_get_status,
+            lan_sync::lan_sync_start_pairing,
+            lan_sync::lan_sync_cancel_pairing,
+            lan_sync::lan_sync_enter_pin,
+            lan_sync::lan_sync_unpair_device,
+            lan_sync::lan_sync_tiddler_changed,
+            lan_sync::lan_sync_tiddler_deleted,
+            lan_sync::lan_sync_wiki_opened,
+            lan_sync::lan_sync_get_available_wikis,
+            lan_sync::lan_sync_request_wiki,
+            lan_sync::lan_sync_get_discovered_peers,
+            lan_sync::lan_sync_pair_with_device,
+            lan_sync::lan_sync_send_full_sync,
+            lan_sync::lan_sync_send_fingerprints,
+            lan_sync::lan_sync_broadcast_fingerprints,
+            lan_sync::lan_sync_broadcast_manifest,
+            lan_sync::lan_sync_poll_ipc
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
@@ -8415,7 +8605,7 @@ pub fn run() {
                                     let app_handle = app.clone();
                                     let path_str = path.to_string_lossy().to_string();
                                     tauri::async_runtime::spawn(async move {
-                                        if let Ok(entry) = open_wiki_window(app_handle.clone(), path_str, None, None).await {
+                                        if let Ok(entry) = open_wiki_window(app_handle.clone(), path_str, None, None, None).await {
                                             // Emit event to refresh wiki list in main window
                                             let _ = app_handle.emit("wiki-list-changed", entry);
                                         }

@@ -31,4 +31,44 @@
     <string name="open_as_wiki">Openen als wiki</string>
     <string name="import_into_wiki">Importeren in wiki</string>
     <string name="no_app_for_link">Geen app gevonden om deze link te openen</string>
+
+    <!-- WikiActivity -->
+    <string name="share_title">Delen als\u2026</string>
+    <string name="share_image">Afbeelding</string>
+    <string name="share_plain_text">Platte tekst</string>
+    <string name="share_json">JSON (.json)</string>
+    <string name="share_tid">TID (.tid)</string>
+    <string name="share_csv">CSV (.csv)</string>
+    <string name="unsaved_title">Niet-opgeslagen wijzigingen</string>
+    <string name="unsaved_message">U heeft %d niet-opgeslagen wijziging(en). Wat wilt u doen?</string>
+    <string name="unsaved_save_close">Opslaan &amp; sluiten</string>
+    <string name="unsaved_discard_close">Verwerpen &amp; sluiten</string>
+
+    <!-- OpenWithActivity -->
+    <string name="open_unsupported_action">Niet-ondersteunde actie</string>
+    <string name="open_no_file">Geen bestand opgegeven</string>
+    <string name="open_no_file_uri">Interne fout: geen bestands-URI</string>
+    <string name="open_select_folder">Selecteer nu de map met de wiki (voor opslaan &amp; back-ups)</string>
+    <string name="open_select_file">Selecteer het wikibestand om toegang te verlenen</string>
+    <string name="open_file_cancelled">Bestandsselectie geannuleerd</string>
+    <string name="open_no_permission">Kan geen toegangsrechten voor het bestand verkrijgen</string>
+
+    <!-- WikiServerService -->
+    <string name="notif_channel_name">Wiki Server</string>
+    <string name="notif_channel_desc">Houdt wiki-servers actief op de achtergrond</string>
+    <string name="notif_title">TiddlyDesktop-RS</string>
+    <string name="notif_text">Wiki draait op de achtergrond</string>
+
+    <string name="label_content">Inhoud</string>
+    <string name="hint_content">Schrijf je notitie hier…</string>
+
+    <!-- Widgets -->
+    <string name="widget_capture_label">Vastleggen</string>
+    <string name="widget_capture_desc">Snelle vastlegknop voor TiddlyWiki</string>
+
+    <!-- LanSyncService -->
+    <string name="sync_notif_channel_name">LAN Sync</string>
+    <string name="sync_notif_channel_desc">Houdt LAN-synchronisatie actief voor real-time wiki-synchronisatie</string>
+    <string name="sync_notif_title">LAN-synchronisatie actief</string>
+    <string name="sync_notif_text">Wiki\'s synchroniseren met nabijgelegen apparaten</string>
 </resources>

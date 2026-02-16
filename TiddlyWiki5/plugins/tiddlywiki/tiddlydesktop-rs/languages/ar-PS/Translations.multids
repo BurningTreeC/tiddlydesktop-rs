@@ -18,6 +18,7 @@ Buttons/CreateWikiFolder: إنشاء مجلد ويكي
 Buttons/ToFile: إلى ملف
 Buttons/ToFolder: إلى مجلد
 Buttons/Reauthorize: Re-authorize
+Buttons/Sync: مزامنة
 
 Tooltips/BackupsEnabled: النسخ الاحتياطي مفعل - انقر للتعطيل
 Tooltips/ConvertWiki: تحويل تنسيق الويكي
@@ -30,6 +31,8 @@ Tooltips/SetBackupDir: تعيين دليل نسخ احتياطي مخصص
 Tooltips/RenameGroup: إعادة تسمية المجموعة
 Tooltips/DeleteGroup: حذف المجموعة (سيتم نقل الويكي إلى غير مصنف)
 Tooltips/SetBackupCount: تعيين الحد الأقصى لعدد النسخ الاحتياطية (0 = غير محدود)
+Tooltips/SyncEnabled: مزامنة الشبكة المحلية مُفعّلة - انقر للتعطيل
+Tooltips/SyncDisabled: مزامنة الشبكة المحلية مُعطّلة - انقر للتفعيل
 
 Labels/BackupFolder: مجلد النسخ الاحتياطي:
 Labels/BackupCount: حد النسخ الاحتياطي:
@@ -65,3 +68,25 @@ EditionSelector/AdditionalPlugins: إضافات إضافية
 EditionSelector/Optional: (اختياري)
 EditionSelector/CreatingFile: جاري إنشاء ملف ويكي...
 EditionSelector/InitializingFolder: جاري تهيئة مجلد ويكي...
+
+LanSync/Title: مزامنة الشبكة المحلية
+LanSync/Start: بدء مزامنة الشبكة المحلية
+LanSync/Stop: إيقاف مزامنة الشبكة المحلية
+LanSync/DeviceName: هذا الجهاز:
+LanSync/Pairing: إقران الأجهزة
+LanSync/PinLabel: أدخل رمز PIN هذا على الجهاز الآخر:
+LanSync/ShowPin: إقران جهاز جديد
+LanSync/HidePairingCode: إخفاء
+LanSync/PairedDevices: الأجهزة المقترنة
+LanSync/NoPairedDevices: لا توجد أجهزة مقترنة. انقر على "إقران جهاز جديد" لتوصيل جهاز آخر.
+LanSync/Unpair: إلغاء الإقران
+LanSync/Connected: متصل
+LanSync/Disconnected: غير متصل
+LanSync/DiscoveredDevices: الأجهزة على شبكتك
+LanSync/PinPlaceholder: PIN
+LanSync/Pair: إقران
+LanSync/AvailableWikis: متاح من الأجهزة
+LanSync/NoRemoteWikis: لا توجد ويكي جديدة متاحة من الأجهزة المتصلة.
+LanSync/From: من
+LanSync/GetWiki: الحصول على ويكي
+LanSync/LinkWiki: ربط

@@ -31,4 +31,44 @@
     <string name="open_as_wiki">ਵਿਕੀ ਵਜੋਂ ਖੋਲ੍ਹੋ</string>
     <string name="import_into_wiki">ਵਿਕੀ ਵਿੱਚ ਆਯਾਤ ਕਰੋ</string>
     <string name="no_app_for_link">ਇਸ ਲਿੰਕ ਨੂੰ ਖੋਲ੍ਹਣ ਲਈ ਕੋਈ ਐਪ ਨਹੀਂ ਮਿਲੀ</string>
+
+    <!-- WikiActivity -->
+    <string name="share_title">ਇਸ ਤਰ੍ਹਾਂ ਸਾਂਝਾ ਕਰੋ\u2026</string>
+    <string name="share_image">ਚਿੱਤਰ</string>
+    <string name="share_plain_text">ਸਾਦਾ ਟੈਕਸਟ</string>
+    <string name="share_json">JSON (.json)</string>
+    <string name="share_tid">TID (.tid)</string>
+    <string name="share_csv">CSV (.csv)</string>
+    <string name="unsaved_title">ਅਣ-ਸੁਰੱਖਿਅਤ ਤਬਦੀਲੀਆਂ</string>
+    <string name="unsaved_message">ਤੁਹਾਡੇ ਕੋਲ %d ਅਣ-ਸੁਰੱਖਿਅਤ ਤਬਦੀਲੀ(ਆਂ) ਹਨ। ਤੁਸੀਂ ਕੀ ਕਰਨਾ ਚਾਹੋਗੇ?</string>
+    <string name="unsaved_save_close">ਸੁਰੱਖਿਅਤ ਕਰੋ &amp; ਬੰਦ ਕਰੋ</string>
+    <string name="unsaved_discard_close">ਰੱਦ ਕਰੋ &amp; ਬੰਦ ਕਰੋ</string>
+
+    <!-- OpenWithActivity -->
+    <string name="open_unsupported_action">ਅਸਮਰੱਥ ਕਾਰਵਾਈ</string>
+    <string name="open_no_file">ਕੋਈ ਫ਼ਾਈਲ ਨਿਰਧਾਰਤ ਨਹੀਂ</string>
+    <string name="open_no_file_uri">ਅੰਦਰੂਨੀ ਗਲਤੀ: ਕੋਈ ਫ਼ਾਈਲ URI ਨਹੀਂ</string>
+    <string name="open_select_folder">ਹੁਣ ਵਿਕੀ ਵਾਲਾ ਫੋਲਡਰ ਚੁਣੋ (ਸੁਰੱਖਿਅਤ ਕਰਨ &amp; ਬੈਕਅੱਪ ਲਈ)</string>
+    <string name="open_select_file">ਕਿਰਪਾ ਕਰਕੇ ਪਹੁੰਚ ਦੇਣ ਲਈ ਵਿਕੀ ਫ਼ਾਈਲ ਚੁਣੋ</string>
+    <string name="open_file_cancelled">ਫ਼ਾਈਲ ਚੋਣ ਰੱਦ ਕੀਤੀ ਗਈ</string>
+    <string name="open_no_permission">ਫ਼ਾਈਲ ਪਹੁੰਚ ਦੀ ਇਜਾਜ਼ਤ ਨਹੀਂ ਮਿਲ ਸਕੀ</string>
+
+    <!-- WikiServerService -->
+    <string name="notif_channel_name">Wiki Server</string>
+    <string name="notif_channel_desc">ਵਿਕੀ ਸਰਵਰਾਂ ਨੂੰ ਬੈਕਗ੍ਰਾਊਂਡ ਵਿੱਚ ਚਾਲੂ ਰੱਖਦਾ ਹੈ</string>
+    <string name="notif_title">TiddlyDesktop-RS</string>
+    <string name="notif_text">ਵਿਕੀ ਬੈਕਗ੍ਰਾਊਂਡ ਵਿੱਚ ਚੱਲ ਰਹੀ ਹੈ</string>
+
+    <string name="label_content">ਸਮੱਗਰੀ</string>
+    <string name="hint_content">ਆਪਣੀ ਟਿੱਪਣੀ ਇੱਥੇ ਲਿਖੋ…</string>
+
+    <!-- Widgets -->
+    <string name="widget_capture_label">ਕੈਪਚਰ</string>
+    <string name="widget_capture_desc">TiddlyWiki ਲਈ ਤੇਜ਼ ਕੈਪਚਰ ਬਟਨ</string>
+
+    <!-- LanSyncService -->
+    <string name="sync_notif_channel_name">LAN Sync</string>
+    <string name="sync_notif_channel_desc">ਲੋਕਲ ਨੈਟਵਰਕ ਸਿੰਕ ਨੂੰ ਮਲਟੀ-ਸਿਸਟਮ ਵਿਕੀ ਸਿੰਕ ਲਈ ਕਿਰਿਆਸ਼ੀਲ ਰੱਖਦਾ ਹੈ</string>
+    <string name="sync_notif_title">LAN Sync ਕਿਰਿਆਸ਼ੀਲ</string>
+    <string name="sync_notif_text">ਨਜ਼ਦੀਕੀ ਸਾਜ਼-ਸਮਾਨ ਨਾਲ ਵਿਕੀ ਨੂੰ ਸਿੰਕ ਕਰ ਰਹੇ ਹਨ</string>
 </resources>

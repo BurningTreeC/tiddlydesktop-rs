@@ -18,6 +18,7 @@ Buttons/CreateWikiFolder: Skapa wiki-mapp
 Buttons/ToFile: till fil
 Buttons/ToFolder: till mapp
 Buttons/Reauthorize: Re-authorize
+Buttons/Sync: synkronisera
 
 Tooltips/BackupsEnabled: Säkerhetskopior aktiverade - klicka för att inaktivera
 Tooltips/ConvertWiki: Konvertera wiki-format
@@ -30,6 +31,8 @@ Tooltips/SetBackupDir: Ange anpassad säkerhetskopieringsmapp
 Tooltips/RenameGroup: Byt namn på grupp
 Tooltips/DeleteGroup: Ta bort grupp (wikis flyttas till Ogrupperade)
 Tooltips/SetBackupCount: Ange maximalt antal säkerhetskopior att behålla (0 = obegränsad)
+Tooltips/SyncEnabled: LAN-synkronisering aktiverad - klicka för att inaktivera
+Tooltips/SyncDisabled: LAN-synkronisering inaktiverad - klicka för att aktivera
 
 Labels/BackupFolder: Säkerhetskopieringsmapp:
 Labels/BackupCount: Säkerhetskopieringsgräns:
@@ -65,3 +68,25 @@ EditionSelector/AdditionalPlugins: Ytterligare plugins
 EditionSelector/Optional: (valfritt)
 EditionSelector/CreatingFile: Skapar wiki-fil...
 EditionSelector/InitializingFolder: Initierar wiki-mapp...
+
+LanSync/Title: LAN-synkronisering
+LanSync/Start: Starta LAN-synkronisering
+LanSync/Stop: Stoppa LAN-synkronisering
+LanSync/DeviceName: Denna enhet:
+LanSync/Pairing: Enhetsparkoppling
+LanSync/PinLabel: Ange denna PIN på den andra enheten:
+LanSync/ShowPin: Parkoppla ny enhet
+LanSync/HidePairingCode: Dölj
+LanSync/PairedDevices: Parkopplade enheter
+LanSync/NoPairedDevices: Inga parkopplade enheter. Klicka på "Parkoppla ny enhet" för att ansluta en annan enhet.
+LanSync/Unpair: Avkoppla
+LanSync/Connected: Ansluten
+LanSync/Disconnected: Offline
+LanSync/DiscoveredDevices: Enheter på ditt nätverk
+LanSync/PinPlaceholder: PIN
+LanSync/Pair: Para
+LanSync/AvailableWikis: Tillgängligt från enheter
+LanSync/NoRemoteWikis: Inga nya wikis tillgängliga från anslutna enheter.
+LanSync/From: från
+LanSync/GetWiki: Hämta wiki
+LanSync/LinkWiki: Länka

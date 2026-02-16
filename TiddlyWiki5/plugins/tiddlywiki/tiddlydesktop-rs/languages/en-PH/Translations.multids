@@ -18,6 +18,7 @@ Buttons/CreateWikiFolder: Create Wiki Folder
 Buttons/ToFile: to file
 Buttons/ToFolder: to folder
 Buttons/Reauthorize: Re-authorize
+Buttons/Sync: sync
 
 Tooltips/BackupsEnabled: Backups enabled - click to disable
 Tooltips/ConvertWiki: Convert wiki format
@@ -30,6 +31,8 @@ Tooltips/SetBackupDir: Set custom backup directory
 Tooltips/RenameGroup: Rename group
 Tooltips/DeleteGroup: Delete group (wikis move to Ungrouped)
 Tooltips/SetBackupCount: Set maximum number of backups to keep (0 = unlimited)
+Tooltips/SyncEnabled: LAN sync enabled - click to disable
+Tooltips/SyncDisabled: LAN sync disabled - click to enable
 
 Labels/BackupFolder: Backup folder:
 Labels/BackupCount: Backup limit:
@@ -65,3 +68,25 @@ EditionSelector/AdditionalPlugins: Additional Plugins
 EditionSelector/Optional: (optional)
 EditionSelector/CreatingFile: Creating wiki file...
 EditionSelector/InitializingFolder: Initializing wiki folder...
+
+LanSync/Title: LAN Sync
+LanSync/Start: Start LAN Sync
+LanSync/Stop: Stop LAN Sync
+LanSync/DeviceName: This device:
+LanSync/Pairing: Device Pairing
+LanSync/PinLabel: Enter this PIN on the other device:
+LanSync/ShowPin: Pair New Device
+LanSync/HidePairingCode: Hide
+LanSync/PairedDevices: Paired Devices
+LanSync/NoPairedDevices: No paired devices. Click "Pair New Device" to connect another device.
+LanSync/Unpair: Unpair
+LanSync/Connected: Connected
+LanSync/Disconnected: Offline
+LanSync/DiscoveredDevices: Devices on your network
+LanSync/PinPlaceholder: PIN
+LanSync/Pair: Pair
+LanSync/AvailableWikis: Available from Peers
+LanSync/NoRemoteWikis: No new wikis available from connected peers.
+LanSync/From: from
+LanSync/GetWiki: Get Wiki
+LanSync/LinkWiki: Link

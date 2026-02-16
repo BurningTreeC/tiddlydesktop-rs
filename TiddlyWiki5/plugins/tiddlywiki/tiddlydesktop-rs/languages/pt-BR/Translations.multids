@@ -18,6 +18,7 @@ Buttons/CreateWikiFolder: Criar pasta wiki
 Buttons/ToFile: para arquivo
 Buttons/ToFolder: para pasta
 Buttons/Reauthorize: Re-authorize
+Buttons/Sync: sincronizar
 
 Tooltips/BackupsEnabled: Backups ativados - clique para desativar
 Tooltips/ConvertWiki: Converter formato do wiki
@@ -30,6 +31,8 @@ Tooltips/SetBackupDir: Definir diretório de backup personalizado
 Tooltips/RenameGroup: Renomear grupo
 Tooltips/DeleteGroup: Excluir grupo (wikis serão movidos para Sem grupo)
 Tooltips/SetBackupCount: Definir número máximo de backups a manter (0 = ilimitado)
+Tooltips/SyncEnabled: Sincronização LAN ativada - clique para desativar
+Tooltips/SyncDisabled: Sincronização LAN desativada - clique para ativar
 
 Labels/BackupFolder: Pasta de backup:
 Labels/BackupCount: Limite de backups:
@@ -65,3 +68,25 @@ EditionSelector/AdditionalPlugins: Plugins adicionais
 EditionSelector/Optional: (opcional)
 EditionSelector/CreatingFile: Criando arquivo wiki...
 EditionSelector/InitializingFolder: Inicializando pasta wiki...
+
+LanSync/Title: Sincronização LAN
+LanSync/Start: Iniciar sincronização LAN
+LanSync/Stop: Parar sincronização LAN
+LanSync/DeviceName: Este dispositivo:
+LanSync/Pairing: Emparelhamento de dispositivos
+LanSync/PinLabel: Digite este PIN no outro dispositivo:
+LanSync/ShowPin: Emparelhar novo dispositivo
+LanSync/HidePairingCode: Ocultar
+LanSync/PairedDevices: Dispositivos emparelhados
+LanSync/NoPairedDevices: Nenhum dispositivo emparelhado. Clique em "Emparelhar novo dispositivo" para conectar outro dispositivo.
+LanSync/Unpair: Desemparelhar
+LanSync/Connected: Conectado
+LanSync/Disconnected: Offline
+LanSync/DiscoveredDevices: Dispositivos na sua rede
+LanSync/PinPlaceholder: PIN
+LanSync/Pair: Emparelhar
+LanSync/AvailableWikis: Disponível de dispositivos
+LanSync/NoRemoteWikis: Nenhum wiki novo disponível de dispositivos conectados.
+LanSync/From: de
+LanSync/GetWiki: Obter wiki
+LanSync/LinkWiki: Vincular

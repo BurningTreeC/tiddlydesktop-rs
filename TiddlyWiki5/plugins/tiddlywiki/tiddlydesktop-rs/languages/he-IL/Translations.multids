@@ -18,6 +18,7 @@ Buttons/CreateWikiFolder: צור תיקיית ויקי
 Buttons/ToFile: לקובץ
 Buttons/ToFolder: לתיקייה
 Buttons/Reauthorize: Re-authorize
+Buttons/Sync: סנכרון
 
 Tooltips/BackupsEnabled: גיבויים מופעלים - לחץ להשבתה
 Tooltips/ConvertWiki: המר תבנית ויקי
@@ -30,6 +31,8 @@ Tooltips/SetBackupDir: הגדר תיקיית גיבוי מותאמת אישית
 Tooltips/RenameGroup: שנה שם קבוצה
 Tooltips/DeleteGroup: מחק קבוצה (הויקי יועברו ללא קבוצה)
 Tooltips/SetBackupCount: הגדר מספר גיבויים מרבי לשמירה (0 = ללא הגבלה)
+Tooltips/SyncEnabled: סנכרון רשת מקומית מופעל - לחץ להשבתה
+Tooltips/SyncDisabled: סנכרון רשת מקומית מושבת - לחץ להפעלה
 
 Labels/BackupFolder: תיקיית גיבוי:
 Labels/BackupCount: מגבלת גיבויים:
@@ -65,3 +68,25 @@ EditionSelector/AdditionalPlugins: תוספים נוספים
 EditionSelector/Optional: (אופציונלי)
 EditionSelector/CreatingFile: יוצר קובץ ויקי...
 EditionSelector/InitializingFolder: מאתחל תיקיית ויקי...
+
+LanSync/Title: סנכרון רשת מקומית
+LanSync/Start: התחל סנכרון רשת מקומית
+LanSync/Stop: עצור סנכרון רשת מקומית
+LanSync/DeviceName: מכשיר זה:
+LanSync/Pairing: שיוך מכשירים
+LanSync/PinLabel: הזן PIN זה במכשיר האחר:
+LanSync/ShowPin: שייך מכשיר חדש
+LanSync/HidePairingCode: הסתר
+LanSync/PairedDevices: מכשירים משויכים
+LanSync/NoPairedDevices: אין מכשירים משויכים. לחץ על "שייך מכשיר חדש" כדי לחבר מכשיר אחר.
+LanSync/Unpair: בטל שיוך
+LanSync/Connected: מחובר
+LanSync/Disconnected: לא מקוון
+LanSync/DiscoveredDevices: מכשירים ברשת
+LanSync/PinPlaceholder: PIN
+LanSync/Pair: צימוד
+LanSync/AvailableWikis: זמין ממכשירים
+LanSync/NoRemoteWikis: אין ויקי חדשים זמינים ממכשירים מחוברים.
+LanSync/From: מ
+LanSync/GetWiki: קבל ויקי
+LanSync/LinkWiki: קשר

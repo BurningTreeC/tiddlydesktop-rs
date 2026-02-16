@@ -31,4 +31,44 @@
     <string name="open_as_wiki">Открыть как вики</string>
     <string name="import_into_wiki">Импортировать в вики</string>
     <string name="no_app_for_link">Не найдено приложение для открытия этой ссылки</string>
+
+    <!-- WikiActivity -->
+    <string name="share_title">Поделиться как\u2026</string>
+    <string name="share_image">Изображение</string>
+    <string name="share_plain_text">Простой текст</string>
+    <string name="share_json">JSON (.json)</string>
+    <string name="share_tid">TID (.tid)</string>
+    <string name="share_csv">CSV (.csv)</string>
+    <string name="unsaved_title">Несохранённые изменения</string>
+    <string name="unsaved_message">У вас %d несохранённых изменений. Что вы хотите сделать?</string>
+    <string name="unsaved_save_close">Сохранить &amp; Закрыть</string>
+    <string name="unsaved_discard_close">Отменить &amp; Закрыть</string>
+
+    <!-- OpenWithActivity -->
+    <string name="open_unsupported_action">Неподдерживаемое действие</string>
+    <string name="open_no_file">Файл не указан</string>
+    <string name="open_no_file_uri">Внутренняя ошибка: нет URI файла</string>
+    <string name="open_select_folder">Теперь выберите папку с вики (для сохранения &amp; резервных копий)</string>
+    <string name="open_select_file">Выберите файл вики для предоставления доступа</string>
+    <string name="open_file_cancelled">Выбор файла отменён</string>
+    <string name="open_no_permission">Не удалось получить разрешение на доступ к файлу</string>
+
+    <!-- WikiServerService -->
+    <string name="notif_channel_name">Wiki Server</string>
+    <string name="notif_channel_desc">Поддерживает работу серверов вики в фоновом режиме</string>
+    <string name="notif_title">TiddlyDesktop-RS</string>
+    <string name="notif_text">Вики работает в фоновом режиме</string>
+
+    <string name="label_content">Содержание</string>
+    <string name="hint_content">Напишите вашу заметку здесь…</string>
+
+    <!-- Widgets -->
+    <string name="widget_capture_label">Захват</string>
+    <string name="widget_capture_desc">Кнопка быстрого захвата для TiddlyWiki</string>
+
+    <!-- LanSyncService -->
+    <string name="sync_notif_channel_name">LAN Sync</string>
+    <string name="sync_notif_channel_desc">Поддерживает LAN Sync активным для синхронизации вики в реальном времени</string>
+    <string name="sync_notif_title">LAN Sync активен</string>
+    <string name="sync_notif_text">Синхронизация вики с близлежащими устройствами</string>
 </resources>

@@ -9,7 +9,7 @@
     *;
 }
 
-# Keep MainActivity for widget handling
+# Keep MainActivity
 -keep class com.burningtreec.tiddlydesktop_rs.MainActivity {
     *;
 }
@@ -20,6 +20,11 @@
 }
 
 -keep class com.burningtreec.tiddlydesktop_rs.WikiServerService$Companion {
+    *;
+}
+
+# Keep widget providers
+-keep class com.burningtreec.tiddlydesktop_rs.QuickCaptureWidgetProvider {
     *;
 }
 

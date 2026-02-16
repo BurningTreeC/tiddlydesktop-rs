@@ -31,4 +31,44 @@
     <string name="open_as_wiki">作为维基打开</string>
     <string name="import_into_wiki">导入到维基</string>
     <string name="no_app_for_link">未找到可打开此链接的应用</string>
+
+    <!-- WikiActivity -->
+    <string name="share_title">分享为\u2026</string>
+    <string name="share_image">图片</string>
+    <string name="share_plain_text">纯文本</string>
+    <string name="share_json">JSON (.json)</string>
+    <string name="share_tid">TID (.tid)</string>
+    <string name="share_csv">CSV (.csv)</string>
+    <string name="unsaved_title">未保存的更改</string>
+    <string name="unsaved_message">您有 %d 个未保存的更改。您想怎么做？</string>
+    <string name="unsaved_save_close">保存 &amp; 关闭</string>
+    <string name="unsaved_discard_close">放弃 &amp; 关闭</string>
+
+    <!-- OpenWithActivity -->
+    <string name="open_unsupported_action">不支持的操作</string>
+    <string name="open_no_file">未指定文件</string>
+    <string name="open_no_file_uri">内部错误：没有文件 URI</string>
+    <string name="open_select_folder">现在请选择包含维基的文件夹（用于保存 &amp; 备份）</string>
+    <string name="open_select_file">请选择维基文件以授予访问权限</string>
+    <string name="open_file_cancelled">文件选择已取消</string>
+    <string name="open_no_permission">无法获取文件访问权限</string>
+
+    <!-- WikiServerService -->
+    <string name="notif_channel_name">Wiki Server</string>
+    <string name="notif_channel_desc">保持维基服务器在后台运行</string>
+    <string name="notif_title">TiddlyDesktop-RS</string>
+    <string name="notif_text">维基正在后台运行</string>
+
+    <string name="label_content">内容</string>
+    <string name="hint_content">在此写下你的笔记…</string>
+
+    <!-- Widgets -->
+    <string name="widget_capture_label">捕获</string>
+    <string name="widget_capture_desc">TiddlyWiki 快速捕获按钮</string>
+
+    <!-- LanSyncService -->
+    <string name="sync_notif_channel_name">LAN Sync</string>
+    <string name="sync_notif_channel_desc">保持 LAN Sync 活跃，实现实时维基同步</string>
+    <string name="sync_notif_title">LAN Sync 活跃中</string>
+    <string name="sync_notif_text">正在与附近设备同步维基</string>
 </resources>

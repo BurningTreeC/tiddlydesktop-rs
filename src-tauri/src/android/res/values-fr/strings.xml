@@ -31,4 +31,44 @@
     <string name="open_as_wiki">Ouvrir comme wiki</string>
     <string name="import_into_wiki">Importer dans un wiki</string>
     <string name="no_app_for_link">Aucune application trouvée pour ouvrir ce lien</string>
+
+    <!-- WikiActivity -->
+    <string name="share_title">Partager en tant que\u2026</string>
+    <string name="share_image">Image</string>
+    <string name="share_plain_text">Texte brut</string>
+    <string name="share_json">JSON (.json)</string>
+    <string name="share_tid">TID (.tid)</string>
+    <string name="share_csv">CSV (.csv)</string>
+    <string name="unsaved_title">Modifications non enregistrées</string>
+    <string name="unsaved_message">Vous avez %d modification(s) non enregistrée(s). Que souhaitez-vous faire ?</string>
+    <string name="unsaved_save_close">Enregistrer &amp; Fermer</string>
+    <string name="unsaved_discard_close">Abandonner &amp; Fermer</string>
+
+    <!-- OpenWithActivity -->
+    <string name="open_unsupported_action">Action non prise en charge</string>
+    <string name="open_no_file">Aucun fichier spécifié</string>
+    <string name="open_no_file_uri">Erreur interne : pas d\'URI de fichier</string>
+    <string name="open_select_folder">Sélectionnez maintenant le dossier contenant le wiki (pour la sauvegarde &amp; les sauvegardes)</string>
+    <string name="open_select_file">Veuillez sélectionner le fichier wiki pour accorder l\'accès</string>
+    <string name="open_file_cancelled">Sélection de fichier annulée</string>
+    <string name="open_no_permission">Impossible d\'obtenir l\'autorisation d\'accès au fichier</string>
+
+    <!-- WikiServerService -->
+    <string name="notif_channel_name">Wiki Server</string>
+    <string name="notif_channel_desc">Maintient les serveurs wiki actifs en arrière-plan</string>
+    <string name="notif_title">TiddlyDesktop-RS</string>
+    <string name="notif_text">Le wiki fonctionne en arrière-plan</string>
+
+    <string name="label_content">Contenu</string>
+    <string name="hint_content">Écrivez votre note ici…</string>
+
+    <!-- Widgets -->
+    <string name="widget_capture_label">Capture</string>
+    <string name="widget_capture_desc">Bouton de capture rapide pour TiddlyWiki</string>
+
+    <!-- LanSyncService -->
+    <string name="sync_notif_channel_name">LAN Sync</string>
+    <string name="sync_notif_channel_desc">Maintient LAN Sync actif pour la synchronisation en temps réel des wikis</string>
+    <string name="sync_notif_title">LAN Sync Actif</string>
+    <string name="sync_notif_text">Synchronisation des wikis avec les appareils à proximité</string>
 </resources>

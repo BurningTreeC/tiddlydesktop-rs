@@ -31,4 +31,44 @@
     <string name="open_as_wiki">Wikiとして開く</string>
     <string name="import_into_wiki">Wikiにインポート</string>
     <string name="no_app_for_link">このリンクを開くアプリが見つかりません</string>
+
+    <!-- WikiActivity -->
+    <string name="share_title">共有形式\u2026</string>
+    <string name="share_image">画像</string>
+    <string name="share_plain_text">プレーンテキスト</string>
+    <string name="share_json">JSON (.json)</string>
+    <string name="share_tid">TID (.tid)</string>
+    <string name="share_csv">CSV (.csv)</string>
+    <string name="unsaved_title">未保存の変更</string>
+    <string name="unsaved_message">%d件の未保存の変更があります。どうしますか?</string>
+    <string name="unsaved_save_close">保存して閉じる</string>
+    <string name="unsaved_discard_close">破棄して閉じる</string>
+
+    <!-- OpenWithActivity -->
+    <string name="open_unsupported_action">サポートされていない操作</string>
+    <string name="open_no_file">ファイルが指定されていません</string>
+    <string name="open_no_file_uri">内部エラー: ファイルURIがありません</string>
+    <string name="open_select_folder">Wikiが含まれるフォルダを選択してください（保存 &amp; バックアップ用）</string>
+    <string name="open_select_file">アクセスを許可するWikiファイルを選択してください</string>
+    <string name="open_file_cancelled">ファイル選択がキャンセルされました</string>
+    <string name="open_no_permission">ファイルアクセス権限を取得できませんでした</string>
+
+    <!-- WikiServerService -->
+    <string name="notif_channel_name">Wiki Server</string>
+    <string name="notif_channel_desc">Wikiサーバーをバックグラウンドで実行し続けます</string>
+    <string name="notif_title">TiddlyDesktop-RS</string>
+    <string name="notif_text">Wikiがバックグラウンドで実行中です</string>
+
+    <string name="label_content">内容</string>
+    <string name="hint_content">ここにメモを書いてください…</string>
+
+    <!-- Widgets -->
+    <string name="widget_capture_label">キャプチャ</string>
+    <string name="widget_capture_desc">TiddlyWiki用クイックキャプチャボタン</string>
+
+    <!-- LanSyncService -->
+    <string name="sync_notif_channel_name">LAN Sync</string>
+    <string name="sync_notif_channel_desc">LAN Syncをアクティブに保ち、リアルタイムでwikiを同期します</string>
+    <string name="sync_notif_title">LAN Sync アクティブ</string>
+    <string name="sync_notif_text">近くのデバイスとwikiを同期中</string>
 </resources>

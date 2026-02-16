@@ -27,6 +27,10 @@ pub struct WikiEntry {
     pub backup_count: Option<u32>, // max backups to keep (None = default 20, 0 = unlimited)
     #[serde(default)]
     pub group: Option<String>, // group name for organizing wikis (None = "Ungrouped")
+    #[serde(default)]
+    pub sync_enabled: bool, // whether LAN sync is enabled for this wiki
+    #[serde(default)]
+    pub sync_id: Option<String>, // unique sync ID (UUID) for matching across devices
 }
 
 fn default_backups_enabled() -> bool {

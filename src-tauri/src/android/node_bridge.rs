@@ -397,6 +397,37 @@ pub fn track_wiki_local_path(wiki_path: &str, local_path: &str) {
     paths.insert(wiki_path.to_string(), local_path.to_string());
 }
 
+/// Get a local filesystem path for an SAF folder wiki.
+/// Checks the in-memory mapping first, then tries the computed local mirror path.
+/// If neither exists, creates a fresh local copy via SAF.
+pub fn get_or_create_local_copy(saf_uri: &str) -> Result<String, String> {
+    // Check in-memory mapping first
+    {
+        let paths = WIKI_LOCAL_PATHS.lock().unwrap();
+        if let Some(local) = paths.get(saf_uri) {
+            let p = std::path::Path::new(local.as_str());
+            if p.is_dir() {
+                return Ok(local.clone());
+            }
+        }
+    }
+
+    // Check the expected local mirror path (survives app restarts)
+    let data_dir = get_app_data_dir()?;
+    let uri_hash = format!("{:x}", md5::compute(saf_uri.as_bytes()));
+    let mirror_dir = data_dir.join("wiki-mirrors").join(&uri_hash);
+    if mirror_dir.is_dir() && mirror_dir.join("tiddlywiki.info").exists() {
+        let local = mirror_dir.to_string_lossy().to_string();
+        // Re-register in memory
+        let mut paths = WIKI_LOCAL_PATHS.lock().unwrap();
+        paths.insert(saf_uri.to_string(), local.clone());
+        return Ok(local);
+    }
+
+    // No local copy exists — create one from SAF
+    copy_saf_wiki_to_local(saf_uri)
+}
+
 /// Stop the file sync watcher for an SAF wiki and clean up the local copy.
 pub fn stop_saf_sync_watcher(local_path: &str) {
     let mut watchers = SAF_SYNC_WATCHERS.lock().unwrap();

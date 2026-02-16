@@ -18,6 +18,7 @@ Buttons/CreateWikiFolder: Ustvari wiki mapo
 Buttons/ToFile: v datoteko
 Buttons/ToFolder: v mapo
 Buttons/Reauthorize: Re-authorize
+Buttons/Sync: sinhroniziraj
 
 Tooltips/BackupsEnabled: Varnostne kopije omogočene - kliknite za onemogočenje
 Tooltips/ConvertWiki: Pretvori format wikija
@@ -30,6 +31,8 @@ Tooltips/SetBackupDir: Nastavi prilagojeno mapo varnostnih kopij
 Tooltips/RenameGroup: Preimenuj skupino
 Tooltips/DeleteGroup: Izbriši skupino (wikiji bodo premaknjeni v Brez skupine)
 Tooltips/SetBackupCount: Nastavi največje število varnostnih kopij (0 = neomejeno)
+Tooltips/SyncEnabled: Sinhronizacija LAN omogočena - kliknite za onemogočenje
+Tooltips/SyncDisabled: Sinhronizacija LAN onemogočena - kliknite za omogočenje
 
 Labels/BackupFolder: Mapa varnostnih kopij:
 Labels/BackupCount: Omejitev kopij:
@@ -65,3 +68,25 @@ EditionSelector/AdditionalPlugins: Dodatni vtičniki
 EditionSelector/Optional: (neobvezno)
 EditionSelector/CreatingFile: Ustvarjanje wiki datoteke...
 EditionSelector/InitializingFolder: Inicializacija wiki mape...
+
+LanSync/Title: Sinhronizacija LAN
+LanSync/Start: Začni sinhronizacijo LAN
+LanSync/Stop: Ustavi sinhronizacijo LAN
+LanSync/DeviceName: Ta naprava:
+LanSync/Pairing: Povezovanje naprav
+LanSync/PinLabel: Vnesite ta PIN na drugi napravi:
+LanSync/ShowPin: Poveži novo napravo
+LanSync/HidePairingCode: Skrij
+LanSync/PairedDevices: Povezane naprave
+LanSync/NoPairedDevices: Ni povezanih naprav. Kliknite "Poveži novo napravo" za povezavo druge naprave.
+LanSync/Unpair: Prekini povezavo
+LanSync/Connected: Povezano
+LanSync/Disconnected: Brez povezave
+LanSync/DiscoveredDevices: Naprave v omrežju
+LanSync/PinPlaceholder: PIN
+LanSync/Pair: Poveži
+LanSync/AvailableWikis: Na voljo iz naprav
+LanSync/NoRemoteWikis: Ni novih wikijev na voljo iz povezanih naprav.
+LanSync/From: iz
+LanSync/GetWiki: Pridobi wiki
+LanSync/LinkWiki: Poveži

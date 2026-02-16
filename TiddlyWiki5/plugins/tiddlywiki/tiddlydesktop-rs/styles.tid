@@ -313,6 +313,27 @@ tags: $:/tags/Stylesheet
 	background: #f0e8d8;
 }
 
+/* Sync toggle button */
+.td-button-sync.td-sync-on {
+	background: #e8f0f8;
+	border-color: #a0c0e0;
+	color: #2d5a8a;
+}
+
+.td-button-sync.td-sync-on:hover {
+	background: #d8e8f0;
+}
+
+.td-button-sync.td-sync-off {
+	background: <<colour tab-background>>;
+	border-color: <<colour tab-border>>;
+	color: <<colour muted-foreground>>;
+}
+
+.td-button-sync.td-sync-off:hover {
+	background: <<colour tab-background-selected>>;
+}
+
 /* Backup directory row */
 .td-wiki-backup-dir {
 	display: flex;
@@ -1693,4 +1714,254 @@ body.td-is-android.td-main-wiki .tc-tiddler-body {
 body.td-is-android.td-main-wiki .td-wikilist {
 	overflow: visible !important;
 	height: auto !important;
+}
+
+/* ── LAN Sync Panel ──────────────────────────────────────────────── */
+
+.td-sync-panel {
+	padding: 16px;
+	max-width: 600px;
+}
+
+.td-sync-header {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	margin-bottom: 16px;
+}
+
+.td-sync-header h2 {
+	margin: 0;
+	font-size: 1.2em;
+}
+
+.td-sync-section {
+	margin-bottom: 20px;
+	padding: 12px;
+	background: <<colour tiddler-background>>;
+	border: 1px solid <<colour tiddler-border>>;
+	border-radius: 8px;
+}
+
+.td-sync-section h3 {
+	margin: 0 0 12px 0;
+	font-size: 1em;
+	color: <<colour foreground>>;
+}
+
+.td-sync-info-row {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+}
+
+.td-sync-label {
+	font-weight: bold;
+	color: <<colour muted-foreground>>;
+}
+
+.td-sync-value {
+	color: <<colour foreground>>;
+}
+
+/* PIN Display */
+.td-sync-pin-display {
+	text-align: center;
+	padding: 16px;
+}
+
+.td-sync-pin-label {
+	margin-bottom: 8px;
+	color: <<colour muted-foreground>>;
+}
+
+.td-sync-pin-code {
+	font-size: 2.5em;
+	font-weight: bold;
+	letter-spacing: 0.3em;
+	font-family: monospace;
+	padding: 12px;
+	background: <<colour page-background>>;
+	border-radius: 8px;
+	margin-bottom: 12px;
+	color: <<colour foreground>>;
+}
+
+/* Paired Device List */
+.td-sync-device {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	padding: 8px 12px;
+	border-bottom: 1px solid <<colour tiddler-border>>;
+}
+
+.td-sync-device:last-child {
+	border-bottom: none;
+}
+
+.td-sync-device-name {
+	font-weight: 500;
+}
+
+.td-sync-fingerprint {
+	font-size: 0.8em;
+	color: <<colour muted-foreground>>;
+	font-family: monospace;
+	font-weight: 400;
+}
+
+.td-sync-device-status {
+	font-size: 0.85em;
+	color: <<colour muted-foreground>>;
+	display: flex;
+	align-items: center;
+	gap: 4px;
+}
+
+.td-sync-status-dot {
+	display: inline-block;
+	width: 8px;
+	height: 8px;
+	border-radius: 50%;
+}
+
+.td-sync-connected {
+	background: #4caf50;
+}
+
+.td-sync-disconnected {
+	background: #9e9e9e;
+}
+
+.td-sync-empty {
+	color: <<colour muted-foreground>>;
+	font-style: italic;
+	padding: 8px 0;
+}
+
+.td-button-primary {
+	background: <<colour primary>> !important;
+	color: <<colour background>> !important;
+	border-radius: 6px !important;
+	padding: 6px 16px !important;
+}
+
+.td-button-danger {
+	background: #e53935 !important;
+	color: white !important;
+	border-radius: 6px !important;
+	padding: 6px 16px !important;
+}
+
+.td-button-small {
+	font-size: 0.85em;
+	padding: 4px 10px !important;
+}
+
+/* Remote wiki items (available from peers) */
+.td-sync-remote-wiki {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	padding: 8px 0;
+	border-bottom: 1px solid <<colour tab-border>>;
+}
+
+.td-sync-remote-wiki:last-child {
+	border-bottom: none;
+}
+
+.td-sync-remote-wiki-name {
+	font-weight: 500;
+	display: flex;
+	align-items: center;
+	gap: 4px;
+}
+
+.td-sync-remote-wiki-name svg {
+	width: 16px;
+	height: 16px;
+	fill: <<colour muted-foreground>>;
+}
+
+.td-sync-remote-wiki-from {
+	font-size: 0.85em;
+	color: <<colour muted-foreground>>;
+}
+
+/* Link wiki dropdown */
+.td-link-wiki-dropdown {
+	min-width: 200px;
+	max-width: 320px;
+}
+
+.td-link-wiki-dropdown-content {
+	padding: 4px 0;
+}
+
+.td-link-wiki-option {
+	display: block;
+	width: 100%;
+	padding: 8px 12px;
+	text-align: left;
+	background: none;
+	border: none;
+	cursor: pointer;
+	font-size: 13px;
+	color: <<colour foreground>>;
+	transition: background 0.1s;
+}
+
+.td-link-wiki-option:hover {
+	background: <<colour tab-background>>;
+}
+
+.td-link-wiki-empty {
+	padding: 8px 12px;
+	font-size: 13px;
+	color: <<colour muted-foreground>>;
+}
+
+/* Discovered devices (pairing) */
+.td-sync-discovered {
+	margin-top: 8px;
+}
+
+.td-sync-discovered h4 {
+	margin: 4px 0;
+	font-size: 0.9em;
+	color: <<colour muted-foreground>>;
+}
+
+.td-sync-discovered-device {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	padding: 6px 0;
+	border-bottom: 1px solid <<colour tab-border>>;
+}
+
+.td-sync-discovered-device:last-child {
+	border-bottom: none;
+}
+
+.td-sync-discovered-name {
+	font-weight: 500;
+}
+
+.td-sync-discovered-pair {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+}
+
+.td-sync-pin-input {
+	width: 80px;
+	padding: 4px 8px;
+	border: 1px solid <<colour tab-border>>;
+	border-radius: 4px;
+	font-size: 1em;
+	text-align: center;
+	letter-spacing: 2px;
 }

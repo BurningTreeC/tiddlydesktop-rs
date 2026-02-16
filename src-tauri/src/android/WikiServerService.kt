@@ -26,7 +26,7 @@ class WikiServerService : Service() {
         private const val TAG = "WikiServerService"
         private const val NOTIFICATION_ID = 1001
         private const val CHANNEL_ID = "wiki_server_channel"
-        private const val CHANNEL_NAME = "Wiki Server"
+        // Channel name moved to getString(R.string.notif_channel_name) at channel creation
         private const val NOTIFICATION_CHECK_INTERVAL = 2000L  // Check every 2 seconds
 
         // In-memory count — WikiActivity and WikiServerService share the :wiki process,
@@ -172,10 +172,10 @@ class WikiServerService : Service() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val channel = NotificationChannel(
                 CHANNEL_ID,
-                CHANNEL_NAME,
+                getString(R.string.notif_channel_name),
                 NotificationManager.IMPORTANCE_DEFAULT
             ).apply {
-                description = "Keeps wiki servers running in the background"
+                description = getString(R.string.notif_channel_desc)
                 setShowBadge(false)
                 setSound(null, null)  // No sound for this notification
             }
@@ -195,8 +195,8 @@ class WikiServerService : Service() {
         )
 
         return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("TiddlyDesktop-RS")
-            .setContentText("Wiki is running in the background")
+            .setContentTitle(getString(R.string.notif_title))
+            .setContentText(getString(R.string.notif_text))
             .setSmallIcon(R.drawable.ic_notification)
             .setContentIntent(pendingIntent)
             .setOngoing(true)

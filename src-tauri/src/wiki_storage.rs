@@ -5,7 +5,7 @@
 //! - Wiki-specific configurations (external attachments, session auth)
 
 use std::path::PathBuf;
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 use crate::types::{WikiEntry, WikiConfigs, ExternalAttachmentsConfig, SessionAuthConfig, AppSettings};
 use crate::utils;
 
@@ -176,10 +176,17 @@ pub fn save_recent_files_to_disk(app: &tauri::AppHandle, entries: &[WikiEntry]) 
 pub fn add_to_recent_files(app: &tauri::AppHandle, mut entry: WikiEntry) -> Result<(), String> {
     let mut entries = load_recent_files_from_disk(app);
 
-    // Preserve backup settings from existing entry (if any)
+    // Preserve settings from existing entry (if any)
     if let Some(existing) = entries.iter().find(|e| utils::paths_equal(&e.path, &entry.path)) {
         entry.backups_enabled = existing.backups_enabled;
         entry.backup_dir = existing.backup_dir.clone();
+        // Preserve LAN sync settings unless the new entry explicitly sets them
+        if !entry.sync_enabled && existing.sync_enabled {
+            entry.sync_enabled = existing.sync_enabled;
+        }
+        if entry.sync_id.is_none() && existing.sync_id.is_some() {
+            entry.sync_id = existing.sync_id.clone();
+        }
     }
 
     // Remove existing entry with same path (if any)
@@ -269,8 +276,40 @@ pub fn get_recent_files(app: tauri::AppHandle) -> Vec<WikiEntry> {
 #[tauri::command]
 pub fn remove_recent_file(app: tauri::AppHandle, path: String) -> Result<(), String> {
     let mut entries = load_recent_files_from_disk(&app);
+
+    // Find the entry before removing so we can clean up related data
+    let removed_entry = entries.iter().find(|e| utils::paths_equal(&e.path, &path)).cloned();
+
     entries.retain(|e| !utils::paths_equal(&e.path, &path));
     save_recent_files_to_disk(&app, &entries)?;
+
+    // Clean up wiki_configs.json entries for this wiki
+    if let Ok(mut configs) = load_wiki_configs(&app) {
+        let mut changed = false;
+        changed |= configs.external_attachments.remove(&path).is_some();
+        changed |= configs.session_auth.remove(&path).is_some();
+        changed |= configs.window_states.remove(&path).is_some();
+        if changed {
+            let _ = save_wiki_configs(&app, &configs);
+        }
+    }
+
+    // Clean up sync state if the wiki had a sync_id
+    if let Some(ref entry) = removed_entry {
+        if let Some(ref sync_id) = entry.sync_id {
+            let data_dir = app.path().app_data_dir().unwrap_or_default();
+            let state_path = data_dir.join("sync_state").join(format!("{}.json", sync_id));
+            let _ = std::fs::remove_file(state_path);
+        }
+    }
+
+    // Broadcast updated WikiManifest so peers no longer see removed wikis
+    if let Some(mgr) = crate::lan_sync::get_sync_manager() {
+        let mgr = mgr.clone();
+        tauri::async_runtime::spawn(async move {
+            mgr.broadcast_wiki_manifest().await;
+        });
+    }
 
     Ok(())
 }
@@ -431,6 +470,131 @@ pub fn update_wiki_favicon(app: tauri::AppHandle, path: String, favicon: Option<
     }));
 
     Ok(())
+}
+
+/// Set LAN sync enabled/disabled for a wiki. Assigns a sync_id (UUID) when first enabled.
+/// Notifies open wiki windows to start/stop syncing and broadcasts updated manifest to peers.
+#[tauri::command]
+pub fn set_wiki_sync(app: tauri::AppHandle, path: String, enabled: bool) -> Result<String, String> {
+    let mut entries = load_recent_files_from_disk(&app);
+    let mut sync_id = String::new();
+
+    for entry in entries.iter_mut() {
+        if utils::paths_equal(&entry.path, &path) {
+            entry.sync_enabled = enabled;
+            if enabled && entry.sync_id.is_none() {
+                entry.sync_id = Some(crate::lan_sync::pairing::generate_random_id());
+            }
+            sync_id = entry.sync_id.clone().unwrap_or_default();
+            break;
+        }
+    }
+
+    save_recent_files_to_disk(&app, &entries)?;
+
+    // Notify open wiki windows to start or stop syncing
+    if enabled {
+        let _ = app.emit("lan-sync-activate", serde_json::json!({
+            "wiki_path": path,
+            "sync_id": sync_id,
+        }));
+        eprintln!("[LAN Sync] Sync enabled for wiki: {} (sync_id: {})", path, sync_id);
+    } else {
+        let _ = app.emit("lan-sync-deactivate", serde_json::json!({
+            "wiki_path": path,
+        }));
+        eprintln!("[LAN Sync] Sync disabled for wiki: {}", path);
+    }
+
+    // Broadcast updated wiki manifest to connected peers
+    if let Some(mgr) = crate::lan_sync::get_sync_manager() {
+        let mgr = mgr.clone();
+        tauri::async_runtime::spawn(async move {
+            mgr.broadcast_wiki_manifest().await;
+        });
+    }
+
+    Ok(sync_id)
+}
+
+/// Get the sync_id for a wiki (empty string if sync not enabled)
+#[tauri::command]
+pub fn get_wiki_sync_id(app: tauri::AppHandle, path: String) -> String {
+    eprintln!("[get_wiki_sync_id] Looking up sync_id for path: {}", path);
+    let entries = load_recent_files_from_disk(&app);
+    for entry in &entries {
+        if utils::paths_equal(&entry.path, &path) {
+            if entry.sync_enabled {
+                let id = entry.sync_id.clone().unwrap_or_default();
+                eprintln!("[get_wiki_sync_id] Found sync_id: {}", id);
+                return id;
+            }
+            eprintln!("[get_wiki_sync_id] sync not enabled for this wiki");
+            return String::new();
+        }
+    }
+    eprintln!("[get_wiki_sync_id] path not found in recent_wikis ({} entries checked)", entries.len());
+    String::new()
+}
+
+/// Link a local wiki to a remote wiki's sync_id (peer-assisted matching after reinstall).
+/// The user selects which local wiki corresponds to a remote wiki from the peer's manifest.
+#[tauri::command]
+pub fn lan_sync_link_wiki(app: tauri::AppHandle, path: String, sync_id: String) -> Result<(), String> {
+    let mut entries = load_recent_files_from_disk(&app);
+    let mut found = false;
+
+    for entry in entries.iter_mut() {
+        if utils::paths_equal(&entry.path, &path) {
+            entry.sync_enabled = true;
+            entry.sync_id = Some(sync_id.clone());
+            found = true;
+            break;
+        }
+    }
+
+    if !found {
+        return Err("Wiki not found in recent files".to_string());
+    }
+
+    save_recent_files_to_disk(&app, &entries)?;
+
+    // Tell the wiki window (if open) to activate sync
+    let _ = app.emit("lan-sync-activate", serde_json::json!({
+        "wiki_path": path,
+        "sync_id": sync_id,
+    }));
+
+    eprintln!("[LAN Sync] Linked wiki for sync: {} -> {}", path, sync_id);
+    Ok(())
+}
+
+/// Get all sync-enabled wikis (for WikiManifest exchange)
+pub fn get_sync_enabled_wikis(app: &tauri::AppHandle) -> Vec<(String, String, bool)> {
+    // Returns vec of (sync_id, filename, is_folder)
+    let entries = load_recent_files_from_disk(app);
+    entries
+        .into_iter()
+        .filter(|e| e.sync_enabled && e.sync_id.is_some())
+        .map(|e| (e.sync_id.unwrap(), e.filename, e.is_folder))
+        .collect()
+}
+
+/// Get the file path for a wiki by its sync_id
+pub fn get_wiki_path_by_sync_id(app: &tauri::AppHandle, sync_id: &str) -> Option<String> {
+    let entries = load_recent_files_from_disk(app);
+    entries
+        .into_iter()
+        .find(|e| e.sync_enabled && e.sync_id.as_deref() == Some(sync_id))
+        .map(|e| e.path)
+}
+
+/// Check if a wiki with the given sync_id exists locally
+pub fn has_wiki_with_sync_id(app: &tauri::AppHandle, sync_id: &str) -> bool {
+    let entries = load_recent_files_from_disk(app);
+    entries
+        .iter()
+        .any(|e| e.sync_id.as_deref() == Some(sync_id))
 }
 
 /// Set group for a wiki (None to move to "Ungrouped")

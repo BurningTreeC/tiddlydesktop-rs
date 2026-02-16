@@ -18,6 +18,7 @@ Buttons/CreateWikiFolder: Δημιουργία φακέλου wiki
 Buttons/ToFile: σε αρχείο
 Buttons/ToFolder: σε φάκελο
 Buttons/Reauthorize: Re-authorize
+Buttons/Sync: συγχρονισμός
 
 Tooltips/BackupsEnabled: Αντίγραφα ασφαλείας ενεργά - κλικ για απενεργοποίηση
 Tooltips/ConvertWiki: Μετατροπή μορφής wiki
@@ -30,6 +31,8 @@ Tooltips/SetBackupDir: Ορισμός προσαρμοσμένου καταλό�
 Tooltips/RenameGroup: Μετονομασία ομάδας
 Tooltips/DeleteGroup: Διαγραφή ομάδας (τα wiki θα μεταφερθούν στα Μη ομαδοποιημένα)
 Tooltips/SetBackupCount: Ορισμός μέγιστου αριθμού αντιγράφων (0 = απεριόριστο)
+Tooltips/SyncEnabled: Ο συγχρονισμός LAN είναι ενεργοποιημένος - κάντε κλικ για απενεργοποίηση
+Tooltips/SyncDisabled: Ο συγχρονισμός LAN είναι απενεργοποιημένος - κάντε κλικ για ενεργοποίηση
 
 Labels/BackupFolder: Φάκελος αντιγράφων ασφαλείας:
 Labels/BackupCount: Όριο αντιγράφων:
@@ -65,3 +68,25 @@ EditionSelector/AdditionalPlugins: Πρόσθετα plugins
 EditionSelector/Optional: (προαιρετικό)
 EditionSelector/CreatingFile: Δημιουργία αρχείου wiki...
 EditionSelector/InitializingFolder: Αρχικοποίηση φακέλου wiki...
+
+LanSync/Title: Συγχρονισμός LAN
+LanSync/Start: Έναρξη συγχρονισμού LAN
+LanSync/Stop: Διακοπή συγχρονισμού LAN
+LanSync/DeviceName: Αυτή η συσκευή:
+LanSync/Pairing: Σύζευξη συσκευών
+LanSync/PinLabel: Εισάγετε αυτό το PIN στην άλλη συσκευή:
+LanSync/ShowPin: Σύζευξη νέας συσκευής
+LanSync/HidePairingCode: Απόκρυψη
+LanSync/PairedDevices: Συζευγμένες συσκευές
+LanSync/NoPairedDevices: Δεν υπάρχουν συζευγμένες συσκευές. Κάντε κλικ στο "Σύζευξη νέας συσκευής" για να συνδέσετε μια άλλη συσκευή.
+LanSync/Unpair: Αποσύζευξη
+LanSync/Connected: Συνδεδεμένο
+LanSync/Disconnected: Εκτός σύνδεσης
+LanSync/DiscoveredDevices: Συσκευές στο δίκτυό σας
+LanSync/PinPlaceholder: PIN
+LanSync/Pair: Σύζευξη
+LanSync/AvailableWikis: Διαθέσιμα από συσκευές
+LanSync/NoRemoteWikis: Δεν υπάρχουν νέα wiki διαθέσιμα από τις συνδεδεμένες συσκευές.
+LanSync/From: από
+LanSync/GetWiki: Λήψη wiki
+LanSync/LinkWiki: Σύνδεση

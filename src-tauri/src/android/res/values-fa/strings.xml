@@ -31,4 +31,44 @@
     <string name="open_as_wiki">باز کردن به عنوان ویکی</string>
     <string name="import_into_wiki">واردکردن به ویکی</string>
     <string name="no_app_for_link">برنامه‌ای برای باز کردن این پیوند یافت نشد</string>
+
+    <!-- WikiActivity -->
+    <string name="share_title">اشتراک‌گذاری به عنوان\u2026</string>
+    <string name="share_image">تصویر</string>
+    <string name="share_plain_text">متن ساده</string>
+    <string name="share_json">JSON (.json)</string>
+    <string name="share_tid">TID (.tid)</string>
+    <string name="share_csv">CSV (.csv)</string>
+    <string name="unsaved_title">تغییرات ذخیره‌نشده</string>
+    <string name="unsaved_message">شما %d تغییر ذخیره‌نشده دارید. چه کاری می‌خواهید انجام دهید؟</string>
+    <string name="unsaved_save_close">ذخیره &amp; بستن</string>
+    <string name="unsaved_discard_close">صرف‌نظر &amp; بستن</string>
+
+    <!-- OpenWithActivity -->
+    <string name="open_unsupported_action">عملکرد پشتیبانی‌نشده</string>
+    <string name="open_no_file">فایلی مشخص نشده</string>
+    <string name="open_no_file_uri">خطای داخلی: URI فایل وجود ندارد</string>
+    <string name="open_select_folder">اکنون پوشه حاوی ویکی را انتخاب کنید (برای ذخیره &amp; پشتیبان‌گیری)</string>
+    <string name="open_select_file">لطفاً فایل ویکی را برای اعطای دسترسی انتخاب کنید</string>
+    <string name="open_file_cancelled">انتخاب فایل لغو شد</string>
+    <string name="open_no_permission">دسترسی به فایل امکان‌پذیر نبود</string>
+
+    <!-- WikiServerService -->
+    <string name="notif_channel_name">Wiki Server</string>
+    <string name="notif_channel_desc">سرورهای ویکی را در پس‌زمینه فعال نگه می‌دارد</string>
+    <string name="notif_title">TiddlyDesktop-RS</string>
+    <string name="notif_text">ویکی در پس‌زمینه در حال اجرا است</string>
+
+    <string name="label_content">محتوا</string>
+    <string name="hint_content">یادداشت خود را اینجا بنویسید…</string>
+
+    <!-- Widgets -->
+    <string name="widget_capture_label">ضبط</string>
+    <string name="widget_capture_desc">دکمه ضبط سریع برای TiddlyWiki</string>
+
+    <!-- LanSyncService -->
+    <string name="sync_notif_channel_name">LAN Sync</string>
+    <string name="sync_notif_channel_desc">LAN Sync را برای همگام‌سازی ویکی در زمان واقعی فعال نگه می‌دارد</string>
+    <string name="sync_notif_title">LAN Sync فعال است</string>
+    <string name="sync_notif_text">همگام‌سازی ویکی‌ها با دستگاه‌های نزدیک</string>
 </resources>

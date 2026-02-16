@@ -79,6 +79,29 @@ pub fn read_document_bytes(uri: &str) -> Result<Vec<u8>, String> {
     Ok(contents)
 }
 
+/// Open a document for reading as a stream.
+/// Returns a boxed reader that can be read in chunks to avoid loading the entire file into memory.
+pub fn open_document_reader(uri: &str) -> Result<Box<dyn std::io::Read>, String> {
+    let app = get_app()?;
+    let api = app.android_fs();
+    let file_uri = parse_uri(uri)?;
+
+    let file = api.open_file(&file_uri, FileAccessMode::Read)
+        .map_err(|e| format!("Failed to open file for reading: {:?}", e))?;
+
+    Ok(Box::new(file))
+}
+
+/// Get the file size in bytes via SAF content resolver.
+pub fn get_document_size(uri: &str) -> Result<u64, String> {
+    let app = get_app()?;
+    let api = app.android_fs();
+    let file_uri = parse_uri(uri)?;
+
+    api.get_len(&file_uri)
+        .map_err(|e| format!("Failed to get file size: {:?}", e))
+}
+
 /// Write a string to a document.
 pub fn write_document_string(uri: &str, content: &str) -> Result<(), String> {
     eprintln!("[SAF] write_document_string called");
@@ -229,6 +252,8 @@ pub struct DirEntry {
     pub name: String,
     pub uri: String,
     pub is_dir: bool,
+    /// File size in bytes (0 for directories)
+    pub size: u64,
 }
 
 /// List contents of a directory (names only, for backwards compatibility).
@@ -261,15 +286,17 @@ pub fn list_directory_entries(uri: &str) -> Result<Vec<DirEntry>, String> {
 
     let result: Vec<DirEntry> = entries.map(|entry| {
         match entry {
-            tauri_plugin_android_fs::Entry::File { name, uri, .. } => DirEntry {
+            tauri_plugin_android_fs::Entry::File { name, uri, len, .. } => DirEntry {
                 name,
                 uri: uri_to_string(&uri),
                 is_dir: false,
+                size: len,
             },
             tauri_plugin_android_fs::Entry::Dir { name, uri, .. } => DirEntry {
                 name,
                 uri: uri_to_string(&uri),
                 is_dir: true,
+                size: 0,
             },
         }
     }).collect();
@@ -305,38 +332,77 @@ pub fn find_subdirectory(parent_uri: &str, name: &str) -> Result<Option<String>,
 
 /// Get the parent directory URI for a file.
 ///
-/// For SAF URIs, this tries to extract the tree URI from the FileUri.
-/// Returns None if the parent cannot be determined.
+/// For SAF URIs, this extracts the parent directory from the document path.
+/// When `documentTopTreeUri` is available (a tree URI like `content://auth/tree/treeId`),
+/// it's used to construct a proper tree document URI for the parent, which is required
+/// for directory listing operations.
 pub fn get_parent_uri(uri: &str) -> Result<String, String> {
-    // Try to parse as JSON FileUri to get the documentTopTreeUri
+    // Extract document path: everything after "/document/"
+    fn extract_doc_path(full_uri: &str) -> Option<&str> {
+        full_uri.find("/document/").map(|idx| &full_uri[idx + "/document/".len()..])
+    }
+
+    // Remove last path component from encoded document path (%2F is the separator)
+    fn parent_doc_path(doc_path: &str) -> Option<&str> {
+        let lower = doc_path.to_lowercase();
+        lower.rfind("%2f").map(|idx| &doc_path[..idx])
+    }
+
+    // Try to parse as JSON FileUri
     if uri.trim().starts_with('{') {
         if let Ok(file_uri) = FileUri::from_json_str(uri) {
-            // Get the tree URI (parent directory) from the FileUri
-            // The documentTopTreeUri field contains the tree root for tree URIs
-            let json_str = file_uri.to_json_string()
-                .map_err(|e| format!("Failed to serialize FileUri: {:?}", e))?;
+            if let Ok(json_str) = file_uri.to_json_string() {
+                if let Ok(json) = serde_json::from_str::<serde_json::Value>(&json_str) {
+                    let main_uri = json.get("uri").and_then(|v| v.as_str()).unwrap_or("");
+                    let tree_uri = json.get("documentTopTreeUri").and_then(|v| v.as_str())
+                        .filter(|s| !s.is_empty() && *s != "null");
 
-            // Parse the JSON to extract documentTopTreeUri
-            if let Ok(json) = serde_json::from_str::<serde_json::Value>(&json_str) {
-                if let Some(tree_uri) = json.get("documentTopTreeUri").and_then(|v| v.as_str()) {
-                    // Return the tree URI as a FileUri JSON
-                    let parent_json = format!(r#"{{"uri":"{}","documentTopTreeUri":null}}"#, tree_uri);
-                    return Ok(parent_json);
+                    // Get parent document path from the file's URI
+                    if let Some(doc_path) = extract_doc_path(main_uri) {
+                        if let Some(parent_path) = parent_doc_path(doc_path) {
+                            // If we have a tree URI, construct a tree document URI for the parent.
+                            // This is required for SAF directory listing to work.
+                            // Strip any /document/ suffix from the tree URI to get just the tree root.
+                            if let Some(tree_val) = tree_uri.filter(|t| t.contains("/tree/")) {
+                                let tree_root = tree_val.find("/document/")
+                                    .map(|idx| &tree_val[..idx])
+                                    .unwrap_or(tree_val);
+                                let parent_doc_uri = format!("{}/document/{}", tree_root, parent_path);
+                                return Ok(format!(
+                                    r#"{{"uri":"{}","documentTopTreeUri":"{}"}}"#,
+                                    parent_doc_uri, tree_root
+                                ));
+                            }
+
+                            // No tree URI — construct plain document URI (directory listing won't work)
+                            let authority = main_uri.find("/document/")
+                                .map(|idx| &main_uri[..idx])
+                                .unwrap_or(main_uri);
+                            let parent_uri = format!("{}/document/{}", authority, parent_path);
+                            return Ok(format!(
+                                r#"{{"uri":"{}","documentTopTreeUri":"{}"}}"#,
+                                parent_uri, authority
+                            ));
+                        }
+                    }
                 }
             }
         }
     }
 
-    // For simple content:// URIs, try to extract parent from the path
-    // content://authority/tree/treeId/document/documentPath
-    // The parent would be the tree URI without the document part
+    // For simple content:// URIs (not wrapped in JSON)
     if uri.starts_with("content://") {
-        // This is a simplified heuristic - proper SAF parent navigation requires the API
-        if let Some(doc_idx) = uri.find("/document/") {
-            let tree_part = &uri[..doc_idx];
-            // Return just the tree URI
-            let parent_json = format!(r#"{{"uri":"{}","documentTopTreeUri":null}}"#, tree_part);
-            return Ok(parent_json);
+        if let Some(doc_path) = extract_doc_path(uri) {
+            if let Some(parent_path) = parent_doc_path(doc_path) {
+                let authority = uri.find("/document/")
+                    .map(|idx| &uri[..idx])
+                    .unwrap_or(uri);
+                let parent_uri = format!("{}/document/{}", authority, parent_path);
+                return Ok(format!(
+                    r#"{{"uri":"{}","documentTopTreeUri":"{}"}}"#,
+                    parent_uri, authority
+                ));
+            }
         }
     }
 

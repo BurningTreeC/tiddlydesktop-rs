@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Widget colors (dark mode) -->
+    <color name="widget_background">#2D2D2D</color>
+    <color name="widget_title_text">#E0E0E0</color>
+    <color name="widget_icon_tint">#8BA4E8</color>
+</resources>

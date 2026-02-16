@@ -18,6 +18,7 @@ Buttons/CreateWikiFolder: Opret wiki-mappe
 Buttons/ToFile: til fil
 Buttons/ToFolder: til mappe
 Buttons/Reauthorize: Re-authorize
+Buttons/Sync: synkroniser
 
 Tooltips/BackupsEnabled: Backups aktiveret - klik for at deaktivere
 Tooltips/ConvertWiki: Konverter wiki-format
@@ -30,6 +31,8 @@ Tooltips/SetBackupDir: Indstil brugerdefineret backup-mappe
 Tooltips/RenameGroup: Omdøb gruppe
 Tooltips/DeleteGroup: Slet gruppe (wikis flyttes til Ikke-grupperet)
 Tooltips/SetBackupCount: Indstil maksimalt antal backups at beholde (0 = ubegrænset)
+Tooltips/SyncEnabled: LAN-synkronisering aktiveret - klik for at deaktivere
+Tooltips/SyncDisabled: LAN-synkronisering deaktiveret - klik for at aktivere
 
 Labels/BackupFolder: Backup-mappe:
 Labels/BackupCount: Backup-grænse:
@@ -65,3 +68,25 @@ EditionSelector/AdditionalPlugins: Yderligere plugins
 EditionSelector/Optional: (valgfrit)
 EditionSelector/CreatingFile: Opretter wiki-fil...
 EditionSelector/InitializingFolder: Initialiserer wiki-mappe...
+
+LanSync/Title: LAN-synkronisering
+LanSync/Start: Start LAN-synkronisering
+LanSync/Stop: Stop LAN-synkronisering
+LanSync/DeviceName: Denne enhed:
+LanSync/Pairing: Enhedsparring
+LanSync/PinLabel: Indtast denne PIN på den anden enhed:
+LanSync/ShowPin: Par ny enhed
+LanSync/HidePairingCode: Skjul
+LanSync/PairedDevices: Parrede enheder
+LanSync/NoPairedDevices: Ingen parrede enheder. Klik på "Par ny enhed" for at forbinde en anden enhed.
+LanSync/Unpair: Afpar
+LanSync/Connected: Forbundet
+LanSync/Disconnected: Offline
+LanSync/DiscoveredDevices: Enheder på dit netværk
+LanSync/PinPlaceholder: PIN
+LanSync/Pair: Par
+LanSync/AvailableWikis: Tilgængelig fra enheder
+LanSync/NoRemoteWikis: Ingen nye wikier tilgængelige fra tilsluttede enheder.
+LanSync/From: fra
+LanSync/GetWiki: Hent wiki
+LanSync/LinkWiki: Kobl

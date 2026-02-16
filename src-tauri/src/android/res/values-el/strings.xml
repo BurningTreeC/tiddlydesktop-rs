@@ -31,4 +31,44 @@
     <string name="open_as_wiki">Άνοιγμα ως wiki</string>
     <string name="import_into_wiki">Εισαγωγή σε wiki</string>
     <string name="no_app_for_link">Δεν βρέθηκε εφαρμογή για αυτόν τον σύνδεσμο</string>
+
+    <!-- WikiActivity -->
+    <string name="share_title">Κοινοποίηση ως\u2026</string>
+    <string name="share_image">Εικόνα</string>
+    <string name="share_plain_text">Απλό κείμενο</string>
+    <string name="share_json">JSON (.json)</string>
+    <string name="share_tid">TID (.tid)</string>
+    <string name="share_csv">CSV (.csv)</string>
+    <string name="unsaved_title">Μη αποθηκευμένες αλλαγές</string>
+    <string name="unsaved_message">Έχετε %d μη αποθηκευμένη(-ες) αλλαγή(-ές). Τι θέλετε να κάνετε;</string>
+    <string name="unsaved_save_close">Αποθήκευση &amp; Κλείσιμο</string>
+    <string name="unsaved_discard_close">Απόρριψη &amp; Κλείσιμο</string>
+
+    <!-- OpenWithActivity -->
+    <string name="open_unsupported_action">Μη υποστηριζόμενη ενέργεια</string>
+    <string name="open_no_file">Δεν καθορίστηκε αρχείο</string>
+    <string name="open_no_file_uri">Εσωτερικό σφάλμα: δεν υπάρχει URI αρχείου</string>
+    <string name="open_select_folder">Τώρα επιλέξτε τον φάκελο που περιέχει το wiki (για αποθήκευση &amp; αντίγραφα ασφαλείας)</string>
+    <string name="open_select_file">Παρακαλώ επιλέξτε το αρχείο wiki για παραχώρηση πρόσβασης</string>
+    <string name="open_file_cancelled">Η επιλογή αρχείου ακυρώθηκε</string>
+    <string name="open_no_permission">Δεν ήταν δυνατή η λήψη άδειας πρόσβασης αρχείου</string>
+
+    <!-- WikiServerService -->
+    <string name="notif_channel_name">Wiki Server</string>
+    <string name="notif_channel_desc">Διατηρεί τους διακομιστές wiki σε λειτουργία στο παρασκήνιο</string>
+    <string name="notif_title">TiddlyDesktop-RS</string>
+    <string name="notif_text">Το wiki εκτελείται στο παρασκήνιο</string>
+
+    <string name="label_content">Περιεχόμενο</string>
+    <string name="hint_content">Γράψτε τη σημείωσή σας εδώ…</string>
+
+    <!-- Widgets -->
+    <string name="widget_capture_label">Σύλληψη</string>
+    <string name="widget_capture_desc">Κουμπί γρήγορης σύλληψης για TiddlyWiki</string>
+
+    <!-- LanSyncService -->
+    <string name="sync_notif_channel_name">LAN Sync</string>
+    <string name="sync_notif_channel_desc">Διατηρεί το LAN Sync ενεργό για συγχρονισμό wiki σε πραγματικό χρόνο</string>
+    <string name="sync_notif_title">LAN Sync Ενεργό</string>
+    <string name="sync_notif_text">Συγχρονισμός wikis με κοντινές συσκευές</string>
 </resources>

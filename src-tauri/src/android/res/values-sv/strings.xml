@@ -31,4 +31,44 @@
     <string name="open_as_wiki">Öppna som wiki</string>
     <string name="import_into_wiki">Importera till wiki</string>
     <string name="no_app_for_link">Ingen app hittades för att öppna denna länk</string>
+
+    <!-- WikiActivity -->
+    <string name="share_title">Dela som\u2026</string>
+    <string name="share_image">Bild</string>
+    <string name="share_plain_text">Oformaterad text</string>
+    <string name="share_json">JSON (.json)</string>
+    <string name="share_tid">TID (.tid)</string>
+    <string name="share_csv">CSV (.csv)</string>
+    <string name="unsaved_title">Osparade ändringar</string>
+    <string name="unsaved_message">Du har %d osparad(e) ändring(ar). Vad vill du göra?</string>
+    <string name="unsaved_save_close">Spara &amp; stäng</string>
+    <string name="unsaved_discard_close">Släng &amp; stäng</string>
+
+    <!-- OpenWithActivity -->
+    <string name="open_unsupported_action">Åtgärden stöds inte</string>
+    <string name="open_no_file">Ingen fil angiven</string>
+    <string name="open_no_file_uri">Internt fel: ingen fil-URI</string>
+    <string name="open_select_folder">Välj nu mappen som innehåller wikin (för sparning &amp; säkerhetskopior)</string>
+    <string name="open_select_file">Välj wikifilen för att ge åtkomst</string>
+    <string name="open_file_cancelled">Filval avbrutet</string>
+    <string name="open_no_permission">Kunde inte få filåtkomstbehörighet</string>
+
+    <!-- WikiServerService -->
+    <string name="notif_channel_name">Wiki Server</string>
+    <string name="notif_channel_desc">Håller wikiservrarna igång i bakgrunden</string>
+    <string name="notif_title">TiddlyDesktop-RS</string>
+    <string name="notif_text">Wikin körs i bakgrunden</string>
+
+    <string name="label_content">Innehåll</string>
+    <string name="hint_content">Skriv din anteckning här…</string>
+
+    <!-- Widgets -->
+    <string name="widget_capture_label">Fånga</string>
+    <string name="widget_capture_desc">Snabbfångstknapp för TiddlyWiki</string>
+
+    <!-- LanSyncService -->
+    <string name="sync_notif_channel_name">LAN Sync</string>
+    <string name="sync_notif_channel_desc">Håller LAN Sync aktiv för realtidswikisynchronisering</string>
+    <string name="sync_notif_title">LAN Sync Aktiv</string>
+    <string name="sync_notif_text">Synkroniserar wikis med närliggande enheter</string>
 </resources>

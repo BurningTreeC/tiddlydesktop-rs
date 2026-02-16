@@ -19,17 +19,9 @@
 //! - internal_drag.js: Internal TiddlyWiki drag-and-drop polyfill
 //! - sync.js: Window handlers, cross-window tiddler synchronization
 
-/// Plyr video/audio player library (included inline because WebKitGTK doesn't execute
-/// scripts loaded from custom URI schemes like tdlib://)
-const PLYR_JS: &str = include_str!("../resources/tdlib/plyr/dist/plyr.min.js");
-
-/// Plyr SVG icon sprite (included inline because WebKitGTK blocks cross-origin XHR
-/// from wikifile:// to tdlib://, so Plyr can't fetch the SVG at runtime)
-const PLYR_SVG: &str = include_str!("../resources/tdlib/plyr/dist/plyr.svg");
-
-/// Plyr CSS stylesheet (included inline because WebKitGTK doesn't load CSS from
-/// custom URI schemes like tdlib:// via <link> tags, same as scripts)
-const PLYR_CSS: &str = include_str!("../resources/tdlib/plyr/dist/plyr.css");
+/// Media controls CSS stylesheet (included inline because WebKitGTK doesn't load
+/// CSS from custom URI schemes like tdlib:// via <link> tags)
+const MEDIA_CONTROLS_CSS: &str = include_str!("../resources/tdlib/media-controls.css");
 
 /// Combined initialization script from all modules (concatenated at compile time)
 const COMBINED_INIT_SCRIPT: &str = concat!(
@@ -54,6 +46,8 @@ const COMBINED_INIT_SCRIPT: &str = concat!(
     include_str!("init_script/title_sync.js"),
     "\n",
     include_str!("init_script/favicon_sync.js"),
+    "\n",
+    include_str!("init_script/lan_sync.js"),
 );
 
 /// Full JavaScript initialization script for wiki windows - sets all necessary variables early
@@ -94,20 +88,11 @@ pub fn get_wiki_init_script_with_language(wiki_path: &str, window_label: &str, i
     #[cfg(target_os = "linux")]
     script.push_str("window.__TD_MEDIA_SERVER__ = true;\n");
 
-    // Include Plyr inline for wiki windows (not landing page).
-    // WebKitGTK doesn't execute scripts loaded from custom URI schemes (tdlib://),
-    // so we embed it directly in the initialization script.
+    // Include media controls CSS as a global variable for media.js to inject as <style>.
+    // WebKitGTK doesn't load CSS from custom URI schemes via <link> tags.
     if !is_main_wiki {
-        script.push_str(PLYR_JS);
-        script.push('\n');
-        // Include SVG icon sprite as a global variable for media.js to inject into DOM.
-        // WebKitGTK blocks cross-origin XHR from wikifile:// to tdlib://.
-        let svg_json = serde_json::to_string(PLYR_SVG).unwrap_or_else(|_| "\"\"".to_string());
-        script.push_str(&format!("window.__PLYR_SVG_SPRITE__ = {};\n", svg_json));
-        // Include CSS as a global variable for media.js to inject as <style>.
-        // WebKitGTK doesn't load CSS from custom URI schemes via <link> tags.
-        let css_json = serde_json::to_string(PLYR_CSS).unwrap_or_else(|_| "\"\"".to_string());
-        script.push_str(&format!("window.__PLYR_CSS__ = {};\n", css_json));
+        let css_json = serde_json::to_string(MEDIA_CONTROLS_CSS).unwrap_or_else(|_| "\"\"".to_string());
+        script.push_str(&format!("window.__MEDIA_CONTROLS_CSS__ = {};\n", css_json));
     }
     script.push_str(get_dialog_init_script());
     script

@@ -31,4 +31,44 @@
     <string name="open_as_wiki">Odpri kot wiki</string>
     <string name="import_into_wiki">Uvozi v wiki</string>
     <string name="no_app_for_link">Ni najdene aplikacije za odpiranje te povezave</string>
+
+    <!-- WikiActivity -->
+    <string name="share_title">Deli kot\u2026</string>
+    <string name="share_image">Slika</string>
+    <string name="share_plain_text">Navadno besedilo</string>
+    <string name="share_json">JSON (.json)</string>
+    <string name="share_tid">TID (.tid)</string>
+    <string name="share_csv">CSV (.csv)</string>
+    <string name="unsaved_title">Neshranjene spremembe</string>
+    <string name="unsaved_message">Imate %d neshranjenih sprememb. Kaj želite storiti?</string>
+    <string name="unsaved_save_close">Shrani &amp; Zapri</string>
+    <string name="unsaved_discard_close">Zavrzi &amp; Zapri</string>
+
+    <!-- OpenWithActivity -->
+    <string name="open_unsupported_action">Nepodprto dejanje</string>
+    <string name="open_no_file">Datoteka ni določena</string>
+    <string name="open_no_file_uri">Notranja napaka: ni URI datoteke</string>
+    <string name="open_select_folder">Zdaj izberite mapo z wikijem (za shranjevanje &amp; varnostne kopije)</string>
+    <string name="open_select_file">Izberite datoteko wikija za odobritev dostopa</string>
+    <string name="open_file_cancelled">Izbira datoteke preklicana</string>
+    <string name="open_no_permission">Ni bilo mogoče pridobiti dovoljenja za dostop do datoteke</string>
+
+    <!-- WikiServerService -->
+    <string name="notif_channel_name">Wiki Server</string>
+    <string name="notif_channel_desc">Ohranja strežnike wikijev delujoče v ozadju</string>
+    <string name="notif_title">TiddlyDesktop-RS</string>
+    <string name="notif_text">Wiki deluje v ozadju</string>
+
+    <string name="label_content">Vsebina</string>
+    <string name="hint_content">Tukaj napišite svojo beležko…</string>
+
+    <!-- Widgets -->
+    <string name="widget_capture_label">Zajemi</string>
+    <string name="widget_capture_desc">Gumb za hitro zajemanje za TiddlyWiki</string>
+
+    <!-- LanSyncService -->
+    <string name="sync_notif_channel_name">LAN Sync</string>
+    <string name="sync_notif_channel_desc">Ohranja LAN Sync aktivnega za sinhronizacijo wikija v realnem času</string>
+    <string name="sync_notif_title">LAN Sync je aktiven</string>
+    <string name="sync_notif_text">Sinhronizacija wikija z bližnjimi napravami</string>
 </resources>

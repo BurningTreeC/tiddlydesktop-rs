@@ -18,6 +18,7 @@ Buttons/CreateWikiFolder: Crear carpeta wiki
 Buttons/ToFile: a fitxer
 Buttons/ToFolder: a carpeta
 Buttons/Reauthorize: Re-authorize
+Buttons/Sync: sincronitzar
 
 Tooltips/BackupsEnabled: Còpies de seguretat activades - feu clic per desactivar
 Tooltips/ConvertWiki: Convertir format de wiki
@@ -30,6 +31,8 @@ Tooltips/SetBackupDir: Establir directori de còpies de seguretat personalitzat
 Tooltips/RenameGroup: Reanomenar grup
 Tooltips/DeleteGroup: Eliminar grup (els wikis es mouran a Sense grup)
 Tooltips/SetBackupCount: Establir nombre màxim de còpies a conservar (0 = il·limitat)
+Tooltips/SyncEnabled: Sincronització LAN activada - feu clic per desactivar
+Tooltips/SyncDisabled: Sincronització LAN desactivada - feu clic per activar
 
 Labels/BackupFolder: Carpeta de còpies de seguretat:
 Labels/BackupCount: Límit de còpies:
@@ -65,3 +68,25 @@ EditionSelector/AdditionalPlugins: Connectors addicionals
 EditionSelector/Optional: (opcional)
 EditionSelector/CreatingFile: Creant fitxer wiki...
 EditionSelector/InitializingFolder: Inicialitzant carpeta wiki...
+
+LanSync/Title: Sincronització LAN
+LanSync/Start: Iniciar sincronització LAN
+LanSync/Stop: Aturar sincronització LAN
+LanSync/DeviceName: Aquest dispositiu:
+LanSync/Pairing: Emparellament de dispositius
+LanSync/PinLabel: Introduïu aquest PIN a l'altre dispositiu:
+LanSync/ShowPin: Emparellar nou dispositiu
+LanSync/HidePairingCode: Amagar
+LanSync/PairedDevices: Dispositius emparellats
+LanSync/NoPairedDevices: No hi ha dispositius emparellats. Feu clic a "Emparellar nou dispositiu" per connectar un altre dispositiu.
+LanSync/Unpair: Desemparellar
+LanSync/Connected: Connectat
+LanSync/Disconnected: Fora de línia
+LanSync/DiscoveredDevices: Dispositius a la xarxa
+LanSync/PinPlaceholder: PIN
+LanSync/Pair: Aparellar
+LanSync/AvailableWikis: Disponible des de dispositius
+LanSync/NoRemoteWikis: No hi ha wikis nous disponibles des dels dispositius connectats.
+LanSync/From: de
+LanSync/GetWiki: Obtenir wiki
+LanSync/LinkWiki: Enllaçar

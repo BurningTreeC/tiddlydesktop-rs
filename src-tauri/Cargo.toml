@@ -17,7 +17,7 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
 tauri-build = { version = "2.5.5", features = [] }
-zip = { version = "7.4", default-features = false, features = ["deflate"] }
+zip = { version = "8.0", default-features = false, features = ["deflate"] }
 walkdir = "2.5"
 
 [dependencies]
@@ -136,7 +136,7 @@ tauri-plugin-android-fs = "25"
 # Embedded HTTP server for folder wiki support (TiddlyWiki sync protocol)
 tiny_http = "0.12"
 # ZIP extraction for bundled TiddlyWiki resources
-zip = { version = "7.4", default-features = false, features = ["deflate"] }
+zip = { version = "8.0", default-features = false, features = ["deflate"] }
 # JNI for launching WikiActivity in separate app instances
 jni = "0.21"
 

@@ -5602,7 +5602,7 @@ async fn check_for_updates() -> Result<UpdateCheckResult, String> {
 
 /// Android version - separate from desktop versioning (must match build.gradle.kts versionName)
 #[cfg(target_os = "android")]
-const ANDROID_VERSION: &str = "0.0.14";
+const ANDROID_VERSION: &str = "0.0.15";
 
 /// Check for updates on Android via version file on GitHub, linking to Play Store
 #[cfg(target_os = "android")]

@@ -83,10 +83,22 @@ pub fn get_wiki_init_script_with_language(wiki_path: &str, window_label: &str, i
         is_main_wiki,
         lang_line
     );
-    // Linux: Flag that the localhost HTTP media server is available for GStreamer playback.
-    // On Windows/macOS, media uses tdasset:// directly (their media engines handle custom schemes).
-    #[cfg(target_os = "linux")]
-    script.push_str("window.__TD_MEDIA_SERVER__ = true;\n");
+    // Detect folder wiki mode: wiki path doesn't end with .html/.htm and isn't the main wiki
+    let is_folder_wiki = !is_main_wiki
+        && !wiki_path.ends_with(".html")
+        && !wiki_path.ends_with(".htm");
+
+    if is_folder_wiki {
+        // Folder wikis load from HTTP origin — tdasset:// custom scheme is blocked.
+        // Route all file access through the localhost media server on all platforms.
+        script.push_str("window.__TD_FOLDER_WIKI__ = true;\n");
+        script.push_str("window.__TD_MEDIA_SERVER__ = true;\n");
+    } else {
+        // Single-file wikis: Linux needs media server for GStreamer playback.
+        // Windows/macOS use tdasset:// directly (their media engines handle custom schemes).
+        #[cfg(target_os = "linux")]
+        script.push_str("window.__TD_MEDIA_SERVER__ = true;\n");
+    }
 
     // Include media controls CSS as a global variable for media.js to inject as <style>.
     // WebKitGTK doesn't load CSS from custom URI schemes via <link> tags.

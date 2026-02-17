@@ -4,13 +4,12 @@
 (function(TD) {
     'use strict';
 
-    // ---- Early prototype intercept for Linux media server ----
-    // On Linux, GStreamer (WebKitGTK's media engine) can't play from custom URI
-    // schemes like wikifile:// or tdasset://. A localhost HTTP media server provides
-    // proper streaming with range request support. This intercept prevents the browser
-    // from ever attempting to load media from non-HTTP sources by catching src assignments
-    // at the prototype level, BEFORE the browser can start its media pipeline.
-    // Must run before any video/audio elements are created by TiddlyWiki.
+    // ---- Early prototype intercept for media server ----
+    // When the media server is active (Linux: GStreamer needs HTTP URLs;
+    // folder wikis: tdasset:// blocked from HTTP origin), this intercept prevents
+    // the browser from ever attempting to load media from non-HTTP sources by
+    // catching src assignments at the prototype level, BEFORE the browser can start
+    // its media pipeline. Must run before any video/audio elements are created.
     if (window.__TD_MEDIA_SERVER__) {
         (function() {
             var origVideoSetAttr = HTMLVideoElement.prototype.setAttribute;
@@ -135,7 +134,7 @@
                 });
             };
 
-            console.log('[TiddlyDesktop] Media prototype intercept installed (Linux)');
+            console.log('[TiddlyDesktop] Media prototype intercept installed');
         })();
     }
 
@@ -153,6 +152,7 @@
 
             var invoke = window.__TAURI__.core.invoke;
             var wikiPath = window.__WIKI_PATH__ || '';
+            var isFolderWiki = !!window.__TD_FOLDER_WIKI__;
 
             function isUrl(path) {
                 if (!path || typeof path !== 'string') return false;
@@ -223,11 +223,12 @@
             }
 
             // Override httpRequest to support filesystem paths
+            // In folder wiki mode, let the Node.js server handle all relative URL requests
             var originalHttpRequest = $tw.utils.httpRequest;
             $tw.utils.httpRequest = function(options) {
                 var url = options.url;
 
-                if (isFilesystemPath(url)) {
+                if (isFilesystemPath(url) && !isFolderWiki) {
                     var resolvedPath = resolveFilesystemPath(url);
                     if (!resolvedPath) {
                         if (options.callback) {
@@ -296,9 +297,8 @@
             console.log('[TiddlyDesktop] copyToClipboard override installed');
 
             // Media interceptor for filesystem paths
-            // Images use tdasset:// (validated custom protocol).
-            // On Linux, video/audio use localhost HTTP server (GStreamer can't play custom URI schemes).
-            // On Windows/macOS, video/audio also use tdasset:// (their media engines handle it fine).
+            // Single-file wikis: images use tdasset://, Linux video/audio use media server.
+            // Folder wikis: ALL elements use media server (tdasset:// blocked from HTTP origin).
             function setupMediaInterceptor() {
                 function convertToTdassetUrl(path) {
                     return 'tdasset://localhost/' + encodeURIComponent(path);
@@ -314,8 +314,8 @@
                 // Per-file token map: HTTP URL -> filesystem path (for resolveVideoPath in media.js)
                 TD.mediaTokenPaths = {};
 
-                // Register a media file with the localhost HTTP server (Linux only).
-                // Returns the HTTP URL via callback. On non-Linux, falls back to tdasset://.
+                // Register a file with the localhost HTTP media server.
+                // Returns an HTTP URL. Used for Linux media and all folder wiki elements.
                 function registerMediaUrl(element, resolvedPath) {
                     // Mark element as pending to prevent re-processing
                     element.__tdMediaPending = true;
@@ -363,11 +363,15 @@
 
                     var resolvedPath = resolveFilesystemPath(rawPath);
                     if (resolvedPath) {
-                        if (isMediaElement(element) && window.__TD_MEDIA_SERVER__) {
-                            // Linux: register with localhost HTTP media server for GStreamer playback
+                        if (isFolderWiki && window.__TD_MEDIA_SERVER__) {
+                            // Folder wiki: ALL elements use media server (HTTP URLs).
+                            // tdasset:// doesn't work from HTTP-origin pages.
+                            registerMediaUrl(element, resolvedPath);
+                        } else if (isMediaElement(element) && window.__TD_MEDIA_SERVER__) {
+                            // Linux single-file wiki: media server for GStreamer playback
                             registerMediaUrl(element, resolvedPath);
                         } else {
-                            // Windows/macOS: tdasset:// works for all media types
+                            // Windows/macOS single-file wiki: tdasset:// works for all types
                             element.setAttribute('src', convertToTdassetUrl(resolvedPath));
                         }
                     }
@@ -415,6 +419,9 @@
             // Uses invoke('read_file_as_binary') directly instead of httpRequest because
             // our httpRequest override returns data URIs, not raw text content.
             function patchTextParsersForCanonicalUri() {
+                // In folder wiki mode, the Node.js server handles lazy loading
+                // of text-type _canonical_uri tiddlers natively
+                if (isFolderWiki) return;
                 if (!$tw.Wiki || !$tw.Wiki.parsers) return;
                 var types = ['text/plain', 'text/x-tiddlywiki', 'application/javascript',
                              'application/json', 'text/css', 'application/x-tiddler-dictionary',

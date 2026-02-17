@@ -35,11 +35,39 @@ class LanSyncService : Service() {
         private const val NOTIFICATION_CHECK_INTERVAL = 2000L
         private const val WAKELOCK_TAG = "TiddlyDesktopRS::LanSync"
 
+        private const val PREFS_NAME = "lan_sync_state"
+        private const val PREF_KEY_ACTIVE = "active"
+
         const val ACTION_WIKI_OPENED = "com.burningtreec.tiddlydesktop_rs.WIKI_OPENED"
         const val ACTION_WIKI_CLOSED = "com.burningtreec.tiddlydesktop_rs.WIKI_CLOSED"
 
         @Volatile
         private var isRunning = false
+
+        /**
+         * Cross-process check: was LAN sync active before the main process died?
+         * Uses SharedPreferences (file-based) so the :wiki process can read it.
+         */
+        @JvmStatic
+        fun isLanSyncActive(context: Context): Boolean {
+            return try {
+                context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                    .getBoolean(PREF_KEY_ACTIVE, false)
+            } catch (e: Exception) {
+                false
+            }
+        }
+
+        private fun setLanSyncActive(context: Context, active: Boolean) {
+            try {
+                context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                    .edit()
+                    .putBoolean(PREF_KEY_ACTIVE, active)
+                    .apply()
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to write LAN sync state: ${e.message}")
+            }
+        }
 
         // Activity tracking (only meaningful in the main process where the service runs)
         @Volatile
@@ -74,6 +102,7 @@ class LanSyncService : Service() {
             try {
                 wikiCount = 0
                 mainActivityAlive = false
+                setLanSyncActive(context, false)
                 val intent = Intent(context, LanSyncService::class.java)
                 context.stopService(intent)
                 Log.d(TAG, "LAN sync service stop requested")
@@ -173,6 +202,7 @@ class LanSyncService : Service() {
                 // Normal start
                 Log.d(TAG, "Service onStartCommand (normal start)")
                 isRunning = true
+                setLanSyncActive(this, true)
 
                 try {
                     showNotification()
@@ -258,6 +288,7 @@ class LanSyncService : Service() {
         Log.d(TAG, "Service onDestroy")
         isRunning = false
         wikiCount = 0
+        setLanSyncActive(this, false)
         releaseWakeLock()
         handler.removeCallbacks(notificationChecker)
         super.onDestroy()

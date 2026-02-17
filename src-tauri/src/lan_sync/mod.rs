@@ -24,6 +24,7 @@ pub mod discovery;
 pub mod pairing;
 pub mod protocol;
 pub mod server;
+pub mod wiki_info;
 
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, OnceLock};
@@ -179,6 +180,17 @@ pub struct SyncManager {
     /// peer thinks we already have them and skips the diff).
     /// Cleared when JS sends real fingerprints (which become the new cache).
     cache_merge_overrides: std::sync::Mutex<HashMap<String, std::collections::HashSet<String>>>,
+    /// Deduplication: last time we sent fingerprints to (wiki_id, device_id).
+    /// Suppresses redundant sends within a 3-second window.
+    last_fp_send: std::sync::Mutex<HashMap<(String, String), std::time::Instant>>,
+    /// Deduplication: last time we forwarded a peer's fingerprints to JS for (wiki_id, from_device_id).
+    /// Suppresses redundant compare-fingerprints forwards within a 3-second window.
+    last_fp_forward: std::sync::Mutex<HashMap<(String, String), std::time::Instant>>,
+    /// Cached tiddlywiki.info content per wiki (wiki_id → (content_json, content_hash, timestamp))
+    /// Only populated for folder wikis. Updated on wiki open and when remote changes arrive.
+    wiki_info_cache: std::sync::Mutex<HashMap<String, (String, String, u64)>>,
+    /// Incoming plugin file transfers: (wiki_id, plugin_name) → accumulated file data
+    incoming_plugin_transfers: std::sync::Mutex<HashMap<(String, String), HashMap<String, Vec<u8>>>>,
     /// Android bridge for cross-process communication with :wiki process
     #[cfg(target_os = "android")]
     android_bridge: std::sync::Mutex<Option<android_bridge::AndroidBridge>>,
@@ -264,6 +276,10 @@ impl SyncManager {
             #[cfg(not(target_os = "android"))]
             pending_wiki_changes: std::sync::Mutex::new(HashMap::new()),
             cache_merge_overrides: std::sync::Mutex::new(HashMap::new()),
+            last_fp_send: std::sync::Mutex::new(HashMap::new()),
+            last_fp_forward: std::sync::Mutex::new(HashMap::new()),
+            wiki_info_cache: std::sync::Mutex::new(HashMap::new()),
+            incoming_plugin_transfers: std::sync::Mutex::new(HashMap::new()),
             #[cfg(target_os = "android")]
             android_bridge: std::sync::Mutex::new(None),
         });
@@ -323,6 +339,38 @@ impl SyncManager {
             }
         }
         Some(fps)
+    }
+
+    /// Deduplication: check if we recently sent fingerprints to this peer for this wiki.
+    /// Returns true if we should skip (sent within last 3s). Records the send if not skipped.
+    fn dedup_fp_send(&self, wiki_id: &str, device_id: &str) -> bool {
+        let key = (wiki_id.to_string(), device_id.to_string());
+        let now = std::time::Instant::now();
+        if let Ok(mut map) = self.last_fp_send.lock() {
+            if let Some(last) = map.get(&key) {
+                if now.duration_since(*last).as_secs() < 3 {
+                    return true; // skip — sent recently
+                }
+            }
+            map.insert(key, now);
+        }
+        false
+    }
+
+    /// Deduplication: check if we recently forwarded this peer's fingerprints to JS.
+    /// Returns true if we should skip (forwarded within last 3s). Records the forward if not skipped.
+    fn dedup_fp_forward(&self, wiki_id: &str, from_device_id: &str) -> bool {
+        let key = (wiki_id.to_string(), from_device_id.to_string());
+        let now = std::time::Instant::now();
+        if let Ok(mut map) = self.last_fp_forward.lock() {
+            if let Some(last) = map.get(&key) {
+                if now.duration_since(*last).as_secs() < 3 {
+                    return true; // skip — forwarded recently
+                }
+            }
+            map.insert(key, now);
+        }
+        false
     }
 
     /// Update fingerprint cache and persist to disk in background.
@@ -811,6 +859,13 @@ impl SyncManager {
 
         for (device_id, wikis) in remote.iter() {
             if wikis.iter().any(|w| w.wiki_id == wiki_id) {
+                if self.dedup_fp_send(wiki_id, device_id) {
+                    eprintln!(
+                        "[LAN Sync] Dedup: skipping broadcast fingerprints to peer {} for wiki {}",
+                        device_id, wiki_id
+                    );
+                    continue;
+                }
                 let msg = SyncMessage::TiddlerFingerprints {
                     wiki_id: wiki_id.to_string(),
                     from_device_id: self.pairing_manager.device_id().to_string(),
@@ -1118,25 +1173,24 @@ impl SyncManager {
 
                 // Send our cached fingerprints so the peer can compute diffs
                 // and start sending us tiddlers before our JS boots.
-                // The peer's JS receives these as compare-fingerprints, finds
-                // tiddlers we're missing or have older versions of, and sends
-                // them as FullSyncBatch — which gets buffered and delivered
-                // when our JS boots.
-                if let Some(ref fps) = cached_fps {
-                    eprintln!(
-                        "[LAN Sync] Sending {} cached fingerprints for wiki {} to peer {} (pre-boot)",
-                        fps.len(), wiki_id, device_id
-                    );
-                    let _ = server.send_to_peer(
-                        device_id,
-                        &SyncMessage::TiddlerFingerprints {
-                            wiki_id: wiki_id.to_string(),
-                            from_device_id: self.pairing_manager.device_id().to_string(),
-                            fingerprints: fps.clone(),
-                            is_reply: false,
-                        },
-                    ).await;
-                }
+                // Always send (pre_request_sync is the critical fast path).
+                // Record timestamp so dedup suppresses redundant sends from
+                // handle_wiki_manifest / reciprocal that fire shortly after.
+                let _ = self.dedup_fp_send(wiki_id, device_id);
+                let fps = cached_fps.clone().unwrap_or_default();
+                eprintln!(
+                    "[LAN Sync] Sending {} fingerprints for wiki {} to peer {} (pre-boot)",
+                    fps.len(), wiki_id, device_id
+                );
+                let _ = server.send_to_peer(
+                    device_id,
+                    &SyncMessage::TiddlerFingerprints {
+                        wiki_id: wiki_id.to_string(),
+                        from_device_id: self.pairing_manager.device_id().to_string(),
+                        fingerprints: fps,
+                        is_reply: false,
+                    },
+                ).await;
             }
         }
     }
@@ -1259,7 +1313,24 @@ impl SyncManager {
                     // Extract wiki_id from WikiOpened so we can trigger fingerprint
                     // sync after the manifest is broadcast (catch-up for reopened wikis)
                     let opened_wiki_id = match &change {
+                        WikiToSync::WikiOpened { wiki_id, is_folder, .. } if *is_folder => Some(wiki_id.clone()),
                         WikiToSync::WikiOpened { wiki_id, .. } => Some(wiki_id.clone()),
+                        _ => None,
+                    };
+                    // For folder wikis, read tiddlywiki.info and pass to sync
+                    let folder_wiki_info = match &change {
+                        WikiToSync::WikiOpened { wiki_id, is_folder: true, .. } => {
+                            if let Some(app) = crate::GLOBAL_APP_HANDLE.get() {
+                                crate::wiki_storage::get_wiki_path_by_sync_id(app, wiki_id)
+                                    .and_then(|wp| {
+                                        let info_path = std::path::PathBuf::from(&wp).join("tiddlywiki.info");
+                                        std::fs::read_to_string(&info_path).ok()
+                                    })
+                                    .map(|content| (wiki_id.clone(), content))
+                            } else {
+                                None
+                            }
+                        }
                         _ => None,
                     };
                     if let Some(ref server) = *self.server.read().await {
@@ -1278,6 +1349,10 @@ impl SyncManager {
                     // so they can compare and send back tiddlers we're missing.
                     if let Some(wiki_id) = opened_wiki_id {
                         self.on_wiki_opened(&wiki_id).await;
+                    }
+                    // Register tiddlywiki.info for folder wikis (for sync)
+                    if let Some((wiki_id, content)) = folder_wiki_info {
+                        self.set_wiki_info(&wiki_id, &content).await;
                     }
                 }
                 _ = maintenance_interval.tick() => {
@@ -1482,6 +1557,9 @@ impl SyncManager {
 
                 // Send WikiManifest to the newly connected peer
                 self.send_wiki_manifest_to_peer(&device_id).await;
+
+                // Send cached tiddlywiki.info for folder wikis
+                self.send_wiki_info_to_peer(&device_id).await;
             }
             ServerEvent::PeerDisconnected { device_id } => {
                 eprintln!("[LAN Sync] Peer disconnected: {}", device_id);
@@ -1563,6 +1641,12 @@ impl SyncManager {
                     SyncMessage::AttachmentChunk { filename, chunk_index, .. } => format!("AttachmentChunk({} #{})", filename, chunk_index),
                     SyncMessage::AttachmentDeleted { filename, .. } => format!("AttachmentDeleted({})", filename),
                     SyncMessage::RequestFingerprints { ref wiki_id } => format!("RequestFingerprints({})", wiki_id),
+                    SyncMessage::WikiInfoChanged { ref wiki_id, ref content_hash, .. } => format!("WikiInfoChanged({}, hash={})", wiki_id, &content_hash[..8.min(content_hash.len())]),
+                    SyncMessage::WikiInfoRequest { ref wiki_id } => format!("WikiInfoRequest({})", wiki_id),
+                    SyncMessage::PluginManifest { ref plugin_name, .. } => format!("PluginManifest({})", plugin_name),
+                    SyncMessage::RequestPluginFiles { ref plugin_name, .. } => format!("RequestPluginFiles({})", plugin_name),
+                    SyncMessage::PluginFileChunk { ref plugin_name, ref rel_path, chunk_index, .. } => format!("PluginFileChunk({}/{} #{})", plugin_name, rel_path, chunk_index),
+                    SyncMessage::PluginFilesComplete { ref plugin_name, .. } => format!("PluginFilesComplete({})", plugin_name),
                     _ => "Other".to_string(),
                 };
                 eprintln!("[LAN Sync] << {} from {}", msg_type, from_device_id);
@@ -1650,6 +1734,69 @@ impl SyncManager {
                     SyncMessage::RequestAttachments { ref wiki_id, ref files } => {
                         self.handle_request_attachments(&from_device_id, wiki_id, files).await;
                     }
+                    SyncMessage::WikiInfoChanged {
+                        ref wiki_id,
+                        ref content_json,
+                        ref content_hash,
+                        timestamp,
+                    } => {
+                        let wid = wiki_id.clone();
+                        let cj = content_json.clone();
+                        let ch = content_hash.clone();
+                        let fid = from_device_id.clone();
+                        if let Some(mgr) = get_sync_manager() {
+                            // Spawn as background task — may do disk I/O
+                            tokio::spawn(async move {
+                                mgr.handle_wiki_info_changed(&fid, &wid, &cj, &ch, timestamp).await;
+                            });
+                        }
+                    }
+                    SyncMessage::WikiInfoRequest { ref wiki_id } => {
+                        // Peer is requesting our tiddlywiki.info — send cached version
+                        let cached = self.wiki_info_cache.lock().ok()
+                            .and_then(|c| c.get(wiki_id).cloned());
+                        if let Some((content, hash, ts)) = cached {
+                            let msg = SyncMessage::WikiInfoChanged {
+                                wiki_id: wiki_id.clone(),
+                                content_json: content,
+                                content_hash: hash,
+                                timestamp: ts,
+                            };
+                            if let Some(ref server) = *self.server.read().await {
+                                let _ = server.send_to_peer(&from_device_id, &msg).await;
+                            }
+                        }
+                    }
+                    SyncMessage::PluginManifest {
+                        ref wiki_id,
+                        ref plugin_name,
+                        ref files,
+                    } => {
+                        self.handle_plugin_manifest(&from_device_id, wiki_id, plugin_name, files).await;
+                    }
+                    SyncMessage::RequestPluginFiles {
+                        ref wiki_id,
+                        ref plugin_name,
+                        ref needed_files,
+                    } => {
+                        self.handle_request_plugin_files(&from_device_id, wiki_id, plugin_name, needed_files).await;
+                    }
+                    SyncMessage::PluginFileChunk {
+                        ref wiki_id,
+                        ref plugin_name,
+                        ref rel_path,
+                        chunk_index,
+                        chunk_count,
+                        ref data_base64,
+                    } => {
+                        self.handle_plugin_file_chunk(wiki_id, plugin_name, rel_path, chunk_index, chunk_count, data_base64);
+                    }
+                    SyncMessage::PluginFilesComplete {
+                        ref wiki_id,
+                        ref plugin_name,
+                    } => {
+                        self.handle_plugin_files_complete(wiki_id, plugin_name);
+                    }
                     SyncMessage::TiddlerFingerprints {
                         ref wiki_id,
                         ref from_device_id,
@@ -1660,50 +1807,66 @@ impl SyncManager {
                             "[LAN Sync] Received {} fingerprints from {} for wiki {} (is_reply={})",
                             fingerprints.len(), from_device_id, wiki_id, is_reply
                         );
-                        // Forward peer's fingerprints to our JS so it can compare
-                        // and send only tiddlers that differ
-                        let fp_list: Vec<serde_json::Value> = fingerprints.iter().map(|f| {
-                            serde_json::json!({"title": f.title, "modified": f.modified})
-                        }).collect();
-                        Self::emit_to_wiki(
-                            wiki_id,
-                            "lan-sync-compare-fingerprints",
-                            serde_json::json!({
-                                "type": "compare-fingerprints",
-                                "wiki_id": wiki_id,
-                                "from_device_id": from_device_id,
-                                "fingerprints": fp_list,
-                            }),
-                        );
+                        // Dedup: skip forwarding to JS if we just forwarded this peer's
+                        // fingerprints for this wiki within the last 3 seconds
+                        if self.dedup_fp_forward(wiki_id, from_device_id) {
+                            eprintln!(
+                                "[LAN Sync] Dedup: skipping compare-fingerprints forward for wiki {} from {}",
+                                wiki_id, from_device_id
+                            );
+                        } else {
+                            // Forward peer's fingerprints to our JS so it can compare
+                            // and send only tiddlers that differ
+                            let fp_list: Vec<serde_json::Value> = fingerprints.iter().map(|f| {
+                                serde_json::json!({"title": f.title, "modified": f.modified})
+                            }).collect();
+                            Self::emit_to_wiki(
+                                wiki_id,
+                                "lan-sync-compare-fingerprints",
+                                serde_json::json!({
+                                    "type": "compare-fingerprints",
+                                    "wiki_id": wiki_id,
+                                    "from_device_id": from_device_id,
+                                    "fingerprints": fp_list,
+                                }),
+                            );
+                        }
 
                         // If this is NOT a reply, send our cached fingerprints
                         // back as a reply so the peer can compute the reverse diff.
                         // Replies never trigger further replies (prevents ping-pong).
+                        // Always send, even if empty — empty means "I have nothing",
+                        // so the peer sends everything (tiddlerDiffers filters dupes).
+                        // Dedup: skip if we already sent to this peer recently.
                         if !is_reply {
-                            let cached_fps = self.local_fingerprint_cache.lock()
-                                .ok()
-                                .and_then(|cache| cache.get(wiki_id).cloned());
-                            if let Some(fps) = cached_fps {
-                                if !fps.is_empty() {
-                                    eprintln!(
-                                        "[LAN Sync] Sending {} reciprocal fingerprints to {} for wiki {}",
-                                        fps.len(), from_device_id, wiki_id
-                                    );
-                                    let reply_msg = SyncMessage::TiddlerFingerprints {
-                                        wiki_id: wiki_id.to_string(),
-                                        from_device_id: self.pairing_manager.device_id().to_string(),
-                                        fingerprints: fps,
-                                        is_reply: true,
-                                    };
-                                    let server_guard = self.server.read().await;
-                                    if let Some(ref server) = *server_guard {
-                                        let send_result: Result<(), String> = server.send_to_peer(from_device_id, &reply_msg).await;
-                                        if let Err(e) = send_result {
-                                            eprintln!(
-                                                "[LAN Sync] Failed to send reciprocal fingerprints: {}",
-                                                e
-                                            );
-                                        }
+                            if self.dedup_fp_send(wiki_id, from_device_id) {
+                                eprintln!(
+                                    "[LAN Sync] Dedup: skipping reciprocal fingerprints to {} for wiki {}",
+                                    from_device_id, wiki_id
+                                );
+                            } else {
+                                let fps = self.local_fingerprint_cache.lock()
+                                    .ok()
+                                    .and_then(|cache| cache.get(wiki_id).cloned())
+                                    .unwrap_or_default();
+                                eprintln!(
+                                    "[LAN Sync] Sending {} reciprocal fingerprints to {} for wiki {}",
+                                    fps.len(), from_device_id, wiki_id
+                                );
+                                let reply_msg = SyncMessage::TiddlerFingerprints {
+                                    wiki_id: wiki_id.to_string(),
+                                    from_device_id: self.pairing_manager.device_id().to_string(),
+                                    fingerprints: fps,
+                                    is_reply: true,
+                                };
+                                let server_guard = self.server.read().await;
+                                if let Some(ref server) = *server_guard {
+                                    let send_result: Result<(), String> = server.send_to_peer(from_device_id, &reply_msg).await;
+                                    if let Err(e) = send_result {
+                                        eprintln!(
+                                            "[LAN Sync] Failed to send reciprocal fingerprints: {}",
+                                            e
+                                        );
                                     }
                                 }
                             }
@@ -1981,28 +2144,31 @@ impl SyncManager {
                     // Also send cached fingerprints directly from Rust so the
                     // peer can start computing diffs immediately — don't wait
                     // for JS to collect and send fingerprints (saves 1-3s).
-                    // Uses get_accurate_cached_fingerprints to exclude tiddlers
-                    // that were merged into cache from FullSyncBatch while the
-                    // wiki JS wasn't open (they aren't in the file yet).
-                    if let Some(fps) = self.get_accurate_cached_fingerprints(&remote_wiki.wiki_id) {
-                        if !fps.is_empty() {
-                            if let Some(ref server) = *self.server.read().await {
-                                eprintln!(
-                                    "[LAN Sync] Sending {} cached fingerprints for wiki {} to peer {} (on manifest)",
-                                    fps.len(), remote_wiki.wiki_id, from_device_id
-                                );
-                                let _ = server.send_to_peer(
-                                    from_device_id,
-                                    &SyncMessage::TiddlerFingerprints {
-                                        wiki_id: remote_wiki.wiki_id.clone(),
-                                        from_device_id: self.pairing_manager.device_id().to_string(),
-                                        fingerprints: fps,
-                                        is_reply: false,
-                                    },
-                                ).await;
-                            }
-                        }
+                    // Dedup: skip if we already sent to this peer recently.
+                    if self.dedup_fp_send(&remote_wiki.wiki_id, from_device_id) {
+                        eprintln!(
+                            "[LAN Sync] Dedup: skipping cached fingerprints for wiki {} to peer {} (on manifest)",
+                            remote_wiki.wiki_id, from_device_id
+                        );
+                    } else {
+                    let fps = self.get_accurate_cached_fingerprints(&remote_wiki.wiki_id)
+                        .unwrap_or_default();
+                    if let Some(ref server) = *self.server.read().await {
+                        eprintln!(
+                            "[LAN Sync] Sending {} cached fingerprints for wiki {} to peer {} (on manifest)",
+                            fps.len(), remote_wiki.wiki_id, from_device_id
+                        );
+                        let _ = server.send_to_peer(
+                            from_device_id,
+                            &SyncMessage::TiddlerFingerprints {
+                                wiki_id: remote_wiki.wiki_id.clone(),
+                                from_device_id: self.pairing_manager.device_id().to_string(),
+                                fingerprints: fps,
+                                is_reply: false,
+                            },
+                        ).await;
                     }
+                    } // end dedup else
 
                     // For single-file wikis, also send our attachment manifest
                     // so the peer can detect missing/outdated files from interrupted syncs.
@@ -2064,6 +2230,679 @@ impl SyncManager {
         }
 
         result
+    }
+
+    // ── tiddlywiki.info sync ───────────────────────────────────────────
+
+    /// Store tiddlywiki.info content for a folder wiki and broadcast to peers.
+    /// Called when a folder wiki is opened (from lib.rs or WikiActivity).
+    pub async fn set_wiki_info(&self, wiki_id: &str, content_json: &str) {
+        let content_hash = wiki_info::hash_content(content_json);
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
+
+        // Store in cache
+        if let Ok(mut cache) = self.wiki_info_cache.lock() {
+            cache.insert(
+                wiki_id.to_string(),
+                (content_json.to_string(), content_hash.clone(), timestamp),
+            );
+        }
+
+        // Broadcast to all connected peers
+        self.broadcast_wiki_info(wiki_id, content_json, &content_hash, timestamp)
+            .await;
+    }
+
+    /// Broadcast WikiInfoChanged to all connected peers for a folder wiki
+    async fn broadcast_wiki_info(
+        &self,
+        wiki_id: &str,
+        content_json: &str,
+        content_hash: &str,
+        timestamp: u64,
+    ) {
+        let msg = SyncMessage::WikiInfoChanged {
+            wiki_id: wiki_id.to_string(),
+            content_json: content_json.to_string(),
+            content_hash: content_hash.to_string(),
+            timestamp,
+        };
+        if let Some(ref server) = *self.server.read().await {
+            server.broadcast(&msg).await;
+            eprintln!(
+                "[LAN Sync] Broadcast WikiInfoChanged for wiki {} (hash={})",
+                wiki_id,
+                &content_hash[..content_hash.len().min(8)]
+            );
+        }
+    }
+
+    /// Send cached WikiInfoChanged to a specific peer (on peer connect)
+    async fn send_wiki_info_to_peer(&self, device_id: &str) {
+        let entries: Vec<(String, String, String, u64)> = {
+            let cache = match self.wiki_info_cache.lock() {
+                Ok(c) => c,
+                Err(_) => return,
+            };
+            cache
+                .iter()
+                .map(|(wid, (content, hash, ts))| {
+                    (wid.clone(), content.clone(), hash.clone(), *ts)
+                })
+                .collect()
+        };
+
+        if entries.is_empty() {
+            return;
+        }
+
+        let server_guard = self.server.read().await;
+        let server = match server_guard.as_ref() {
+            Some(s) => s,
+            None => return,
+        };
+
+        for (wiki_id, content_json, content_hash, timestamp) in entries {
+            let msg = SyncMessage::WikiInfoChanged {
+                wiki_id: wiki_id.clone(),
+                content_json,
+                content_hash: content_hash.clone(),
+                timestamp,
+            };
+            if let Err(e) = server.send_to_peer(device_id, &msg).await {
+                eprintln!(
+                    "[LAN Sync] Failed to send WikiInfoChanged for {} to {}: {}",
+                    wiki_id, device_id, e
+                );
+            }
+        }
+    }
+
+    /// Handle an incoming WikiInfoChanged from a peer.
+    /// Merges the remote tiddlywiki.info with our local copy (union of arrays),
+    /// writes the merged version, and emits a reload warning to JS.
+    async fn handle_wiki_info_changed(
+        &self,
+        from_device_id: &str,
+        wiki_id: &str,
+        content_json: &str,
+        content_hash: &str,
+        _timestamp: u64,
+    ) {
+        // Check if we have this wiki locally
+        let app = match crate::GLOBAL_APP_HANDLE.get() {
+            Some(a) => a,
+            None => return,
+        };
+        let wiki_path = match crate::wiki_storage::get_wiki_path_by_sync_id(app, wiki_id) {
+            Some(p) => p,
+            None => {
+                eprintln!(
+                    "[LAN Sync] WikiInfoChanged for unknown wiki {} — ignoring",
+                    wiki_id
+                );
+                return;
+            }
+        };
+
+        // Check if hash differs from our cached version
+        let our_hash = self.wiki_info_cache.lock().ok()
+            .and_then(|c| c.get(wiki_id).map(|(_, h, _)| h.clone()));
+        if our_hash.as_deref() == Some(content_hash) {
+            eprintln!(
+                "[LAN Sync] WikiInfoChanged for {} — hash matches, no merge needed",
+                wiki_id
+            );
+            return;
+        }
+
+        // Parse remote tiddlywiki.info
+        let remote_info = match wiki_info::WikiInfo::parse(content_json) {
+            Ok(info) => info,
+            Err(e) => {
+                eprintln!(
+                    "[LAN Sync] Failed to parse remote tiddlywiki.info for {}: {}",
+                    wiki_id, e
+                );
+                return;
+            }
+        };
+
+        // Read our local tiddlywiki.info
+        let wiki_path_buf = std::path::PathBuf::from(&wiki_path);
+        let info_path = wiki_path_buf.join("tiddlywiki.info");
+        let local_content = match std::fs::read_to_string(&info_path) {
+            Ok(c) => c,
+            Err(e) => {
+                eprintln!(
+                    "[LAN Sync] Failed to read local tiddlywiki.info for {}: {}",
+                    wiki_id, e
+                );
+                return;
+            }
+        };
+
+        let local_info = match wiki_info::WikiInfo::parse(&local_content) {
+            Ok(info) => info,
+            Err(e) => {
+                eprintln!(
+                    "[LAN Sync] Failed to parse local tiddlywiki.info for {}: {}",
+                    wiki_id, e
+                );
+                return;
+            }
+        };
+
+        // Merge (union of arrays)
+        let merged = wiki_info::merge_wiki_info(&local_info, &remote_info);
+        let merged_json = match merged.to_json() {
+            Ok(j) => j,
+            Err(e) => {
+                eprintln!("[LAN Sync] Failed to serialize merged tiddlywiki.info: {}", e);
+                return;
+            }
+        };
+
+        // Check if merge actually changed anything (compare arrays directly to avoid
+        // false positives from JSON re-serialization formatting differences)
+        let merged_hash = wiki_info::hash_content(&merged_json);
+        if merged.plugins == local_info.plugins
+            && merged.themes == local_info.themes
+            && merged.languages == local_info.languages
+        {
+            eprintln!(
+                "[LAN Sync] WikiInfoChanged for {} — merge produced no changes",
+                wiki_id
+            );
+            // Still update our cache with the latest hash
+            if let Ok(mut cache) = self.wiki_info_cache.lock() {
+                let ts = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_millis() as u64;
+                cache.insert(wiki_id.to_string(), (merged_json, merged_hash, ts));
+            }
+            return;
+        }
+
+        eprintln!(
+            "[LAN Sync] Merging tiddlywiki.info for wiki {} from peer {}",
+            wiki_id, from_device_id
+        );
+
+        // Determine which items are new (for plugin file transfer)
+        let new_plugins = wiki_info::new_items(&local_info.plugins, &remote_info.plugins);
+        let new_themes = wiki_info::new_items(&local_info.themes, &remote_info.themes);
+        let new_languages = wiki_info::new_items(&local_info.languages, &remote_info.languages);
+
+        // Check availability of new items and request transfers for non-bundled ones
+        let resources_dir = self.get_resources_dir();
+        let synced_dir = self.get_synced_plugins_dir();
+
+        let mut items_needing_transfer: Vec<(String, String)> = Vec::new(); // (category, name)
+
+        for plugin in &new_plugins {
+            if !wiki_info::is_bundled_plugin(&resources_dir, plugin)
+                && !wiki_info::is_synced_item(&synced_dir, "plugins", plugin)
+                && !wiki_path_buf.join("plugins").join(plugin).is_dir()
+            {
+                eprintln!(
+                    "[LAN Sync] New plugin '{}' not found locally — will request from peer",
+                    plugin
+                );
+                items_needing_transfer.push(("plugins".to_string(), plugin.clone()));
+            } else {
+                eprintln!("[LAN Sync] New plugin '{}' already available locally", plugin);
+            }
+        }
+
+        for theme in &new_themes {
+            if !wiki_info::is_bundled_theme(&resources_dir, theme)
+                && !wiki_info::is_synced_item(&synced_dir, "themes", theme)
+                && !wiki_path_buf.join("themes").join(theme).is_dir()
+            {
+                items_needing_transfer.push(("themes".to_string(), theme.clone()));
+            }
+        }
+
+        for language in &new_languages {
+            if !wiki_info::is_bundled_language(&resources_dir, language)
+                && !wiki_info::is_synced_item(&synced_dir, "languages", language)
+                && !wiki_path_buf.join("languages").join(language).is_dir()
+            {
+                items_needing_transfer.push(("languages".to_string(), language.clone()));
+            }
+        }
+
+        // Write merged tiddlywiki.info
+        if let Err(e) = std::fs::write(&info_path, &merged_json) {
+            eprintln!(
+                "[LAN Sync] Failed to write merged tiddlywiki.info for {}: {}",
+                wiki_id, e
+            );
+            return;
+        }
+
+        // Update our cache
+        let ts = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
+        if let Ok(mut cache) = self.wiki_info_cache.lock() {
+            cache.insert(
+                wiki_id.to_string(),
+                (merged_json.clone(), merged_hash.clone(), ts),
+            );
+        }
+
+        eprintln!(
+            "[LAN Sync] Wrote merged tiddlywiki.info for wiki {} (new plugins: {}, themes: {}, languages: {})",
+            wiki_id, new_plugins.len(), new_themes.len(), new_languages.len()
+        );
+
+        // Emit reload warning to JS
+        Self::emit_to_wiki(
+            wiki_id,
+            "lan-sync-wiki-info-changed",
+            serde_json::json!({
+                "type": "wiki-info-changed",
+                "wiki_id": wiki_id,
+            }),
+        );
+
+        // Request plugin files for items that need transfer
+        if !items_needing_transfer.is_empty() {
+            if let Some(ref server) = *self.server.read().await {
+                for (category, name) in &items_needing_transfer {
+                    let plugin_key = format!("{}/{}", category, name);
+                    eprintln!(
+                        "[LAN Sync] Requesting plugin manifest for '{}' from peer {}",
+                        plugin_key, from_device_id
+                    );
+                    let _ = server
+                        .send_to_peer(
+                            from_device_id,
+                            &SyncMessage::RequestPluginFiles {
+                                wiki_id: wiki_id.to_string(),
+                                plugin_name: plugin_key,
+                                needed_files: vec![], // empty = send manifest first
+                            },
+                        )
+                        .await;
+                }
+            }
+        }
+
+        // Broadcast our updated wiki info to other peers
+        self.broadcast_wiki_info(wiki_id, &merged_json, &merged_hash, ts)
+            .await;
+    }
+
+    /// Handle RequestPluginFiles from a peer — send manifest or specific files
+    async fn handle_request_plugin_files(
+        &self,
+        from_device_id: &str,
+        wiki_id: &str,
+        plugin_name: &str,
+        needed_files: &[String],
+    ) {
+        let app = match crate::GLOBAL_APP_HANDLE.get() {
+            Some(a) => a,
+            None => return,
+        };
+        let wiki_path = match crate::wiki_storage::get_wiki_path_by_sync_id(app, wiki_id) {
+            Some(p) => p,
+            None => return,
+        };
+
+        // Parse plugin_name: "plugins/tiddlywiki/markdown" → category="plugins", name="tiddlywiki/markdown"
+        let (category, name) = match plugin_name.split_once('/') {
+            Some((cat, rest)) if cat == "plugins" || cat == "themes" || cat == "languages" => {
+                (cat, rest)
+            }
+            _ => {
+                eprintln!(
+                    "[LAN Sync] Invalid plugin name format: {}",
+                    plugin_name
+                );
+                return;
+            }
+        };
+
+        let resources_dir = self.get_resources_dir();
+        let synced_dir = self.get_synced_plugins_dir();
+        let wiki_folder = std::path::PathBuf::from(&wiki_path);
+
+        let item_dir = match wiki_info::find_item_dir(
+            &wiki_folder,
+            &resources_dir,
+            &synced_dir,
+            category,
+            name,
+        ) {
+            Some(d) => d,
+            None => {
+                eprintln!(
+                    "[LAN Sync] Plugin '{}' not found on this device — can't send",
+                    plugin_name
+                );
+                return;
+            }
+        };
+
+        if needed_files.is_empty() {
+            // Send manifest first
+            let manifest = wiki_info::item_dir_manifest(&item_dir);
+            eprintln!(
+                "[LAN Sync] Sending PluginManifest for '{}' ({} files) to peer {}",
+                plugin_name,
+                manifest.len(),
+                from_device_id
+            );
+            let msg = SyncMessage::PluginManifest {
+                wiki_id: wiki_id.to_string(),
+                plugin_name: plugin_name.to_string(),
+                files: manifest,
+            };
+            if let Some(ref server) = *self.server.read().await {
+                let _ = server.send_to_peer(from_device_id, &msg).await;
+            }
+        } else {
+            // Send specific files as chunks
+            self.send_plugin_files(from_device_id, wiki_id, plugin_name, &item_dir, needed_files)
+                .await;
+        }
+    }
+
+    /// Send plugin files in chunks to a peer
+    async fn send_plugin_files(
+        &self,
+        to_device_id: &str,
+        wiki_id: &str,
+        plugin_name: &str,
+        item_dir: &std::path::Path,
+        files: &[String],
+    ) {
+        use base64::Engine;
+
+        let server_guard = self.server.read().await;
+        let server = match server_guard.as_ref() {
+            Some(s) => s,
+            None => return,
+        };
+
+        for rel_path in files {
+            let file_path = item_dir.join(rel_path);
+            let data = match std::fs::read(&file_path) {
+                Ok(d) => d,
+                Err(e) => {
+                    eprintln!(
+                        "[LAN Sync] Failed to read plugin file {}: {}",
+                        file_path.display(),
+                        e
+                    );
+                    continue;
+                }
+            };
+
+            let chunk_size = protocol::ATTACHMENT_CHUNK_SIZE;
+            let chunk_count = ((data.len() + chunk_size - 1) / chunk_size) as u32;
+
+            for i in 0..chunk_count {
+                let start = i as usize * chunk_size;
+                let end = std::cmp::min(start + chunk_size, data.len());
+                let chunk_data = &data[start..end];
+                let data_base64 =
+                    base64::engine::general_purpose::STANDARD.encode(chunk_data);
+
+                let msg = SyncMessage::PluginFileChunk {
+                    wiki_id: wiki_id.to_string(),
+                    plugin_name: plugin_name.to_string(),
+                    rel_path: rel_path.clone(),
+                    chunk_index: i,
+                    chunk_count,
+                    data_base64,
+                };
+                if let Err(e) = server.send_to_peer(to_device_id, &msg).await {
+                    eprintln!(
+                        "[LAN Sync] Failed to send plugin file chunk: {}",
+                        e
+                    );
+                    return;
+                }
+            }
+        }
+
+        // Send completion signal
+        let msg = SyncMessage::PluginFilesComplete {
+            wiki_id: wiki_id.to_string(),
+            plugin_name: plugin_name.to_string(),
+        };
+        let _ = server.send_to_peer(to_device_id, &msg).await;
+    }
+
+    /// Handle PluginManifest from a peer — compare with local and request missing files
+    async fn handle_plugin_manifest(
+        &self,
+        from_device_id: &str,
+        wiki_id: &str,
+        plugin_name: &str,
+        remote_files: &[protocol::AttachmentFileInfo],
+    ) {
+        let synced_dir = self.get_synced_plugins_dir();
+
+        // Parse category/name from plugin_name
+        let (category, name) = match plugin_name.split_once('/') {
+            Some((cat, rest)) if cat == "plugins" || cat == "themes" || cat == "languages" => {
+                (cat, rest)
+            }
+            _ => return,
+        };
+
+        let local_dir = synced_dir.join(category).join(name);
+        let local_manifest = if local_dir.is_dir() {
+            wiki_info::item_dir_manifest(&local_dir)
+        } else {
+            vec![]
+        };
+
+        // Build hash map of local files
+        let local_hashes: std::collections::HashMap<&str, &str> = local_manifest
+            .iter()
+            .map(|f| (f.rel_path.as_str(), f.sha256_hex.as_str()))
+            .collect();
+
+        // Find files that are missing or have different hashes
+        let needed: Vec<String> = remote_files
+            .iter()
+            .filter(|rf| {
+                match local_hashes.get(rf.rel_path.as_str()) {
+                    Some(local_hash) => *local_hash != rf.sha256_hex, // different hash
+                    None => true,                                      // missing
+                }
+            })
+            .map(|rf| rf.rel_path.clone())
+            .collect();
+
+        if needed.is_empty() {
+            eprintln!(
+                "[LAN Sync] Plugin '{}' already up to date ({} files match)",
+                plugin_name,
+                remote_files.len()
+            );
+            return;
+        }
+
+        eprintln!(
+            "[LAN Sync] Requesting {} files for plugin '{}' from peer {}",
+            needed.len(),
+            plugin_name,
+            from_device_id
+        );
+
+        let msg = SyncMessage::RequestPluginFiles {
+            wiki_id: wiki_id.to_string(),
+            plugin_name: plugin_name.to_string(),
+            needed_files: needed,
+        };
+        if let Some(ref server) = *self.server.read().await {
+            let _ = server.send_to_peer(from_device_id, &msg).await;
+        }
+    }
+
+    /// Handle an incoming PluginFileChunk — accumulate data
+    fn handle_plugin_file_chunk(
+        &self,
+        wiki_id: &str,
+        plugin_name: &str,
+        rel_path: &str,
+        chunk_index: u32,
+        chunk_count: u32,
+        data_base64: &str,
+    ) {
+        use base64::Engine;
+        let data = match base64::engine::general_purpose::STANDARD.decode(data_base64) {
+            Ok(d) => d,
+            Err(e) => {
+                eprintln!("[LAN Sync] Failed to decode plugin file chunk: {}", e);
+                return;
+            }
+        };
+
+        let key = (wiki_id.to_string(), plugin_name.to_string());
+        let mut transfers = match self.incoming_plugin_transfers.lock() {
+            Ok(t) => t,
+            Err(_) => return,
+        };
+        let file_map = transfers.entry(key).or_insert_with(HashMap::new);
+
+        // Append data to the file
+        let entry = file_map.entry(rel_path.to_string()).or_insert_with(Vec::new);
+        entry.extend_from_slice(&data);
+
+        if chunk_index + 1 < chunk_count {
+            // More chunks coming for this file
+            return;
+        }
+
+        eprintln!(
+            "[LAN Sync] Received complete file: {}/{} ({} bytes)",
+            plugin_name,
+            rel_path,
+            entry.len()
+        );
+    }
+
+    /// Handle PluginFilesComplete — write all accumulated files to synced_plugins dir
+    fn handle_plugin_files_complete(&self, wiki_id: &str, plugin_name: &str) {
+        let key = (wiki_id.to_string(), plugin_name.to_string());
+        let file_map = match self.incoming_plugin_transfers.lock() {
+            Ok(mut t) => t.remove(&key).unwrap_or_default(),
+            Err(_) => return,
+        };
+
+        if file_map.is_empty() {
+            eprintln!(
+                "[LAN Sync] PluginFilesComplete for '{}' but no files accumulated",
+                plugin_name
+            );
+            return;
+        }
+
+        // Parse category/name
+        let (category, name) = match plugin_name.split_once('/') {
+            Some((cat, rest)) if cat == "plugins" || cat == "themes" || cat == "languages" => {
+                (cat, rest)
+            }
+            _ => {
+                eprintln!("[LAN Sync] Invalid plugin name: {}", plugin_name);
+                return;
+            }
+        };
+
+        let synced_dir = self.get_synced_plugins_dir();
+        let target_dir = synced_dir.join(category).join(name);
+        if let Err(e) = std::fs::create_dir_all(&target_dir) {
+            eprintln!(
+                "[LAN Sync] Failed to create synced plugin dir {:?}: {}",
+                target_dir, e
+            );
+            return;
+        }
+
+        let mut written = 0;
+        for (rel_path, data) in &file_map {
+            let file_path = target_dir.join(rel_path);
+            // Create parent directories if needed
+            if let Some(parent) = file_path.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            if let Err(e) = std::fs::write(&file_path, data) {
+                eprintln!(
+                    "[LAN Sync] Failed to write synced plugin file {:?}: {}",
+                    file_path, e
+                );
+            } else {
+                written += 1;
+            }
+        }
+
+        eprintln!(
+            "[LAN Sync] Wrote {}/{} files for plugin '{}' to {:?}",
+            written,
+            file_map.len(),
+            plugin_name,
+            target_dir
+        );
+
+        // Emit reload warning
+        Self::emit_to_wiki(
+            wiki_id,
+            "lan-sync-wiki-info-changed",
+            serde_json::json!({
+                "type": "wiki-info-changed",
+                "wiki_id": wiki_id,
+            }),
+        );
+    }
+
+    /// Get the bundled TiddlyWiki resources directory
+    fn get_resources_dir(&self) -> std::path::PathBuf {
+        // Try to resolve from app handle
+        if let Some(app) = crate::GLOBAL_APP_HANDLE.get() {
+            if let Ok(res_dir) = app.path().resource_dir() {
+                let tw_dir = res_dir.join("tiddlywiki");
+                if tw_dir.exists() {
+                    return tw_dir;
+                }
+            }
+        }
+        // Fallback: try relative to executable
+        if let Ok(exe) = std::env::current_exe() {
+            if let Some(dir) = exe.parent() {
+                let candidates = [
+                    dir.join("resources").join("tiddlywiki"),
+                    dir.join("..").join("lib").join("tiddlydesktop-rs").join("resources").join("tiddlywiki"),
+                    dir.join("..").join("Resources").join("tiddlywiki"),
+                ];
+                for c in &candidates {
+                    if c.exists() {
+                        return c.clone();
+                    }
+                }
+            }
+        }
+        std::path::PathBuf::from("resources/tiddlywiki")
+    }
+
+    /// Get the synced plugins directory (created if it doesn't exist)
+    fn get_synced_plugins_dir(&self) -> std::path::PathBuf {
+        let dir = self.data_dir.join("synced_plugins");
+        let _ = std::fs::create_dir_all(&dir);
+        dir
     }
 
     /// Handle a RequestWikiFile from a peer — read the wiki and send it back in chunks.

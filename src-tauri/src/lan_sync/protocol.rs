@@ -179,6 +179,49 @@ pub enum SyncMessage {
     RequestFingerprints {
         wiki_id: String,
     },
+    /// tiddlywiki.info content broadcast (folder wikis only).
+    /// Sent on wiki open and peer connect for folder wikis.
+    WikiInfoChanged {
+        wiki_id: String,
+        /// Full JSON content of tiddlywiki.info
+        content_json: String,
+        /// SHA-256 hash of the content
+        content_hash: String,
+        /// File modification timestamp (ms since epoch)
+        timestamp: u64,
+    },
+    /// Request tiddlywiki.info content from a peer
+    WikiInfoRequest {
+        wiki_id: String,
+    },
+    /// Plugin directory file manifest (for non-bundled plugins)
+    PluginManifest {
+        wiki_id: String,
+        plugin_name: String,
+        /// List of (relative_path, sha256_hash, file_size) for each file in the plugin
+        files: Vec<AttachmentFileInfo>,
+    },
+    /// Request specific plugin files
+    RequestPluginFiles {
+        wiki_id: String,
+        plugin_name: String,
+        /// Relative paths of files needed
+        needed_files: Vec<String>,
+    },
+    /// Chunked plugin file transfer
+    PluginFileChunk {
+        wiki_id: String,
+        plugin_name: String,
+        rel_path: String,
+        chunk_index: u32,
+        chunk_count: u32,
+        data_base64: String,
+    },
+    /// All plugin files for a plugin have been sent
+    PluginFilesComplete {
+        wiki_id: String,
+        plugin_name: String,
+    },
     /// Keepalive
     Ping,
     Pong,
@@ -198,6 +241,10 @@ impl SyncMessage {
                 | SyncMessage::WikiFileChunk { .. }
                 | SyncMessage::WikiFileComplete { .. }
                 | SyncMessage::RequestWikiFile { .. }
+                | SyncMessage::PluginFileChunk { .. }
+                | SyncMessage::PluginManifest { .. }
+                | SyncMessage::RequestPluginFiles { .. }
+                | SyncMessage::PluginFilesComplete { .. }
         )
     }
 }

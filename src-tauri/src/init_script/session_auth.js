@@ -32,6 +32,11 @@
         var invoke = window.__TAURI__.core.invoke;
 
         function isInjectedTiddler(title) {
+            // External attachments config tiddlers persist in the wiki (not the settings UI tab)
+            if (title.indexOf("$:/plugins/tiddlydesktop-rs/external-attachments/") === 0 &&
+                title !== "$:/plugins/tiddlydesktop-rs/external-attachments/settings") {
+                return false;
+            }
             return title === PLUGIN_TITLE ||
                 title.indexOf("$:/plugins/tiddlydesktop-rs/") === 0 ||
                 title.indexOf("$:/temp/tiddlydesktop") === 0;
@@ -240,8 +245,52 @@
                 text: tabText
             });
 
+            // Reload warning for tiddlywiki.info changes from LAN sync
+            addPluginTiddler({
+                title: "$:/plugins/tiddlydesktop-rs/injected/config-reload-warning",
+                tags: "$:/tags/PageTemplate",
+                text: '<$reveal state="$:/temp/tiddlydesktop/config-reload-required" type="match" text="yes" animate="yes">\n' +
+                      '<div class="tc-plugin-reload-warning">\n' +
+                      '{{$:/core/images/warning}} Wiki configuration was updated from another device. ' +
+                      '<$button message="tm-browser-refresh" class="tc-btn-invisible tc-btn-mini">Click here to reload</$button> ' +
+                      'to apply the changes.\n' +
+                      '<$button set="$:/temp/tiddlydesktop/config-reload-required" setTo="" class="tc-btn-invisible tc-btn-mini" style="float:right;">{{$:/core/images/close-button}}</$button>\n' +
+                      '</div>\n' +
+                      '</$reveal>'
+            });
+
+            // Prevent address bar / location hash updates (not useful in desktop app)
+            addPluginTiddler({
+                title: "$:/config/Navigation/UpdateAddressBar",
+                text: "no"
+            });
+
             // Register plugin with all tiddlers (dirty state guard is inside registerPlugin)
             registerPlugin();
+
+            // Override permalink/permaview actions to do nothing — address bar URLs
+            // are managed by the app container, not TW's hash-based navigation.
+            // TW's rootWidget.addEventListener replaces previous handler (last wins).
+            $tw.rootWidget.addEventListener("tm-permalink", function() {});
+            $tw.rootWidget.addEventListener("tm-permaview", function() {});
+
+            // Override tm-home to preserve navigation but skip location.hash change
+            $tw.rootWidget.addEventListener("tm-home", function() {
+                var storyFilter = $tw.wiki.getTiddlerText("$:/DefaultTiddlers");
+                var storyList = $tw.wiki.filterTiddlers(storyFilter);
+                storyList = $tw.hooks.invokeHook("th-opening-default-tiddlers-list", storyList);
+                $tw.wiki.addTiddler({
+                    title: "$:/StoryList", text: "", list: storyList
+                }, $tw.wiki.getModificationFields());
+                if (storyList[0]) {
+                    $tw.wiki.addToHistory(storyList[0]);
+                }
+            });
+
+            // Block hashchange events from being processed by TW's story.js listener
+            window.addEventListener("hashchange", function(e) {
+                e.stopImmediatePropagation();
+            }, true);
 
             console.log("[TiddlyDesktop] Session Authentication settings UI ready");
         }

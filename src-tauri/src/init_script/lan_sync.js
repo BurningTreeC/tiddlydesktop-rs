@@ -112,6 +112,10 @@
       });
     }
 
+    // Wiki config change notifications (tiddlywiki.info updated via LAN sync)
+    // are delivered through IPC poll (desktop) or bridge poll (Android),
+    // handled as type 'wiki-info-changed' in queueInboundChange / IPC switch.
+
     function activateSync(syncId) {
       // If already active with the same syncId, don't duplicate
       if (activeSyncState && activeSyncState.syncId === syncId) {
@@ -303,7 +307,9 @@
 
   // Check if a title should be excluded from sync
   function isSyncExcluded(title) {
-    if (title === '$:/StoryList' || title === '$:/HistoryList' || title === '$:/library/sjcl.js') return true;
+    if (title === '$:/StoryList' || title === '$:/HistoryList' || title === '$:/library/sjcl.js' ||
+        title === '$:/Import' || title === '$:/language' || title === '$:/theme' || title === '$:/palette' ||
+        title === '$:/isEncrypted') return true;
     if (title.indexOf("Draft of '") === 0) return true;
     if (title.indexOf('$:/TiddlyDesktopRS/Conflicts/') === 0) return true;
     if (title.indexOf('$:/state/') === 0) return true;
@@ -507,6 +513,16 @@
       // Fingerprint-based sync: compare peer's fingerprints and send diffs
       if (data.type === 'compare-fingerprints') {
         handleCompareFingerprints(data.from_device_id, data.fingerprints);
+        return;
+      }
+
+      // Wiki config changed (tiddlywiki.info updated via LAN sync)
+      if (data.type === 'wiki-info-changed') {
+        _log('[LAN Sync] Wiki config changed from another device');
+        $tw.wiki.addTiddler(new $tw.Tiddler({
+          title: "$:/temp/tiddlydesktop/config-reload-required",
+          text: "yes"
+        }));
         return;
       }
 
@@ -775,6 +791,13 @@
                     break;
                   case 'attachment-received':
                     reloadAttachment(data.filename);
+                    break;
+                  case 'wiki-info-changed':
+                    _log('[LAN Sync] Wiki config changed from another device');
+                    $tw.wiki.addTiddler(new $tw.Tiddler({
+                      title: "$:/temp/tiddlydesktop/config-reload-required",
+                      text: "yes"
+                    }));
                     break;
                 }
               } catch (e) {

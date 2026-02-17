@@ -1,9 +1,8 @@
-//! Linux-only localhost HTTP media server for GStreamer playback.
+//! Localhost HTTP media server for file serving.
 //!
-//! GStreamer (used by WebKitGTK for video/audio) cannot play media from custom
-//! URI schemes like tdasset://. It only supports http:// (via souphttpsrc) and
-//! file:// (via filesrc). Since file:// is blocked from wikifile:// page origins,
-//! we serve media files via a localhost HTTP server.
+//! Serves registered media files over HTTP for contexts where custom URI schemes
+//! (tdasset://) don't work: Linux GStreamer playback (requires http:// or file://),
+//! and folder wiki mode on all platforms (HTTP-origin pages can't load tdasset://).
 //!
 //! Security model:
 //! - Bound to 127.0.0.1 only (no external access)
@@ -16,8 +15,6 @@
 //! - Range requests (206 Partial Content for seeking)
 //! - ETag caching (304 Not Modified, If-Range)
 //! - CORS (Access-Control-Allow-Origin for cross-scheme loading)
-
-#![cfg(target_os = "linux")]
 
 use std::collections::HashMap;
 use std::fs::{self, File};

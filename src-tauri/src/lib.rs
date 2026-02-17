@@ -642,7 +642,7 @@ mod clipboard;
 /// Utility functions
 mod utils;
 
-#[cfg(target_os = "linux")]
+#[cfg(not(target_os = "android"))]
 mod media_server;
 
 /// Chrome-like user agent for Linux WebKitGTK.
@@ -665,6 +665,9 @@ mod fs_abstraction;
 /// Android-specific implementations (SAF, permissions, etc.)
 #[cfg(target_os = "android")]
 mod android;
+
+/// PDFium-based PDF rendering (replaces PDF.js)
+mod pdf_renderer;
 
 /// LAN Sync: real-time tiddler synchronization across devices on the same network
 #[allow(dead_code)]
@@ -1853,9 +1856,69 @@ async fn extract_video_poster(_app: tauri::AppHandle, _path: String) -> Result<O
     Ok(None)
 }
 
-/// Linux media server state — held in Tauri managed state.
+// ---- PDFium Commands ----
+
+/// Open a PDF from base64-encoded data. Returns handle + page metadata.
+#[tauri::command]
+fn pdf_open(data_base64: String) -> Result<pdf_renderer::PdfOpenResult, String> {
+    let bytes = base64::Engine::decode(
+        &base64::engine::general_purpose::STANDARD,
+        &data_base64,
+    ).map_err(|e| format!("Invalid base64: {}", e))?;
+    pdf_renderer::pdf_open(bytes)
+}
+
+/// Open a PDF from a filesystem path. Used for tdasset:// URLs on WebKitGTK
+/// where cross-scheme fetch fails.
+#[tauri::command]
+fn pdf_open_file(path: String) -> Result<pdf_renderer::PdfOpenResult, String> {
+    let validated_path = drag_drop::sanitize::validate_user_file_path(&path)?;
+    let bytes = std::fs::read(&validated_path)
+        .map_err(|e| format!("Failed to read file {}: {}", path, e))?;
+    pdf_renderer::pdf_open(bytes)
+}
+
+/// Render a single page as PNG.
+#[tauri::command]
+fn pdf_render_page(handle: u64, page_num: u32, width_px: u32) -> Result<pdf_renderer::PdfPageRenderResult, String> {
+    pdf_renderer::pdf_render_page(handle, page_num, width_px)
+}
+
+/// Close a PDF document and release its handle.
+#[tauri::command]
+fn pdf_close(handle: u64) {
+    pdf_renderer::pdf_close(handle)
+}
+
+/// Hit-test: find character index at pixel position on a rendered page.
+#[tauri::command]
+fn pdf_char_at_pos(handle: u64, page_num: u32, pixel_x: i32, pixel_y: i32, render_width: u32) -> Result<i32, String> {
+    pdf_renderer::pdf_char_at_pos(handle, page_num, pixel_x, pixel_y, render_width)
+}
+
+/// Get selection highlight rectangles for a character range, in device pixels.
+#[tauri::command]
+fn pdf_selection_rects(handle: u64, page_num: u32, start_idx: u32, end_idx: u32, render_width: u32) -> Result<Vec<pdf_renderer::SelectionRect>, String> {
+    pdf_renderer::pdf_selection_rects(handle, page_num, start_idx, end_idx, render_width)
+}
+
+/// Extract text for a character range.
+#[tauri::command]
+fn pdf_get_text(handle: u64, page_num: u32, start_idx: u32, end_idx: u32) -> Result<String, String> {
+    pdf_renderer::pdf_get_text(handle, page_num, start_idx, end_idx)
+}
+
+/// Get total character count for a page.
+#[tauri::command]
+fn pdf_char_count(handle: u64, page_num: u32) -> Result<u32, String> {
+    pdf_renderer::pdf_char_count(handle, page_num)
+}
+
+/// Media server state — held in Tauri managed state.
 /// Contains the localhost HTTP server that serves token-registered media files.
-#[cfg(target_os = "linux")]
+/// Used on Linux (GStreamer needs HTTP URLs) and for folder wikis on all platforms
+/// (HTTP-origin pages can't load tdasset:// custom scheme).
+#[cfg(not(target_os = "android"))]
 struct MediaServerState {
     server: media_server::MediaServer,
 }
@@ -1863,7 +1926,7 @@ struct MediaServerState {
 /// Register a media file with the localhost HTTP server and return its URL.
 /// Only registered files can be served — this is the per-file allowlist mechanism.
 /// The wiki's JavaScript calls this for each video/audio element it encounters.
-#[cfg(target_os = "linux")]
+#[cfg(not(target_os = "android"))]
 #[tauri::command]
 fn register_media_url(
     state: tauri::State<'_, MediaServerState>,
@@ -1886,8 +1949,8 @@ fn register_media_url(
     Ok(format!("http://127.0.0.1:{}/media/{}", state.server.port(), token))
 }
 
-/// Stub for non-Linux platforms — media uses tdasset:// directly there.
-#[cfg(not(target_os = "linux"))]
+/// Stub for Android — media server not used there.
+#[cfg(target_os = "android")]
 #[tauri::command]
 fn register_media_url() -> Result<String, String> {
     Err("Not available on this platform".into())
@@ -3233,6 +3296,22 @@ async fn open_wiki_folder(app: tauri::AppHandle, path: String, _tiddler_title: O
     // Pass IPC auth token to child process via environment variable
     if let Some(token) = ipc::get_auth_token() {
         cmd.env(ipc::AUTH_TOKEN_ENV_VAR, token);
+    }
+
+    // Set TIDDLYWIKI_PLUGIN_PATH so Node.js can find synced plugins.
+    // Prepend our synced_plugins dir to any existing TIDDLYWIKI_PLUGIN_PATH.
+    if let Ok(data_dir) = app.path().app_data_dir() {
+        let synced_dir = data_dir.join("synced_plugins");
+        let _ = std::fs::create_dir_all(&synced_dir);
+        let sep = if cfg!(windows) { ";" } else { ":" };
+        let plugin_path = match std::env::var("TIDDLYWIKI_PLUGIN_PATH") {
+            Ok(existing) if !existing.is_empty() => {
+                format!("{}{}{}", synced_dir.display(), sep, existing)
+            }
+            _ => synced_dir.to_string_lossy().to_string(),
+        };
+        cmd.env("TIDDLYWIKI_PLUGIN_PATH", &plugin_path);
+        eprintln!("[TiddlyDesktop] Set TIDDLYWIKI_PLUGIN_PATH={}", plugin_path);
     }
 
     #[cfg(target_os = "windows")]
@@ -5322,8 +5401,8 @@ async fn open_tiddler_window(
     #[cfg(target_os = "linux")]
     let mut builder = builder.user_agent(LINUX_USER_AGENT);
 
-    // Linux: Inject embed proxy port so external iframes can be proxied through HTTP
-    #[cfg(target_os = "linux")]
+    // Inject embed proxy port so external iframes can be proxied through HTTP
+    #[cfg(not(target_os = "android"))]
     if let Some(state) = app.try_state::<MediaServerState>() {
         let port = state.server.port();
         builder = builder.initialization_script(&format!("window.__TD_EMBED_PORT__ = {};", port));
@@ -5602,7 +5681,7 @@ async fn check_for_updates() -> Result<UpdateCheckResult, String> {
 
 /// Android version - separate from desktop versioning (must match build.gradle.kts versionName)
 #[cfg(target_os = "android")]
-const ANDROID_VERSION: &str = "0.0.15";
+const ANDROID_VERSION: &str = "0.0.16";
 
 /// Check for updates on Android via version file on GitHub, linking to Play Store
 #[cfg(target_os = "android")]
@@ -5724,6 +5803,94 @@ fn ipc_update_favicon(
             .map_err(|e| format!("IPC error: {}", e))?;
     }
     Ok(())
+}
+
+/// Initialize PDFium from the bundled library in the tdlib resources directory.
+/// Uses the same multi-path resolution as tdlib_protocol_handler.
+/// Safe to call multiple times — subsequent calls are no-ops.
+fn init_pdfium_from_resources(app: &tauri::AppHandle) {
+    if pdf_renderer::is_initialized() {
+        return;
+    }
+
+    #[cfg(target_os = "linux")]
+    let lib_name = "libpdfium.so";
+    #[cfg(target_os = "windows")]
+    let lib_name = "pdfium.dll";
+    #[cfg(target_os = "macos")]
+    let lib_name = "libpdfium.dylib";
+    #[cfg(target_os = "android")]
+    let lib_name = "libpdfium.so";
+
+    let resource_dir = match get_resource_dir_path(app) {
+        Some(d) => d,
+        None => {
+            eprintln!("[TiddlyDesktop] PDFium init: no resource directory found");
+            return;
+        }
+    };
+
+    // Try multiple paths: bundled structure, tarball structure, dev-mode fallback
+    let candidates = [
+        resource_dir.join("resources").join("tdlib").join(lib_name),
+        resource_dir.join("tdlib").join(lib_name),
+    ];
+
+    // Dev-mode: resolve relative to executable
+    let dev_path = std::env::current_exe().ok()
+        .and_then(|exe| exe.parent().map(|d| d.join("..").join("..").join("resources").join("tdlib").join(lib_name)))
+        .unwrap_or_else(|| PathBuf::from("src-tauri").join("resources").join("tdlib").join(lib_name));
+
+    #[cfg(target_os = "android")]
+    let android_path = {
+        // On Android, libpdfium.so is in jniLibs and loaded via System.loadLibrary path
+        // Try the extracted resources first, then nativeLibraryDir
+        let data_dir = resource_dir.clone();
+        data_dir.join(lib_name)
+    };
+
+    for candidate in candidates.iter().chain(std::iter::once(&dev_path)) {
+        if candidate.exists() {
+            match pdf_renderer::init_pdfium(&candidate.to_string_lossy()) {
+                Ok(()) => {
+                    eprintln!("[TiddlyDesktop] PDFium initialized from {:?}", candidate);
+                    return;
+                }
+                Err(e) => {
+                    eprintln!("[TiddlyDesktop] PDFium init failed for {:?}: {}", candidate, e);
+                }
+            }
+        }
+    }
+
+    #[cfg(target_os = "android")]
+    if android_path.exists() {
+        match pdf_renderer::init_pdfium(&android_path.to_string_lossy()) {
+            Ok(()) => {
+                eprintln!("[TiddlyDesktop] PDFium initialized from {:?}", android_path);
+                return;
+            }
+            Err(e) => {
+                eprintln!("[TiddlyDesktop] PDFium init failed for {:?}: {}", android_path, e);
+            }
+        }
+    }
+
+    // On Android, try loading from the native lib directory (loaded by JNI)
+    #[cfg(target_os = "android")]
+    {
+        match pdf_renderer::init_pdfium("libpdfium.so") {
+            Ok(()) => {
+                eprintln!("[TiddlyDesktop] PDFium initialized from system library path");
+                return;
+            }
+            Err(e) => {
+                eprintln!("[TiddlyDesktop] PDFium init from system path failed: {}", e);
+            }
+        }
+    }
+
+    eprintln!("[TiddlyDesktop] PDFium: library not found in any expected location");
 }
 
 /// Get the resource directory, preferring paths relative to executable for tarball installs
@@ -7251,6 +7418,9 @@ fn run_wiki_mode(args: WikiModeArgs) {
         .with_platform_plugins()
         .plugin(drag_drop::init_plugin());
     let builder = builder.setup(move |app| {
+            // Initialize PDFium for native PDF rendering
+            init_pdfium_from_resources(&app.handle());
+
             // Store state for this wiki process
             let wiki_path_clone = wiki_path.clone();
             let path_key_clone = path_key.clone();
@@ -7263,16 +7433,14 @@ fn run_wiki_mode(args: WikiModeArgs) {
                 ipc_client: ipc_client_for_state.clone(),
             });
 
-            // Linux: Start localhost HTTP media server for GStreamer playback
-            #[cfg(target_os = "linux")]
-            {
-                match media_server::MediaServer::start() {
-                    Ok(server) => {
-                        app.manage(MediaServerState { server });
-                    }
-                    Err(e) => {
-                        eprintln!("[TiddlyDesktop] Failed to start media server: {}", e);
-                    }
+            // Start localhost HTTP media server (Linux: GStreamer needs HTTP URLs;
+            // also used for folder wikis on all platforms)
+            match media_server::MediaServer::start() {
+                Ok(server) => {
+                    app.manage(MediaServerState { server });
+                }
+                Err(e) => {
+                    eprintln!("[TiddlyDesktop] Failed to start media server: {}", e);
                 }
             }
 
@@ -7354,8 +7522,7 @@ fn run_wiki_mode(args: WikiModeArgs) {
             #[cfg(target_os = "linux")]
             let mut builder = builder.user_agent(LINUX_USER_AGENT);
 
-            // Linux: Inject embed proxy port so external iframes can be proxied through HTTP
-            #[cfg(target_os = "linux")]
+            // Inject embed proxy port so external iframes can be proxied through HTTP
             if let Some(state) = app.try_state::<MediaServerState>() {
                 let port = state.server.port();
                 builder = builder.initialization_script(&format!("window.__TD_EMBED_PORT__ = {};", port));
@@ -7562,6 +7729,15 @@ fn run_wiki_mode(args: WikiModeArgs) {
             show_find_in_page,
             extract_video_poster,
             register_media_url,
+            // PDF rendering commands
+            pdf_open,
+            pdf_open_file,
+            pdf_render_page,
+            pdf_close,
+            pdf_char_at_pos,
+            pdf_selection_rects,
+            pdf_get_text,
+            pdf_char_count,
             // LAN sync commands (fall back to IPC when sync manager not in this process)
             wiki_storage::get_wiki_sync_id,
             lan_sync::lan_sync_wiki_opened,
@@ -7725,6 +7901,9 @@ fn run_wiki_folder_mode(args: WikiFolderModeArgs) {
         .with_platform_plugins()
         .plugin(drag_drop::init_plugin())
         .setup(move |app| {
+            // Initialize PDFium for native PDF rendering
+            init_pdfium_from_resources(&app.handle());
+
             let icon = Image::from_bytes(include_bytes!("../icons/icon.png"))?;
 
             // Load saved window state
@@ -7745,17 +7924,14 @@ fn run_wiki_folder_mode(args: WikiFolderModeArgs) {
                 (w, h)
             };
 
-            // Linux: Start localhost HTTP media server for GStreamer playback
+            // Start localhost HTTP media server for file serving in folder wikis
             // (must be before window builder so embed proxy port is available for init script)
-            #[cfg(target_os = "linux")]
-            {
-                match media_server::MediaServer::start() {
-                    Ok(server) => {
-                        app.manage(MediaServerState { server });
-                    }
-                    Err(e) => {
-                        eprintln!("[TiddlyDesktop] Failed to start media server: {}", e);
-                    }
+            match media_server::MediaServer::start() {
+                Ok(server) => {
+                    app.manage(MediaServerState { server });
+                }
+                Err(e) => {
+                    eprintln!("[TiddlyDesktop] Failed to start media server: {}", e);
                 }
             }
 
@@ -7775,8 +7951,7 @@ fn run_wiki_folder_mode(args: WikiFolderModeArgs) {
             ))
             .devtools(cfg!(debug_assertions)); // Only enable in debug builds
 
-            // Linux: Inject embed proxy port so external iframes can be proxied through HTTP
-            #[cfg(target_os = "linux")]
+            // Inject embed proxy port so external iframes can be proxied through HTTP
             if let Some(state) = app.try_state::<MediaServerState>() {
                 let port = state.server.port();
                 builder = builder.initialization_script(&format!("window.__TD_EMBED_PORT__ = {};", port));
@@ -7901,6 +8076,9 @@ fn run_wiki_folder_mode(args: WikiFolderModeArgs) {
                 responder.respond(tdasset_protocol_handler(request));
             });
         })
+        .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_fs::init())
         .invoke_handler(tauri::generate_handler![
             load_wiki,
             save_wiki,
@@ -7930,6 +8108,15 @@ fn run_wiki_folder_mode(args: WikiFolderModeArgs) {
             clipboard::set_clipboard_content,
             show_find_in_page,
             extract_video_poster,
+            // PDF rendering commands
+            pdf_open,
+            pdf_open_file,
+            pdf_render_page,
+            pdf_close,
+            pdf_char_at_pos,
+            pdf_selection_rects,
+            pdf_get_text,
+            pdf_char_count,
             run_command,
             request_run_command_permission,
             check_run_command_permission,
@@ -8257,6 +8444,9 @@ pub fn run() {
             // Store global AppHandle for IPC callbacks
             let _ = GLOBAL_APP_HANDLE.set(app.handle().clone());
 
+            // Initialize PDFium for native PDF rendering
+            init_pdfium_from_resources(&app.handle());
+
             // Ensure main wiki exists (creates from template if needed)
             // This also handles first-run mode selection on macOS/Linux
             let main_wiki_path = ensure_main_wiki_exists(app)
@@ -8279,16 +8469,15 @@ pub fn run() {
                 saf_wiki_mappings: Mutex::new(HashMap::new()),
             });
 
-            // Linux: Start localhost HTTP media server for GStreamer playback
-            #[cfg(target_os = "linux")]
-            {
-                match media_server::MediaServer::start() {
-                    Ok(server) => {
-                        app.manage(MediaServerState { server });
-                    }
-                    Err(e) => {
-                        eprintln!("[TiddlyDesktop] Failed to start media server: {}", e);
-                    }
+            // Start localhost HTTP media server (Linux: GStreamer needs HTTP URLs;
+            // also used for folder wikis on all platforms)
+            #[cfg(not(target_os = "android"))]
+            match media_server::MediaServer::start() {
+                Ok(server) => {
+                    app.manage(MediaServerState { server });
+                }
+                Err(e) => {
+                    eprintln!("[TiddlyDesktop] Failed to start media server: {}", e);
                 }
             }
 
@@ -8560,6 +8749,15 @@ pub fn run() {
             get_pending_widget_wiki,
             extract_video_poster,
             register_media_url,
+            // PDF rendering commands
+            pdf_open,
+            pdf_open_file,
+            pdf_render_page,
+            pdf_close,
+            pdf_char_at_pos,
+            pdf_selection_rects,
+            pdf_get_text,
+            pdf_char_count,
             // LAN Sync commands
             lan_sync::lan_sync_start,
             lan_sync::lan_sync_stop,
@@ -8750,5 +8948,164 @@ pub extern "system" fn Java_com_burningtreec_tiddlydesktop_1rs_WikiActivity_star
             eprintln!("[TiddlyDesktop] Failed to start folder wiki server: {}", e);
             env.new_string(format!("ERROR:{}", e)).unwrap()
         }
+    }
+}
+
+/// JNI: Open a PDF from base64-encoded data. Returns JSON string with handle + page metadata.
+#[cfg(target_os = "android")]
+#[no_mangle]
+pub extern "system" fn Java_com_burningtreec_tiddlydesktop_1rs_WikiActivity_pdfOpen<'a>(
+    mut env: jni::JNIEnv<'a>,
+    _class: jni::objects::JClass<'a>,
+    data_base64: jni::objects::JString<'a>,
+) -> jni::objects::JString<'a> {
+    // Lazy-init PDFium in the :wiki process (main process inits in Tauri setup,
+    // but JNI calls come from the :wiki process which has a separate address space)
+    if !pdf_renderer::is_initialized() {
+        // Try loading from nativeLibraryDir (full path)
+        let init_result = match crate::android::node_bridge::get_native_library_dir_pub() {
+            Ok(dir) => {
+                let lib_path = format!("{}/libpdfium.so", dir);
+                pdf_renderer::init_pdfium(&lib_path)
+            }
+            Err(_) => pdf_renderer::init_pdfium("libpdfium.so"),
+        };
+        if let Err(e) = init_result {
+            let err = format!("{{\"error\":\"Failed to initialize PDFium: {}\"}}", e.replace('"', "'"));
+            return env.new_string(&err).unwrap();
+        }
+    }
+
+    let b64_str: String = match env.get_string(&data_base64) {
+        Ok(s) => s.into(),
+        Err(e) => {
+            let err = format!("{{\"error\":\"Failed to get base64 string: {}\"}}", e);
+            return env.new_string(&err).unwrap();
+        }
+    };
+
+    let bytes = match base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &b64_str) {
+        Ok(b) => b,
+        Err(e) => {
+            let err = format!("{{\"error\":\"Invalid base64: {}\"}}", e);
+            return env.new_string(&err).unwrap();
+        }
+    };
+
+    match pdf_renderer::pdf_open(bytes) {
+        Ok(result) => {
+            let json = serde_json::to_string(&result).unwrap_or_else(|_| "{}".to_string());
+            env.new_string(&json).unwrap()
+        }
+        Err(e) => {
+            let err = format!("{{\"error\":\"{}\"}}", e.replace('"', "'"));
+            env.new_string(&err).unwrap()
+        }
+    }
+}
+
+/// JNI: Render a single page as PNG + text items. Returns JSON string.
+#[cfg(target_os = "android")]
+#[no_mangle]
+pub extern "system" fn Java_com_burningtreec_tiddlydesktop_1rs_WikiActivity_pdfRenderPage<'a>(
+    mut env: jni::JNIEnv<'a>,
+    _class: jni::objects::JClass<'a>,
+    handle: jni::sys::jlong,
+    page_num: jni::sys::jint,
+    width_px: jni::sys::jint,
+) -> jni::objects::JString<'a> {
+    match pdf_renderer::pdf_render_page(handle as u64, page_num as u32, width_px as u32) {
+        Ok(result) => {
+            let json = serde_json::to_string(&result).unwrap_or_else(|_| "{}".to_string());
+            env.new_string(&json).unwrap()
+        }
+        Err(e) => {
+            let err = format!("{{\"error\":\"{}\"}}", e.replace('"', "'"));
+            env.new_string(&err).unwrap()
+        }
+    }
+}
+
+/// JNI: Close a PDF document and release its handle.
+#[cfg(target_os = "android")]
+#[no_mangle]
+pub extern "system" fn Java_com_burningtreec_tiddlydesktop_1rs_WikiActivity_pdfClose(
+    _env: jni::JNIEnv,
+    _class: jni::objects::JClass,
+    handle: jni::sys::jlong,
+) {
+    pdf_renderer::pdf_close(handle as u64);
+}
+
+/// JNI: Hit-test character at pixel position. Returns char index or -1.
+#[cfg(target_os = "android")]
+#[no_mangle]
+pub extern "system" fn Java_com_burningtreec_tiddlydesktop_1rs_WikiActivity_pdfCharAtPos(
+    _env: jni::JNIEnv,
+    _class: jni::objects::JClass,
+    handle: jni::sys::jlong,
+    page_num: jni::sys::jint,
+    pixel_x: jni::sys::jint,
+    pixel_y: jni::sys::jint,
+    render_width: jni::sys::jint,
+) -> jni::sys::jint {
+    match pdf_renderer::pdf_char_at_pos(handle as u64, page_num as u32, pixel_x, pixel_y, render_width as u32) {
+        Ok(idx) => idx,
+        Err(_) => -1,
+    }
+}
+
+/// JNI: Get selection rectangles for character range. Returns JSON array.
+#[cfg(target_os = "android")]
+#[no_mangle]
+pub extern "system" fn Java_com_burningtreec_tiddlydesktop_1rs_WikiActivity_pdfSelectionRects<'a>(
+    mut env: jni::JNIEnv<'a>,
+    _class: jni::objects::JClass<'a>,
+    handle: jni::sys::jlong,
+    page_num: jni::sys::jint,
+    start_idx: jni::sys::jint,
+    end_idx: jni::sys::jint,
+    render_width: jni::sys::jint,
+) -> jni::objects::JString<'a> {
+    match pdf_renderer::pdf_selection_rects(handle as u64, page_num as u32, start_idx as u32, end_idx as u32, render_width as u32) {
+        Ok(rects) => {
+            let json = serde_json::to_string(&rects).unwrap_or_else(|_| "[]".to_string());
+            env.new_string(&json).unwrap()
+        }
+        Err(_) => {
+            env.new_string("[]").unwrap()
+        }
+    }
+}
+
+/// JNI: Extract text for character range.
+#[cfg(target_os = "android")]
+#[no_mangle]
+pub extern "system" fn Java_com_burningtreec_tiddlydesktop_1rs_WikiActivity_pdfGetText<'a>(
+    mut env: jni::JNIEnv<'a>,
+    _class: jni::objects::JClass<'a>,
+    handle: jni::sys::jlong,
+    page_num: jni::sys::jint,
+    start_idx: jni::sys::jint,
+    end_idx: jni::sys::jint,
+) -> jni::objects::JString<'a> {
+    match pdf_renderer::pdf_get_text(handle as u64, page_num as u32, start_idx as u32, end_idx as u32) {
+        Ok(text) => env.new_string(&text).unwrap(),
+        Err(_) => env.new_string("").unwrap(),
+    }
+}
+
+/// JNI: Get total character count for a page.
+#[cfg(target_os = "android")]
+#[no_mangle]
+pub extern "system" fn Java_com_burningtreec_tiddlydesktop_1rs_WikiActivity_pdfCharCount(
+    _env: jni::JNIEnv,
+    _class: jni::objects::JClass,
+    handle: jni::sys::jlong,
+    page_num: jni::sys::jint,
+) -> jni::sys::jint {
+    match pdf_renderer::pdf_char_count(handle as u64, page_num as u32) {
+        Ok(count) => count as jni::sys::jint,
+        Err(_) => 0,
     }
 }

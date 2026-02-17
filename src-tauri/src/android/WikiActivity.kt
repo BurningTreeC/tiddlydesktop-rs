@@ -127,6 +127,34 @@ class WikiActivity : AppCompatActivity() {
         @JvmStatic
         external fun startFolderWikiServerFromLocal(localPath: String, wikiPath: String): String
 
+        /** Native method: Open a PDF from base64 data. Returns JSON with handle + page metadata. */
+        @JvmStatic
+        external fun pdfOpen(dataBase64: String): String
+
+        /** Native method: Render a PDF page as PNG. Returns JSON. */
+        @JvmStatic
+        external fun pdfRenderPage(handle: Long, pageNum: Int, widthPx: Int): String
+
+        /** Native method: Close a PDF document and release its handle. */
+        @JvmStatic
+        external fun pdfClose(handle: Long)
+
+        /** Native method: Hit-test character at pixel position. Returns char index or -1. */
+        @JvmStatic
+        external fun pdfCharAtPos(handle: Long, pageNum: Int, pixelX: Int, pixelY: Int, renderWidth: Int): Int
+
+        /** Native method: Get selection rectangles for character range. Returns JSON array. */
+        @JvmStatic
+        external fun pdfSelectionRects(handle: Long, pageNum: Int, startIdx: Int, endIdx: Int, renderWidth: Int): String
+
+        /** Native method: Extract text for character range. */
+        @JvmStatic
+        external fun pdfGetText(handle: Long, pageNum: Int, startIdx: Int, endIdx: Int): String
+
+        /** Native method: Get total character count for a page. */
+        @JvmStatic
+        external fun pdfCharCount(handle: Long, pageNum: Int): Int
+
         /**
          * Check if a wiki is already open by scanning running tasks.
          * Returns the task ID if open, or -1 if not.
@@ -1765,6 +1793,15 @@ class WikiActivity : AppCompatActivity() {
                             } catch(e) { return true; }
                         }
                     };
+                    // Fix PDF containers: position:sticky toolbar renders twice
+                    // in SVG foreignObject. Convert to static and remove scroll constraints.
+                    clone.querySelectorAll('.td-pdf-container').forEach(function(pc) {
+                        var tb = pc.querySelector('div[style*="sticky"]');
+                        if (tb) tb.style.position = 'static';
+                        var pw = pc.querySelector('.td-pdf-pages-wrap');
+                        if (pw) { pw.style.maxHeight = 'none'; pw.style.overflow = 'visible'; }
+                    });
+
                     fixBlockSpacing();
                     fixLayout();
                     inlineImages().then(function() {
@@ -2069,6 +2106,48 @@ class WikiActivity : AppCompatActivity() {
                 android.util.Log.e("TiddlyDesktopSync", "bridgePost $endpoint failed: ${e.message} (payload ${payload.toString().length} bytes)")
             }
         }
+    }
+
+    /**
+     * JavaScript interface for native PDF rendering via PDFium.
+     * Accessible from all frames in the WebView as "TiddlyDesktopPdf".
+     */
+    inner class PdfInterface {
+        @JavascriptInterface
+        fun open(dataBase64: String): String {
+            return pdfOpen(dataBase64)
+        }
+
+        @JavascriptInterface
+        fun renderPage(handle: Long, pageNum: Int, widthPx: Int): String {
+            return pdfRenderPage(handle, pageNum, widthPx)
+        }
+
+        @JavascriptInterface
+        fun close(handle: Long) {
+            pdfClose(handle)
+        }
+
+        @JavascriptInterface
+        fun charAtPos(handle: Long, pageNum: Int, pixelX: Int, pixelY: Int, renderWidth: Int): Int {
+            return pdfCharAtPos(handle, pageNum, pixelX, pixelY, renderWidth)
+        }
+
+        @JavascriptInterface
+        fun selectionRects(handle: Long, pageNum: Int, startIdx: Int, endIdx: Int, renderWidth: Int): String {
+            return pdfSelectionRects(handle, pageNum, startIdx, endIdx, renderWidth)
+        }
+
+        @JavascriptInterface
+        fun getText(handle: Long, pageNum: Int, startIdx: Int, endIdx: Int): String {
+            return pdfGetText(handle, pageNum, startIdx, endIdx)
+        }
+
+        @JavascriptInterface
+        fun charCount(handle: Long, pageNum: Int): Int {
+            return pdfCharCount(handle, pageNum)
+        }
+
     }
 
     /**
@@ -2624,8 +2703,10 @@ class WikiActivity : AppCompatActivity() {
             Log.e(TAG, "Failed to start foreground service: ${e.message}")
         }
 
-        // Notify LAN sync service (main process) that a wiki is open
-        LanSyncService.notifyWikiOpened(applicationContext)
+        // Notify LAN sync service (main process) that a wiki is open — only if LAN sync is active
+        if (LanSyncService.isLanSyncActive(applicationContext)) {
+            LanSyncService.notifyWikiOpened(applicationContext)
+        }
 
         if (wikiPath.isNullOrEmpty()) {
             Log.e(TAG, "No wiki path provided!")
@@ -2889,6 +2970,9 @@ class WikiActivity : AppCompatActivity() {
             // Add JavaScript interface for LAN sync bridge
             addJavascriptInterface(SyncInterface(), "TiddlyDesktopSync")
 
+            // Add JavaScript interface for native PDF rendering
+            addJavascriptInterface(PdfInterface(), "TiddlyDesktopPdf")
+
         }
 
         // Use FrameLayout wrapper for fullscreen video support
@@ -2984,10 +3068,10 @@ class WikiActivity : AppCompatActivity() {
                 var SESSION_AUTH_PREFIX = "${'$'}:/plugins/tiddlydesktop-rs/session-auth/";
                 var SESSION_AUTH_SETTINGS_TAB = SESSION_AUTH_PREFIX + "settings";
 
-                // Check if a tiddler title is one of our injected ephemeral tiddlers
+                // Check if a tiddler title is one of our injected ephemeral tiddlers.
+                // CONFIG_ENABLE is NOT listed here — it persists in the wiki across reloads.
                 function isInjectedTiddler(title) {
                     return title === PLUGIN_TITLE ||
-                        title === CONFIG_ENABLE ||
                         title === CONFIG_SETTINGS_TAB ||
                         title === SESSION_AUTH_SETTINGS_TAB ||
                         title === "${'$'}:/plugins/tiddlydesktop-rs/android-share" ||
@@ -3132,6 +3216,17 @@ class WikiActivity : AppCompatActivity() {
                         text: tabText
                     });
 
+                    // Sync localStorage and recent_wikis from wiki values
+                    // (handles persisted real tiddlers that may differ from localStorage)
+                    var wikiEnabled = ${'$'}tw.wiki.getTiddlerText(CONFIG_ENABLE, "yes") === "yes";
+                    if (settings.enabled !== wikiEnabled) {
+                        settings.enabled = wikiEnabled;
+                        saveSettings(settings);
+                    }
+                    if (window.TiddlyDesktopConfig) {
+                        window.TiddlyDesktopConfig.setExternalAttachments(wikiEnabled);
+                    }
+
                     // Listen for changes to the enable setting
                     ${'$'}tw.wiki.addEventListener("change", function(changes) {
                         if (changes[CONFIG_ENABLE]) {
@@ -3145,11 +3240,6 @@ class WikiActivity : AppCompatActivity() {
                             console.log('[TiddlyDesktop] External attachments ' + (enabled ? 'enabled' : 'disabled'));
                         }
                     });
-
-                    // Persist initial setting to recent_wikis.json
-                    if (window.TiddlyDesktopConfig) {
-                        window.TiddlyDesktopConfig.setExternalAttachments(settings.enabled !== false);
-                    }
 
                     console.log('[TiddlyDesktop] External attachments UI injected');
                 }
@@ -3899,8 +3989,50 @@ class WikiActivity : AppCompatActivity() {
 
                 injectSettingsUI();
                 injectSessionAuthUI();
+
+                // Reload warning for tiddlywiki.info changes from LAN sync
+                addPluginTiddler({
+                    title: "${'$'}:/plugins/tiddlydesktop-rs/injected/config-reload-warning",
+                    tags: "${'$'}:/tags/PageTemplate",
+                    text: '<${'$'}reveal state="${'$'}:/temp/tiddlydesktop/config-reload-required" type="match" text="yes" animate="yes">\n' +
+                          '<div class="tc-plugin-reload-warning">\n' +
+                          '{{${'$'}:/core/images/warning}} Wiki configuration was updated from another device. ' +
+                          '<${'$'}button message="tm-browser-refresh" class="tc-btn-invisible tc-btn-mini">Click here to reload</${'$'}button> ' +
+                          'to apply the changes.\n' +
+                          '<${'$'}button set="${'$'}:/temp/tiddlydesktop/config-reload-required" setTo="" class="tc-btn-invisible tc-btn-mini" style="float:right;">{{${'$'}:/core/images/close-button}}</${'$'}button>\n' +
+                          '</div>\n' +
+                          '</${'$'}reveal>'
+                });
+
+                // Prevent address bar / location hash updates (not useful in app)
+                addPluginTiddler({
+                    title: "${'$'}:/config/Navigation/UpdateAddressBar",
+                    text: "no"
+                });
+
                 registerPlugin();  // Register all shadow tiddlers as a plugin
                 installImportHook();
+
+                // Override permalink/permaview actions to do nothing — address bar URLs
+                // are managed by the app container, not TW's hash-based navigation.
+                ${'$'}tw.rootWidget.addEventListener("tm-permalink", function() {});
+                ${'$'}tw.rootWidget.addEventListener("tm-permaview", function() {});
+
+                // Override tm-home to preserve navigation but skip location.hash change
+                ${'$'}tw.rootWidget.addEventListener("tm-home", function() {
+                    var sf = ${'$'}tw.wiki.getTiddlerText("${'$'}:/DefaultTiddlers");
+                    var sl = ${'$'}tw.wiki.filterTiddlers(sf);
+                    sl = ${'$'}tw.hooks.invokeHook("th-opening-default-tiddlers-list", sl);
+                    ${'$'}tw.wiki.addTiddler({
+                        title: "${'$'}:/StoryList", text: "", list: sl
+                    }, ${'$'}tw.wiki.getModificationFields());
+                    if (sl[0]) { ${'$'}tw.wiki.addToHistory(sl[0]); }
+                });
+
+                // Block hashchange events from being processed by TW's story.js listener
+                window.addEventListener("hashchange", function(e) {
+                    e.stopImmediatePropagation();
+                }, true);
 
                 // Override clipboard for Android — document.execCommand("copy") doesn't work in WebView.
                 // Replace the tm-copy-to-clipboard handler with one that:
@@ -4511,16 +4643,17 @@ class WikiActivity : AppCompatActivity() {
                             }).observe(srcDocument.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['src', 'data'] });
                         }
 
-                        // Inject media enhancement (PDF.js + poster extraction) into the overlay iframe
+                        // Inject media enhancement (PDFium + poster extraction) into the overlay iframe
+                        // TiddlyDesktopPdf is accessible from all frames in the WebView
                         (function(iDoc, iWin) {
-                            var TD = '/_td/';
+                            var hasPdf = typeof TiddlyDesktopPdf !== 'undefined';
                             // Media controls CSS
                             var mediaStyle = iDoc.createElement('style');
                             mediaStyle.textContent = 'video{max-width:100%;height:auto;object-fit:contain;border-radius:4px;background:#000}audio{max-width:100%;width:100%;box-sizing:border-box}video::-webkit-media-controls-play-button,video::-webkit-media-controls-mute-button,video::-webkit-media-controls-fullscreen-button,video::-webkit-media-controls-overflow-button,video::-webkit-media-controls-timeline,video::-webkit-media-controls-volume-slider,video::-webkit-media-controls-overlay-play-button,audio::-webkit-media-controls-play-button,audio::-webkit-media-controls-mute-button,audio::-webkit-media-controls-timeline,audio::-webkit-media-controls-volume-slider,audio::-webkit-media-controls-overflow-button{cursor:pointer}video::-webkit-media-controls-overlay-play-button{display:flex;align-items:center;justify-content:center}';
                             iDoc.head.appendChild(mediaStyle);
                             // PDF viewer styles
                             var pdfStyle = iDoc.createElement('style');
-                            pdfStyle.textContent = '.td-pdf-btn{background:#555;color:#fff;border:none;border-radius:3px;padding:4px 10px;font-size:14px;cursor:pointer;min-width:32px}.td-pdf-btn:active{background:#777}.td-pdf-page-wrap{display:flex;justify-content:center;padding:8px 0}.td-pdf-page-wrap canvas{background:#fff;box-shadow:0 2px 8px rgba(0,0,0,.3);display:block;max-width:none}';
+                            pdfStyle.textContent = '.td-pdf-btn{background:#555;color:#fff;border:none;border-radius:3px;padding:4px 10px;font-size:14px;cursor:pointer;min-width:32px}.td-pdf-btn:active{background:#777}.td-pdf-page-wrap{display:flex;justify-content:center;margin:8px 0;position:relative}.td-pdf-page-wrap img{background:#fff;box-shadow:0 2px 8px rgba(0,0,0,.3);display:block;max-width:none;pointer-events:none}.td-pdf-text-layer{position:absolute;top:0;left:0;width:100%;height:100%;z-index:1;line-height:1}.td-pdf-text-layer span{position:absolute;color:transparent !important;white-space:pre;transform-origin:0% 0%;user-select:text;-webkit-user-select:text}.td-pdf-text-layer span::selection{background:rgba(0,100,255,0.3)}';
                             iDoc.head.appendChild(pdfStyle);
 
                             function enhanceVideo(el) {
@@ -4545,16 +4678,18 @@ class WikiActivity : AppCompatActivity() {
                                 var src = el.getAttribute('src') || el.getAttribute('data') || '';
                                 if (tag === 'object') src = el.getAttribute('data') || src;
                                 if (!src) return null;
-                                if (src.toLowerCase().indexOf('.pdf') === -1 &&
-                                    (el.getAttribute('type') || '').toLowerCase() !== 'application/pdf') return null;
+                                var srcLower = src.toLowerCase();
+                                if (srcLower.indexOf('.pdf') === -1 &&
+                                    (el.getAttribute('type') || '').toLowerCase() !== 'application/pdf' &&
+                                    srcLower.indexOf('data:application/pdf') !== 0) return null;
                                 return src;
                             }
 
                             function replacePdfElement(el) {
-                                if (el.__tdPdfDone) return;
+                                if (el.__tdPdfDone || !hasPdf) return;
                                 el.__tdPdfDone = true;
                                 var src = getPdfSrc(el);
-                                if (!src || typeof iWin.pdfjsLib === 'undefined') { el.__tdPdfDone = false; return; }
+                                if (!src) return;
                                 var container = iDoc.createElement('div');
                                 container.style.cssText = 'width:100%;max-width:100%;overflow:auto;background:#525659;padding:8px 0;border-radius:4px;position:relative';
                                 var toolbar = iDoc.createElement('div');
@@ -4564,65 +4699,138 @@ class WikiActivity : AppCompatActivity() {
                                 var pagesWrap = iDoc.createElement('div');
                                 pagesWrap.style.cssText = 'max-height:80vh;overflow-y:auto;-webkit-overflow-scrolling:touch';
                                 container.appendChild(pagesWrap);
-                                el.parentNode.replaceChild(container, el);
-                                var scale = 1.5, pdfDoc = null, pageCanvases = [];
+                                el.style.display = 'none';
+                                el.parentNode.insertBefore(container, el.nextSibling);
+                                var pdfHandle = null, pageSizes = [], pageWraps = [], renderedPages = {}, pageCharBounds = {};
+                                var scale = 1.0, userZoomed = false, lastContainerWidth = 0;
                                 var pageInfo = toolbar.querySelector('.td-pdf-pageinfo');
-                                var userZoomed = false, lastContainerWidth = 0;
-                                function renderPage(num, canvas) {
-                                    pdfDoc.getPage(num).then(function(page) {
-                                        var dpr = iWin.devicePixelRatio || 1;
-                                        var vp = page.getViewport({ scale: scale });
-                                        canvas.width = Math.floor(vp.width * dpr); canvas.height = Math.floor(vp.height * dpr);
-                                        canvas.style.width = Math.floor(vp.width) + 'px'; canvas.style.height = Math.floor(vp.height) + 'px';
-                                        var ctx = canvas.getContext('2d');
-                                        var transform = dpr !== 1 ? [dpr, 0, 0, dpr, 0, 0] : null;
-                                        page.render({ canvasContext: ctx, transform: transform, viewport: vp });
-                                    });
+                                function getTargetWidthPx() {
+                                    var cw = pagesWrap.clientWidth - 16;
+                                    if (cw <= 0) cw = 800;
+                                    return Math.floor(cw * scale * (iWin.devicePixelRatio || 1));
                                 }
-                                function renderAll() { pageCanvases.forEach(function(c, i) { renderPage(i + 1, c); }); }
+                                function buildTextLayer(inner, pageNum, dw, dh) {
+                                    var bounds = pageCharBounds[pageNum];
+                                    if (!bounds || bounds.length === 0) return;
+                                    var cc = bounds.length / 4;
+                                    var ft = ''; try { ft = TiddlyDesktopPdf.getText(pdfHandle, pageNum, 0, cc - 1); } catch(ex) { return; }
+                                    if (!ft) return;
+                                    var tl = iDoc.createElement('div'); tl.className = 'td-pdf-text-layer';
+                                    var dpr = iWin.devicePixelRatio || 1, wpx = dw * dpr, hpx = dh * dpr;
+                                    var chs = [];
+                                    for (var i = 0; i < cc; i++) chs.push({x:bounds[i*4],y:bounds[i*4+1],w:bounds[i*4+2],h:bounds[i*4+3]});
+                                    var words = [], ws = 0;
+                                    for (var i = 0; i < cc; i++) {
+                                        var isL = (i === cc - 1), isG = false;
+                                        if (!isL) {
+                                            var c = chs[i], n = chs[i+1];
+                                            if (c.w<=0||c.h<=0||n.w<=0||n.h<=0) isG = true;
+                                            else {
+                                                var ov = Math.min(c.y+c.h,n.y+n.h)-Math.max(c.y,n.y);
+                                                if (ov<Math.min(c.h,n.h)*0.3) isG=true;
+                                                else if (n.x-(c.x+c.w)>Math.min(c.h,n.h)*0.3) isG=true;
+                                            }
+                                        }
+                                        if (isG || isL) {
+                                            var end = i, wx=1e9,wy=1e9,wr=-1e9,wb=-1e9,hv=false;
+                                            for(var j=ws;j<=end;j++){if(chs[j].w<=0||chs[j].h<=0)continue;hv=true;if(chs[j].x<wx)wx=chs[j].x;if(chs[j].y<wy)wy=chs[j].y;if(chs[j].x+chs[j].w>wr)wr=chs[j].x+chs[j].w;if(chs[j].y+chs[j].h>wb)wb=chs[j].y+chs[j].h;}
+                                            if(hv) words.push({s:ws,e:end,x:wx,y:wy,w:wr-wx,h:wb-wy});
+                                            ws=i+1;
+                                        }
+                                    }
+                                    var tc = Array.from(ft), sds = [];
+                                    for (var i = 0; i < words.length; i++) {
+                                        var wd = words[i], txt = tc.slice(wd.s, wd.e+1).join('');
+                                        if (!txt||!txt.trim()) continue;
+                                        var sp = iDoc.createElement('span'); sp.textContent = txt;
+                                        var cl=(wd.x/wpx)*dw, ct=(wd.y/hpx)*dh, cw=(wd.w/wpx)*dw, ch=(wd.h/hpx)*dh;
+                                        sp.style.cssText='position:absolute;left:'+cl+'px;top:'+ct+'px;font-size:'+ch+'px;font-family:sans-serif;line-height:1;color:transparent !important;white-space:pre;transform-origin:0% 0%;user-select:text;-webkit-user-select:text;height:'+ch+'px;';
+                                        sp.__tdTW=cw;
+                                        tl.appendChild(sp); sds.push(sp);
+                                    }
+                                    inner.appendChild(tl);
+                                    for(var i=0;i<sds.length;i++){var sp=sds[i],a=sp.scrollWidth;if(a>0&&sp.__tdTW>0)sp.style.transform='scaleX('+(sp.__tdTW/a)+')';delete sp.__tdTW;}
+                                }
+                                function renderPage(pageNum) {
+                                    var widthPx = getTargetWidthPx();
+                                    var key = pageNum + ':' + widthPx;
+                                    if (renderedPages[key]) return;
+                                    renderedPages[key] = true;
+                                    try {
+                                        var result = JSON.parse(TiddlyDesktopPdf.renderPage(pdfHandle, pageNum, widthPx));
+                                        if (result.error) return;
+                                        if (result.charBounds) { pageCharBounds[pageNum] = result.charBounds; }
+                                        var wrap = pageWraps[pageNum];
+                                        if (!wrap) return;
+                                        wrap.innerHTML = '';
+                                        var inner = iDoc.createElement('div');
+                                        inner.style.cssText = 'position:relative;display:inline-block;';
+                                        wrap.appendChild(inner);
+                                        var img = iDoc.createElement('img');
+                                        img.src = 'data:image/png;base64,' + result.imageBase64;
+                                        var ps = pageSizes[pageNum];
+                                        var displayWidth = (pagesWrap.clientWidth - 16) * scale;
+                                        if (ps) { img.style.width = Math.floor(displayWidth) + 'px'; img.style.height = Math.floor(displayWidth * ps.h / ps.w) + 'px'; }
+                                        img.style.display = 'block';
+                                        img.setAttribute('data-page', pageNum);
+                                        inner.appendChild(img);
+                                        var dh = ps ? Math.floor(displayWidth * ps.h / ps.w) : Math.floor(displayWidth);
+                                        buildTextLayer(inner, pageNum, Math.floor(displayWidth), dh);
+                                    } catch(e) { console.error('[TD-PDF] overlay render page ' + pageNum + ':', e); }
+                                }
+                                function renderVisiblePages() {
+                                    var wr = pagesWrap.getBoundingClientRect();
+                                    pageWraps.forEach(function(w, i) { var r = w.getBoundingClientRect(); if (r.bottom >= wr.top - wr.height && r.top <= wr.bottom + wr.height) renderPage(i); });
+                                }
+                                function renderAll() { renderedPages = {}; pageCharBounds = {}; renderVisiblePages(); }
                                 function fitWidth() {
-                                    if (!pdfDoc) return;
                                     var w = pagesWrap.clientWidth;
-                                    if (w <= 0) { iWin.requestAnimationFrame(function() { fitWidth(); }); return; }
-                                    userZoomed = false; lastContainerWidth = w;
-                                    pdfDoc.getPage(1).then(function(page) {
-                                        var vp = page.getViewport({ scale: 1 });
-                                        scale = Math.max(0.5, Math.min(5, (w - 16) / vp.width));
-                                        renderAll();
-                                    });
+                                    if (w <= 0) { iWin.requestAnimationFrame(fitWidth); return; }
+                                    userZoomed = false; lastContainerWidth = w; scale = 1.0; renderAll();
                                 }
-                                iWin.pdfjsLib.getDocument({ url: src, cMapUrl: TD + 'pdfjs/cmaps/', cMapPacked: true }).promise.then(function(pdf) {
-                                    pdfDoc = pdf;
-                                    pageInfo.textContent = pdf.numPages + ' page' + (pdf.numPages !== 1 ? 's' : '');
-                                    for (var p = 1; p <= pdf.numPages; p++) {
+                                (src.startsWith('data:') ? Promise.resolve(src.substring(src.indexOf(',') + 1)) :
+                                    fetch(src).then(function(r) { return r.arrayBuffer(); }).then(function(ab) {
+                                        var bytes = new Uint8Array(ab), binary = '';
+                                        for (var i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+                                        return btoa(binary);
+                                    })
+                                ).then(function(b64) {
+                                    var result = JSON.parse(TiddlyDesktopPdf.open(b64));
+                                    if (result.error) throw new Error(result.error);
+                                    pdfHandle = result.handle;
+                                    pageSizes = result.pageSizes;
+                                    pageInfo.textContent = result.pageCount + ' page' + (result.pageCount !== 1 ? 's' : '');
+                                    for (var p = 0; p < result.pageCount; p++) {
                                         var wrap = iDoc.createElement('div');
                                         wrap.className = 'td-pdf-page-wrap';
-                                        var canvas = iDoc.createElement('canvas');
-                                        wrap.appendChild(canvas); pagesWrap.appendChild(wrap);
-                                        pageCanvases.push(canvas);
+                                        var ps = pageSizes[p];
+                                        if (ps) wrap.style.minHeight = Math.floor((pagesWrap.clientWidth - 16 || 800) * ps.h / ps.w) + 'px';
+                                        pagesWrap.appendChild(wrap); pageWraps.push(wrap);
                                     }
                                     fitWidth();
+                                    pagesWrap.addEventListener('scroll', function() {
+                                        renderVisiblePages();
+                                    });
                                     if (typeof iWin.ResizeObserver !== 'undefined') {
                                         var resizeTimer;
                                         new iWin.ResizeObserver(function() {
                                             var w = pagesWrap.clientWidth;
                                             if (w > 0 && w !== lastContainerWidth) {
-                                                lastContainerWidth = w;
-                                                clearTimeout(resizeTimer);
+                                                lastContainerWidth = w; clearTimeout(resizeTimer);
                                                 resizeTimer = setTimeout(userZoomed ? renderAll : fitWidth, 100);
                                             }
                                         }).observe(container);
                                     }
                                 }).catch(function(err) {
-                                    pagesWrap.innerHTML = '<p style="color:#f88;padding:20px;text-align:center">Failed to load PDF: ' + err.message + '</p>';
+                                    pagesWrap.innerHTML = '<p style="color:#f88;padding:20px;text-align:center">Failed to load PDF: ' + (err.message || err) + '</p>';
                                 });
                                 toolbar.addEventListener('click', function(e) {
                                     var btn = e.target.closest('[data-action]');
                                     if (!btn) return;
                                     var a = btn.getAttribute('data-action');
                                     if (a === 'zoomin') { userZoomed = true; scale = Math.min(scale * 1.25, 5); renderAll(); }
-                                    else if (a === 'zoomout') { userZoomed = true; scale = Math.max(scale / 1.25, 0.5); renderAll(); }
-                                    else if (a === 'fitwidth') fitWidth();
+                                    else if (a === 'zoomout') { userZoomed = true; scale = Math.max(scale / 1.25, 0.3); renderAll(); }
+                                    else if (a === 'fitwidth') { fitWidth(); }
                                     else if (a === 'prev') pagesWrap.scrollBy(0, -pagesWrap.clientHeight * 0.8);
                                     else if (a === 'next') pagesWrap.scrollBy(0, pagesWrap.clientHeight * 0.8);
                                 });
@@ -4630,22 +4838,10 @@ class WikiActivity : AppCompatActivity() {
 
                             function scanAll() {
                                 iDoc.querySelectorAll('video').forEach(enhanceVideo);
-                                if (typeof iWin.pdfjsLib !== 'undefined') iDoc.querySelectorAll('embed, object, iframe').forEach(function(el) { if (getPdfSrc(el)) replacePdfElement(el); });
+                                if (hasPdf) iDoc.querySelectorAll('embed, object, iframe').forEach(function(el) { if (getPdfSrc(el)) replacePdfElement(el); });
                             }
 
-                            // Scan videos immediately (poster extraction doesn't need external libs)
                             scanAll();
-
-                            // Load PDF.js
-                            var pdfJs = iDoc.createElement('script');
-                            pdfJs.src = TD + 'pdfjs/build/pdf.min.js';
-                            pdfJs.onload = function() {
-                                if (iWin.pdfjsLib) {
-                                    iWin.pdfjsLib.GlobalWorkerOptions.workerSrc = TD + 'pdfjs/build/pdf.worker.min.js';
-                                    scanAll();
-                                }
-                            };
-                            iDoc.head.appendChild(pdfJs);
 
                             // Watch for dynamically added elements
                             new MutationObserver(function(muts) {
@@ -5024,53 +5220,55 @@ class WikiActivity : AppCompatActivity() {
             })();
         """.trimIndent()
 
-        // Inline PDF.js renderer and video poster extraction script
+        // Inline PDFium renderer and video poster extraction script
         val inlineMediaScript = """
             (function() {
-                var TD_BASE = '/_td/';
-                var pdfjsLoaded = false;
+                var hasPdf = typeof TiddlyDesktopPdf !== 'undefined';
+                var openPdfHandles = [];
 
-                // ---- Helper: dynamically load a script ----
-                function loadScript(src, cb) {
-                    var s = document.createElement('script');
-                    s.src = src;
-                    s.onload = cb || function(){};
-                    s.onerror = function(){ console.error('[TD] Failed to load ' + src); };
-                    document.head.appendChild(s);
-                }
-
-                // ---- PDF.js inline renderer ----
+                // ---- PDFium inline renderer ----
                 function getPdfSrc(el) {
                     var tag = el.tagName.toLowerCase();
                     var src = el.getAttribute('src') || el.getAttribute('data') || '';
                     if (tag === 'object') src = el.getAttribute('data') || src;
                     if (!src) return null;
-                    // Only handle PDF sources
-                    if (src.toLowerCase().indexOf('.pdf') === -1 &&
-                        (el.getAttribute('type') || '').toLowerCase() !== 'application/pdf') return null;
+                    var srcLower = src.toLowerCase();
+                    if (srcLower.indexOf('.pdf') === -1 &&
+                        (el.getAttribute('type') || '').toLowerCase() !== 'application/pdf' &&
+                        srcLower.indexOf('data:application/pdf') !== 0) return null;
                     return src;
+                }
+
+                function fetchPdfBytes(src) {
+                    if (src.startsWith('data:')) {
+                        var commaIdx = src.indexOf(',');
+                        if (commaIdx < 0) return Promise.reject(new Error('Invalid data URI'));
+                        return Promise.resolve(src.substring(commaIdx + 1));
+                    }
+                    return fetch(src).then(function(r) {
+                        if (!r.ok) throw new Error('HTTP ' + r.status);
+                        return r.arrayBuffer();
+                    }).then(function(ab) {
+                        var bytes = new Uint8Array(ab);
+                        var binary = '';
+                        for (var i = 0; i < bytes.length; i++) {
+                            binary += String.fromCharCode(bytes[i]);
+                        }
+                        return btoa(binary);
+                    });
                 }
 
                 function replacePdfElement(el) {
                     if (el.__tdPdfDone) return;
+                    if (!hasPdf) return;
                     el.__tdPdfDone = true;
                     var src = getPdfSrc(el);
                     if (!src) return;
-
-                    // Verify pdfjsLib is available
-                    if (typeof pdfjsLib === 'undefined' || !pdfjsLib.getDocument) {
-                        console.warn('[TD-PDF] PDF.js not ready, skipping:', src);
-                        el.__tdPdfDone = false; // Allow retry
-                        return;
-                    }
-
-                    console.log('[TD-PDF] Replacing PDF element:', src);
 
                     var container = document.createElement('div');
                     container.className = 'td-pdf-container';
                     container.style.cssText = 'width:100%;max-width:100%;overflow:auto;background:#525659;padding:8px 0;border-radius:4px;position:relative;';
 
-                    // Toolbar
                     var toolbar = document.createElement('div');
                     toolbar.style.cssText = 'display:flex;align-items:center;justify-content:center;gap:8px;padding:6px 8px;background:#333;color:#fff;font:13px sans-serif;border-radius:4px 4px 0 0;flex-wrap:wrap;position:sticky;top:0;z-index:10;';
                     toolbar.innerHTML =
@@ -5083,82 +5281,216 @@ class WikiActivity : AppCompatActivity() {
                         '<button class="td-pdf-btn" data-action="zoomin" title="Zoom in">&#43;</button>';
                     container.appendChild(toolbar);
 
-                    // Style toolbar buttons
-                    var style = document.createElement('style');
                     if (!document.querySelector('#td-pdf-styles')) {
+                        var style = document.createElement('style');
                         style.id = 'td-pdf-styles';
-                        style.textContent = '.td-pdf-btn{background:#555;color:#fff;border:none;border-radius:3px;padding:4px 10px;font-size:14px;cursor:pointer;min-width:32px;}.td-pdf-btn:active{background:#777;}.td-pdf-pages-wrap{overflow-y:auto;-webkit-overflow-scrolling:touch;}.td-pdf-page-wrap{display:flex;justify-content:center;padding:8px 0;}.td-pdf-page-wrap canvas{background:#fff;box-shadow:0 2px 8px rgba(0,0,0,.3);display:block;max-width:none;}';
+                        style.textContent =
+                            '.td-pdf-btn{background:#555;color:#fff;border:none;border-radius:3px;padding:4px 10px;font-size:14px;cursor:pointer;min-width:32px;}' +
+                            '.td-pdf-btn:active{background:#777;}' +
+                            '.td-pdf-pages-wrap{overflow-y:auto;-webkit-overflow-scrolling:touch;}' +
+                            '.td-pdf-page-wrap{display:flex;justify-content:center;margin:8px 0;position:relative;}' +
+                            '.td-pdf-page-wrap img{background:#fff;box-shadow:0 2px 8px rgba(0,0,0,.3);display:block;max-width:none;pointer-events:none;}' +
+                            '.td-pdf-text-layer{position:absolute;top:0;left:0;width:100%;height:100%;z-index:1;line-height:1;}' +
+                            '.td-pdf-text-layer span{position:absolute;color:transparent !important;white-space:pre;transform-origin:0% 0%;user-select:text;-webkit-user-select:text;}' +
+                            '.td-pdf-text-layer span::selection{background:rgba(0,100,255,0.3);}';
                         document.head.appendChild(style);
                     }
 
-                    // Scrollable page area
                     var pagesWrap = document.createElement('div');
                     pagesWrap.className = 'td-pdf-pages-wrap';
                     pagesWrap.style.cssText = 'max-height:80vh;overflow-y:auto;-webkit-overflow-scrolling:touch;';
                     container.appendChild(pagesWrap);
 
-                    el.parentNode.replaceChild(container, el);
+                    el.style.display = 'none';
+                    el.parentNode.insertBefore(container, el.nextSibling);
 
-                    // Load PDF
-                    var scale = 1.5;
-                    var pdfDoc = null;
-                    var pageCanvases = [];
-                    var pageInfo = toolbar.querySelector('.td-pdf-pageinfo');
+                    var pdfHandle = null;
+                    var pageSizes = [];
+                    var pageCount = 0;
+                    var scale = 1.0;
+                    var pageWraps = [];
+                    var renderedPages = {};
+                    var pageCharBounds = {};
                     var userZoomed = false;
                     var lastContainerWidth = 0;
+                    var pageInfo = toolbar.querySelector('.td-pdf-pageinfo');
+                    function getTargetWidthPx() {
+                        var containerWidth = pagesWrap.clientWidth - 16;
+                        if (containerWidth <= 0) containerWidth = 800;
+                        var dpr = window.devicePixelRatio || 1;
+                        return Math.floor(containerWidth * scale * dpr);
+                    }
 
-                    function renderPage(num, canvas) {
-                        pdfDoc.getPage(num).then(function(page) {
-                            var dpr = window.devicePixelRatio || 1;
-                            var viewport = page.getViewport({ scale: scale });
-                            canvas.width = Math.floor(viewport.width * dpr);
-                            canvas.height = Math.floor(viewport.height * dpr);
-                            canvas.style.width = Math.floor(viewport.width) + 'px';
-                            canvas.style.height = Math.floor(viewport.height) + 'px';
-                            var ctx = canvas.getContext('2d');
-                            var transform = dpr !== 1 ? [dpr, 0, 0, dpr, 0, 0] : null;
-                            page.render({ canvasContext: ctx, transform: transform, viewport: viewport });
+                    function buildTextLayer(inner, pageNum, displayWidth, displayHeight) {
+                        var bounds = pageCharBounds[pageNum];
+                        if (!bounds || bounds.length === 0) return;
+                        var charCount = bounds.length / 4;
+                        var fullText = '';
+                        try { fullText = TiddlyDesktopPdf.getText(pdfHandle, pageNum, 0, charCount - 1); } catch(ex) { return; }
+                        if (!fullText) return;
+                        var textLayer = document.createElement('div');
+                        textLayer.className = 'td-pdf-text-layer';
+                        var dpr = window.devicePixelRatio || 1;
+                        var widthPx = displayWidth * dpr;
+                        var heightPx = displayHeight * dpr;
+                        var chars = [];
+                        for (var i = 0; i < charCount; i++) {
+                            chars.push({ x: bounds[i*4], y: bounds[i*4+1], w: bounds[i*4+2], h: bounds[i*4+3] });
+                        }
+                        // Group chars into words (same line, no large gap)
+                        var words = [];
+                        var wordStart = 0;
+                        for (var i = 0; i < charCount; i++) {
+                            var isLast = (i === charCount - 1);
+                            var isGap = false;
+                            if (!isLast) {
+                                var c = chars[i], n = chars[i+1];
+                                if (c.w <= 0 || c.h <= 0 || n.w <= 0 || n.h <= 0) { isGap = true; }
+                                else {
+                                    var overlapY = Math.min(c.y+c.h, n.y+n.h) - Math.max(c.y, n.y);
+                                    if (overlapY < Math.min(c.h, n.h) * 0.3) isGap = true;
+                                    else if (n.x - (c.x + c.w) > Math.min(c.h, n.h) * 0.3) isGap = true;
+                                }
+                            }
+                            if (isGap || isLast) {
+                                var end = isLast ? i : i;
+                                var wx = Infinity, wy = Infinity, wr = -Infinity, wb = -Infinity;
+                                var hasValid = false;
+                                for (var j = wordStart; j <= end; j++) {
+                                    if (chars[j].w <= 0 || chars[j].h <= 0) continue;
+                                    hasValid = true;
+                                    if (chars[j].x < wx) wx = chars[j].x;
+                                    if (chars[j].y < wy) wy = chars[j].y;
+                                    if (chars[j].x + chars[j].w > wr) wr = chars[j].x + chars[j].w;
+                                    if (chars[j].y + chars[j].h > wb) wb = chars[j].y + chars[j].h;
+                                }
+                                if (hasValid) {
+                                    words.push({ start: wordStart, end: end, x: wx, y: wy, w: wr - wx, h: wb - wy });
+                                }
+                                wordStart = i + 1;
+                            }
+                        }
+                        var textChars = Array.from(fullText);
+                        var spanData = [];
+                        for (var i = 0; i < words.length; i++) {
+                            var wd = words[i];
+                            var text = textChars.slice(wd.start, wd.end + 1).join('');
+                            if (!text || !text.trim()) continue;
+                            var span = document.createElement('span');
+                            span.textContent = text;
+                            var cssLeft = (wd.x / widthPx) * displayWidth;
+                            var cssTop = (wd.y / heightPx) * displayHeight;
+                            var cssW = (wd.w / widthPx) * displayWidth;
+                            var cssH = (wd.h / heightPx) * displayHeight;
+                            span.style.cssText = 'position:absolute;left:' + cssLeft + 'px;top:' + cssTop + 'px;' +
+                                'font-size:' + cssH + 'px;font-family:sans-serif;line-height:1;' +
+                                'color:transparent !important;white-space:pre;transform-origin:0% 0%;' +
+                                'user-select:text;-webkit-user-select:text;height:' + cssH + 'px;';
+                            span.__tdTargetW = cssW;
+                            textLayer.appendChild(span);
+                            spanData.push(span);
+                        }
+                        inner.appendChild(textLayer);
+                        // Measure actual rendered width and apply scaleX to fit
+                        for (var i = 0; i < spanData.length; i++) {
+                            var sp = spanData[i];
+                            var actual = sp.scrollWidth;
+                            if (actual > 0 && sp.__tdTargetW > 0) {
+                                var sx = sp.__tdTargetW / actual;
+                                sp.style.transform = 'scaleX(' + sx + ')';
+                            }
+                            delete sp.__tdTargetW;
+                        }
+                    }
+
+                    function renderPage(pageNum) {
+                        var widthPx = getTargetWidthPx();
+                        var key = pageNum + ':' + widthPx;
+                        if (renderedPages[key]) return;
+                        renderedPages[key] = true;
+                        try {
+                            var resultJson = TiddlyDesktopPdf.renderPage(pdfHandle, pageNum, widthPx);
+                            var result = JSON.parse(resultJson);
+                            if (result.error) { console.error('[TD-PDF] Render error:', result.error); return; }
+                            if (result.charBounds) { pageCharBounds[pageNum] = result.charBounds; }
+                            var wrap = pageWraps[pageNum];
+                            if (!wrap) return;
+                            wrap.innerHTML = '';
+                            var inner = document.createElement('div');
+                            inner.style.cssText = 'position:relative;display:inline-block;';
+                            wrap.appendChild(inner);
+                            var img = document.createElement('img');
+                            img.src = 'data:image/png;base64,' + result.imageBase64;
+                            var ps = pageSizes[pageNum];
+                            var containerWidth = pagesWrap.clientWidth - 16;
+                            var displayWidth = containerWidth * scale;
+                            if (ps) {
+                                var aspect = ps.h / ps.w;
+                                img.style.width = Math.floor(displayWidth) + 'px';
+                                img.style.height = Math.floor(displayWidth * aspect) + 'px';
+                            }
+                            img.style.display = 'block';
+                            img.setAttribute('data-page', pageNum);
+                            inner.appendChild(img);
+                            var dh = ps ? Math.floor(displayWidth * ps.h / ps.w) : Math.floor(displayWidth);
+                            buildTextLayer(inner, pageNum, Math.floor(displayWidth), dh);
+                        } catch(e) {
+                            console.error('[TD-PDF] Failed to render page ' + pageNum + ':', e);
+                        }
+                    }
+
+                    function renderVisiblePages() {
+                        var wrapRect = pagesWrap.getBoundingClientRect();
+                        var margin = wrapRect.height;
+                        pageWraps.forEach(function(wrap, i) {
+                            var rect = wrap.getBoundingClientRect();
+                            if (rect.bottom >= wrapRect.top - margin && rect.top <= wrapRect.bottom + margin) {
+                                renderPage(i);
+                            }
                         });
                     }
 
-                    function renderAll() {
-                        pageCanvases.forEach(function(c, i) { renderPage(i + 1, c); });
-                    }
+                    function renderAll() { renderedPages = {}; pageCharBounds = {}; renderVisiblePages(); }
 
                     function fitWidth() {
-                        if (!pdfDoc) return;
                         var w = pagesWrap.clientWidth;
                         if (w <= 0) { requestAnimationFrame(function() { fitWidth(); }); return; }
                         userZoomed = false;
                         lastContainerWidth = w;
-                        pdfDoc.getPage(1).then(function(page) {
-                            var vp = page.getViewport({ scale: 1 });
-                            var containerWidth = w - 16;
-                            scale = containerWidth / vp.width;
-                            if (scale < 0.5) scale = 0.5;
-                            if (scale > 5) scale = 5;
-                            renderAll();
-                        });
+                        scale = 1.0;
+                        renderAll();
                     }
 
-                    pdfjsLib.getDocument({ url: src, cMapUrl: TD_BASE + 'pdfjs/cmaps/', cMapPacked: true }).promise.then(function(pdf) {
-                        pdfDoc = pdf;
-                        var total = pdf.numPages;
-                        pageInfo.textContent = total + ' page' + (total !== 1 ? 's' : '');
+                    fetchPdfBytes(src).then(function(b64) {
+                        var resultJson = TiddlyDesktopPdf.open(b64);
+                        var result = JSON.parse(resultJson);
+                        if (result.error) throw new Error(result.error);
 
-                        for (var p = 1; p <= total; p++) {
+                        pdfHandle = result.handle;
+                        pageCount = result.pageCount;
+                        pageSizes = result.pageSizes;
+                        openPdfHandles.push(pdfHandle);
+
+                        pageInfo.textContent = pageCount + ' page' + (pageCount !== 1 ? 's' : '');
+
+                        for (var p = 0; p < pageCount; p++) {
                             var wrap = document.createElement('div');
                             wrap.className = 'td-pdf-page-wrap';
-                            var canvas = document.createElement('canvas');
-                            wrap.appendChild(canvas);
+                            var ps = pageSizes[p];
+                            if (ps) {
+                                var containerWidth = pagesWrap.clientWidth - 16 || 800;
+                                wrap.style.minHeight = Math.floor(containerWidth * (ps.h / ps.w)) + 'px';
+                            }
                             pagesWrap.appendChild(wrap);
-                            pageCanvases.push(canvas);
+                            pageWraps.push(wrap);
                         }
 
-                        // Initial fit-width render
                         fitWidth();
 
-                        // Re-fit only on external container width changes
+                        pagesWrap.addEventListener('scroll', function() {
+                            renderVisiblePages();
+                        });
+
                         if (typeof ResizeObserver !== 'undefined') {
                             var resizeTimer;
                             new ResizeObserver(function() {
@@ -5175,35 +5507,22 @@ class WikiActivity : AppCompatActivity() {
                                 }
                             }).observe(container);
                         }
-
-                        // Use IntersectionObserver for lazy rendering
-                        if (typeof IntersectionObserver !== 'undefined') {
-                            var observer = new IntersectionObserver(function(entries) {
-                                entries.forEach(function(entry) {
-                                    if (entry.isIntersecting) {
-                                        var idx = pageCanvases.indexOf(entry.target);
-                                        if (idx >= 0) renderPage(idx + 1, entry.target);
-                                    }
-                                });
-                            }, { root: pagesWrap, rootMargin: '200px' });
-                            pageCanvases.forEach(function(c) { observer.observe(c); });
-                        }
                     }).catch(function(err) {
                         console.error('[TD-PDF] Error loading PDF:', err);
-                        pagesWrap.innerHTML = '<p style="color:#f88;padding:20px;text-align:center;">Failed to load PDF: ' + err.message + '</p>';
+                        pagesWrap.innerHTML = '<p style="color:#f88;padding:20px;text-align:center;">Failed to load PDF: ' + (err.message || err) + '</p>';
                     });
 
-                    // Toolbar actions
                     toolbar.addEventListener('click', function(e) {
                         var btn = e.target.closest('[data-action]');
                         if (!btn) return;
                         var action = btn.getAttribute('data-action');
                         if (action === 'zoomin') { userZoomed = true; scale = Math.min(scale * 1.25, 5); renderAll(); }
-                        else if (action === 'zoomout') { userZoomed = true; scale = Math.max(scale / 1.25, 0.5); renderAll(); }
+                        else if (action === 'zoomout') { userZoomed = true; scale = Math.max(scale / 1.25, 0.3); renderAll(); }
                         else if (action === 'fitwidth') { fitWidth(); }
                         else if (action === 'prev') { pagesWrap.scrollBy(0, -pagesWrap.clientHeight * 0.8); }
                         else if (action === 'next') { pagesWrap.scrollBy(0, pagesWrap.clientHeight * 0.8); }
                     });
+
                 }
 
                 // ---- Video poster extraction ----
@@ -5211,7 +5530,6 @@ class WikiActivity : AppCompatActivity() {
                     el.setAttribute('poster', posterUrl);
                 }
 
-                // Queue for sequential video processing (poster extraction)
                 var videoQueue = [];
                 var videoQueueRunning = false;
                 function enqueueVideoWork(work) {
@@ -5232,17 +5550,10 @@ class WikiActivity : AppCompatActivity() {
                     if (el.__tdMediaDone) return;
                     el.__tdMediaDone = true;
 
-                    // Small delay to let URL-transform complete
                     setTimeout(function() {
                         var videoSrc = el.src || (el.querySelector('source') ? el.querySelector('source').src : null);
-
-                        // "metadata" downloads just the header (~50-100KB per video),
-                        // enabling duration display and fast play start without
-                        // downloading the full video. Much better than "none" (which
-                        // delays play start) or "auto" (which downloads everything).
                         el.setAttribute('preload', 'metadata');
 
-                        // Queue poster extraction (native)
                         if (videoSrc) {
                             enqueueVideoWork(function(done) {
                                 try {
@@ -5267,13 +5578,11 @@ class WikiActivity : AppCompatActivity() {
 
                 // ---- Scan and enhance existing elements ----
                 function scanAll() {
-                    // Process PDFs if PDF.js is loaded
-                    if (pdfjsLoaded && typeof pdfjsLib !== 'undefined') {
+                    if (hasPdf) {
                         document.querySelectorAll('embed, object, iframe').forEach(function(el) {
                             if (getPdfSrc(el)) replacePdfElement(el);
                         });
                     }
-                    // Process videos for poster extraction
                     document.querySelectorAll('video').forEach(function(el) { enhanceVideo(el); });
                 }
 
@@ -5284,18 +5593,14 @@ class WikiActivity : AppCompatActivity() {
                         mutations.forEach(function(m) {
                             m.addedNodes.forEach(function(node) {
                                 if (node.nodeType !== 1) return;
-                                // Check the node itself
                                 var tag = node.tagName ? node.tagName.toLowerCase() : '';
-                                if ((tag === 'embed' || tag === 'object' || tag === 'iframe') && getPdfSrc(node)) {
-                                    if (pdfjsLoaded && typeof pdfjsLib !== 'undefined') {
-                                        replacePdfElement(node);
-                                    }
+                                if ((tag === 'embed' || tag === 'object' || tag === 'iframe') && hasPdf && getPdfSrc(node)) {
+                                    replacePdfElement(node);
                                 } else if (tag === 'video') {
                                     enhanceVideo(node);
                                 }
-                                // Check children
                                 if (node.querySelectorAll) {
-                                    if (pdfjsLoaded && typeof pdfjsLib !== 'undefined') {
+                                    if (hasPdf) {
                                         node.querySelectorAll('embed, object, iframe').forEach(function(el) {
                                             if (getPdfSrc(el)) replacePdfElement(el);
                                         });
@@ -5307,7 +5612,6 @@ class WikiActivity : AppCompatActivity() {
                     });
                     obs.observe(document.body, { childList: true, subtree: true });
 
-                    // Re-scan on pageshow (back/forward navigation)
                     window.addEventListener('pageshow', function(event) {
                         if (event.persisted) {
                             console.log('[TiddlyDesktop] Page restored from bfcache, re-scanning');
@@ -5317,10 +5621,6 @@ class WikiActivity : AppCompatActivity() {
                 }
 
                 // ---- Blur active element on video/audio interaction ----
-                // Clicking native media controls doesn't blur focused inputs,
-                // so the browser scrolls back to the focused element on layout
-                // changes (poster removal, metadata load). Capture-phase
-                // mousedown on video/audio blurs the active element to prevent this.
                 if (!window.__tdMediaBlurSet) {
                     window.__tdMediaBlurSet = true;
                     document.addEventListener('mousedown', function(e) {
@@ -5332,25 +5632,14 @@ class WikiActivity : AppCompatActivity() {
                     }, true);
                 }
 
-                // ---- Load PDF.js then scan ----
-                function loadPdfJs() {
-                    if (pdfjsLoaded || typeof pdfjsLib !== 'undefined') {
-                        pdfjsLoaded = true;
-                        scanAll();
-                        return;
-                    }
-                    loadScript(TD_BASE + 'pdfjs/build/pdf.min.js', function() {
-                        if (typeof pdfjsLib !== 'undefined') {
-                            pdfjsLib.GlobalWorkerOptions.workerSrc = TD_BASE + 'pdfjs/build/pdf.worker.min.js';
-                            pdfjsLoaded = true;
-                            console.log('[TD-PDF] PDF.js loaded');
-                            scanAll();
-                        }
+                // Cleanup PDF handles on page unload
+                window.addEventListener('beforeunload', function() {
+                    openPdfHandles.forEach(function(h) {
+                        try { TiddlyDesktopPdf.close(h); } catch(e) {}
                     });
-                }
+                    openPdfHandles = [];
+                });
 
-                loadPdfJs();
-                // Scan for videos immediately (poster extraction doesn't need external libs)
                 scanAll();
 
                 console.log('[TiddlyDesktop] Inline media enhancement initialized');
@@ -5582,7 +5871,7 @@ class WikiActivity : AppCompatActivity() {
             // Proactively broadcast fingerprints to all connected peers for catch-up
             "var all=\$tw.wiki.allTitles();var fps=[];" +
             "for(var i=0;i<all.length;i++){var t=all[i];" +
-            "if(t==='\$:/StoryList'||t==='\$:/HistoryList'||t==='\$:/library/sjcl.js')continue;" +
+            "if(t==='\$:/StoryList'||t==='\$:/HistoryList'||t==='\$:/library/sjcl.js'||t==='\$:/Import'||t==='\$:/language'||t==='\$:/theme'||t==='\$:/palette'||t==='\$:/isEncrypted')continue;" +
             "if(isDraft(t))continue;" +
             "if(t.indexOf('\$:/TiddlyDesktopRS/Conflicts/')==0)continue;" +
             "if(t.indexOf('\$:/state/')==0||t.indexOf('\$:/status/')==0||t.indexOf('\$:/temp/')==0)continue;" +
@@ -5608,7 +5897,7 @@ class WikiActivity : AppCompatActivity() {
             "for(var i=0;i<keys.length;i++){" +
             "var t=keys[i];" +
             "if(suppress.delete(t))continue;" +
-            "if(t==='\$:/StoryList'||t==='\$:/HistoryList'||t==='\$:/library/sjcl.js')continue;" +
+            "if(t==='\$:/StoryList'||t==='\$:/HistoryList'||t==='\$:/library/sjcl.js'||t==='\$:/Import'||t==='\$:/language'||t==='\$:/theme'||t==='\$:/palette'||t==='\$:/isEncrypted')continue;" +
             "if(isDraft(t))continue;" +
             "if(t.indexOf('\$:/TiddlyDesktopRS/Conflicts/')==0)continue;" +
             "if(t.indexOf('\$:/state/')==0)continue;" +
@@ -5635,7 +5924,7 @@ class WikiActivity : AppCompatActivity() {
             // collectFingerprints: includes knownSyncTitles for convergence
             "function cfps(){var all=\$tw.wiki.allTitles();var seen={};var fps=[];" +
             "for(var i=0;i<all.length;i++){var t=all[i];" +
-            "if(t==='\$:/StoryList'||t==='\$:/HistoryList'||t==='\$:/library/sjcl.js')continue;" +
+            "if(t==='\$:/StoryList'||t==='\$:/HistoryList'||t==='\$:/library/sjcl.js'||t==='\$:/Import'||t==='\$:/language'||t==='\$:/theme'||t==='\$:/palette'||t==='\$:/isEncrypted')continue;" +
             "if(isDraft(t))continue;" +
             "if(t.indexOf('\$:/TiddlyDesktopRS/Conflicts/')==0)continue;" +
             "if(t.indexOf('\$:/state/')==0||t.indexOf('\$:/status/')==0||t.indexOf('\$:/temp/')==0)continue;" +
@@ -5651,6 +5940,7 @@ class WikiActivity : AppCompatActivity() {
             "if(d.type==='send-fingerprints'){sendFingerprints(d.to_device_id);return;}" +
             "if(d.type==='compare-fingerprints'){compareFingerprints(d.from_device_id,d.fingerprints);return;}" +
             "if(d.type==='attachment-received'){reloadAttachment(d.filename);return;}" +
+            "if(d.type==='wiki-info-changed'){console.log('[LAN Sync] Wiki config changed from another device');\$tw.wiki.addTiddler(new \$tw.Tiddler({title:'\$:/temp/tiddlydesktop/config-reload-required',text:'yes'}));return;}" +
             "queue.push(d);if(!batchTimer)batchTimer=setTimeout(applyBatch,50);" +
             "}" +
             "function applyBatch(){batchTimer=null;var b=queue;queue=[];if(!b.length)return;" +
@@ -5671,7 +5961,7 @@ class WikiActivity : AppCompatActivity() {
             "var remote={};for(var i=0;i<fps.length;i++)remote[fps[i].title]=fps[i].modified;" +
             "var all=\$tw.wiki.allTitles();var diffs=[];" +
             "for(var j=0;j<all.length;j++){var t=all[j];" +
-            "if(t==='\$:/StoryList'||t==='\$:/HistoryList'||t==='\$:/library/sjcl.js')continue;" +
+            "if(t==='\$:/StoryList'||t==='\$:/HistoryList'||t==='\$:/library/sjcl.js'||t==='\$:/Import'||t==='\$:/language'||t==='\$:/theme'||t==='\$:/palette'||t==='\$:/isEncrypted')continue;" +
             "if(isDraft(t))continue;" +
             "if(t.indexOf('\$:/TiddlyDesktopRS/Conflicts/')==0)continue;" +
             "if(t.indexOf('\$:/state/')==0||t.indexOf('\$:/status/')==0||t.indexOf('\$:/temp/')==0)continue;" +
@@ -5703,7 +5993,7 @@ class WikiActivity : AppCompatActivity() {
             "console.log('[LAN Sync] Dumping '+all.length+' tiddlers to '+toDevId);" +
             "function send(si){var batch=[];var bytes=0;var i=si;" +
             "while(i<all.length&&(batch.length===0||bytes<MX)){var t=all[i];i++;" +
-            "if(t==='\$:/StoryList'||t==='\$:/HistoryList'||t==='\$:/library/sjcl.js')continue;" +
+            "if(t==='\$:/StoryList'||t==='\$:/HistoryList'||t==='\$:/library/sjcl.js'||t==='\$:/Import'||t==='\$:/language'||t==='\$:/theme'||t==='\$:/palette'||t==='\$:/isEncrypted')continue;" +
             "if(isDraft(t))continue;" +
             "if(t.indexOf('\$:/TiddlyDesktopRS/Conflicts/')==0)continue;" +
             "if(t.indexOf('\$:/state/')==0||t.indexOf('\$:/status/')==0||t.indexOf('\$:/temp/')==0)continue;" +
@@ -6089,9 +6379,11 @@ class WikiActivity : AppCompatActivity() {
             }
         }
 
-        // Start watchdog to keep main process (LAN sync) alive.
+        // Start watchdog to keep main process (LAN sync) alive — only if LAN sync is active.
         // If Android kills the main process, this detects it and restarts.
-        mainProcessWatchdog.postDelayed(mainProcessCheckRunnable, 250L)
+        if (LanSyncService.isLanSyncActive(applicationContext)) {
+            mainProcessWatchdog.postDelayed(mainProcessCheckRunnable, 250L)
+        }
     }
 
     // Flag to track if we're waiting for unsaved changes check
@@ -7097,8 +7389,10 @@ class WikiActivity : AppCompatActivity() {
         // Clean up auth overlay if present
         dismissAuthOverlay()
 
-        // Notify LAN sync service (main process) that a wiki closed
-        LanSyncService.notifyWikiClosed(applicationContext)
+        // Notify LAN sync service (main process) that a wiki closed — only if LAN sync is active
+        if (LanSyncService.isLanSyncActive(applicationContext)) {
+            LanSyncService.notifyWikiClosed(applicationContext)
+        }
 
         // Notify foreground service that wiki is closed
         WikiServerService.wikiClosed(applicationContext)
@@ -7170,6 +7464,14 @@ class WikiActivity : AppCompatActivity() {
      * (initializes Tauri runtime → LAN sync re-enables on landing page load).
      */
     private fun checkMainProcessAlive() {
+        // Only restart the main process if LAN sync was active.
+        // Without this check, the sync notification would appear on every restart
+        // even when LAN sync is disabled.
+        if (!LanSyncService.isLanSyncActive(applicationContext)) {
+            // LAN sync is not active — stop the watchdog, no need to keep checking
+            mainProcessWatchdog.removeCallbacks(mainProcessCheckRunnable)
+            return
+        }
         try {
             val am = getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
             val processes = am.runningAppProcesses ?: return

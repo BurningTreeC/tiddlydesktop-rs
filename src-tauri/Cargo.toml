@@ -45,6 +45,10 @@ rand = "0.9.2"
 dirs = "6.0.0"
 md5 = "0.8"
 
+# PDFium-based PDF rendering (replaces PDF.js)
+pdfium-render = { version = "0.8", features = ["thread_safe", "image_025"] }
+image = { version = "0.25", default-features = false, features = ["png"] }
+
 # LAN Sync: encrypted WebSocket communication
 tokio-tungstenite = "0.24"
 futures-util = "0.3"
@@ -111,7 +115,6 @@ webview2-com = { git = "https://github.com/BurningTreeC/webview2-rs", branch = "
 # Required for implementing COM interfaces (ICoreWebView2DragStartingEventHandler)
 windows-implement = "0.60"
 windows-core = "0.61"
-image = { version = "0.25", default-features = false, features = ["png"] }
 
 # Patch webview2-com/webview2-com-sys to use our fork with DragStarting API
 # This ensures WRY and our code use the same ICoreWebView2 types

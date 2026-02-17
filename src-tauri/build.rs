@@ -46,6 +46,7 @@ fn copy_node_to_jnilibs() {
         ("libicuuc.so", "libicuuc.so"),
         ("libicudata.so", "libicudata.so"),
         ("libc++_shared.so", "libc++_shared.so"),
+        ("libpdfium.so", "libpdfium.so"),
     ];
 
     for (src_name, dest_name) in files_to_copy {

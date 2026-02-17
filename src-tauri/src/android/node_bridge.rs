@@ -587,6 +587,11 @@ fn get_native_library_dir() -> Result<String, String> {
     Ok(native_lib_str)
 }
 
+/// Public wrapper for get_native_library_dir (used by PDFium init in :wiki process)
+pub fn get_native_library_dir_pub() -> Result<String, String> {
+    get_native_library_dir()
+}
+
 /// Get the path to the extracted TiddlyWiki resources.
 pub fn get_tiddlywiki_dir() -> Result<PathBuf, String> {
     let data_dir = get_app_data_dir()?;
@@ -904,6 +909,22 @@ pub fn start_wiki_server(folder_path: &str, port: u16) -> Result<String, String>
 
     let mut cmd = Command::new(&node_path);
     cmd.env("LD_LIBRARY_PATH", &ld_library_path);
+
+    // Set TIDDLYWIKI_PLUGIN_PATH so Node.js can find synced plugins.
+    // Prepend our synced_plugins dir to any existing TIDDLYWIKI_PLUGIN_PATH.
+    if let Ok(data_dir) = get_app_data_dir() {
+        let synced_dir = data_dir.join("synced_plugins");
+        let _ = std::fs::create_dir_all(&synced_dir);
+        let plugin_path = match std::env::var("TIDDLYWIKI_PLUGIN_PATH") {
+            Ok(existing) if !existing.is_empty() => {
+                format!("{}:{}", synced_dir.display(), existing)
+            }
+            _ => synced_dir.to_string_lossy().to_string(),
+        };
+        cmd.env("TIDDLYWIKI_PLUGIN_PATH", &plugin_path);
+        eprintln!("[NodeBridge] Set TIDDLYWIKI_PLUGIN_PATH={}", plugin_path);
+    }
+
     cmd.arg(&tiddlywiki_js);
     cmd.arg(folder_path);
     cmd.arg("--listen");

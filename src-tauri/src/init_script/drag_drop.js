@@ -600,6 +600,7 @@
         var invoke = window.__TAURI__.core.invoke;
         var wikiPath = window.__WIKI_PATH__;
         var windowLabel = window.__WINDOW_LABEL__ || 'unknown';
+        var isFolderWiki = !!window.__TD_FOLDER_WIKI__;
 
         invoke("js_log", { message: "Setting up drag-drop listeners for: " + wikiPath + " window: " + windowLabel + " (window-specific)" });
 
@@ -1299,7 +1300,11 @@
                     });
                 } else if (externalEnabled && info.path) {
                     // Non-native file with external attachments enabled: create _canonical_uri tiddler
-                    var canonicalUri = makePathRelative(info.path, wikiPath, {
+                    // makePathRelative treats the last component of rootpath as a filename.
+                    // For folder wikis (wikiPath = "/home/user/mywiki"), append a dummy filename
+                    // so the folder is treated as the base directory.
+                    var rootForRelative = isFolderWiki ? wikiPath + '/index.html' : wikiPath;
+                    var canonicalUri = makePathRelative(info.path, rootForRelative, {
                         useAbsoluteForDescendents: useAbsDesc,
                         useAbsoluteForNonDescendents: useAbsNonDesc
                     });
@@ -1986,11 +1991,50 @@
         // Paste Handling for File URIs
         // ========================================
 
+        // Dispatch files to TW's import mechanism as a synthetic drop event
+        function dispatchFilesToDropzone(files, filePaths) {
+            var dropzone = document.querySelector(".tc-dropzone");
+            if (!dropzone) {
+                console.error("[TiddlyDesktop] No dropzone found for pasted files");
+                return;
+            }
+
+            var dt = new DataTransfer();
+            files.forEach(function(file) { dt.items.add(file); });
+
+            var dropEvent = new DragEvent("drop", {
+                bubbles: true,
+                cancelable: true,
+                dataTransfer: dt
+            });
+            dropEvent.__tiddlyDesktopSynthetic = true;
+
+            try {
+                Object.defineProperty(dropEvent, 'dataTransfer', {
+                    value: dt,
+                    writable: false,
+                    configurable: true
+                });
+            } catch (e) {}
+
+            dropzone.dispatchEvent(dropEvent);
+            if (filePaths) {
+                setTimeout(function() { window.__pendingExternalFiles = {}; }, 5000);
+            }
+        }
+
         document.addEventListener("paste", function(event) {
             if (window.__IS_MAIN_WIKI__) return;
 
             var clipboardData = event.clipboardData;
             if (!clipboardData) return;
+
+            // Let the browser handle paste in text areas and editable elements
+            var target = event.target;
+            if (target && (target.tagName === "TEXTAREA" || target.tagName === "INPUT" ||
+                target.isContentEditable || target.twEditor)) {
+                return;
+            }
 
             var uriList = sanitizeDroppedText(clipboardData.getData("text/uri-list"));
             if (!uriList) {
@@ -2000,77 +2044,79 @@
                 }
             }
 
-            if (!uriList) return;
-
-            var filePaths = uriList.split(/[\r\n]+/)
-                .filter(function(line) { return line.trim() && line.charAt(0) !== String.fromCharCode(35); })
-                .map(function(line) {
-                    var trimmed = line.trim();
-                    if (trimmed.startsWith("file://")) {
-                        var path = trimmed.substring(7);
-                        if (path.startsWith("//")) {
-                            path = path.substring(2);
-                            var slashIdx = path.indexOf("/");
-                            if (slashIdx !== -1) path = path.substring(slashIdx);
+            if (uriList) {
+                // File URI paste (e.g., files copied in file manager)
+                var filePaths = uriList.split(/[\r\n]+/)
+                    .filter(function(line) { return line.trim() && line.charAt(0) !== String.fromCharCode(35); })
+                    .map(function(line) {
+                        var trimmed = line.trim();
+                        if (trimmed.startsWith("file://")) {
+                            var path = trimmed.substring(7);
+                            if (path.startsWith("//")) {
+                                path = path.substring(2);
+                                var slashIdx = path.indexOf("/");
+                                if (slashIdx !== -1) path = path.substring(slashIdx);
+                            }
+                            try { return decodeURIComponent(path); } catch (e) { return path; }
                         }
-                        try { return decodeURIComponent(path); } catch (e) { return path; }
+                        return null;
+                    })
+                    .filter(function(p) { return p !== null; });
+
+                if (filePaths.length === 0) return;
+
+                invoke("js_log", { message: "Paste: detected " + filePaths.length + " file URI(s)" });
+
+                event.preventDefault();
+                event.stopPropagation();
+
+                var filePromises = filePaths.map(function(filepath) {
+                    var filename = filepath.split("/").pop();
+                    var mimeType = getMimeType(filename);
+
+                    return invoke("read_file_as_binary", { path: filepath }).then(function(bytes) {
+                        window.__pendingExternalFiles = window.__pendingExternalFiles || {};
+                        window.__pendingExternalFiles[filename] = filepath;
+                        return new File([new Uint8Array(bytes)], filename, { type: mimeType });
+                    }).catch(function(err) {
+                        console.error("[TiddlyDesktop] Failed to read pasted file:", filepath, err);
+                        return null;
+                    });
+                });
+
+                Promise.all(filePromises).then(function(files) {
+                    var validFiles = files.filter(function(f) { return f !== null; });
+                    if (validFiles.length > 0) {
+                        dispatchFilesToDropzone(validFiles, true);
                     }
-                    return null;
-                })
-                .filter(function(p) { return p !== null; });
+                });
+                return;
+            }
 
-            if (filePaths.length === 0) return;
+            // No file URIs — check for binary file items on the clipboard
+            // (e.g., screenshots, images copied from other apps).
+            // We handle this ourselves because the WebView's clipboard API
+            // may not expose items correctly to TW's paste handler.
+            var items = clipboardData.items;
+            if (!items || items.length === 0) return;
 
-            invoke("js_log", { message: "Paste: detected " + filePaths.length + " file URI(s)" });
+            var fileItems = [];
+            for (var i = 0; i < items.length; i++) {
+                if (items[i].kind === "file") {
+                    var file = items[i].getAsFile();
+                    if (file) fileItems.push(file);
+                }
+            }
+
+            if (fileItems.length === 0) return;
+
+            invoke("js_log", { message: "Paste: detected " + fileItems.length + " clipboard file item(s) (no filepath)" });
 
             event.preventDefault();
             event.stopPropagation();
 
-            var filePromises = filePaths.map(function(filepath) {
-                var filename = filepath.split("/").pop();
-                var mimeType = getMimeType(filename);
-
-                return invoke("read_file_as_binary", { path: filepath }).then(function(bytes) {
-                    window.__pendingExternalFiles = window.__pendingExternalFiles || {};
-                    window.__pendingExternalFiles[filename] = filepath;
-                    return new File([new Uint8Array(bytes)], filename, { type: mimeType });
-                }).catch(function(err) {
-                    console.error("[TiddlyDesktop] Failed to read pasted file:", filepath, err);
-                    return null;
-                });
-            });
-
-            Promise.all(filePromises).then(function(files) {
-                var validFiles = files.filter(function(f) { return f !== null; });
-                if (validFiles.length === 0) return;
-
-                var dropzone = document.querySelector(".tc-dropzone");
-                if (!dropzone) {
-                    console.error("[TiddlyDesktop] No dropzone found for pasted files");
-                    return;
-                }
-
-                var dt = new DataTransfer();
-                validFiles.forEach(function(file) { dt.items.add(file); });
-
-                var dropEvent = new DragEvent("drop", {
-                    bubbles: true,
-                    cancelable: true,
-                    dataTransfer: dt
-                });
-                dropEvent.__tiddlyDesktopSynthetic = true;
-
-                try {
-                    Object.defineProperty(dropEvent, 'dataTransfer', {
-                        value: dt,
-                        writable: false,
-                        configurable: true
-                    });
-                } catch (e) {}
-
-                dropzone.dispatchEvent(dropEvent);
-                setTimeout(function() { window.__pendingExternalFiles = {}; }, 5000);
-            });
+            // Import as embedded binary tiddlers (no file path = no external attachment)
+            dispatchFilesToDropzone(fileItems, false);
         }, true);
 
         // ========================================
@@ -2183,7 +2229,10 @@
                         return true; // Signal we're handling it asynchronously
                     } else {
                         // Desktop: Use relative path to original file location
-                        var canonicalUri = makePathRelative(originalPath, wikiPath, {
+                        // makePathRelative treats the last component of rootpath as a filename.
+                        // For folder wikis, append a dummy filename so the folder is the base.
+                        var rootForRelative = isFolderWiki ? wikiPath + '/index.html' : wikiPath;
+                        var canonicalUri = makePathRelative(originalPath, rootForRelative, {
                             useAbsoluteForDescendents: useAbsDesc,
                             useAbsoluteForNonDescendents: useAbsNonDesc
                         });
@@ -2268,14 +2317,13 @@
 
             var originalNumChanges = $tw.saverHandler ? $tw.saverHandler.numChanges : 0;
 
-            // Remove our tiddlers from the plugin
-            [CONFIG_ENABLE, CONFIG_ABS_DESC, CONFIG_ABS_NONDESC, CONFIG_SETTINGS_TAB].forEach(function(title) {
-                removePluginTiddler(title);
-                // Also delete any regular tiddler that may have been created by widget interaction
-                if ($tw.wiki.tiddlerExists(title)) {
-                    $tw.wiki.deleteTiddler(title);
-                }
-            });
+            // Only remove the settings UI tab — the actual config tiddlers
+            // (CONFIG_ENABLE, CONFIG_ABS_DESC, CONFIG_ABS_NONDESC) should persist
+            // in the wiki so they survive reloads.
+            removePluginTiddler(CONFIG_SETTINGS_TAB);
+            if ($tw.wiki.tiddlerExists(CONFIG_SETTINGS_TAB)) {
+                $tw.wiki.deleteTiddler(CONFIG_SETTINGS_TAB);
+            }
 
             if ($tw.saverHandler) {
                 setTimeout(function() {
@@ -2320,6 +2368,10 @@
             if (TD.registerPlugin) {
                 TD.registerPlugin();
             }
+
+            // Sync Rust backend from wiki values (handles external edits and
+            // persisted real tiddlers that may differ from the Rust-stored config)
+            saveConfigToTauri();
 
             $tw.wiki.addEventListener("change", function(changes) {
                 if (changes[CONFIG_ENABLE] || changes[CONFIG_ABS_DESC] || changes[CONFIG_ABS_NONDESC]) {

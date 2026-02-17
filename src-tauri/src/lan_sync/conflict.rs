@@ -11,8 +11,16 @@ use std::sync::Mutex;
 
 use super::protocol::VectorClock;
 
-/// Tiddler titles excluded from sync (per-device navigation state)
-const EXCLUDED_TIDDLERS: &[&str] = &["$:/StoryList", "$:/HistoryList", "$:/library/sjcl.js"];
+/// Tiddler titles excluded from sync (per-device navigation/preferences state)
+const EXCLUDED_TIDDLERS: &[&str] = &[
+    "$:/StoryList",
+    "$:/HistoryList",
+    "$:/library/sjcl.js",
+    "$:/Import",
+    "$:/language",
+    "$:/theme",
+    "$:/palette",
+];
 
 /// Prefix for draft tiddlers (excluded from sync).
 /// TiddlyWiki creates "Draft of 'title'", "Draft 2 of 'title'", "Draft 3 of 'title'", etc.

@@ -236,6 +236,14 @@ jobs:
           rm -rf src-tauri/resources/tiddlywiki/editions/tiddlywiki-surveys
           cp src/index.html src-tauri/resources/index.html
 
+      - name: Download PDFium
+        working-directory: tiddlydesktop-rs
+        run: |
+          mkdir -p /tmp/pdfium-extract src-tauri/resources/tdlib
+          curl -sL "https://github.com/bblanchon/pdfium-binaries/releases/latest/download/pdfium-linux-x64.tgz" | tar xz -C /tmp/pdfium-extract
+          cp /tmp/pdfium-extract/lib/libpdfium.so src-tauri/resources/tdlib/
+          rm -rf /tmp/pdfium-extract
+
       - name: Build Tauri (Linux)
         working-directory: tiddlydesktop-rs
         run: npm run tauri build -- -c src-tauri/tauri.linux.conf.json
@@ -330,6 +338,15 @@ jobs:
           # Copy index.html to resources for bundling (avoids WiX issues with map format)
           cp src/index.html src-tauri/resources/index.html
 
+      - name: Download PDFium
+        working-directory: tiddlydesktop-rs
+        shell: bash
+        run: |
+          mkdir -p /tmp/pdfium-extract src-tauri/resources/tdlib
+          curl -sL "https://github.com/bblanchon/pdfium-binaries/releases/latest/download/pdfium-win-x64.tgz" | tar xz -C /tmp/pdfium-extract
+          cp /tmp/pdfium-extract/bin/pdfium.dll src-tauri/resources/tdlib/
+          rm -rf /tmp/pdfium-extract
+
       - name: Build Tauri (Windows)
         working-directory: tiddlydesktop-rs
         run: npm run tauri build -- -c src-tauri/tauri.windows.conf.json
@@ -404,6 +421,15 @@ jobs:
           rm -rf src-tauri/resources/tiddlywiki/editions/tiddlywiki-surveys
           # Copy index.html to resources for bundling (avoids WiX issues with map format)
           cp src/index.html src-tauri/resources/index.html
+
+      - name: Download PDFium
+        working-directory: tiddlydesktop-rs
+        shell: bash
+        run: |
+          mkdir -p /tmp/pdfium-extract src-tauri/resources/tdlib
+          curl -sL "https://github.com/bblanchon/pdfium-binaries/releases/latest/download/pdfium-win-x64.tgz" | tar xz -C /tmp/pdfium-extract
+          cp /tmp/pdfium-extract/bin/pdfium.dll src-tauri/resources/tdlib/
+          rm -rf /tmp/pdfium-extract
 
       - name: Build Tauri (Windows without bundled Node.js)
         working-directory: tiddlydesktop-rs
@@ -508,6 +534,14 @@ jobs:
           # Copy index.html to resources for bundling
           cp src/index.html src-tauri/resources/index.html
 
+      - name: Download PDFium
+        working-directory: tiddlydesktop-rs
+        run: |
+          mkdir -p /tmp/pdfium-extract src-tauri/resources/tdlib
+          curl -sL "https://github.com/bblanchon/pdfium-binaries/releases/latest/download/pdfium-mac-univ.tgz" | tar xz -C /tmp/pdfium-extract
+          cp /tmp/pdfium-extract/lib/libpdfium.dylib src-tauri/resources/tdlib/
+          rm -rf /tmp/pdfium-extract
+
       - name: Add Rust targets for universal binary
         run: |
           rustup target add x86_64-apple-darwin
@@ -584,6 +618,14 @@ jobs:
           rm -rf src-tauri/resources/tiddlywiki/editions/tiddlywiki-surveys
           # Copy index.html to resources for bundling
           cp src/index.html src-tauri/resources/index.html
+
+      - name: Download PDFium
+        working-directory: tiddlydesktop-rs
+        run: |
+          mkdir -p /tmp/pdfium-extract src-tauri/resources/tdlib
+          curl -sL "https://github.com/bblanchon/pdfium-binaries/releases/latest/download/pdfium-mac-univ.tgz" | tar xz -C /tmp/pdfium-extract
+          cp /tmp/pdfium-extract/lib/libpdfium.dylib src-tauri/resources/tdlib/
+          rm -rf /tmp/pdfium-extract
 
       - name: Add Rust targets for universal binary
         run: |

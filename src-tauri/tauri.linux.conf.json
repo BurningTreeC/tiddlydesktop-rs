@@ -4,6 +4,7 @@
     "targets": ["deb", "rpm"],
     "resources": [
       "resources/tiddlywiki/**/*",
+      "resources/tdlib/**/*",
       "resources/index.html"
     ]
   }

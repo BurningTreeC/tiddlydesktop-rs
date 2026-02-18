@@ -3,6 +3,7 @@
   "bundle": {
     "resources": [
       "resources/tiddlywiki/**/*",
+      "resources/tdlib/**/*",
       "resources/index.html"
     ]
   }

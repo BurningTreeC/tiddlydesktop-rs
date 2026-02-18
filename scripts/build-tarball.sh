@@ -45,6 +45,7 @@ touch "${BUILD_DIR}/bin/portable"
 
 # Copy resources to lib/<app-name>/ (where Tauri expects them)
 cp -r src-tauri/resources/tiddlywiki "${BUILD_DIR}/lib/${NAME}/"
+cp -r src-tauri/resources/tdlib "${BUILD_DIR}/lib/${NAME}/"
 cp src/index.html "${BUILD_DIR}/lib/${NAME}/"
 
 # Copy icons

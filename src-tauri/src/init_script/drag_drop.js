@@ -139,7 +139,7 @@
             "js": "application/javascript",
             "md": "text/markdown",
             // TiddlyWiki specific
-            "tid": "text/vnd.tiddlywiki",
+            "tid": "application/x-tiddler",
             "tiddler": "application/x-tiddler-html-div",
             "multids": "application/x-tiddlers",
             // Fonts
@@ -1222,6 +1222,7 @@
         var TW_NATIVE_EXTS = {
             '.tid': true, '.csv': true, '.json': true,
             '.html': true, '.htm': true,
+            '.css': true, '.js': true,
             '.tiddler': true, '.multids': true
         };
 
@@ -1231,8 +1232,25 @@
             return TW_NATIVE_EXTS[filename.substr(dotPos).toLowerCase()] === true;
         }
 
+        // Find a widget in the tree that handles a given event type.
+        // $tw.rootWidget.dispatchEvent() bubbles UP to parents, but rootWidget
+        // has no parent — so events dispatched there never reach child widgets.
+        // We search the widget tree to find the NavigatorWidget and dispatch from it.
+        function findWidgetWithHandler(widget, eventType) {
+            if (widget.eventListeners && widget.eventListeners[eventType]) {
+                return widget;
+            }
+            if (widget.children) {
+                for (var i = 0; i < widget.children.length; i++) {
+                    var found = findWidgetWithHandler(widget.children[i], eventType);
+                    if (found) return found;
+                }
+            }
+            return null;
+        }
+
         // Import files from paths, with proper file type distinction:
-        //   - TW-native files (.tid, .csv, .json, .html) → deserialize via TW
+        //   - TW-native files (.tid, .csv, .json, .html, .css, .js) → deserialize via TW
         //   - Other files + external attachments enabled → _canonical_uri tiddlers
         //   - Other files + external attachments disabled → embed via TW readFile
         function importFiles(fileInfos) {
@@ -1249,23 +1267,6 @@
 
             var allTiddlers = [];
             var remaining = fileInfos.length;
-
-            // Find the NavigatorWidget (which handles tm-import-tiddlers).
-            // $tw.rootWidget.dispatchEvent() bubbles UP to parents, but rootWidget
-            // has no parent — so events dispatched there never reach child widgets.
-            // We search the widget tree to find the NavigatorWidget and dispatch from it.
-            function findWidgetWithHandler(widget, eventType) {
-                if (widget.eventListeners && widget.eventListeners[eventType]) {
-                    return widget;
-                }
-                if (widget.children) {
-                    for (var i = 0; i < widget.children.length; i++) {
-                        var found = findWidgetWithHandler(widget.children[i], eventType);
-                        if (found) return found;
-                    }
-                }
-                return null;
-            }
 
             function done() {
                 remaining--;
@@ -2023,6 +2024,40 @@
             }
         }
 
+        // Helper: parse file:// URIs from a URI list string
+        function parseFileUris(text) {
+            if (!text) return [];
+            return text.split(/[\r\n]+/)
+                .filter(function(line) { return line.trim() && line.charAt(0) !== String.fromCharCode(35); })
+                .map(function(line) {
+                    var trimmed = line.trim();
+                    if (trimmed.startsWith("file://")) {
+                        var path = trimmed.substring(7);
+                        if (path.startsWith("//")) {
+                            path = path.substring(2);
+                            var slashIdx = path.indexOf("/");
+                            if (slashIdx !== -1) path = path.substring(slashIdx);
+                        }
+                        try { return decodeURIComponent(path); } catch (e) { return path; }
+                    }
+                    return null;
+                })
+                .filter(function(p) { return p !== null; });
+        }
+
+        // Helper: dispatch tiddlers through TW's import mechanism
+        function pasteImportCallback(tiddlerFieldsArray) {
+            if (tiddlerFieldsArray && tiddlerFieldsArray.length) {
+                var navWidget = findWidgetWithHandler($tw.rootWidget, "tm-import-tiddlers") || $tw.rootWidget;
+                navWidget.dispatchEvent({
+                    type: "tm-import-tiddlers",
+                    param: JSON.stringify(tiddlerFieldsArray),
+                    autoOpenOnImport: "yes",
+                    importTitle: "$:/Import"
+                });
+            }
+        }
+
         document.addEventListener("paste", function(event) {
             if (window.__IS_MAIN_WIKI__) return;
 
@@ -2036,87 +2071,105 @@
                 return;
             }
 
-            var uriList = sanitizeDroppedText(clipboardData.getData("text/uri-list"));
-            if (!uriList) {
-                var plainText = sanitizeDroppedText(clipboardData.getData("text/plain"));
-                if (plainText && plainText.trim().startsWith("file://")) {
-                    uriList = plainText;
-                }
-            }
-
-            if (uriList) {
-                // File URI paste (e.g., files copied in file manager)
-                var filePaths = uriList.split(/[\r\n]+/)
-                    .filter(function(line) { return line.trim() && line.charAt(0) !== String.fromCharCode(35); })
-                    .map(function(line) {
-                        var trimmed = line.trim();
-                        if (trimmed.startsWith("file://")) {
-                            var path = trimmed.substring(7);
-                            if (path.startsWith("//")) {
-                                path = path.substring(2);
-                                var slashIdx = path.indexOf("/");
-                                if (slashIdx !== -1) path = path.substring(slashIdx);
-                            }
-                            try { return decodeURIComponent(path); } catch (e) { return path; }
-                        }
-                        return null;
-                    })
-                    .filter(function(p) { return p !== null; });
-
-                if (filePaths.length === 0) return;
-
-                invoke("js_log", { message: "Paste: detected " + filePaths.length + " file URI(s)" });
-
-                event.preventDefault();
-                event.stopPropagation();
-
-                var filePromises = filePaths.map(function(filepath) {
-                    var filename = filepath.split("/").pop();
-                    var mimeType = getMimeType(filename);
-
-                    return invoke("read_file_as_binary", { path: filepath }).then(function(bytes) {
-                        window.__pendingExternalFiles = window.__pendingExternalFiles || {};
-                        window.__pendingExternalFiles[filename] = filepath;
-                        return new File([new Uint8Array(bytes)], filename, { type: mimeType });
-                    }).catch(function(err) {
-                        console.error("[TiddlyDesktop] Failed to read pasted file:", filepath, err);
-                        return null;
-                    });
-                });
-
-                Promise.all(filePromises).then(function(files) {
-                    var validFiles = files.filter(function(f) { return f !== null; });
-                    if (validFiles.length > 0) {
-                        dispatchFilesToDropzone(validFiles, true);
-                    }
-                });
+            // If the event would naturally reach a .tc-dropzone, let TW handle it
+            if (target && target.closest && target.closest(".tc-dropzone")) {
                 return;
             }
 
-            // No file URIs — check for binary file items on the clipboard
-            // (e.g., screenshots, images copied from other apps).
-            // We handle this ourselves because the WebView's clipboard API
-            // may not expose items correctly to TW's paste handler.
-            var items = clipboardData.items;
-            if (!items || items.length === 0) return;
+            // The paste event won't reach TW's dropzone handler (focus is on <body>
+            // which is above .tc-dropzone in the DOM, not inside it).
+            // We handle all paste processing ourselves.
 
-            var fileItems = [];
-            for (var i = 0; i < items.length; i++) {
-                if (items[i].kind === "file") {
-                    var file = items[i].getAsFile();
-                    if (file) fileItems.push(file);
+            // Cache file items from clipboard NOW (they become stale after handler returns)
+            var cachedFiles = [];
+            var items = clipboardData.items;
+            if (items) {
+                for (var t = 0; t < items.length; t++) {
+                    if (items[t].kind === "file") {
+                        var file = items[t].getAsFile();
+                        if (file) cachedFiles.push(file);
+                    }
                 }
             }
 
-            if (fileItems.length === 0) return;
-
-            invoke("js_log", { message: "Paste: detected " + fileItems.length + " clipboard file item(s) (no filepath)" });
-
+            // Take over the event — we'll handle everything from here
             event.preventDefault();
-            event.stopPropagation();
+            event.stopImmediatePropagation();
 
-            // Import as embedded binary tiddlers (no file path = no external attachment)
-            dispatchFilesToDropzone(fileItems, false);
+            // Use native clipboard reading via Rust (web API doesn't expose
+            // text/uri-list on WebKitGTK for files copied from file managers)
+            invoke("get_clipboard_content").then(function(content) {
+                // Check for file URIs from multiple clipboard formats
+                var fileUriText = content.data && content.data["text/uri-list"];
+
+                // x-special/*-copied-files (GNOME/XFCE, KDE, MATE):
+                // Format: "copy\nfile:///path1\nfile:///path2" or "cut\nfile:///path"
+                if (!fileUriText && content.data) {
+                    var copiedFiles = content.data["x-special/gnome-copied-files"]
+                        || content.data["x-special/kde-copied-files"]
+                        || content.data["x-special/KDE-copied-files"]
+                        || content.data["x-special/mate-copied-files"];
+                    if (copiedFiles) {
+                        var lines = copiedFiles.split(/[\r\n]+/);
+                        if (lines.length > 1 && (lines[0] === "copy" || lines[0] === "cut")) {
+                            fileUriText = lines.slice(1).join("\n");
+                        }
+                    }
+                }
+
+                // text/plain with file:// URIs or bare paths
+                if (!fileUriText) {
+                    var nativePlain = content.data && content.data["text/plain"];
+                    if (nativePlain) {
+                        var trimmedPlain = nativePlain.trim();
+                        if (trimmedPlain.startsWith("file://")) {
+                            fileUriText = trimmedPlain;
+                        } else if (trimmedPlain.startsWith("/") && trimmedPlain.indexOf("\n") === -1) {
+                            // Single bare Unix path — convert to file URI
+                            fileUriText = "file://" + trimmedPlain;
+                        }
+                    }
+                }
+
+                var filePaths = parseFileUris(fileUriText);
+                if (filePaths.length > 0) {
+                    invoke("js_log", { message: "Paste: detected " + filePaths.length + " file URI(s) via native clipboard" });
+                    var fileInfos = filePaths.map(function(filepath) {
+                        var filename = filepath.split("/").pop();
+                        return { path: filepath, filename: filename, mimeType: getMimeType(filename) };
+                    });
+                    importFiles(fileInfos);
+                    return;
+                }
+
+                // No file URIs. Check cached file items (e.g., pasted screenshots)
+                if (cachedFiles.length > 0) {
+                    invoke("js_log", { message: "Paste: importing " + cachedFiles.length + " clipboard file item(s)" });
+                    cachedFiles.forEach(function(file) {
+                        $tw.wiki.readFile(file, { callback: pasteImportCallback });
+                    });
+                    return;
+                }
+
+                // No files at all — handle as text paste.
+                // Use native clipboard data (web API data is stale by now).
+                var textHtml = content.data && content.data["text/html"];
+                var textPlain = content.data && content.data["text/plain"];
+                if (textHtml) {
+                    var title = $tw.wiki.generateNewTitle("Untitled text/html");
+                    pasteImportCallback([{ title: title, text: textHtml, type: "text/html" }]);
+                } else if (textPlain) {
+                    var title = $tw.wiki.generateNewTitle("Untitled text/plain");
+                    pasteImportCallback([{ title: title, text: textPlain, type: "text/plain" }]);
+                }
+            }).catch(function(err) {
+                // Native clipboard failed — try cached file items as fallback
+                if (cachedFiles.length > 0) {
+                    cachedFiles.forEach(function(file) {
+                        $tw.wiki.readFile(file, { callback: pasteImportCallback });
+                    });
+                }
+            });
         }, true);
 
         // ========================================
@@ -2407,92 +2460,6 @@
 
         installImportHook();
         setupCleanup();
-
-        // ========================================
-        // Native Clipboard Paste Handler
-        // ========================================
-
-        var lastClickedElement = null;
-        document.addEventListener("click", function(event) {
-            lastClickedElement = event.target;
-        }, true);
-
-        document.addEventListener("paste", function(event) {
-            if (window.__IS_MAIN_WIKI__) return;
-
-            var target = event.target;
-            if (target.tagName === "TEXTAREA" || target.tagName === "INPUT" || target.isContentEditable) {
-                return;
-            }
-
-            if (event.twEditor) return;
-            if (event.__tiddlyDesktopSynthetic) return;
-
-            event.preventDefault();
-            event.stopPropagation();
-
-            invoke("js_log", { message: "Paste event intercepted, reading native clipboard" });
-
-            invoke("get_clipboard_content").then(function(clipboardData) {
-                if (!clipboardData || !clipboardData.types || clipboardData.types.length === 0) {
-                    invoke("js_log", { message: "Clipboard is empty or unreadable" });
-                    return;
-                }
-
-                invoke("js_log", { message: "Clipboard content types: " + JSON.stringify(clipboardData.types) });
-
-                var dataMap = clipboardData.data || {};
-                var typesList = clipboardData.types || [];
-
-                var itemsArray = [];
-                typesList.forEach(function(type) {
-                    itemsArray.push({
-                        kind: "string",
-                        type: type,
-                        getAsString: function(callback) {
-                            if (typeof callback === "function") {
-                                setTimeout(function() { callback(dataMap[type] || ""); }, 0);
-                            }
-                        },
-                        getAsFile: function() { return null; }
-                    });
-                });
-
-                var mockClipboardData = {
-                    types: typesList,
-                    items: itemsArray,
-                    getData: function(type) { return dataMap[type] || ""; },
-                    setData: function() {},
-                    clearData: function() {}
-                };
-
-                var syntheticPaste = new ClipboardEvent("paste", {
-                    bubbles: true,
-                    cancelable: true,
-                    composed: true
-                });
-
-                Object.defineProperty(syntheticPaste, "clipboardData", {
-                    value: mockClipboardData,
-                    writable: false
-                });
-
-                syntheticPaste.__tiddlyDesktopSynthetic = true;
-
-                var pasteTarget = lastClickedElement || target;
-                var dropzone = pasteTarget.closest ? pasteTarget.closest(".tc-dropzone") : null;
-
-                if (dropzone) {
-                    invoke("js_log", { message: "Dispatching synthetic paste to: " + pasteTarget.tagName + " (inside dropzone)" });
-                    pasteTarget.dispatchEvent(syntheticPaste);
-                    invoke("js_log", { message: "Synthetic paste dispatched, defaultPrevented=" + syntheticPaste.defaultPrevented });
-                } else {
-                    invoke("js_log", { message: "Last clicked element is not inside a dropzone - no import" });
-                }
-            }).catch(function(err) {
-                invoke("js_log", { message: "Failed to read clipboard: " + err });
-            });
-        }, true);
 
         window.__TD_EXTERNAL_ATTACHMENTS_READY__ = true;
         console.log("[TiddlyDesktop] External attachments ready for:", wikiPath);

@@ -69,6 +69,13 @@ EditionSelector/Optional: (volitelné)
 EditionSelector/CreatingFile: Vytváření wiki souboru...
 EditionSelector/InitializingFolder: Inicializace wiki složky...
 
+CustomPaths/Title: Vlastní cesty
+CustomPaths/PluginsFolder: Složka pluginů:
+CustomPaths/EditionsFolder: Složka edic:
+CustomPaths/SelectFolder: Vybrat složku
+CustomPaths/Change: Změnit
+CustomPaths/Clear: Vymazat
+
 LanSync/Title: Synchronizace LAN
 LanSync/Start: Spustit synchronizaci LAN
 LanSync/Stop: Zastavit synchronizaci LAN

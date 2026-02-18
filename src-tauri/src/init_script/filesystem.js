@@ -223,12 +223,40 @@
             }
 
             // Override httpRequest to support filesystem paths
-            // In folder wiki mode, let the Node.js server handle all relative URL requests
+            // Single-file wikis: intercept all filesystem paths (relative + absolute)
+            // Folder wikis: only intercept absolute paths (relative paths go to Node.js server)
             var originalHttpRequest = $tw.utils.httpRequest;
+
+            var TEXT_EXTS = {
+                'txt': true, 'css': true, 'js': true, 'json': true,
+                'html': true, 'htm': true, 'xml': true, 'svg': true,
+                'csv': true, 'md': true, 'tid': true, 'tiddler': true,
+                'multids': true, 'yaml': true, 'yml': true, 'ini': true,
+                'cfg': true, 'conf': true, 'log': true, 'sh': true,
+                'bat': true, 'cmd': true, 'py': true, 'rb': true,
+                'java': true, 'c': true, 'cpp': true, 'h': true,
+                'rs': true, 'go': true, 'ts': true, 'tsx': true, 'jsx': true
+            };
+            function isTextFile(path) {
+                var ext = path.split('.').pop().toLowerCase();
+                return TEXT_EXTS[ext] === true;
+            }
+
+            // TiddlyWiki server API paths that must NOT be intercepted in folder wikis
+            // (these go to the Node.js server for the syncer to work)
+            function isTwServerApiPath(path) {
+                return path === 'status' || path.indexOf('status/') === 0 ||
+                       path.indexOf('recipes/') === 0 || path.indexOf('bags/') === 0 ||
+                       path === 'login' || path.indexOf('login/') === 0;
+            }
+
             $tw.utils.httpRequest = function(options) {
                 var url = options.url;
 
-                if (isFilesystemPath(url) && !isFolderWiki) {
+                // Intercept filesystem paths:
+                //   Single-file wikis: all filesystem paths
+                //   Folder wikis: absolute paths + relative file paths (NOT TW API paths)
+                if (isFilesystemPath(url) && (!isFolderWiki || isAbsolutePath(url) || !isTwServerApiPath(url))) {
                     var resolvedPath = resolveFilesystemPath(url);
                     if (!resolvedPath) {
                         if (options.callback) {
@@ -241,31 +269,62 @@
                         return { abort: function() {} };
                     }
 
-                    invoke('read_file_as_data_uri', { path: resolvedPath })
-                        .then(function(dataUri) {
-                            var mockXhr = {
-                                status: 200,
-                                statusText: 'OK',
-                                responseText: dataUri,
-                                response: dataUri,
-                                getAllResponseHeaders: function() { return ''; }
-                            };
-                            if (options.callback) {
-                                options.callback(null, dataUri, mockXhr);
-                            }
-                        })
-                        .catch(function(err) {
-                            var mockXhr = {
-                                status: 404,
-                                statusText: 'Not Found',
-                                responseText: '',
-                                response: '',
-                                getAllResponseHeaders: function() { return ''; }
-                            };
-                            if (options.callback) {
-                                options.callback(err, null, mockXhr);
-                            }
-                        });
+                    if (isTextFile(resolvedPath)) {
+                        // Text files: return actual text content
+                        invoke('read_file_as_binary', { path: resolvedPath })
+                            .then(function(bytes) {
+                                var text = new TextDecoder('utf-8').decode(new Uint8Array(bytes));
+                                var mockXhr = {
+                                    status: 200,
+                                    statusText: 'OK',
+                                    responseText: text,
+                                    response: text,
+                                    getAllResponseHeaders: function() { return ''; }
+                                };
+                                if (options.callback) {
+                                    options.callback(null, text, mockXhr);
+                                }
+                            })
+                            .catch(function(err) {
+                                var mockXhr = {
+                                    status: 404,
+                                    statusText: 'Not Found',
+                                    responseText: '',
+                                    response: '',
+                                    getAllResponseHeaders: function() { return ''; }
+                                };
+                                if (options.callback) {
+                                    options.callback(err, null, mockXhr);
+                                }
+                            });
+                    } else {
+                        // Binary files: return data URI
+                        invoke('read_file_as_data_uri', { path: resolvedPath })
+                            .then(function(dataUri) {
+                                var mockXhr = {
+                                    status: 200,
+                                    statusText: 'OK',
+                                    responseText: dataUri,
+                                    response: dataUri,
+                                    getAllResponseHeaders: function() { return ''; }
+                                };
+                                if (options.callback) {
+                                    options.callback(null, dataUri, mockXhr);
+                                }
+                            })
+                            .catch(function(err) {
+                                var mockXhr = {
+                                    status: 404,
+                                    statusText: 'Not Found',
+                                    responseText: '',
+                                    response: '',
+                                    getAllResponseHeaders: function() { return ''; }
+                                };
+                                if (options.callback) {
+                                    options.callback(err, null, mockXhr);
+                                }
+                            });
+                    }
                     return { abort: function() {} };
                 }
 
@@ -419,9 +478,6 @@
             // Uses invoke('read_file_as_binary') directly instead of httpRequest because
             // our httpRequest override returns data URIs, not raw text content.
             function patchTextParsersForCanonicalUri() {
-                // In folder wiki mode, the Node.js server handles lazy loading
-                // of text-type _canonical_uri tiddlers natively
-                if (isFolderWiki) return;
                 if (!$tw.Wiki || !$tw.Wiki.parsers) return;
                 var types = ['text/plain', 'text/x-tiddlywiki', 'application/javascript',
                              'application/json', 'text/css', 'application/x-tiddler-dictionary',

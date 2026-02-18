@@ -69,6 +69,13 @@ EditionSelector/Optional: (オプション)
 EditionSelector/CreatingFile: Wikiファイルを作成中...
 EditionSelector/InitializingFolder: Wikiフォルダを初期化中...
 
+CustomPaths/Title: カスタムパス
+CustomPaths/PluginsFolder: プラグインフォルダ:
+CustomPaths/EditionsFolder: エディションフォルダ:
+CustomPaths/SelectFolder: フォルダを選択
+CustomPaths/Change: 変更
+CustomPaths/Clear: クリア
+
 LanSync/Title: LAN同期
 LanSync/Start: LAN同期を開始
 LanSync/Stop: LAN同期を停止

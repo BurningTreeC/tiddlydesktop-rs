@@ -315,6 +315,7 @@ fn run_bridge_server(
                                                 .as_str()
                                                 .unwrap_or("")
                                                 .to_string(),
+                                            deleted: f["deleted"].as_bool().filter(|&b| b),
                                         })
                                     })
                                     .collect()
@@ -363,6 +364,7 @@ fn run_bridge_server(
                                                 .as_str()
                                                 .unwrap_or("")
                                                 .to_string(),
+                                            deleted: f["deleted"].as_bool().filter(|&b| b),
                                         })
                                     })
                                     .collect()

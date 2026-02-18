@@ -757,3 +757,41 @@ pub fn set_palette(app: tauri::AppHandle, palette: String) -> Result<(), String>
     eprintln!("[TiddlyDesktop] Palette saved: {:?}", settings.palette);
     Ok(())
 }
+
+/// Get custom plugin path URI (Android SAF content:// URI)
+#[tauri::command]
+pub fn get_custom_plugin_path(app: tauri::AppHandle) -> Option<String> {
+    load_app_settings(&app)
+        .map(|s| s.custom_plugin_path_uri)
+        .unwrap_or(None)
+}
+
+/// Set custom plugin path URI (empty string clears it)
+#[tauri::command]
+pub fn set_custom_plugin_path(app: tauri::AppHandle, uri: String) -> Result<(), String> {
+    eprintln!("[TiddlyDesktop] set_custom_plugin_path called with: '{}'", uri);
+    let mut settings = load_app_settings(&app)?;
+    settings.custom_plugin_path_uri = if uri.is_empty() { None } else { Some(uri) };
+    save_app_settings(&app, &settings)?;
+    eprintln!("[TiddlyDesktop] Custom plugin path saved: {:?}", settings.custom_plugin_path_uri);
+    Ok(())
+}
+
+/// Get custom edition path URI (Android SAF content:// URI)
+#[tauri::command]
+pub fn get_custom_edition_path(app: tauri::AppHandle) -> Option<String> {
+    load_app_settings(&app)
+        .map(|s| s.custom_edition_path_uri)
+        .unwrap_or(None)
+}
+
+/// Set custom edition path URI (empty string clears it)
+#[tauri::command]
+pub fn set_custom_edition_path(app: tauri::AppHandle, uri: String) -> Result<(), String> {
+    eprintln!("[TiddlyDesktop] set_custom_edition_path called with: '{}'", uri);
+    let mut settings = load_app_settings(&app)?;
+    settings.custom_edition_path_uri = if uri.is_empty() { None } else { Some(uri) };
+    save_app_settings(&app, &settings)?;
+    eprintln!("[TiddlyDesktop] Custom edition path saved: {:?}", settings.custom_edition_path_uri);
+    Ok(())
+}

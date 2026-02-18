@@ -69,6 +69,13 @@ EditionSelector/Optional: (वैकल्पिक)
 EditionSelector/CreatingFile: विकी फ़ाइल बना रहे हैं...
 EditionSelector/InitializingFolder: विकी फ़ोल्डर प्रारंभ कर रहे हैं...
 
+CustomPaths/Title: कस्टम पथ
+CustomPaths/PluginsFolder: प्लगइन फ़ोल्डर:
+CustomPaths/EditionsFolder: संस्करण फ़ोल्डर:
+CustomPaths/SelectFolder: फ़ोल्डर चुनें
+CustomPaths/Change: बदलें
+CustomPaths/Clear: साफ़ करें
+
 LanSync/Title: LAN सिंक
 LanSync/Start: LAN सिंक शुरू करें
 LanSync/Stop: LAN सिंक बंद करें

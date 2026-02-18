@@ -254,6 +254,10 @@ impl SyncMessage {
 pub struct TiddlerFingerprint {
     pub title: String,
     pub modified: String,
+    /// If true, this is a deletion tombstone — the tiddler was intentionally
+    /// deleted and peers should delete their copy if it is older.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deleted: Option<bool>,
 }
 
 /// Info about a single file in an attachment manifest

@@ -69,6 +69,13 @@ EditionSelector/Optional: (valfritt)
 EditionSelector/CreatingFile: Skapar wiki-fil...
 EditionSelector/InitializingFolder: Initierar wiki-mapp...
 
+CustomPaths/Title: Anpassade sökvägar
+CustomPaths/PluginsFolder: Plugin-mapp:
+CustomPaths/EditionsFolder: Editions-mapp:
+CustomPaths/SelectFolder: Välj mapp
+CustomPaths/Change: Ändra
+CustomPaths/Clear: Rensa
+
 LanSync/Title: LAN-synkronisering
 LanSync/Start: Starta LAN-synkronisering
 LanSync/Stop: Stoppa LAN-synkronisering

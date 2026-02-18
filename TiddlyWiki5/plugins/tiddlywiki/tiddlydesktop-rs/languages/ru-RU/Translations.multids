@@ -69,6 +69,13 @@ EditionSelector/Optional: (необязательно)
 EditionSelector/CreatingFile: Создание файла вики...
 EditionSelector/InitializingFolder: Инициализация папки вики...
 
+CustomPaths/Title: Пользовательские пути
+CustomPaths/PluginsFolder: Папка плагинов:
+CustomPaths/EditionsFolder: Папка редакций:
+CustomPaths/SelectFolder: Выбрать папку
+CustomPaths/Change: Изменить
+CustomPaths/Clear: Очистить
+
 LanSync/Title: Синхронизация по LAN
 LanSync/Start: Начать синхронизацию по LAN
 LanSync/Stop: Остановить синхронизацию по LAN

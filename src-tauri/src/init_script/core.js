@@ -291,6 +291,18 @@
         initPaletteSync();
     }
 
+    // Ctrl/Cmd+0 to reset zoom to 100%
+    // (Ctrl/Cmd+Plus/Minus and Ctrl+mousewheel are handled by Tauri's built-in zoom_hotkeys_enabled)
+    document.addEventListener('keydown', function(e) {
+        if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && (e.key === '0' || e.code === 'Digit0')) {
+            e.preventDefault();
+            e.stopPropagation();
+            if (window.__TAURI__ && window.__TAURI__.core) {
+                window.__TAURI__.core.invoke('set_zoom_level', { level: 1.0 }).catch(function() {});
+            }
+        }
+    }, true);
+
     // Export to TD namespace
     TD.showConfirmModal = showConfirmModal;
     TD.getColour = getColour;

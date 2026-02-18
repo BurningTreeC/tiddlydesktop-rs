@@ -1716,6 +1716,64 @@ body.td-is-android.td-main-wiki .td-wikilist {
 	height: auto !important;
 }
 
+/* ── Custom Paths Panel (Android) ────────────────────────────────── */
+
+.td-custom-paths-panel {
+	padding: 16px;
+	max-width: 600px;
+	border-top: 1px solid <<colour tiddler-border>>;
+	margin-top: 8px;
+}
+
+.td-custom-paths-title {
+	font-size: 1em;
+	font-weight: 600;
+	margin: 0 0 12px 0;
+	color: <<colour foreground>>;
+}
+
+.td-custom-path-row {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	padding: 8px 0;
+	gap: 8px;
+}
+
+.td-custom-path-row + .td-custom-path-row {
+	border-top: 1px solid <<colour tiddler-border>>;
+}
+
+.td-custom-path-label {
+	font-weight: 500;
+	white-space: nowrap;
+	color: <<colour foreground>>;
+	flex-shrink: 0;
+}
+
+.td-custom-path-actions {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	flex-wrap: wrap;
+	justify-content: flex-end;
+	min-width: 0;
+}
+
+.td-custom-path-value {
+	font-size: 0.85em;
+	color: <<colour muted-foreground>>;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	max-width: 200px;
+}
+
+.td-custom-path-none {
+	color: <<colour muted-foreground>>;
+	font-size: 0.85em;
+}
+
 /* ── LAN Sync Panel ──────────────────────────────────────────────── */
 
 .td-sync-panel {

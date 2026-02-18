@@ -69,6 +69,13 @@ EditionSelector/Optional: (опционално)
 EditionSelector/CreatingFile: Се создава вики датотека...
 EditionSelector/InitializingFolder: Се иницијализира вики папка...
 
+CustomPaths/Title: Прилагодени патеки
+CustomPaths/PluginsFolder: Папка за додатоци:
+CustomPaths/EditionsFolder: Папка за изданија:
+CustomPaths/SelectFolder: Избери папка
+CustomPaths/Change: Промени
+CustomPaths/Clear: Исчисти
+
 LanSync/Title: LAN синхронизација
 LanSync/Start: Започни LAN синхронизација
 LanSync/Stop: Запри LAN синхронизација

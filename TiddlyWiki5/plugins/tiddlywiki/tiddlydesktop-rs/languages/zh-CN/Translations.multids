@@ -69,6 +69,13 @@ EditionSelector/Optional: （可选）
 EditionSelector/CreatingFile: 正在创建维基文件...
 EditionSelector/InitializingFolder: 正在初始化维基文件夹...
 
+CustomPaths/Title: 自定义路径
+CustomPaths/PluginsFolder: 插件文件夹:
+CustomPaths/EditionsFolder: 版本文件夹:
+CustomPaths/SelectFolder: 选择文件夹
+CustomPaths/Change: 更改
+CustomPaths/Clear: 清除
+
 LanSync/Title: 局域网同步
 LanSync/Start: 开始局域网同步
 LanSync/Stop: 停止局域网同步

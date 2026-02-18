@@ -123,6 +123,8 @@ pub struct SyncManager {
     conflict_manager: Arc<ConflictManager>,
     attachment_manager: Arc<AttachmentManager>,
     bridge: Arc<SyncBridge>,
+    /// Fast flag checked by the event loop to skip messages after stop()
+    running: std::sync::atomic::AtomicBool,
     server: RwLock<Option<SyncServer>>,
     discovery: RwLock<Option<DiscoveryManager>>,
     /// Channel sender for wiki-to-sync messages
@@ -252,6 +254,7 @@ impl SyncManager {
             conflict_manager,
             attachment_manager,
             bridge,
+            running: std::sync::atomic::AtomicBool::new(false),
             server: RwLock::new(None),
             discovery: RwLock::new(None),
             wiki_tx,
@@ -413,6 +416,7 @@ impl SyncManager {
         let port = server.port();
 
         // Store server immediately so it's tracked even if mDNS fails
+        self.running.store(true, std::sync::atomic::Ordering::Release);
         *self.server.write().await = Some(server);
 
         // Start UDP broadcast discovery (non-fatal — sync works without it, just no auto-discovery)
@@ -724,6 +728,9 @@ impl SyncManager {
 
     /// Stop the sync server and discovery
     pub async fn stop(&self) {
+        // Mark as not running immediately so the event loop stops processing messages
+        self.running.store(false, std::sync::atomic::Ordering::Release);
+
         // Cancel all reconnection tasks
         {
             let mut tasks = self.reconnect_tasks.write().await;
@@ -1651,6 +1658,48 @@ impl SyncManager {
                 };
                 eprintln!("[LAN Sync] << {} from {}", msg_type, from_device_id);
 
+                // Skip all sync messages if the sync system has been stopped.
+                // Also skip wiki-specific messages for wikis no longer sync-enabled.
+                if !self.running.load(std::sync::atomic::Ordering::Acquire) {
+                    eprintln!("[LAN Sync] Ignoring {} — sync stopped", msg_type);
+                    return;
+                }
+                {
+                    let sync_wiki_id: Option<&str> = match &message {
+                        SyncMessage::TiddlerFingerprints { wiki_id, .. } |
+                        SyncMessage::TiddlerChanged { wiki_id, .. } |
+                        SyncMessage::TiddlerDeleted { wiki_id, .. } |
+                        SyncMessage::FullSyncBatch { wiki_id, .. } |
+                        SyncMessage::RequestFullSync { wiki_id, .. } |
+                        SyncMessage::RequestFingerprints { wiki_id, .. } |
+                        SyncMessage::AttachmentChanged { wiki_id, .. } |
+                        SyncMessage::AttachmentChunk { wiki_id, .. } |
+                        SyncMessage::AttachmentDeleted { wiki_id, .. } |
+                        SyncMessage::AttachmentManifest { wiki_id, .. } |
+                        SyncMessage::RequestAttachments { wiki_id, .. } |
+                        SyncMessage::WikiInfoChanged { wiki_id, .. } |
+                        SyncMessage::WikiInfoRequest { wiki_id, .. } |
+                        SyncMessage::PluginManifest { wiki_id, .. } |
+                        SyncMessage::RequestPluginFiles { wiki_id, .. } |
+                        SyncMessage::PluginFileChunk { wiki_id, .. } |
+                        SyncMessage::PluginFilesComplete { wiki_id, .. } => Some(wiki_id.as_str()),
+                        // Device-level and wiki-transfer messages are always processed
+                        _ => None,
+                    };
+                    if let Some(wid) = sync_wiki_id {
+                        if let Some(app) = GLOBAL_APP_HANDLE.get() {
+                            let sync_wikis = crate::wiki_storage::get_sync_enabled_wikis(app);
+                            if !sync_wikis.iter().any(|(id, _, _)| id == wid) {
+                                eprintln!(
+                                    "[LAN Sync] Ignoring {} — wiki {} no longer sync-enabled",
+                                    msg_type, wid
+                                );
+                                return;
+                            }
+                        }
+                    }
+                }
+
                 // Handle attachment messages, wiki transfer messages, and manifest separately
                 match message {
                     SyncMessage::AttachmentChanged {
@@ -1816,9 +1865,14 @@ impl SyncManager {
                             );
                         } else {
                             // Forward peer's fingerprints to our JS so it can compare
-                            // and send only tiddlers that differ
+                            // and send only tiddlers that differ.
+                            // Must preserve the `deleted` flag for tombstone propagation.
                             let fp_list: Vec<serde_json::Value> = fingerprints.iter().map(|f| {
-                                serde_json::json!({"title": f.title, "modified": f.modified})
+                                let mut v = serde_json::json!({"title": f.title, "modified": f.modified});
+                                if f.deleted == Some(true) {
+                                    v["deleted"] = serde_json::json!(true);
+                                }
+                                v
                             }).collect();
                             Self::emit_to_wiki(
                                 wiki_id,
@@ -1960,7 +2014,7 @@ impl SyncManager {
                                         if let Some(existing) = entry.iter_mut().find(|f| f.title == title) {
                                             existing.modified = modified;
                                         } else {
-                                            entry.push(protocol::TiddlerFingerprint { title, modified });
+                                            entry.push(protocol::TiddlerFingerprint { title, modified, deleted: None });
                                         }
                                     }
                                 }
@@ -2796,7 +2850,7 @@ impl SyncManager {
         );
     }
 
-    /// Handle PluginFilesComplete — write all accumulated files to synced_plugins dir
+    /// Handle PluginFilesComplete — write all accumulated files to plugins dir
     fn handle_plugin_files_complete(&self, wiki_id: &str, plugin_name: &str) {
         let key = (wiki_id.to_string(), plugin_name.to_string());
         let file_map = match self.incoming_plugin_transfers.lock() {
@@ -2900,7 +2954,7 @@ impl SyncManager {
 
     /// Get the synced plugins directory (created if it doesn't exist)
     fn get_synced_plugins_dir(&self) -> std::path::PathBuf {
-        let dir = self.data_dir.join("synced_plugins");
+        let dir = self.data_dir.join("plugins");
         let _ = std::fs::create_dir_all(&dir);
         dir
     }
@@ -4483,7 +4537,27 @@ pub fn set_ipc_client_for_sync(client: Arc<std::sync::Mutex<Option<crate::ipc::I
 #[tauri::command]
 pub async fn lan_sync_start(_app: tauri::AppHandle) -> Result<(), String> {
     let mgr = get_sync_manager().ok_or("Sync not initialized")?;
-    mgr.start().await
+    mgr.start().await?;
+
+    // Notify all open wiki windows that have sync enabled to start syncing.
+    // This handles the case where wikis are already open when the user starts
+    // the global LAN sync service.
+    let entries = crate::wiki_storage::load_recent_files_from_disk(&_app);
+    for entry in &entries {
+        if entry.sync_enabled {
+            if let Some(ref sync_id) = entry.sync_id {
+                if !sync_id.is_empty() {
+                    let _ = _app.emit("lan-sync-activate", serde_json::json!({
+                        "wiki_path": entry.path,
+                        "sync_id": sync_id,
+                    }));
+                    eprintln!("[LAN Sync] Global start: activating sync for wiki: {} (sync_id: {})", entry.path, sync_id);
+                }
+            }
+        }
+    }
+
+    Ok(())
 }
 
 #[tauri::command]
@@ -4734,6 +4808,39 @@ pub fn lan_sync_poll_ipc() -> Vec<String> {
 #[tauri::command]
 pub fn lan_sync_poll_ipc() -> Vec<String> {
     Vec::new()
+}
+
+/// Load persisted deletion tombstones for a wiki (by sync_id).
+/// Returns JSON string (empty object `{}` if none stored).
+#[tauri::command]
+pub async fn lan_sync_load_tombstones(
+    app: tauri::AppHandle,
+    wiki_id: String,
+) -> Result<String, String> {
+    let data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let tombstone_dir = data_dir.join("lan_sync_tombstones");
+    let safe_name = wiki_id.replace(|c: char| !c.is_alphanumeric() && c != '-' && c != '_', "_");
+    let file_path = tombstone_dir.join(format!("{}.json", safe_name));
+    match tokio::fs::read_to_string(&file_path).await {
+        Ok(content) => Ok(content),
+        Err(_) => Ok("{}".to_string()),
+    }
+}
+
+/// Save deletion tombstones for a wiki (by sync_id).
+#[tauri::command]
+pub async fn lan_sync_save_tombstones(
+    app: tauri::AppHandle,
+    wiki_id: String,
+    tombstones_json: String,
+) -> Result<(), String> {
+    let data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let tombstone_dir = data_dir.join("lan_sync_tombstones");
+    tokio::fs::create_dir_all(&tombstone_dir).await.map_err(|e| e.to_string())?;
+    let safe_name = wiki_id.replace(|c: char| !c.is_alphanumeric() && c != '-' && c != '_', "_");
+    let file_path = tombstone_dir.join(format!("{}.json", safe_name));
+    tokio::fs::write(&file_path, tombstones_json).await.map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 /// A tiddler in a full sync batch from JS

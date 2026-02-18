@@ -69,6 +69,13 @@ EditionSelector/Optional: (optioneel)
 EditionSelector/CreatingFile: Wiki-bestand wordt gemaakt...
 EditionSelector/InitializingFolder: Wiki-map wordt geïnitialiseerd...
 
+CustomPaths/Title: Aangepaste paden
+CustomPaths/PluginsFolder: Plugin-map:
+CustomPaths/EditionsFolder: Edities-map:
+CustomPaths/SelectFolder: Map selecteren
+CustomPaths/Change: Wijzigen
+CustomPaths/Clear: Wissen
+
 LanSync/Title: LAN-synchronisatie
 LanSync/Start: LAN-synchronisatie starten
 LanSync/Stop: LAN-synchronisatie stoppen

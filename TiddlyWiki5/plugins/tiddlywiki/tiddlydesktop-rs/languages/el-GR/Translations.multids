@@ -69,6 +69,13 @@ EditionSelector/Optional: (προαιρετικό)
 EditionSelector/CreatingFile: Δημιουργία αρχείου wiki...
 EditionSelector/InitializingFolder: Αρχικοποίηση φακέλου wiki...
 
+CustomPaths/Title: Προσαρμοσμένες διαδρομές
+CustomPaths/PluginsFolder: Φάκελος πρόσθετων:
+CustomPaths/EditionsFolder: Φάκελος εκδόσεων:
+CustomPaths/SelectFolder: Επιλογή φακέλου
+CustomPaths/Change: Αλλαγή
+CustomPaths/Clear: Εκκαθάριση
+
 LanSync/Title: Συγχρονισμός LAN
 LanSync/Start: Έναρξη συγχρονισμού LAN
 LanSync/Stop: Διακοπή συγχρονισμού LAN

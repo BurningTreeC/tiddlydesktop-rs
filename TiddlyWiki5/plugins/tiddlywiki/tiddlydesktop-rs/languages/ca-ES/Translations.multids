@@ -69,6 +69,13 @@ EditionSelector/Optional: (opcional)
 EditionSelector/CreatingFile: Creant fitxer wiki...
 EditionSelector/InitializingFolder: Inicialitzant carpeta wiki...
 
+CustomPaths/Title: Camins personalitzats
+CustomPaths/PluginsFolder: Carpeta de connectors:
+CustomPaths/EditionsFolder: Carpeta d'edicions:
+CustomPaths/SelectFolder: Selecciona carpeta
+CustomPaths/Change: Canvia
+CustomPaths/Clear: Esborra
+
 LanSync/Title: Sincronització LAN
 LanSync/Start: Iniciar sincronització LAN
 LanSync/Stop: Aturar sincronització LAN

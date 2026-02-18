@@ -479,6 +479,115 @@ pub fn cleanup_stale_wiki_mirrors() {
     }
 }
 
+/// Load AppSettings directly from the JSON file on disk.
+/// This works in both the main process and the :wiki process (no tauri::AppHandle needed).
+fn load_app_settings_from_disk() -> Result<crate::types::AppSettings, String> {
+    let data_dir = get_app_data_dir()?;
+    let path = data_dir.join("app_settings.json");
+    if path.exists() {
+        let content = std::fs::read_to_string(&path)
+            .map_err(|e| format!("Failed to read app settings: {}", e))?;
+        serde_json::from_str(&content)
+            .map_err(|e| format!("Failed to parse app settings: {}", e))
+    } else {
+        Ok(crate::types::AppSettings::default())
+    }
+}
+
+/// Sync custom plugins from a SAF folder to a local directory.
+/// Clears and re-copies the entire folder each time so local state
+/// matches the SAF source exactly.
+///
+/// Returns the local filesystem path.
+pub fn sync_custom_plugins_from_saf(saf_uri: &str) -> Result<String, String> {
+    let data_dir = get_app_data_dir()?;
+    let local_dir = data_dir.join("custom_plugins");
+
+    eprintln!("[NodeBridge] Syncing custom plugins from SAF: {}", saf_uri);
+
+    // Clear and re-copy
+    if local_dir.exists() {
+        let _ = std::fs::remove_dir_all(&local_dir);
+    }
+    std::fs::create_dir_all(&local_dir)
+        .map_err(|e| format!("Failed to create custom_plugins dir: {}", e))?;
+
+    copy_saf_directory_recursive(saf_uri, &local_dir)?;
+
+    let local_str = local_dir.to_string_lossy().to_string();
+    eprintln!("[NodeBridge] Custom plugins synced to: {}", local_str);
+    Ok(local_str)
+}
+
+/// Sync custom editions from a SAF folder to a local directory.
+/// Clears and re-copies the entire folder each time so local state
+/// matches the SAF source exactly.
+///
+/// Returns the local filesystem path.
+pub fn sync_custom_editions_from_saf(saf_uri: &str) -> Result<String, String> {
+    let data_dir = get_app_data_dir()?;
+    let local_dir = data_dir.join("custom_editions");
+
+    eprintln!("[NodeBridge] Syncing custom editions from SAF: {}", saf_uri);
+
+    // Clear and re-copy
+    if local_dir.exists() {
+        let _ = std::fs::remove_dir_all(&local_dir);
+    }
+    std::fs::create_dir_all(&local_dir)
+        .map_err(|e| format!("Failed to create custom_editions dir: {}", e))?;
+
+    copy_saf_directory_recursive(saf_uri, &local_dir)?;
+
+    let local_str = local_dir.to_string_lossy().to_string();
+    eprintln!("[NodeBridge] Custom editions synced to: {}", local_str);
+    Ok(local_str)
+}
+
+/// Build the TIDDLYWIKI_PLUGIN_PATH value, including {app_data}/plugins and optionally custom_plugins.
+/// Also syncs custom plugins from SAF if a URI is configured.
+fn build_plugin_path() -> Option<String> {
+    let data_dir = get_app_data_dir().ok()?;
+    let plugins_dir = data_dir.join("plugins");
+    let _ = std::fs::create_dir_all(&plugins_dir);
+
+    let mut paths = vec![plugins_dir.to_string_lossy().to_string()];
+
+    // Add custom plugins path if configured
+    if let Ok(settings) = load_app_settings_from_disk() {
+        if let Some(ref uri) = settings.custom_plugin_path_uri {
+            match sync_custom_plugins_from_saf(uri) {
+                Ok(local_path) => paths.push(local_path),
+                Err(e) => eprintln!("[NodeBridge] Warning: Failed to sync custom plugins: {}", e),
+            }
+        }
+    }
+
+    Some(paths.join(":"))
+}
+
+/// Build the TIDDLYWIKI_EDITION_PATH value, including user editions and optionally custom_editions.
+/// Also syncs custom editions from SAF if a URI is configured.
+fn build_edition_path() -> Option<String> {
+    let data_dir = get_app_data_dir().ok()?;
+    let editions_dir = data_dir.join("editions");
+    let _ = std::fs::create_dir_all(&editions_dir);
+
+    let mut paths = vec![editions_dir.to_string_lossy().to_string()];
+
+    // Add custom editions path if configured
+    if let Ok(settings) = load_app_settings_from_disk() {
+        if let Some(ref uri) = settings.custom_edition_path_uri {
+            match sync_custom_editions_from_saf(uri) {
+                Ok(local_path) => paths.push(local_path),
+                Err(e) => eprintln!("[NodeBridge] Warning: Failed to sync custom editions: {}", e),
+            }
+        }
+    }
+
+    Some(paths.join(":"))
+}
+
 /// Get the path to the Node.js executable.
 /// On Android, the binary MUST be in the native library directory as libnode.so
 /// (native libs are executable, unlike files in app data directory due to W^X policy)
@@ -659,6 +768,19 @@ pub fn run_tiddlywiki_command(args: &[&str]) -> Result<String, String> {
 
     let mut cmd = Command::new(&node_path);
     cmd.env("LD_LIBRARY_PATH", &ld_library_path);
+
+    // Set TIDDLYWIKI_PLUGIN_PATH (plugins + custom_plugins from SAF)
+    if let Some(plugin_path) = build_plugin_path() {
+        cmd.env("TIDDLYWIKI_PLUGIN_PATH", &plugin_path);
+        eprintln!("[NodeBridge] TIDDLYWIKI_PLUGIN_PATH={}", plugin_path);
+    }
+
+    // Set TIDDLYWIKI_EDITION_PATH (user editions + custom_editions from SAF)
+    if let Some(edition_path) = build_edition_path() {
+        cmd.env("TIDDLYWIKI_EDITION_PATH", &edition_path);
+        eprintln!("[NodeBridge] TIDDLYWIKI_EDITION_PATH={}", edition_path);
+    }
+
     cmd.arg(&tiddlywiki_js);
     cmd.args(args);
     cmd.current_dir(&tw_dir);
@@ -683,6 +805,34 @@ pub fn run_tiddlywiki_command(args: &[&str]) -> Result<String, String> {
         Ok(stdout)
     } else {
         Err(format!("TiddlyWiki command failed: {}\n{}", stderr, stdout))
+    }
+}
+
+/// Create symlinks so that relative includeWikis paths in tiddlywiki.info
+/// resolve from a temp build directory to the bundled editions.
+fn resolve_include_wikis_for_build(wiki_dir: &std::path::Path, editions_dir: &std::path::Path) {
+    let info_path = wiki_dir.join("tiddlywiki.info");
+    let content = match std::fs::read_to_string(&info_path) {
+        Ok(c) => c,
+        Err(_) => return,
+    };
+    let info: serde_json::Value = match serde_json::from_str(&content) {
+        Ok(v) => v,
+        Err(_) => return,
+    };
+
+    if let Some(arr) = info.get("includeWikis").and_then(|v| v.as_array()) {
+        for entry in arr {
+            let rel_path = if let Some(s) = entry.as_str() {
+                s.to_string()
+            } else if let Some(p) = entry.get("path").and_then(|v| v.as_str()) {
+                p.to_string()
+            } else {
+                continue;
+            };
+
+            create_edition_symlink(&rel_path, wiki_dir, editions_dir);
+        }
     }
 }
 
@@ -737,7 +887,26 @@ pub fn build_wiki_file(
     // Always copy the edition to a temp dir so we can modify tiddlywiki.info
     // (add user-selected plugins and strip server-only plugins)
     let temp_edition = temp_dir.join("edition");
-    let original_edition = tw_dir.join("editions").join(edition);
+
+    // Look up the edition: bundled first, then user editions, then custom editions
+    let bundled_edition = tw_dir.join("editions").join(edition);
+    let original_edition = if bundled_edition.exists() {
+        bundled_edition
+    } else {
+        let data_dir = get_app_data_dir()?;
+        let user_edition = data_dir.join("editions").join(edition);
+        if user_edition.exists() {
+            user_edition
+        } else {
+            let custom_edition = data_dir.join("custom_editions").join(edition);
+            if custom_edition.exists() {
+                custom_edition
+            } else {
+                // Fall back to the bundled path for the error message
+                bundled_edition
+            }
+        }
+    };
     copy_dir_recursive(&original_edition, &temp_edition)?;
 
     // Add user-selected plugins to tiddlywiki.info
@@ -778,6 +947,11 @@ pub fn build_wiki_file(
     if info_path.exists() {
         strip_server_plugins_from_info(&info_path)?;
     }
+
+    // Resolve includeWikis paths — create symlinks so relative paths
+    // (e.g. "../tw5.com") resolve from the temp edition directory to bundled editions
+    let editions_dir = tw_dir.join("editions");
+    resolve_include_wikis_for_build(&temp_edition, &editions_dir);
 
     let edition_path = temp_edition.to_string_lossy().to_string();
 
@@ -910,19 +1084,16 @@ pub fn start_wiki_server(folder_path: &str, port: u16) -> Result<String, String>
     let mut cmd = Command::new(&node_path);
     cmd.env("LD_LIBRARY_PATH", &ld_library_path);
 
-    // Set TIDDLYWIKI_PLUGIN_PATH so Node.js can find synced plugins.
-    // Prepend our synced_plugins dir to any existing TIDDLYWIKI_PLUGIN_PATH.
-    if let Ok(data_dir) = get_app_data_dir() {
-        let synced_dir = data_dir.join("synced_plugins");
-        let _ = std::fs::create_dir_all(&synced_dir);
-        let plugin_path = match std::env::var("TIDDLYWIKI_PLUGIN_PATH") {
-            Ok(existing) if !existing.is_empty() => {
-                format!("{}:{}", synced_dir.display(), existing)
-            }
-            _ => synced_dir.to_string_lossy().to_string(),
-        };
+    // Set TIDDLYWIKI_PLUGIN_PATH (plugins + custom_plugins from SAF)
+    if let Some(plugin_path) = build_plugin_path() {
         cmd.env("TIDDLYWIKI_PLUGIN_PATH", &plugin_path);
         eprintln!("[NodeBridge] Set TIDDLYWIKI_PLUGIN_PATH={}", plugin_path);
+    }
+
+    // Set TIDDLYWIKI_EDITION_PATH (user editions + custom_editions from SAF)
+    if let Some(edition_path) = build_edition_path() {
+        cmd.env("TIDDLYWIKI_EDITION_PATH", &edition_path);
+        eprintln!("[NodeBridge] Set TIDDLYWIKI_EDITION_PATH={}", edition_path);
     }
 
     cmd.arg(&tiddlywiki_js);

@@ -1504,6 +1504,32 @@ class WikiActivity : AppCompatActivity() {
 
                     var clone = bodyEl.cloneNode(true);
                     clone.style.margin = '0';
+                    // Handle embed/object elements for capture:
+                    // - Hidden ones (display:none from PDF.js): remove (large data URLs bloat SVG)
+                    // - Visible PDF embeds (not yet processed by PDF.js): replace with placeholder
+                    // - Other visible embeds: remove (can't render in SVG foreignObject)
+                    clone.querySelectorAll('embed, object').forEach(function(el) {
+                        if (el.style.display === 'none') {
+                            el.remove();
+                        } else {
+                            var tp = (el.getAttribute('type') || '').toLowerCase();
+                            var src = el.getAttribute('data') || el.getAttribute('src') || '';
+                            if (tp === 'application/pdf' || /\.pdf$/i.test(src)) {
+                                var ph = document.createElement('div');
+                                ph.style.cssText = 'background:#525659;color:#fff;padding:40px 20px;text-align:center;font:16px sans-serif;border-radius:4px;';
+                                ph.textContent = 'PDF: ' + (src.split('/').pop() || 'document');
+                                if (el.parentNode) el.parentNode.replaceChild(ph, el);
+                            } else {
+                                el.remove();
+                            }
+                        }
+                    });
+                    // For iframes, strip src/data to prevent resource loading
+                    // (they'll be replaced by cleanupMedia later anyway).
+                    clone.querySelectorAll('iframe').forEach(function(el) {
+                        el.removeAttribute('src');
+                        el.removeAttribute('data');
+                    });
                     wrapper.appendChild(clone);
                     document.body.appendChild(wrapper);
                     console.log('[TiddlyDesktop] shareAsImage: size=' + wrapper.offsetWidth + 'x' + wrapper.offsetHeight);
@@ -1793,17 +1819,69 @@ class WikiActivity : AppCompatActivity() {
                             } catch(e) { return true; }
                         }
                     };
-                    // Fix PDF containers: position:sticky toolbar renders twice
-                    // in SVG foreignObject. Convert to static and remove scroll constraints.
-                    clone.querySelectorAll('.td-pdf-container').forEach(function(pc) {
-                        var tb = pc.querySelector('div[style*="sticky"]');
-                        if (tb) tb.style.position = 'static';
-                        var pw = pc.querySelector('.td-pdf-pages-wrap');
-                        if (pw) { pw.style.maxHeight = 'none'; pw.style.overflow = 'visible'; }
-                    });
+                    // --- Fix PDF containers for capture ---
+                    // PDF pages are lazily rendered as large PNG data-URL <img> elements.
+                    // html-to-image serialises them into SVG foreignObject + URL-encodes,
+                    // which can exceed browser limits. Fix by:
+                    // 1) Hiding unrendered (empty) page wraps to limit height
+                    // 2) Compressing rendered page images from PNG to JPEG
+                    // 3) Removing hidden original embed/object elements (large data URLs)
+                    // 4) Fixing sticky toolbar, scroll constraints, and overflow
+                    // 5) Removing transparent text layers (not needed for image capture)
+                    function fixPdfContainers() {
+                        // Remove ALL embed/object elements inside PDF containers
+                        // (they may have large PDF data URLs that bloat the SVG)
+                        clone.querySelectorAll('.td-pdf-container embed, .td-pdf-container object').forEach(function(el) {
+                            el.remove();
+                        });
+                        // Remove text selection layers (transparent overlays not needed in capture)
+                        clone.querySelectorAll('.td-pdf-text-layer').forEach(function(tl) {
+                            tl.remove();
+                        });
+                        clone.querySelectorAll('.td-pdf-container').forEach(function(pc) {
+                            // Fix container overflow — overflow:auto can clip in SVG foreignObject
+                            pc.style.overflow = 'visible';
+                            var tb = pc.querySelector('div[style*="sticky"]');
+                            if (tb) tb.style.position = 'static';
+                            var pw = pc.querySelector('.td-pdf-pages-wrap');
+                            if (pw) { pw.style.maxHeight = 'none'; pw.style.overflow = 'visible'; }
+                            // Hide empty page wraps (unrendered pages) instead of removing
+                            // to preserve element count for fixLayout() parallel iteration
+                            pc.querySelectorAll('.td-pdf-page-wrap').forEach(function(wrap) {
+                                if (!wrap.querySelector('img')) {
+                                    wrap.style.display = 'none';
+                                    wrap.style.minHeight = '0';
+                                }
+                            });
+                        });
+                        // Downscale + compress rendered PDF page images for capture.
+                        // Native PDF renders are very high-res; downscale to max 800px wide
+                        // and use lower JPEG quality to keep the SVG data URL under ~2MB.
+                        var MAX_PAGE_W = 800;
+                        var origPdfImgs = bodyEl.querySelectorAll('.td-pdf-page-wrap img');
+                        var clonePdfImgs = clone.querySelectorAll('.td-pdf-page-wrap img');
+                        for (var pi = 0; pi < origPdfImgs.length && pi < clonePdfImgs.length; pi++) {
+                            try {
+                                var opi = origPdfImgs[pi];
+                                var cpi = clonePdfImgs[pi];
+                                if (opi.naturalWidth > 0 && opi.naturalHeight > 0) {
+                                    var scale = Math.min(1, MAX_PAGE_W / opi.naturalWidth);
+                                    var w = Math.round(opi.naturalWidth * scale);
+                                    var h = Math.round(opi.naturalHeight * scale);
+                                    var pc2 = document.createElement('canvas');
+                                    pc2.width = w;
+                                    pc2.height = h;
+                                    pc2.getContext('2d').drawImage(opi, 0, 0, w, h);
+                                    cpi.src = pc2.toDataURL('image/jpeg', 0.6);
+                                    cpi.style.width = '100%';
+                                }
+                            } catch(e) {}
+                        }
+                    }
 
                     fixBlockSpacing();
                     fixLayout();
+                    fixPdfContainers();
                     inlineImages().then(function() {
                         convertCanvases();
                         return cleanupMedia();
@@ -2104,6 +2182,28 @@ class WikiActivity : AppCompatActivity() {
                 conn.disconnect()
             } catch (e: Exception) {
                 android.util.Log.e("TiddlyDesktopSync", "bridgePost $endpoint failed: ${e.message} (payload ${payload.toString().length} bytes)")
+            }
+        }
+
+        @JavascriptInterface
+        fun loadTombstones(wikiId: String): String {
+            return try {
+                val dir = File(filesDir, "lan_sync_tombstones")
+                val safeName = wikiId.replace(Regex("[^a-zA-Z0-9_-]"), "_")
+                val file = File(dir, "$safeName.json")
+                if (file.exists()) file.readText() else "{}"
+            } catch (_: Exception) { "{}" }
+        }
+
+        @JavascriptInterface
+        fun saveTombstones(wikiId: String, tombstonesJson: String) {
+            try {
+                val dir = File(filesDir, "lan_sync_tombstones")
+                dir.mkdirs()
+                val safeName = wikiId.replace(Regex("[^a-zA-Z0-9_-]"), "_")
+                File(dir, "$safeName.json").writeText(tombstonesJson)
+            } catch (e: Exception) {
+                android.util.Log.e("TiddlyDesktopSync", "saveTombstones failed: ${e.message}")
             }
         }
     }
@@ -4836,8 +4936,28 @@ class WikiActivity : AppCompatActivity() {
                                 });
                             }
 
+                            function enhanceAudioOverlay(el) {
+                                if (el.__tdAudioDone) return;
+                                el.__tdAudioDone = true;
+                                function lockWidth() {
+                                    var parent = el.parentElement;
+                                    if (!parent) return;
+                                    var pw = parent.clientWidth;
+                                    if (pw > 0) {
+                                        el.style.width = pw + 'px';
+                                        el.style.maxWidth = '100%';
+                                        el.style.boxSizing = 'border-box';
+                                    }
+                                }
+                                if (el.offsetWidth > 0) { lockWidth(); } else { requestAnimationFrame(lockWidth); }
+                                if (typeof ResizeObserver !== 'undefined' && el.parentElement) {
+                                    new ResizeObserver(function() { lockWidth(); }).observe(el.parentElement);
+                                }
+                            }
+
                             function scanAll() {
                                 iDoc.querySelectorAll('video').forEach(enhanceVideo);
+                                iDoc.querySelectorAll('audio').forEach(enhanceAudioOverlay);
                                 if (hasPdf) iDoc.querySelectorAll('embed, object, iframe').forEach(function(el) { if (getPdfSrc(el)) replacePdfElement(el); });
                             }
 
@@ -5576,6 +5696,37 @@ class WikiActivity : AppCompatActivity() {
                     }, 50);
                 }
 
+                // ---- Lock audio element width to container pixels ----
+                // Android WebView re-renders native audio controls at the new
+                // zoom level during playback, causing them to resize relative to
+                // the viewport instead of the container. Locking width in CSS
+                // pixels prevents this.
+                function enhanceAudio(el) {
+                    if (el.__tdAudioDone) return;
+                    el.__tdAudioDone = true;
+                    function lockWidth() {
+                        var parent = el.parentElement;
+                        if (!parent) return;
+                        var pw = parent.clientWidth;
+                        if (pw > 0) {
+                            el.style.width = pw + 'px';
+                            el.style.maxWidth = '100%';
+                            el.style.boxSizing = 'border-box';
+                        }
+                    }
+                    // Lock once the element is in layout
+                    if (el.offsetWidth > 0) {
+                        lockWidth();
+                    } else {
+                        requestAnimationFrame(lockWidth);
+                    }
+                    // Re-lock on container resize (sidebar toggle, orientation)
+                    if (typeof ResizeObserver !== 'undefined' && el.parentElement) {
+                        var ro = new ResizeObserver(function() { lockWidth(); });
+                        ro.observe(el.parentElement);
+                    }
+                }
+
                 // ---- Scan and enhance existing elements ----
                 function scanAll() {
                     if (hasPdf) {
@@ -5584,6 +5735,7 @@ class WikiActivity : AppCompatActivity() {
                         });
                     }
                     document.querySelectorAll('video').forEach(function(el) { enhanceVideo(el); });
+                    document.querySelectorAll('audio').forEach(function(el) { enhanceAudio(el); });
                 }
 
                 // ---- MutationObserver to catch dynamically added elements ----
@@ -5598,6 +5750,8 @@ class WikiActivity : AppCompatActivity() {
                                     replacePdfElement(node);
                                 } else if (tag === 'video') {
                                     enhanceVideo(node);
+                                } else if (tag === 'audio') {
+                                    enhanceAudio(node);
                                 }
                                 if (node.querySelectorAll) {
                                     if (hasPdf) {
@@ -5606,6 +5760,7 @@ class WikiActivity : AppCompatActivity() {
                                         });
                                     }
                                     node.querySelectorAll('video').forEach(function(el) { enhanceVideo(el); });
+                                    node.querySelectorAll('audio').forEach(function(el) { enhanceAudio(el); });
                                 }
                             });
                         });
@@ -5868,24 +6023,13 @@ class WikiActivity : AppCompatActivity() {
             "function activate(syncId){" +
             "console.log('[LAN Sync] Activated for wiki: '+syncId);" +
             "S.wikiOpened(syncId);" +
-            // Proactively broadcast fingerprints to all connected peers for catch-up
-            "var all=\$tw.wiki.allTitles();var fps=[];" +
-            "for(var i=0;i<all.length;i++){var t=all[i];" +
-            "if(t==='\$:/StoryList'||t==='\$:/HistoryList'||t==='\$:/library/sjcl.js'||t==='\$:/Import'||t==='\$:/language'||t==='\$:/theme'||t==='\$:/palette'||t==='\$:/isEncrypted')continue;" +
-            "if(isDraft(t))continue;" +
-            "if(t.indexOf('\$:/TiddlyDesktopRS/Conflicts/')==0)continue;" +
-            "if(t.indexOf('\$:/state/')==0||t.indexOf('\$:/status/')==0||t.indexOf('\$:/temp/')==0)continue;" +
-            "if(t.indexOf('\$:/plugins/tiddlydesktop-rs/')==0||t.indexOf('\$:/plugins/tiddlydesktop/')==0)continue;" +
-            "if(t.indexOf('\$:/config/ViewToolbarButtons/Visibility/\$:/plugins/tiddlydesktop-rs/')==0)continue;" +
-            "if(\$tw.wiki.isShadowTiddler(t)&&!\$tw.wiki.tiddlerExists(t))continue;" +
-            "var td=\$tw.wiki.getTiddler(t);if(td){var m=td.fields.modified;fps.push({title:t,modified:m?fts(m):''});}}" +
-            "console.log('[LAN Sync] Broadcasting '+fps.length+' fingerprints for catch-up');" +
-            "S.broadcastFingerprints(syncId,JSON.stringify(fps));" +
             // Use a Set to suppress re-broadcasting received changes.
             // TiddlyWiki dispatches change events asynchronously via $tw.utils.nextTick(),
             // so a boolean flag would already be cleared when the change listener fires.
             "var suppress=new Set();" +
             "var kst={};" +  // knownSyncTitles: title→modified for tiddlers received but skipped as identical
+            "var tomb={};" +  // deletionTombstones: title→{modified,time}
+            "var TOMB_MAX=30*24*60*60*1000;" +  // 30 days
             "var conflicts={};" +
             "var saveTimer=null;" +
             "var isSingle=!\$tw.syncer;" +
@@ -5908,7 +6052,7 @@ class WikiActivity : AppCompatActivity() {
             "if(t.indexOf('\$:/config/ViewToolbarButtons/Visibility/\$:/plugins/tiddlydesktop-rs/')==0)continue;" +
             "if(conflicts[t])continue;" +
             "var td=\$tw.wiki.getTiddler(t);" +
-            "if(ch[t].deleted){console.log('[LAN Sync] Outbound delete: '+t);S.tiddlerDeleted(syncId,t);}" +
+            "if(ch[t].deleted){var dm=\$tw.utils.stringifyDate(new Date());tomb[t]={modified:dm,time:Date.now()};S.saveTombstones(syncId,JSON.stringify(tomb));console.log('[LAN Sync] Outbound delete: '+t);S.tiddlerDeleted(syncId,t);}" +
             "else if(td){console.log('[LAN Sync] Outbound change: '+t);S.tiddlerChanged(syncId,t,serFields(td.fields));}" +
             "}" +
             "});" +
@@ -5933,6 +6077,7 @@ class WikiActivity : AppCompatActivity() {
             "if(\$tw.wiki.isShadowTiddler(t)&&!\$tw.wiki.tiddlerExists(t))continue;" +
             "var td=\$tw.wiki.getTiddler(t);if(td){var m=td.fields.modified;fps.push({title:t,modified:m?fts(m):''});seen[t]=1;}}" +
             "var ks=Object.keys(kst);for(var j=0;j<ks.length;j++){if(!seen[ks[j]])fps.push({title:ks[j],modified:kst[ks[j]]});}" +
+            "var tks=Object.keys(tomb);for(var k=0;k<tks.length;k++){if(!seen[tks[k]])fps.push({title:tks[k],modified:tomb[tks[k]].modified,deleted:true});else delete tomb[tks[k]];}" +
             "return fps;}" +
             "function queueChange(d){" +
             "if(d.wiki_id!==syncId)return;" +
@@ -5947,8 +6092,8 @@ class WikiActivity : AppCompatActivity() {
             "console.log('[LAN Sync] Applying batch of '+b.length+' changes');" +
             "var ns=false;" +
             "for(var i=0;i<b.length;i++){var d=b[i];" +
-            "if(d.type==='apply-change'){try{var f=JSON.parse(d.tiddler_json);if(tiddlerDiffers(f)){if(f.created)f.created=\$tw.utils.parseDate(f.created);if(f.modified)f.modified=\$tw.utils.parseDate(f.modified);suppress.add(f.title);\$tw.wiki.addTiddler(new \$tw.Tiddler(f));ns=true;}else{kst[f.title]=f.modified?String(f.modified):'';}}catch(e){}}" +
-            "else if(d.type==='apply-deletion'){try{if(\$tw.wiki.tiddlerExists(d.title)){suppress.add(d.title);\$tw.wiki.deleteTiddler(d.title);ns=true;}}catch(e){}}" +
+            "if(d.type==='apply-change'){try{var f=JSON.parse(d.tiddler_json);if(tomb[f.title])delete tomb[f.title];if(tiddlerDiffers(f)){if(f.created)f.created=\$tw.utils.parseDate(f.created);if(f.modified)f.modified=\$tw.utils.parseDate(f.modified);suppress.add(f.title);\$tw.wiki.addTiddler(new \$tw.Tiddler(f));ns=true;}else{kst[f.title]=f.modified?String(f.modified):'';}}catch(e){}}" +
+            "else if(d.type==='apply-deletion'){try{if(\$tw.wiki.tiddlerExists(d.title)){suppress.add(d.title);\$tw.wiki.deleteTiddler(d.title);ns=true;}var ddm=\$tw.utils.stringifyDate(new Date());if(!tomb[d.title]||tomb[d.title].modified<ddm){tomb[d.title]={modified:ddm,time:Date.now()};S.saveTombstones(syncId,JSON.stringify(tomb));}}catch(e){}}" +
             "else if(d.type==='conflict'){var lt=\$tw.wiki.getTiddler(d.title);if(lt){var ct='\$:/TiddlyDesktopRS/Conflicts/'+d.title;" +
             "conflicts[ct]=1;var cf=Object.assign({},lt.fields,{title:ct,'conflict-original-title':d.title,'conflict-timestamp':new Date().toISOString(),'conflict-source':'local'});" +
             "\$tw.wiki.addTiddler(new \$tw.Tiddler(cf));delete conflicts[ct];}}" +
@@ -5958,7 +6103,15 @@ class WikiActivity : AppCompatActivity() {
             "function sendFingerprints(toDevId){var fps=cfps();S.sendFingerprints(syncId,toDevId,JSON.stringify(fps));}" +
             "function compareFingerprints(fromDevId,fps){" +
             "console.log('[LAN Sync] compareFingerprints: received '+fps.length+' fingerprints from '+fromDevId);" +
-            "var remote={};for(var i=0;i<fps.length;i++)remote[fps[i].title]=fps[i].modified;" +
+            // Separate normal fingerprints from tombstones
+            "var remote={};var peerTombs={};for(var i=0;i<fps.length;i++){if(fps[i].deleted)peerTombs[fps[i].title]=fps[i].modified;else remote[fps[i].title]=fps[i].modified;}" +
+            // Apply peer tombstones: delete local tiddlers that peer intentionally deleted
+            "var tombNs=false;var ptks=Object.keys(peerTombs);for(var ti=0;ti<ptks.length;ti++){" +
+            "var tt=ptks[ti];var tm=peerTombs[tt];var lt=\$tw.wiki.getTiddler(tt);" +
+            "if(lt){var lm2=lt.fields.modified?fts(lt.fields.modified):'';" +
+            "if(!lm2||lm2<=tm){suppress.add(tt);\$tw.wiki.deleteTiddler(tt);tombNs=true;console.log('[LAN Sync] Applied tombstone deletion: '+tt);}}" +
+            "if(!tomb[tt]||tomb[tt].modified<tm)tomb[tt]={modified:tm,time:Date.now()};}" +
+            "if(tombNs)scheduleSave();if(ptks.length>0)S.saveTombstones(syncId,JSON.stringify(tomb));" +
             "var all=\$tw.wiki.allTitles();var diffs=[];" +
             "for(var j=0;j<all.length;j++){var t=all[j];" +
             "if(t==='\$:/StoryList'||t==='\$:/HistoryList'||t==='\$:/library/sjcl.js'||t==='\$:/Import'||t==='\$:/language'||t==='\$:/theme'||t==='\$:/palette'||t==='\$:/isEncrypted')continue;" +
@@ -5971,7 +6124,7 @@ class WikiActivity : AppCompatActivity() {
             "var td=\$tw.wiki.getTiddler(t);if(!td)continue;" +
             "var localMod=td.fields.modified?fts(td.fields.modified):'';" +
             "if(!(t in remote)){diffs.push({title:t,tiddler_json:serFields(td.fields)});}" +
-            "else if(localMod&&remote[t]&&localMod>remote[t]){diffs.push({title:t,tiddler_json:serFields(td.fields)});}" +
+            "else if(localMod>(remote[t]||'')){diffs.push({title:t,tiddler_json:serFields(td.fields)});}" +
             "delete remote[t];}" +
             "console.log('[LAN Sync] compareFingerprints: '+diffs.length+' diffs to send (of '+all.length+' local, peer has '+fps.length+')');" +
             "if(diffs.length>0){var MAX_BYTES=500000;" +
@@ -6006,6 +6159,13 @@ class WikiActivity : AppCompatActivity() {
             "else console.log('[LAN Sync] Full sync dump complete');" +
             "}" +
             "if(all.length>0)send(0);}" +
+            // Load tombstones and broadcast initial fingerprints
+            "try{var stored=JSON.parse(S.loadTombstones(syncId));var now=Date.now();var sks=Object.keys(stored);" +
+            "for(var si=0;si<sks.length;si++){if(stored[sks[si]].time&&now-stored[sks[si]].time>TOMB_MAX)continue;tomb[sks[si]]=stored[sks[si]];}" +
+            "console.log('[LAN Sync] Loaded '+Object.keys(tomb).length+' tombstones');}catch(e){}" +
+            "var fps=cfps();" +
+            "console.log('[LAN Sync] Broadcasting '+fps.length+' fingerprints for catch-up');" +
+            "S.broadcastFingerprints(syncId,JSON.stringify(fps));" +
             // Poll loop — fast polling (20ms) for first 5s to speed up initial sync
             "var pollStart=Date.now();" +
             "function pollIv(){return(Date.now()-pollStart<5000)?20:100;}" +
@@ -6015,6 +6175,8 @@ class WikiActivity : AppCompatActivity() {
             "setTimeout(poll,0);" +
             // Periodic fingerprint re-broadcast (5s safety net for convergence)
             "setInterval(function(){try{var fps2=cfps();S.broadcastFingerprints(syncId,JSON.stringify(fps2));}catch(e){}},5000);" +
+            // Periodic tombstone cleanup (every 10 minutes)
+            "setInterval(function(){try{var now2=Date.now();var tks=Object.keys(tomb);var rm=0;for(var ti=0;ti<tks.length;ti++){if(tomb[tks[ti]].time&&now2-tomb[tks[ti]].time>TOMB_MAX){delete tomb[tks[ti]];rm++;}}if(rm>0){console.log('[LAN Sync] Cleaned up '+rm+' expired tombstones');S.saveTombstones(syncId,JSON.stringify(tomb));}}catch(e){}},600000);" +
             "}" +
             "setTimeout(init,100);" +
             "})()"

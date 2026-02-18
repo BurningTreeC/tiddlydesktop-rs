@@ -69,6 +69,13 @@ EditionSelector/Optional: (optional)
 EditionSelector/CreatingFile: Creating wiki file...
 EditionSelector/InitializingFolder: Initializing wiki folder...
 
+CustomPaths/Title: Custom Paths
+CustomPaths/PluginsFolder: Plugins Folder:
+CustomPaths/EditionsFolder: Editions Folder:
+CustomPaths/SelectFolder: Select Folder
+CustomPaths/Change: Change
+CustomPaths/Clear: Clear
+
 LanSync/Title: LAN Sync
 LanSync/Start: Start LAN Sync
 LanSync/Stop: Stop LAN Sync

@@ -69,6 +69,13 @@ EditionSelector/Optional: (neobvezno)
 EditionSelector/CreatingFile: Ustvarjanje wiki datoteke...
 EditionSelector/InitializingFolder: Inicializacija wiki mape...
 
+CustomPaths/Title: Prilagojene poti
+CustomPaths/PluginsFolder: Mapa vtičnikov:
+CustomPaths/EditionsFolder: Mapa izdaj:
+CustomPaths/SelectFolder: Izberi mapo
+CustomPaths/Change: Spremeni
+CustomPaths/Clear: Počisti
+
 LanSync/Title: Sinhronizacija LAN
 LanSync/Start: Začni sinhronizacijo LAN
 LanSync/Stop: Ustavi sinhronizacijo LAN

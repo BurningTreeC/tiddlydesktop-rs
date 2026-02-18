@@ -69,6 +69,13 @@ EditionSelector/Optional: (선택 사항)
 EditionSelector/CreatingFile: 위키 파일 생성 중...
 EditionSelector/InitializingFolder: 위키 폴더 초기화 중...
 
+CustomPaths/Title: 사용자 지정 경로
+CustomPaths/PluginsFolder: 플러그인 폴더:
+CustomPaths/EditionsFolder: 에디션 폴더:
+CustomPaths/SelectFolder: 폴더 선택
+CustomPaths/Change: 변경
+CustomPaths/Clear: 지우기
+
 LanSync/Title: LAN 동기화
 LanSync/Start: LAN 동기화 시작
 LanSync/Stop: LAN 동기화 중지

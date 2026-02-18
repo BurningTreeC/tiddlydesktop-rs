@@ -1694,6 +1694,21 @@ fn toggle_fullscreen(window: tauri::WebviewWindow) -> Result<bool, String> {
     }
 }
 
+/// Set the zoom level for the current window (1.0 = 100%)
+#[tauri::command]
+fn set_zoom_level(window: tauri::WebviewWindow, level: f64) -> Result<(), String> {
+    #[cfg(not(target_os = "android"))]
+    {
+        let clamped = level.max(0.2).min(5.0);
+        window.set_zoom(clamped).map_err(|e| e.to_string())
+    }
+    #[cfg(target_os = "android")]
+    {
+        let _ = (window, level);
+        Err("Zoom not available on Android".to_string())
+    }
+}
+
 /// Print the current page (used by tm-print)
 #[tauri::command]
 fn print_page(window: tauri::WebviewWindow) -> Result<(), String> {
@@ -3298,20 +3313,36 @@ async fn open_wiki_folder(app: tauri::AppHandle, path: String, _tiddler_title: O
         cmd.env(ipc::AUTH_TOKEN_ENV_VAR, token);
     }
 
-    // Set TIDDLYWIKI_PLUGIN_PATH so Node.js can find synced plugins.
-    // Prepend our synced_plugins dir to any existing TIDDLYWIKI_PLUGIN_PATH.
+    // Set TIDDLYWIKI_PLUGIN_PATH so Node.js can find user plugins.
+    // Include our {app_data}/plugins dir and any existing global TIDDLYWIKI_PLUGIN_PATH.
     if let Ok(data_dir) = app.path().app_data_dir() {
-        let synced_dir = data_dir.join("synced_plugins");
-        let _ = std::fs::create_dir_all(&synced_dir);
+        let plugins_dir = data_dir.join("plugins");
+        let _ = std::fs::create_dir_all(&plugins_dir);
         let sep = if cfg!(windows) { ";" } else { ":" };
         let plugin_path = match std::env::var("TIDDLYWIKI_PLUGIN_PATH") {
             Ok(existing) if !existing.is_empty() => {
-                format!("{}{}{}", synced_dir.display(), sep, existing)
+                format!("{}{}{}", plugins_dir.display(), sep, existing)
             }
-            _ => synced_dir.to_string_lossy().to_string(),
+            _ => plugins_dir.to_string_lossy().to_string(),
         };
         cmd.env("TIDDLYWIKI_PLUGIN_PATH", &plugin_path);
         eprintln!("[TiddlyDesktop] Set TIDDLYWIKI_PLUGIN_PATH={}", plugin_path);
+    }
+
+    // Set TIDDLYWIKI_EDITION_PATH so TiddlyWiki can find user editions.
+    // Include our {app_data}/editions dir and any existing global TIDDLYWIKI_EDITION_PATH.
+    if let Ok(data_dir) = app.path().app_data_dir() {
+        let editions_dir = data_dir.join("editions");
+        let _ = std::fs::create_dir_all(&editions_dir);
+        let sep = if cfg!(windows) { ";" } else { ":" };
+        let edition_path = match std::env::var("TIDDLYWIKI_EDITION_PATH") {
+            Ok(existing) if !existing.is_empty() => {
+                format!("{}{}{}", editions_dir.display(), sep, existing)
+            }
+            _ => editions_dir.to_string_lossy().to_string(),
+        };
+        cmd.env("TIDDLYWIKI_EDITION_PATH", &edition_path);
+        eprintln!("[TiddlyDesktop] Set TIDDLYWIKI_EDITION_PATH={}", edition_path);
     }
 
     #[cfg(target_os = "windows")]
@@ -3610,6 +3641,29 @@ async fn get_available_editions(app: tauri::AppHandle) -> Result<Vec<EditionInfo
     other_builtin.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
     editions.extend(other_builtin);
 
+    // On Android, also scan custom editions synced from SAF
+    #[cfg(target_os = "android")]
+    {
+        let settings = wiki_storage::load_app_settings(&app).unwrap_or_default();
+        if let Some(ref uri) = settings.custom_edition_path_uri {
+            match android::node_bridge::sync_custom_editions_from_saf(uri) {
+                Ok(local_path) => {
+                    let custom_dir = PathBuf::from(&local_path);
+                    // Collect already-known edition IDs to avoid duplicates
+                    let existing_ids: Vec<String> = editions.iter().map(|e| e.id.clone()).collect();
+                    let skip_custom: Vec<&str> = existing_ids.iter().map(|s| s.as_str()).collect();
+                    let mut custom_editions = read_editions_from_dir(&custom_dir, true, &skip_custom);
+                    custom_editions.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+                    eprintln!("[TiddlyDesktop] Found {} custom editions from SAF", custom_editions.len());
+                    editions.extend(custom_editions);
+                }
+                Err(e) => {
+                    eprintln!("[TiddlyDesktop] Warning: Failed to sync custom editions: {}", e);
+                }
+            }
+        }
+    }
+
     println!("Editions: {} total ({} user editions from {:?})", editions.len(), user_edition_ids.len(), user_editions_dir);
 
     Ok(editions)
@@ -3689,13 +3743,82 @@ async fn get_available_plugins(app: tauri::AppHandle) -> Result<Vec<PluginInfo>,
         }
     }
 
+    // On Android, also scan custom plugins synced from SAF
+    #[cfg(target_os = "android")]
+    {
+        let settings = wiki_storage::load_app_settings(&app).unwrap_or_default();
+        if let Some(ref uri) = settings.custom_plugin_path_uri {
+            match android::node_bridge::sync_custom_plugins_from_saf(uri) {
+                Ok(local_path) => {
+                    let custom_dir = PathBuf::from(&local_path);
+                    // Scan two-level deep: {custom_plugins}/{author}/{name}/plugin.info
+                    let existing_ids: std::collections::HashSet<String> = plugins.iter().map(|p| p.id.clone()).collect();
+                    if let Ok(author_entries) = std::fs::read_dir(&custom_dir) {
+                        for author_entry in author_entries.flatten() {
+                            let author_path = author_entry.path();
+                            if !author_path.is_dir() { continue; }
+                            let author_name = author_path.file_name()
+                                .and_then(|n| n.to_str())
+                                .unwrap_or("")
+                                .to_string();
+
+                            if let Ok(plugin_entries) = std::fs::read_dir(&author_path) {
+                                for plugin_entry in plugin_entries.flatten() {
+                                    let plugin_path = plugin_entry.path();
+                                    if !plugin_path.is_dir() { continue; }
+                                    let plugin_info_path = plugin_path.join("plugin.info");
+                                    if !plugin_info_path.exists() { continue; }
+
+                                    let plugin_name = plugin_path.file_name()
+                                        .and_then(|n| n.to_str())
+                                        .unwrap_or("")
+                                        .to_string();
+                                    let id = format!("{}/{}", author_name, plugin_name);
+
+                                    if existing_ids.contains(&plugin_name) || existing_ids.contains(&id) {
+                                        continue;
+                                    }
+
+                                    if let Ok(content) = std::fs::read_to_string(&plugin_info_path) {
+                                        if let Ok(info) = serde_json::from_str::<serde_json::Value>(&content) {
+                                            let name = info.get("name")
+                                                .and_then(|v| v.as_str())
+                                                .unwrap_or(&plugin_name)
+                                                .to_string();
+                                            let description = info.get("description")
+                                                .and_then(|v| v.as_str())
+                                                .unwrap_or("")
+                                                .to_string();
+
+                                            plugins.push(PluginInfo {
+                                                id,
+                                                name,
+                                                description,
+                                                category: "Custom".to_string(),
+                                            });
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    eprintln!("[TiddlyDesktop] Scanned custom plugins from SAF");
+                }
+                Err(e) => {
+                    eprintln!("[TiddlyDesktop] Warning: Failed to sync custom plugins: {}", e);
+                }
+            }
+        }
+    }
+
     // Sort by category, then by name
     plugins.sort_by(|a, b| {
         let cat_order = |c: &str| match c {
             "Editor" => 0,
             "Utility" => 1,
             "Storage" => 2,
-            _ => 3,
+            "Custom" => 3,
+            _ => 4,
         };
         cat_order(&a.category).cmp(&cat_order(&b.category))
             .then_with(|| a.name.cmp(&b.name))
@@ -3754,8 +3877,18 @@ async fn init_wiki_folder(app: tauri::AppHandle, path: String, edition: String, 
         .arg("--init")
         .arg(&edition);
     // Set TIDDLYWIKI_EDITION_PATH so TiddlyWiki can find user editions
-    let user_editions_dir = get_user_editions_dir(&app)?;
-    cmd.env("TIDDLYWIKI_EDITION_PATH", &user_editions_dir);
+    // Include our {app_data}/editions dir and any existing global TIDDLYWIKI_EDITION_PATH
+    {
+        let user_editions_dir = get_user_editions_dir(&app)?;
+        let sep = if cfg!(windows) { ";" } else { ":" };
+        let edition_path = match std::env::var("TIDDLYWIKI_EDITION_PATH") {
+            Ok(existing) if !existing.is_empty() => {
+                format!("{}{}{}", user_editions_dir.display(), sep, existing)
+            }
+            _ => user_editions_dir.to_string_lossy().to_string(),
+        };
+        cmd.env("TIDDLYWIKI_EDITION_PATH", &edition_path);
+    }
     #[cfg(target_os = "windows")]
     cmd.creation_flags(CREATE_NO_WINDOW);
     let output = cmd.output()
@@ -3852,15 +3985,33 @@ async fn init_wiki_folder(app: tauri::AppHandle, path: String, edition: String, 
     // On Android, resources are extracted to app_data_dir/tiddlywiki/
     let data_dir = app.path().app_data_dir()
         .map_err(|e| format!("Failed to get app data dir: {}", e))?;
-    let editions_dir = data_dir.join("tiddlywiki/editions");
-    let edition_path = editions_dir.join(&edition);
 
-    eprintln!("  Editions dir: {:?}", editions_dir);
+    // Look up the edition: bundled first, then user editions, then custom editions (SAF-synced)
+    let bundled_edition_path = data_dir.join("tiddlywiki/editions").join(&edition);
+    let user_edition_path = data_dir.join("editions").join(&edition);
+    let custom_edition_path = data_dir.join("custom_editions").join(&edition);
+
+    let edition_path = if bundled_edition_path.exists() {
+        bundled_edition_path
+    } else if user_edition_path.exists() {
+        user_edition_path
+    } else if custom_edition_path.exists() {
+        custom_edition_path
+    } else {
+        // Try syncing custom editions from SAF in case they haven't been synced yet
+        let settings = wiki_storage::load_app_settings(&app).unwrap_or_default();
+        if let Some(ref uri) = settings.custom_edition_path_uri {
+            let _ = android::node_bridge::sync_custom_editions_from_saf(uri);
+        }
+        // Re-check custom editions after sync
+        if custom_edition_path.exists() {
+            custom_edition_path
+        } else {
+            return Err(format!("Edition '{}' not found", edition));
+        }
+    };
+
     eprintln!("  Edition path: {:?}", edition_path);
-
-    if !edition_path.exists() {
-        return Err(format!("Edition '{}' not found", edition));
-    }
 
     // Read tiddlywiki.info from the edition
     let tiddlywiki_info_path = edition_path.join("tiddlywiki.info");
@@ -4008,6 +4159,85 @@ async fn init_wiki_folder(app: tauri::AppHandle, path: String, edition: String, 
 
 
 
+/// Create symlinks so that relative includeWikis paths in tiddlywiki.info
+/// resolve from a temp build directory to the bundled editions.
+/// For example, if tiddlywiki.info has includeWikis: [{"path": "../tw5.com"}],
+/// and the wiki is at /tmp/build-XXX/, this creates a symlink at
+/// /tmp/tw5.com → <editions_dir>/tw5.com
+#[cfg(not(target_os = "android"))]
+fn resolve_include_wikis_paths(wiki_dir: &std::path::Path, editions_dir: &std::path::Path) {
+    let info_path = wiki_dir.join("tiddlywiki.info");
+    let content = match std::fs::read_to_string(&info_path) {
+        Ok(c) => c,
+        Err(_) => return,
+    };
+    let info: serde_json::Value = match serde_json::from_str(&content) {
+        Ok(v) => v,
+        Err(_) => return,
+    };
+
+    let include_wikis = match info.get("includeWikis").and_then(|v| v.as_array()) {
+        Some(arr) => arr,
+        None => return,
+    };
+
+    for entry in include_wikis {
+        let rel_path = if let Some(s) = entry.as_str() {
+            s.to_string()
+        } else if let Some(p) = entry.get("path").and_then(|v| v.as_str()) {
+            p.to_string()
+        } else {
+            continue;
+        };
+
+        // Check if the relative path already resolves
+        if wiki_dir.join(&rel_path).exists() {
+            continue;
+        }
+
+        // Strip leading "../" to get the edition name
+        let stripped = rel_path.trim_start_matches("../").trim_start_matches("..\\");
+        let top_dir = stripped.split('/').next().unwrap_or(stripped);
+        let top_dir = top_dir.split('\\').next().unwrap_or(top_dir);
+
+        let edition_path = editions_dir.join(top_dir);
+        if !edition_path.exists() {
+            eprintln!("[TiddlyDesktop] Warning: bundled edition '{}' not found at {:?}", top_dir, edition_path);
+            continue;
+        }
+
+        // Create symlink at the location the relative path resolves to
+        let link_path = match wiki_dir.parent() {
+            Some(parent) => parent.join(top_dir),
+            None => continue,
+        };
+
+        if link_path.exists() || link_path.symlink_metadata().is_ok() {
+            continue; // Already exists
+        }
+
+        #[cfg(unix)]
+        {
+            if let Err(e) = std::os::unix::fs::symlink(&edition_path, &link_path) {
+                eprintln!("[TiddlyDesktop] Failed to create symlink {:?} → {:?}: {}", link_path, edition_path, e);
+            }
+        }
+        #[cfg(windows)]
+        {
+            if let Err(e) = std::os::windows::fs::symlink_dir(&edition_path, &link_path) {
+                // Symlink may require admin on Windows; fall back to junction
+                eprintln!("[TiddlyDesktop] symlink_dir failed, trying junction: {}", e);
+                let _ = std::process::Command::new("cmd")
+                    .args(["/C", "mklink", "/J",
+                        &link_path.to_string_lossy(),
+                        &edition_path.to_string_lossy()])
+                    .creation_flags(CREATE_NO_WINDOW)
+                    .output();
+            }
+        }
+    }
+}
+
 /// Strip tiddlyweb and filesystem plugins from a tiddlywiki.info file.
 /// These plugins are designed for client-server folder wikis and cause problems
 /// in standalone single-file wikis.
@@ -4021,6 +4251,11 @@ fn strip_server_plugins_from_info(info_path: &std::path::Path) -> Result<(), Str
             let name = p.as_str().unwrap_or("");
             name != "tiddlywiki/tiddlyweb" && name != "tiddlywiki/filesystem"
         });
+    }
+    // Remove includeWikis — relative paths break in the temp build directory,
+    // and included content (e.g. tw5.com docs) isn't needed for single-file wikis
+    if let Some(obj) = info.as_object_mut() {
+        obj.remove("includeWikis");
     }
     let updated = serde_json::to_string_pretty(&info)
         .map_err(|e| format!("Failed to serialize tiddlywiki.info: {}", e))?;
@@ -4072,8 +4307,18 @@ async fn create_wiki_file(app: tauri::AppHandle, path: String, edition: String, 
         .arg("--init")
         .arg(&edition);
     // Set TIDDLYWIKI_EDITION_PATH so TiddlyWiki can find user editions
-    let user_editions_dir = get_user_editions_dir(&app)?;
-    init_cmd.env("TIDDLYWIKI_EDITION_PATH", &user_editions_dir);
+    // Include our {app_data}/editions dir and any existing global TIDDLYWIKI_EDITION_PATH
+    {
+        let user_editions_dir = get_user_editions_dir(&app)?;
+        let sep = if cfg!(windows) { ";" } else { ":" };
+        let edition_path = match std::env::var("TIDDLYWIKI_EDITION_PATH") {
+            Ok(existing) if !existing.is_empty() => {
+                format!("{}{}{}", user_editions_dir.display(), sep, existing)
+            }
+            _ => user_editions_dir.to_string_lossy().to_string(),
+        };
+        init_cmd.env("TIDDLYWIKI_EDITION_PATH", &edition_path);
+    }
     #[cfg(target_os = "windows")]
     init_cmd.creation_flags(CREATE_NO_WINDOW);
     let init_output = init_cmd.output()
@@ -4124,6 +4369,11 @@ async fn create_wiki_file(app: tauri::AppHandle, path: String, edition: String, 
         strip_server_plugins_from_info(&info_path)?;
     }
 
+    // Resolve includeWikis paths — create symlinks so relative paths
+    // (e.g. "../tw5.com") resolve from the temp directory to bundled editions
+    let editions_dir = tw_dir.join("editions");
+    resolve_include_wikis_paths(&temp_dir, &editions_dir);
+
     // Get the output filename
     let output_filename = output_path.file_name()
         .and_then(|n| n.to_str())
@@ -4140,6 +4390,28 @@ async fn create_wiki_file(app: tauri::AppHandle, path: String, edition: String, 
         .arg(output_filename)
         .arg("text/plain")
         .current_dir(tw_dir);
+    // Set TIDDLYWIKI_PLUGIN_PATH and TIDDLYWIKI_EDITION_PATH for the build step
+    if let Ok(data_dir) = app.path().app_data_dir() {
+        let sep = if cfg!(windows) { ";" } else { ":" };
+        let plugins_dir = data_dir.join("plugins");
+        let _ = std::fs::create_dir_all(&plugins_dir);
+        let plugin_path = match std::env::var("TIDDLYWIKI_PLUGIN_PATH") {
+            Ok(existing) if !existing.is_empty() => {
+                format!("{}{}{}", plugins_dir.display(), sep, existing)
+            }
+            _ => plugins_dir.to_string_lossy().to_string(),
+        };
+        build_cmd.env("TIDDLYWIKI_PLUGIN_PATH", &plugin_path);
+        let editions_dir = data_dir.join("editions");
+        let _ = std::fs::create_dir_all(&editions_dir);
+        let edition_path = match std::env::var("TIDDLYWIKI_EDITION_PATH") {
+            Ok(existing) if !existing.is_empty() => {
+                format!("{}{}{}", editions_dir.display(), sep, existing)
+            }
+            _ => editions_dir.to_string_lossy().to_string(),
+        };
+        build_cmd.env("TIDDLYWIKI_EDITION_PATH", &edition_path);
+    }
     #[cfg(target_os = "windows")]
     build_cmd.creation_flags(CREATE_NO_WINDOW);
     let build_output = build_cmd.output()
@@ -5396,6 +5668,7 @@ async fn open_tiddler_window(
         .map_err(|e| format!("Failed to set icon: {}", e))?
         .window_classname("tiddlydesktop-rs")
         .initialization_script(&init_script::get_wiki_init_script(&wiki_path, &label, false))
+        .zoom_hotkeys_enabled(true)
         .devtools(cfg!(debug_assertions)); // Only enable in debug builds
 
     #[cfg(target_os = "linux")]
@@ -5681,7 +5954,7 @@ async fn check_for_updates() -> Result<UpdateCheckResult, String> {
 
 /// Android version - separate from desktop versioning (must match build.gradle.kts versionName)
 #[cfg(target_os = "android")]
-const ANDROID_VERSION: &str = "0.0.16";
+const ANDROID_VERSION: &str = "0.0.17";
 
 /// Check for updates on Android via version file on GitHub, linking to Play Store
 #[cfg(target_os = "android")]
@@ -7153,7 +7426,8 @@ fn reveal_or_create_main_window(app_handle: &tauri::AppHandle) {
             .inner_size(win_width, win_height)
             .icon(icon)
             .expect("Failed to set icon")
-            .initialization_script(&init_script::get_wiki_init_script_with_language(&main_wiki_path.to_string_lossy(), "main", true, Some(&language)));
+            .initialization_script(&init_script::get_wiki_init_script_with_language(&main_wiki_path.to_string_lossy(), "main", true, Some(&language)))
+            .zoom_hotkeys_enabled(true);
 
         #[cfg(target_os = "linux")]
         let mut builder = builder.user_agent(LINUX_USER_AGENT);
@@ -7213,14 +7487,19 @@ fn setup_system_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>>
                     reveal_or_create_main_window(app);
                 }
                 "quit" => {
-                    // Check if wikis are open before quitting
-                    let state = app.state::<AppState>();
-                    let wiki_count = state.wiki_processes.lock().unwrap().len();
-                    if wiki_count > 0 {
-                        eprintln!("[TiddlyDesktop] Quit requested with {} wiki(s) open - closing all", wiki_count);
-                        // Clear wiki processes so ExitRequested handler allows exit
-                        state.wiki_processes.lock().unwrap().clear();
+                    // Close all open windows (wiki windows + landing page) before exiting
+                    let windows = app.webview_windows();
+                    let window_count = windows.len();
+                    if window_count > 0 {
+                        eprintln!("[TiddlyDesktop] Quit requested - closing {} window(s)", window_count);
+                        for (label, window) in &windows {
+                            eprintln!("[TiddlyDesktop] Closing window: {}", label);
+                            let _ = window.destroy();
+                        }
                     }
+                    // Clear wiki processes so ExitRequested handler allows exit
+                    let state = app.state::<AppState>();
+                    state.wiki_processes.lock().unwrap().clear();
                     app.exit(0);
                 }
                 _ => {}
@@ -7517,6 +7796,7 @@ fn run_wiki_mode(args: WikiModeArgs) {
                 .icon(icon)?
                 .window_classname("tiddlydesktop-rs-wiki")
                 .initialization_script(&init_script::get_wiki_init_script(&wiki_path_clone.to_string_lossy(), &label, false))
+                .zoom_hotkeys_enabled(true)
                 .devtools(cfg!(debug_assertions)); // Only enable in debug builds
 
             #[cfg(target_os = "linux")]
@@ -7712,6 +7992,7 @@ fn run_wiki_mode(args: WikiModeArgs) {
             close_window_by_label,
             toggle_fullscreen,
             print_page,
+            set_zoom_level,
             download_file,
             is_directory,
             get_window_state_info,
@@ -7746,6 +8027,8 @@ fn run_wiki_mode(args: WikiModeArgs) {
             lan_sync::lan_sync_send_full_sync,
             lan_sync::lan_sync_send_fingerprints,
             lan_sync::lan_sync_poll_ipc,
+            lan_sync::lan_sync_load_tombstones,
+            lan_sync::lan_sync_save_tombstones,
         ])
         .build(tauri::generate_context!())
         .expect("error while building wiki-mode application")
@@ -7949,6 +8232,7 @@ fn run_wiki_folder_mode(args: WikiFolderModeArgs) {
                 &label_for_state,
                 false
             ))
+            .zoom_hotkeys_enabled(true)
             .devtools(cfg!(debug_assertions)); // Only enable in debug builds
 
             // Inject embed proxy port so external iframes can be proxied through HTTP
@@ -8093,6 +8377,7 @@ fn run_wiki_folder_mode(args: WikiFolderModeArgs) {
             close_window,
             toggle_fullscreen,
             print_page,
+            set_zoom_level,
             download_file,
             is_directory,
             get_window_state_info,
@@ -8143,6 +8428,8 @@ fn run_wiki_folder_mode(args: WikiFolderModeArgs) {
             lan_sync::lan_sync_send_full_sync,
             lan_sync::lan_sync_send_fingerprints,
             lan_sync::lan_sync_poll_ipc,
+            lan_sync::lan_sync_load_tombstones,
+            lan_sync::lan_sync_save_tombstones,
         ])
         .build(tauri::generate_context!())
         .expect("error while building wiki-folder-mode application")
@@ -8544,6 +8831,7 @@ pub fn run() {
                 .icon(icon)?
                 .window_classname("tiddlydesktop-rs")
                 .initialization_script(&init_script::get_wiki_init_script_with_language(&main_wiki_path.to_string_lossy(), "main", true, Some(&language)))
+                .zoom_hotkeys_enabled(true)
                 .devtools(cfg!(debug_assertions)); // Only enable in debug builds
 
             #[cfg(target_os = "linux")]
@@ -8708,6 +8996,10 @@ pub fn run() {
             wiki_storage::get_system_language,
             wiki_storage::get_palette,
             wiki_storage::set_palette,
+            wiki_storage::get_custom_plugin_path,
+            wiki_storage::set_custom_plugin_path,
+            wiki_storage::get_custom_edition_path,
+            wiki_storage::set_custom_edition_path,
             open_auth_window,
             clear_wiki_session,
             run_command,
@@ -8716,6 +9008,7 @@ pub fn run() {
             show_find_in_page,
             toggle_fullscreen,
             print_page,
+            set_zoom_level,
             download_file,
             wiki_storage::js_log,
             clipboard::get_clipboard_content,
@@ -8777,7 +9070,9 @@ pub fn run() {
             lan_sync::lan_sync_send_fingerprints,
             lan_sync::lan_sync_broadcast_fingerprints,
             lan_sync::lan_sync_broadcast_manifest,
-            lan_sync::lan_sync_poll_ipc
+            lan_sync::lan_sync_poll_ipc,
+            lan_sync::lan_sync_load_tombstones,
+            lan_sync::lan_sync_save_tombstones
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

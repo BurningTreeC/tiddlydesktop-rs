@@ -69,6 +69,13 @@ EditionSelector/Optional: (אופציונלי)
 EditionSelector/CreatingFile: יוצר קובץ ויקי...
 EditionSelector/InitializingFolder: מאתחל תיקיית ויקי...
 
+CustomPaths/Title: נתיבים מותאמים אישית
+CustomPaths/PluginsFolder: תיקיית תוספים:
+CustomPaths/EditionsFolder: תיקיית מהדורות:
+CustomPaths/SelectFolder: בחר תיקייה
+CustomPaths/Change: שנה
+CustomPaths/Clear: נקה
+
 LanSync/Title: סנכרון רשת מקומית
 LanSync/Start: התחל סנכרון רשת מקומית
 LanSync/Stop: עצור סנכרון רשת מקומית

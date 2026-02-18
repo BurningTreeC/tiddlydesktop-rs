@@ -69,6 +69,13 @@ EditionSelector/Optional: (اختیاری)
 EditionSelector/CreatingFile: در حال ایجاد فایل ویکی...
 EditionSelector/InitializingFolder: در حال آماده‌سازی پوشه ویکی...
 
+CustomPaths/Title: مسیرهای سفارشی
+CustomPaths/PluginsFolder: پوشه افزونه‌ها:
+CustomPaths/EditionsFolder: پوشه نسخه‌ها:
+CustomPaths/SelectFolder: انتخاب پوشه
+CustomPaths/Change: تغییر
+CustomPaths/Clear: پاک کردن
+
 LanSync/Title: همگام‌سازی شبکه محلی
 LanSync/Start: شروع همگام‌سازی شبکه محلی
 LanSync/Stop: توقف همگام‌سازی شبکه محلی

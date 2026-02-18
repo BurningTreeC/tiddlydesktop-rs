@@ -131,6 +131,12 @@ pub struct AppSettings {
     /// Color palette for the landing page (e.g., "$:/palettes/Vanilla"). None = default
     #[serde(default)]
     pub palette: Option<String>,
+    /// SAF content:// URI for a folder containing custom plugins (Android only)
+    #[serde(default)]
+    pub custom_plugin_path_uri: Option<String>,
+    /// SAF content:// URI for a folder containing custom editions (Android only)
+    #[serde(default)]
+    pub custom_edition_path_uri: Option<String>,
 }
 
 /// Information about a TiddlyWiki edition

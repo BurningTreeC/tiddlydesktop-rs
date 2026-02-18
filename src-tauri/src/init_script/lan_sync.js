@@ -136,24 +136,6 @@
         // Notify Rust that this wiki window is now open and ready for sync.
         notifyWikiOpened(syncId);
 
-        // Proactively collect and broadcast our fingerprints to all connected
-        // peers. This is the most reliable catch-up mechanism — no event
-        // round-trip needed. Each peer compares and sends back what we're missing.
-        var titles = getSyncableTitles();
-        var fingerprints = [];
-        for (var i = 0; i < titles.length; i++) {
-          var tiddler = $tw.wiki.getTiddler(titles[i]);
-          if (tiddler) {
-            var mod = tiddler.fields.modified;
-            fingerprints.push({
-              title: titles[i],
-              modified: mod ? fieldToString(mod) : ''
-            });
-          }
-        }
-        rsLog('[LAN Sync] Broadcasting ' + fingerprints.length + ' fingerprints for catch-up');
-        broadcastFingerprints(syncId, fingerprints);
-
         rsLog('[LAN Sync] Initialized for wiki: ' + syncId);
       } catch (e) {
         rsLog('[LAN Sync] activateSync error: ' + e.message);
@@ -281,6 +263,27 @@
     }
   }
 
+  function loadTombstones(wikiId, callback) {
+    if (isAndroid) {
+      var json = window.TiddlyDesktopSync.loadTombstones(wikiId);
+      callback(json || '{}');
+    } else {
+      window.__TAURI__.core.invoke('lan_sync_load_tombstones', { wikiId: wikiId })
+        .then(function(json) { callback(json || '{}'); })
+        .catch(function() { callback('{}'); });
+    }
+  }
+
+  function saveTombstones(wikiId, tombstonesJson) {
+    if (isAndroid) {
+      window.TiddlyDesktopSync.saveTombstones(wikiId, tombstonesJson);
+    } else {
+      window.__TAURI__.core.invoke('lan_sync_save_tombstones', {
+        wikiId: wikiId, tombstonesJson: tombstonesJson
+      }).catch(function(e) { console.error('[LAN Sync] Failed to save tombstones:', e); });
+    }
+  }
+
   // ── Helpers ─────────────────────────────────────────────────────────
 
   // Convert a field value to a comparable string
@@ -360,6 +363,13 @@
     // Maps title → modified string.
     var knownSyncTitles = {};
 
+    // Deletion tombstones: title → {modified: TW date string, time: epoch ms}
+    // When a tiddler is deleted locally, a tombstone is recorded so fingerprint
+    // broadcasts inform peers to delete it too — even if they were offline.
+    var deletionTombstones = {};
+    var tombstonesLoaded = false; // Set true after loadTombstones callback
+    var TOMBSTONE_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
+
 
     // State object to return for cleanup
     var state = {
@@ -405,7 +415,8 @@
     }
 
     // Collect fingerprints for all syncable tiddlers, including titles we
-    // received from peers but skipped as identical (shadow-only on this side).
+    // received from peers but skipped as identical (shadow-only on this side),
+    // and deletion tombstones so peers learn about offline deletions.
     function collectFingerprints() {
       var titles = getSyncableTitles();
       var seen = {};
@@ -422,6 +433,20 @@
       for (var j = 0; j < knownKeys.length; j++) {
         if (!seen[knownKeys[j]]) {
           fps.push({ title: knownKeys[j], modified: knownSyncTitles[knownKeys[j]] });
+        }
+      }
+      // Include deletion tombstones (skip if tiddler was re-created locally)
+      var tombKeys = Object.keys(deletionTombstones);
+      for (var k = 0; k < tombKeys.length; k++) {
+        if (!seen[tombKeys[k]]) {
+          fps.push({
+            title: tombKeys[k],
+            modified: deletionTombstones[tombKeys[k]].modified,
+            deleted: true
+          });
+        } else {
+          // Tiddler was re-created — remove stale tombstone
+          delete deletionTombstones[tombKeys[k]];
         }
       }
       return fps;
@@ -456,6 +481,10 @@
         if (conflictTitles.has(title)) return;
 
         if (changes[title].deleted) {
+          // Record tombstone so peers learn about this deletion even if offline
+          var delMod = $tw.utils.stringifyDate(new Date());
+          deletionTombstones[title] = { modified: delMod, time: Date.now() };
+          saveTombstones(wikiId, JSON.stringify(deletionTombstones));
           pendingOutbound[title] = { deleted: true, tiddlerJson: null };
         } else {
           var tiddler = $tw.wiki.getTiddler(title);
@@ -547,6 +576,10 @@
         if (data.type === 'apply-change') {
           try {
             var fields = JSON.parse(data.tiddler_json);
+            // If we had a tombstone for this title, the peer re-created it
+            if (deletionTombstones[fields.title]) {
+              delete deletionTombstones[fields.title];
+            }
             if (tiddlerDiffers(fields)) {
               // Parse date strings to Date objects so TiddlyWiki stores them correctly
               if (fields.created) fields.created = $tw.utils.parseDate(fields.created);
@@ -570,6 +603,13 @@
               suppressOutbound.add(data.title);
               $tw.wiki.deleteTiddler(data.title);
               needSave = true;
+            }
+            // Record tombstone so this deletion propagates to other peers
+            var delMod = $tw.utils.stringifyDate(new Date());
+            if (!deletionTombstones[data.title] ||
+                deletionTombstones[data.title].modified < delMod) {
+              deletionTombstones[data.title] = { modified: delMod, time: Date.now() };
+              saveTombstones(wikiId, JSON.stringify(deletionTombstones));
             }
           } catch (e) {
             console.error('[LAN Sync] Failed to apply remote deletion:', e);
@@ -602,6 +642,12 @@
     //          state and send only tiddlers that are missing or newer here.
 
     function handleSendFingerprints(toDeviceId) {
+      // Defer until tombstones are loaded so our fingerprints include them
+      if (!tombstonesLoaded) {
+        _log('[LAN Sync] Deferring send-fingerprints until tombstones loaded');
+        setTimeout(function() { handleSendFingerprints(toDeviceId); }, 100);
+        return;
+      }
       var fingerprints = collectFingerprints();
 
       console.log('[LAN Sync] Sending ' + fingerprints.length + ' fingerprints to ' + toDeviceId);
@@ -610,13 +656,62 @@
     }
 
     function handleCompareFingerprints(fromDeviceId, peerFingerprints) {
-      // Build a map of peer's tiddlers: title → modified
+      // Defer until tombstones are loaded so comparisons are accurate
+      if (!tombstonesLoaded) {
+        _log('[LAN Sync] Deferring compare-fingerprints until tombstones loaded');
+        setTimeout(function() { handleCompareFingerprints(fromDeviceId, peerFingerprints); }, 100);
+        return;
+      }
+      // Guard against undefined/null fingerprints (e.g. truncated IPC message)
+      if (!peerFingerprints || !peerFingerprints.length) {
+        _log('[LAN Sync] compare-fingerprints: no fingerprints received');
+        return;
+      }
+      // Separate peer's fingerprints into normal tiddlers and tombstones
       var peerMap = {};
+      var peerTombstones = {};
       for (var i = 0; i < peerFingerprints.length; i++) {
-        peerMap[peerFingerprints[i].title] = peerFingerprints[i].modified;
+        var fp = peerFingerprints[i];
+        if (fp.deleted) {
+          peerTombstones[fp.title] = fp.modified;
+        } else {
+          peerMap[fp.title] = fp.modified;
+        }
       }
 
-      // Find tiddlers we have that the peer needs (missing or our version is newer)
+      // Phase 1: Apply peer's tombstones — delete local tiddlers that the peer
+      // intentionally deleted (if our version is older than the deletion).
+      var tombKeys = Object.keys(peerTombstones);
+      var needSave = false;
+      for (var t = 0; t < tombKeys.length; t++) {
+        var tombTitle = tombKeys[t];
+        var tombModified = peerTombstones[tombTitle];
+
+        var localTiddler = $tw.wiki.getTiddler(tombTitle);
+        if (localTiddler) {
+          var localMod = localTiddler.fields.modified ? fieldToString(localTiddler.fields.modified) : '';
+          if (!localMod || localMod <= tombModified) {
+            // Peer deleted it after our version — apply deletion
+            suppressOutbound.add(tombTitle);
+            $tw.wiki.deleteTiddler(tombTitle);
+            needSave = true;
+            _log('[LAN Sync] Applied tombstone deletion: ' + tombTitle);
+          }
+          // else: our version is newer than the deletion — keep it, will send below
+        }
+
+        // Record peer's tombstone locally (propagate to other peers)
+        if (!deletionTombstones[tombTitle] ||
+            deletionTombstones[tombTitle].modified < tombModified) {
+          deletionTombstones[tombTitle] = { modified: tombModified, time: Date.now() };
+        }
+      }
+      if (needSave) scheduleSave();
+      if (tombKeys.length > 0) {
+        saveTombstones(wikiId, JSON.stringify(deletionTombstones));
+      }
+
+      // Phase 2: Find tiddlers we have that the peer needs (missing or newer)
       var titles = getSyncableTitles();
       var toSend = [];
 
@@ -625,19 +720,20 @@
         var tiddler = $tw.wiki.getTiddler(title);
         if (!tiddler) continue;
 
-        var localMod = tiddler.fields.modified ? fieldToString(tiddler.fields.modified) : '';
+        var localMod2 = tiddler.fields.modified ? fieldToString(tiddler.fields.modified) : '';
 
         if (!(title in peerMap)) {
           // Peer doesn't have this tiddler — send it
           toSend.push(title);
-        } else if (localMod && peerMap[title] && localMod > peerMap[title]) {
+        } else if (localMod2 > (peerMap[title] || '')) {
           // Our version is newer — send it
           toSend.push(title);
         }
       }
 
       _log('[LAN Sync] Fingerprint diff: ' + toSend.length + ' tiddlers to send to ' + fromDeviceId +
-                  ' (of ' + titles.length + ' local, peer has ' + peerFingerprints.length + ')');
+                  ' (of ' + titles.length + ' local, peer has ' + peerFingerprints.length +
+                  ', ' + tombKeys.length + ' tombstones processed)');
 
       if (toSend.length === 0) {
         // Still send an empty last batch to signal completion
@@ -822,6 +918,28 @@
       state.unlistenFns.push(function() { ipcPollActive = false; });
     }
 
+    // ── Load persisted tombstones + initial fingerprint broadcast ──────
+    loadTombstones(wikiId, function(stored) {
+      try {
+        var parsed = JSON.parse(stored);
+        var now = Date.now();
+        var keys = Object.keys(parsed);
+        for (var i = 0; i < keys.length; i++) {
+          if (parsed[keys[i]].time && now - parsed[keys[i]].time > TOMBSTONE_MAX_AGE_MS) {
+            continue; // expired
+          }
+          deletionTombstones[keys[i]] = parsed[keys[i]];
+        }
+        _log('[LAN Sync] Loaded ' + Object.keys(deletionTombstones).length + ' tombstones');
+      } catch (e) {}
+      tombstonesLoaded = true;
+
+      // Broadcast fingerprints (includes tombstones) for catch-up
+      var fps = collectFingerprints();
+      _log('[LAN Sync] Broadcasting ' + fps.length + ' fingerprints for catch-up');
+      broadcastFingerprints(wikiId, fps);
+    });
+
     // ── Periodic re-sync (5s safety net) ──────────────────────────────
     // Periodically re-broadcast fingerprints so peers detect diffs and
     // re-send missed changes.  Converges quickly then becomes a no-op
@@ -835,6 +953,23 @@
       }
     }, 5000);
     state.unlistenFns.push(function() { clearInterval(resyncIntervalId); });
+
+    // ── Periodic tombstone cleanup (every 10 minutes) ────────────────
+    var tombstoneCleanupId = setInterval(function() {
+      var now = Date.now();
+      var changed = false;
+      var keys = Object.keys(deletionTombstones);
+      for (var i = 0; i < keys.length; i++) {
+        if (deletionTombstones[keys[i]].time && now - deletionTombstones[keys[i]].time > TOMBSTONE_MAX_AGE_MS) {
+          delete deletionTombstones[keys[i]];
+          changed = true;
+        }
+      }
+      if (changed) {
+        saveTombstones(wikiId, JSON.stringify(deletionTombstones));
+      }
+    }, 600000);
+    state.unlistenFns.push(function() { clearInterval(tombstoneCleanupId); });
 
     return state;
   }

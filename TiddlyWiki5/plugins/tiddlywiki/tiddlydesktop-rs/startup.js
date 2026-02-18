@@ -1465,6 +1465,84 @@ exports.startup = function(callback) {
 		checkPendingWikiOpen();
 	}
 
+	// ========================================
+	// Custom Plugin/Edition Path Handlers (Android only)
+	// ========================================
+	if (isAndroid) {
+		// Load and display current custom paths on startup
+		function refreshCustomPaths() {
+			invoke("get_custom_plugin_path").then(function(uri) {
+				if (uri) {
+					$tw.wiki.setText("$:/temp/tiddlydesktop-rs/custom-plugin-path", "text", null, uri);
+					$tw.wiki.setText("$:/temp/tiddlydesktop-rs/custom-plugin-path-display", "text", null, getDisplayPath(uri));
+				} else {
+					$tw.wiki.setText("$:/temp/tiddlydesktop-rs/custom-plugin-path", "text", null, "");
+					$tw.wiki.setText("$:/temp/tiddlydesktop-rs/custom-plugin-path-display", "text", null, "");
+				}
+			}).catch(function() {});
+			invoke("get_custom_edition_path").then(function(uri) {
+				if (uri) {
+					$tw.wiki.setText("$:/temp/tiddlydesktop-rs/custom-edition-path", "text", null, uri);
+					$tw.wiki.setText("$:/temp/tiddlydesktop-rs/custom-edition-path-display", "text", null, getDisplayPath(uri));
+				} else {
+					$tw.wiki.setText("$:/temp/tiddlydesktop-rs/custom-edition-path", "text", null, "");
+					$tw.wiki.setText("$:/temp/tiddlydesktop-rs/custom-edition-path-display", "text", null, "");
+				}
+			}).catch(function() {});
+		}
+		refreshCustomPaths();
+
+		// Message handler: set custom plugin path via SAF folder picker
+		$tw.rootWidget.addEventListener("tm-tiddlydesktop-rs-set-plugin-path", function(event) {
+			invoke("android_pick_directory").then(function(uri) {
+				if (uri) {
+					invoke("set_custom_plugin_path", { uri: uri }).then(function() {
+						refreshCustomPaths();
+					}).catch(function(err) {
+						console.error("Failed to set custom plugin path:", err);
+						alert("Failed to set plugin folder: " + err);
+					});
+				}
+			}).catch(function(err) {
+				console.error("android_pick_directory error:", err);
+			});
+		});
+
+		// Message handler: clear custom plugin path
+		$tw.rootWidget.addEventListener("tm-tiddlydesktop-rs-clear-plugin-path", function(event) {
+			invoke("set_custom_plugin_path", { uri: "" }).then(function() {
+				refreshCustomPaths();
+			}).catch(function(err) {
+				console.error("Failed to clear custom plugin path:", err);
+			});
+		});
+
+		// Message handler: set custom edition path via SAF folder picker
+		$tw.rootWidget.addEventListener("tm-tiddlydesktop-rs-set-edition-path", function(event) {
+			invoke("android_pick_directory").then(function(uri) {
+				if (uri) {
+					invoke("set_custom_edition_path", { uri: uri }).then(function() {
+						refreshCustomPaths();
+					}).catch(function(err) {
+						console.error("Failed to set custom edition path:", err);
+						alert("Failed to set edition folder: " + err);
+					});
+				}
+			}).catch(function(err) {
+				console.error("android_pick_directory error:", err);
+			});
+		});
+
+		// Message handler: clear custom edition path
+		$tw.rootWidget.addEventListener("tm-tiddlydesktop-rs-clear-edition-path", function(event) {
+			invoke("set_custom_edition_path", { uri: "" }).then(function() {
+				refreshCustomPaths();
+			}).catch(function(err) {
+				console.error("Failed to clear custom edition path:", err);
+			});
+		});
+	}
+
 	// Check for application updates
 	invoke("check_for_updates").then(function(result) {
 		if (result.update_available && result.latest_version) {
@@ -1628,6 +1706,16 @@ exports.startup = function(callback) {
 
 		invoke("lan_sync_link_wiki", { path: path, syncId: wikiId }).then(function() {
 			console.log("[LAN Sync] Linked wiki to sync ID " + wikiId);
+			// Update the wiki list tiddler to reflect the new sync state
+			var entries = getWikiListEntries();
+			for (var i = 0; i < entries.length; i++) {
+				if (entries[i].path === path) {
+					entries[i].sync_enabled = true;
+					entries[i].sync_id = wikiId;
+					break;
+				}
+			}
+			saveWikiList(entries);
 			refreshWikiList();
 			invoke("lan_sync_get_available_wikis").then(function(wikis) {
 				refreshRemoteWikis(wikis);

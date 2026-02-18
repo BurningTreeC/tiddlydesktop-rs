@@ -69,6 +69,13 @@ EditionSelector/Optional: (ਵਿਕਲਪਿਕ)
 EditionSelector/CreatingFile: ਵਿਕੀ ਫ਼ਾਈਲ ਬਣਾ ਰਿਹਾ ਹੈ...
 EditionSelector/InitializingFolder: ਵਿਕੀ ਫੋਲਡਰ ਸ਼ੁਰੂ ਕਰ ਰਿਹਾ ਹੈ...
 
+CustomPaths/Title: ਕਸਟਮ ਮਾਰਗ
+CustomPaths/PluginsFolder: ਪਲੱਗਇਨ ਫੋਲਡਰ:
+CustomPaths/EditionsFolder: ਐਡੀਸ਼ਨ ਫੋਲਡਰ:
+CustomPaths/SelectFolder: ਫੋਲਡਰ ਚੁਣੋ
+CustomPaths/Change: ਬਦਲੋ
+CustomPaths/Clear: ਸਾਫ਼ ਕਰੋ
+
 LanSync/Title: LAN ਸਿੰਕ
 LanSync/Start: LAN ਸਿੰਕ ਸ਼ੁਰੂ ਕਰੋ
 LanSync/Stop: LAN ਸਿੰਕ ਬੰਦ ਕਰੋ

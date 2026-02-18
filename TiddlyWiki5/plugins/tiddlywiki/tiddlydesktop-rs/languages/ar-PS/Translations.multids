@@ -69,6 +69,13 @@ EditionSelector/Optional: (اختياري)
 EditionSelector/CreatingFile: جاري إنشاء ملف ويكي...
 EditionSelector/InitializingFolder: جاري تهيئة مجلد ويكي...
 
+CustomPaths/Title: مسارات مخصصة
+CustomPaths/PluginsFolder: مجلد الإضافات:
+CustomPaths/EditionsFolder: مجلد الإصدارات:
+CustomPaths/SelectFolder: اختر مجلدًا
+CustomPaths/Change: تغيير
+CustomPaths/Clear: مسح
+
 LanSync/Title: مزامنة الشبكة المحلية
 LanSync/Start: بدء مزامنة الشبكة المحلية
 LanSync/Stop: إيقاف مزامنة الشبكة المحلية

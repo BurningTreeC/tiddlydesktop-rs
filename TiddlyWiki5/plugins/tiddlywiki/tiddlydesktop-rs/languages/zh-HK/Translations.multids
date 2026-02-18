@@ -69,6 +69,13 @@ EditionSelector/Optional: （選用）
 EditionSelector/CreatingFile: 正在建立維基檔案...
 EditionSelector/InitializingFolder: 正在初始化維基資料夾...
 
+CustomPaths/Title: 自訂路徑
+CustomPaths/PluginsFolder: 外掛程式資料夾:
+CustomPaths/EditionsFolder: 版本資料夾:
+CustomPaths/SelectFolder: 選擇資料夾
+CustomPaths/Change: 變更
+CustomPaths/Clear: 清除
+
 LanSync/Title: 區域網路同步
 LanSync/Start: 開始區域網路同步
 LanSync/Stop: 停止區域網路同步

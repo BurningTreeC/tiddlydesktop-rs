@@ -112,8 +112,18 @@ fn get_clipboard_content_linux() -> Result<ClipboardContentData, String> {
     let display = gdk::Display::default().ok_or("No display")?;
     let clipboard = gtk::Clipboard::default(&display).ok_or("No clipboard")?;
 
-    // Request formats in TiddlyWiki priority order
+    // Request formats in priority order (file URIs first for paste-from-file-manager)
+    // File manager clipboard formats by DE:
+    //   GNOME/Nautilus + XFCE/Thunar: x-special/gnome-copied-files
+    //   KDE/Dolphin: x-special/kde-copied-files or x-special/KDE-copied-files
+    //   MATE/Caja: x-special/mate-copied-files
+    //   All DEs also typically provide: text/uri-list
     let formats_to_try = [
+        "text/uri-list",
+        "x-special/gnome-copied-files",
+        "x-special/kde-copied-files",
+        "x-special/KDE-copied-files",
+        "x-special/mate-copied-files",
         "text/vnd.tiddler",
         "text/html",
         "text/plain",
@@ -209,7 +219,7 @@ fn get_clipboard_content_windows() -> Result<ClipboardContentData, String> {
         CloseClipboard, GetClipboardData, OpenClipboard, RegisterClipboardFormatA,
     };
     use windows::Win32::System::Memory::{GlobalLock, GlobalSize, GlobalUnlock};
-    use windows::Win32::System::Ole::CF_UNICODETEXT;
+    use windows::Win32::System::Ole::{CF_HDROP, CF_UNICODETEXT};
 
     let mut types = Vec::new();
     let mut data = HashMap::new();
@@ -217,6 +227,55 @@ fn get_clipboard_content_windows() -> Result<ClipboardContentData, String> {
     unsafe {
         if OpenClipboard(None).is_err() {
             return Err("Failed to open clipboard".to_string());
+        }
+
+        // Get CF_HDROP (file list from file manager copy)
+        if let Ok(h) = GetClipboardData(CF_HDROP.0 as u32) {
+            if !h.0.is_null() {
+                let hdrop = windows::Win32::UI::Shell::HDROP(h.0);
+                // Get number of files
+                let count =
+                    windows::Win32::UI::Shell::DragQueryFileW(hdrop, 0xFFFFFFFF, None);
+                if count > 0 {
+                    let mut uri_list = String::new();
+                    for i in 0..count {
+                        // Get required buffer size
+                        let len = windows::Win32::UI::Shell::DragQueryFileW(
+                            hdrop,
+                            i,
+                            None,
+                        );
+                        if len > 0 {
+                            let mut buf = vec![0u16; (len + 1) as usize];
+                            windows::Win32::UI::Shell::DragQueryFileW(
+                                hdrop,
+                                i,
+                                Some(&mut buf),
+                            );
+                            let path = OsString::from_wide(&buf[..len as usize])
+                                .to_string_lossy()
+                                .to_string();
+                            if !path.is_empty() {
+                                // Convert backslashes and build file:// URI
+                                let forward = path.replace('\\', "/");
+                                if !uri_list.is_empty() {
+                                    uri_list.push('\n');
+                                }
+                                uri_list.push_str("file:///");
+                                uri_list.push_str(&forward);
+                            }
+                        }
+                    }
+                    if !uri_list.is_empty() {
+                        types.push("text/uri-list".to_string());
+                        data.insert("text/uri-list".to_string(), uri_list);
+                        eprintln!(
+                            "[TiddlyDesktop] Clipboard: Got CF_HDROP ({} files)",
+                            count
+                        );
+                    }
+                }
+            }
         }
 
         // Get HTML format - RegisterClipboardFormatA returns 0 on failure, format ID on success
@@ -303,6 +362,20 @@ fn get_clipboard_content_macos() -> Result<ClipboardContentData, String> {
     let mut data = HashMap::new();
 
     let pasteboard = NSPasteboard::generalPasteboard();
+
+    // Check for file URLs first (files copied from Finder)
+    let file_url_type = NSString::from_str("public.file-url");
+    if let Some(ns_str) = pasteboard.stringForType(&file_url_type) {
+        let url_str = ns_str.to_string();
+        if !url_str.is_empty() && url_str.starts_with("file://") {
+            types.push("text/uri-list".to_string());
+            data.insert("text/uri-list".to_string(), url_str.clone());
+            eprintln!(
+                "[TiddlyDesktop] Clipboard: Got public.file-url ({} chars)",
+                url_str.len()
+            );
+        }
+    }
 
     // Request types matching TiddlyWiki5's importDataTypes priority
     let type_mappings: &[(&str, &str)] = &[

@@ -484,6 +484,41 @@ title: $:/plugins/tiddlywiki/tiddlydesktop-rs/WikiList
 </div>
 </$reveal>
 
+<!-- ── Custom Plugin/Edition Paths (Android only) ─────────────────── -->
+<$list filter="[{$:/temp/tiddlydesktop-rs/is-android}match[yes]]" variable="ignore">
+<div class="td-custom-paths-panel">
+<h3 class="td-custom-paths-title"><<td-lingo CustomPaths/Title>></h3>
+<div class="td-custom-path-row">
+<span class="td-custom-path-label"><<td-lingo CustomPaths/PluginsFolder>></span>
+<div class="td-custom-path-actions">
+<$list filter="[{$:/temp/tiddlydesktop-rs/custom-plugin-path}!is[blank]]" variable="ignore">
+<span class="td-custom-path-value" title={{$:/temp/tiddlydesktop-rs/custom-plugin-path}}><$text text={{$:/temp/tiddlydesktop-rs/custom-plugin-path-display}}/></span>
+<$button message="tm-tiddlydesktop-rs-set-plugin-path" class="tc-btn-invisible td-button td-button-small"><<td-lingo CustomPaths/Change>></$button>
+<$button message="tm-tiddlydesktop-rs-clear-plugin-path" class="tc-btn-invisible td-button td-button-small td-button-remove"><<td-lingo CustomPaths/Clear>></$button>
+</$list>
+<$list filter="[{$:/temp/tiddlydesktop-rs/custom-plugin-path}is[blank]]" variable="ignore">
+<span class="td-custom-path-none">—</span>
+<$button message="tm-tiddlydesktop-rs-set-plugin-path" class="tc-btn-invisible td-button td-button-small td-button-primary"><<td-lingo CustomPaths/SelectFolder>></$button>
+</$list>
+</div>
+</div>
+<div class="td-custom-path-row">
+<span class="td-custom-path-label"><<td-lingo CustomPaths/EditionsFolder>></span>
+<div class="td-custom-path-actions">
+<$list filter="[{$:/temp/tiddlydesktop-rs/custom-edition-path}!is[blank]]" variable="ignore">
+<span class="td-custom-path-value" title={{$:/temp/tiddlydesktop-rs/custom-edition-path}}><$text text={{$:/temp/tiddlydesktop-rs/custom-edition-path-display}}/></span>
+<$button message="tm-tiddlydesktop-rs-set-edition-path" class="tc-btn-invisible td-button td-button-small"><<td-lingo CustomPaths/Change>></$button>
+<$button message="tm-tiddlydesktop-rs-clear-edition-path" class="tc-btn-invisible td-button td-button-small td-button-remove"><<td-lingo CustomPaths/Clear>></$button>
+</$list>
+<$list filter="[{$:/temp/tiddlydesktop-rs/custom-edition-path}is[blank]]" variable="ignore">
+<span class="td-custom-path-none">—</span>
+<$button message="tm-tiddlydesktop-rs-set-edition-path" class="tc-btn-invisible td-button td-button-small td-button-primary"><<td-lingo CustomPaths/SelectFolder>></$button>
+</$list>
+</div>
+</div>
+</div>
+</$list>
+
 <!-- ── LAN Sync Panel (persistent at bottom) ──────────────────────── -->
 <div class="td-sync-panel">
 

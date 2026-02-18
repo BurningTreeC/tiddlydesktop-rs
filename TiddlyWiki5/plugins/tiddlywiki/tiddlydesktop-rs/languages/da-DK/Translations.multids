@@ -69,6 +69,13 @@ EditionSelector/Optional: (valgfrit)
 EditionSelector/CreatingFile: Opretter wiki-fil...
 EditionSelector/InitializingFolder: Initialiserer wiki-mappe...
 
+CustomPaths/Title: Brugerdefinerede stier
+CustomPaths/PluginsFolder: Plugin-mappe:
+CustomPaths/EditionsFolder: Udgave-mappe:
+CustomPaths/SelectFolder: Vælg mappe
+CustomPaths/Change: Ændre
+CustomPaths/Clear: Ryd
+
 LanSync/Title: LAN-synkronisering
 LanSync/Start: Start LAN-synkronisering
 LanSync/Stop: Stop LAN-synkronisering

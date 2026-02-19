@@ -33,6 +33,7 @@ import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.FrameLayout
+import android.widget.Toast
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.ActivityResultLauncher
 import androidx.activity.result.contract.ActivityResultContracts
@@ -1456,8 +1457,10 @@ class WikiActivity : AppCompatActivity() {
     }
 
     private fun shareAsImage(title: String) {
-        // Use html-to-image library directly in the wiki's WebView to capture the tiddler body.
-        // This preserves all TiddlyWiki CSS/styling and avoids off-screen WebView issues.
+        // Use html-to-image library to capture the tiddler body as a JPEG.
+        // Key optimization: images are downscaled to max 800px and JPEG-compressed
+        // during inlining to keep the SVG foreignObject string small (~2.5MB for
+        // 50 images instead of ~1GB with full-resolution PNG data URLs).
         val escapedTitle = title.replace("\\", "\\\\").replace("'", "\\'").replace("\n", "\\n")
         webView?.evaluateJavascript("""
             (function() {
@@ -1471,50 +1474,24 @@ class WikiActivity : AppCompatActivity() {
                     });
                     if (!bodyEl) {
                         console.error('[TiddlyDesktop] shareAsImage: tiddler element not found for: ' + title);
+                        TiddlyDesktopShareCapture.onCaptureFailed('Tiddler element not found');
                         return;
                     }
-                    // Wrap in a container div to preserve margins between child elements
-                    // (tags, body, etc.). html-to-image clones elements into an isolated
-                    // context where CSS margin collapsing behaves differently. The wrapper
-                    // with overflow:hidden establishes a block formatting context that
-                    // forces proper margin rendering.
                     var wrapper = document.createElement('div');
                     wrapper.style.cssText = 'overflow:hidden;background:#ffffff;padding:8px;width:' + bodyEl.offsetWidth + 'px;';
-
-                    // Embed document stylesheets into the wrapper so html-to-image's
-                    // SVG foreignObject has access to all CSS rules (pseudo-elements,
-                    // CSS custom properties, complex selectors, etc.) that per-element
-                    // getComputedStyle inlining may miss.
-                    try {
-                        var cssText = '';
-                        for (var si = 0; si < document.styleSheets.length; si++) {
-                            try {
-                                var rules = document.styleSheets[si].cssRules;
-                                for (var ri = 0; ri < rules.length; ri++) {
-                                    cssText += rules[ri].cssText + '\n';
-                                }
-                            } catch(e) { /* cross-origin stylesheet */ }
-                        }
-                        if (cssText) {
-                            var styleEl = document.createElement('style');
-                            styleEl.textContent = cssText;
-                            wrapper.appendChild(styleEl);
-                        }
-                    } catch(e) {}
+                    // CSS is NOT embedded — html-to-image inlines computed styles
+                    // per-element. Embedding all stylesheets added 500KB-2MB to the
+                    // SVG foreignObject and URL-encoding tripled that.
 
                     var clone = bodyEl.cloneNode(true);
                     clone.style.margin = '0';
-                    // Handle embed/object elements for capture:
-                    // - Hidden ones (display:none from PDF.js): remove (large data URLs bloat SVG)
-                    // - Visible PDF embeds (not yet processed by PDF.js): replace with placeholder
-                    // - Other visible embeds: remove (can't render in SVG foreignObject)
                     clone.querySelectorAll('embed, object').forEach(function(el) {
                         if (el.style.display === 'none') {
                             el.remove();
                         } else {
                             var tp = (el.getAttribute('type') || '').toLowerCase();
                             var src = el.getAttribute('data') || el.getAttribute('src') || '';
-                            if (tp === 'application/pdf' || /\.pdf$/i.test(src)) {
+                            if (tp === 'application/pdf' || /\.pdf${'$'}/i.test(src)) {
                                 var ph = document.createElement('div');
                                 ph.style.cssText = 'background:#525659;color:#fff;padding:40px 20px;text-align:center;font:16px sans-serif;border-radius:4px;';
                                 ph.textContent = 'PDF: ' + (src.split('/').pop() || 'document');
@@ -1524,28 +1501,22 @@ class WikiActivity : AppCompatActivity() {
                             }
                         }
                     });
-                    // For iframes, strip src/data to prevent resource loading
-                    // (they'll be replaced by cleanupMedia later anyway).
                     clone.querySelectorAll('iframe').forEach(function(el) {
                         el.removeAttribute('src');
                         el.removeAttribute('data');
                     });
                     wrapper.appendChild(clone);
-                    document.body.appendChild(wrapper);
-                    console.log('[TiddlyDesktop] shareAsImage: size=' + wrapper.offsetWidth + 'x' + wrapper.offsetHeight);
+                    // Do NOT append wrapper to DOM yet — cloned images still have
+                    // server URLs and appending would trigger 50+ full-resolution
+                    // fetches. We append after inlineImages() replaces them with
+                    // compressed data URLs.
 
-                    // Gray placeholder for any resource that fails to load
                     function placeholder(w, h) {
                         var d = document.createElement('div');
                         d.style.cssText = 'width:' + w + 'px;height:' + h + 'px;background:#e8e8e8;display:block;';
                         return d;
                     }
 
-                    // --- Preserve margins/padding on block-level children ---
-                    // html-to-image renders DOM in SVG foreignObject where margin
-                    // collapsing behaves differently. Inline the computed margins
-                    // and paddings on direct block-level children so spacing after
-                    // tags (before images, audio, etc.) is preserved.
                     function fixBlockSpacing() {
                         var origChildren = bodyEl.children;
                         var cloneChildren = clone.children;
@@ -1562,11 +1533,6 @@ class WikiActivity : AppCompatActivity() {
                         }
                     }
 
-                    // --- Fix inline element layout for SVG foreignObject ---
-                    // html-to-image renders the DOM inside an SVG foreignObject where
-                    // inline-block/inline-flex elements (buttons, tags, pills) lose
-                    // their computed dimensions and wrap text or overlap. Pre-inlining
-                    // explicit widths and white-space on these elements fixes the layout.
                     function fixLayout() {
                         var origAll = bodyEl.querySelectorAll('*');
                         var cloneAll = clone.querySelectorAll('*');
@@ -1584,12 +1550,10 @@ class WikiActivity : AppCompatActivity() {
                         }
                     }
 
-                    // --- Pre-inline <img> elements using already-loaded pixel data ---
-                    // html-to-image re-fetches every image when it serialises the DOM
-                    // to SVG foreignObject. On the wiki HTTP server this exhausts the
-                    // browser's 6-connection-per-origin pool, causing blank images for
-                    // transcluded content. Drawing loaded images to a canvas and
-                    // converting to data-URLs avoids all network requests.
+                    // Inline images with aggressive compression to keep SVG
+                    // foreignObject memory-safe. Max 400px + JPEG 0.5 ≈ 10-15KB
+                    // each. For 50 images: ~500KB-750KB in SVG string.
+                    var MAX_IMG_DIM = 400;
                     function inlineImages() {
                         var origImgs = bodyEl.querySelectorAll('img');
                         var cloneImgs = clone.querySelectorAll('img');
@@ -1600,17 +1564,27 @@ class WikiActivity : AppCompatActivity() {
                                 if (!src || src.startsWith('data:')) return;
                                 var p = new Promise(function(resolve) {
                                     function tryInline() {
-                                        if (origImg.naturalWidth > 0 && origImg.naturalHeight > 0) {
+                                        var nw = origImg.naturalWidth;
+                                        var nh = origImg.naturalHeight;
+                                        if (nw > 0 && nh > 0) {
                                             try {
+                                                var scale = Math.min(1, MAX_IMG_DIM / Math.max(nw, nh));
                                                 var c = document.createElement('canvas');
-                                                c.width = origImg.naturalWidth;
-                                                c.height = origImg.naturalHeight;
-                                                c.getContext('2d').drawImage(origImg, 0, 0);
-                                                cloneImg.setAttribute('src', c.toDataURL());
+                                                c.width = Math.round(nw * scale);
+                                                c.height = Math.round(nh * scale);
+                                                c.getContext('2d').drawImage(origImg, 0, 0, c.width, c.height);
+                                                var isSvg = (origImg.src || '').indexOf('.svg') !== -1 ||
+                                                    (origImg.getAttribute('type') || '').indexOf('svg') !== -1;
+                                                if (isSvg) {
+                                                    cloneImg.setAttribute('src', c.toDataURL('image/png'));
+                                                } else {
+                                                    cloneImg.setAttribute('src', c.toDataURL('image/jpeg', 0.5));
+                                                }
                                                 cloneImg.removeAttribute('srcset');
+                                                // Release canvas backing store immediately
+                                                c.width = 0; c.height = 0;
                                             } catch(e) { /* tainted canvas (cross-origin) */ }
                                         } else if (cloneImg.parentNode) {
-                                            // Broken image — replace with placeholder
                                             var w = origImg.offsetWidth || origImg.width || 100;
                                             var h = origImg.offsetHeight || origImg.height || 100;
                                             cloneImg.parentNode.replaceChild(placeholder(w, h), cloneImg);
@@ -1627,7 +1601,6 @@ class WikiActivity : AppCompatActivity() {
                                         origImg.addEventListener('error', function() {
                                             if (!done) {
                                                 done = true;
-                                                // Failed to load — placeholder
                                                 if (cloneImg.parentNode) {
                                                     var w = origImg.offsetWidth || origImg.width || 100;
                                                     var h = origImg.offsetHeight || origImg.height || 100;
@@ -1647,8 +1620,7 @@ class WikiActivity : AppCompatActivity() {
                         return Promise.all(promises);
                     }
 
-                    // --- Convert <canvas> elements to <img> (PDF.js, charts, etc.) ---
-                    // cloneNode produces blank canvases; capture the originals' pixels.
+                    // Convert canvas elements to compressed JPEG images
                     function convertCanvases() {
                         var origCanvases = bodyEl.querySelectorAll('canvas');
                         var cloneCanvases = clone.querySelectorAll('canvas');
@@ -1658,8 +1630,15 @@ class WikiActivity : AppCompatActivity() {
                             if (!cc.parentNode) continue;
                             try {
                                 if (oc.width > 0 && oc.height > 0) {
+                                    // Downscale large canvases (e.g. PDF pages)
+                                    var cScale = Math.min(1, 400 / Math.max(oc.width, oc.height));
+                                    var tc = document.createElement('canvas');
+                                    tc.width = Math.round(oc.width * cScale);
+                                    tc.height = Math.round(oc.height * cScale);
+                                    tc.getContext('2d').drawImage(oc, 0, 0, tc.width, tc.height);
                                     var img = document.createElement('img');
-                                    img.src = oc.toDataURL();
+                                    img.src = tc.toDataURL('image/jpeg', 0.5);
+                                    tc.width = 0; tc.height = 0;
                                     img.style.cssText = 'width:' + oc.offsetWidth + 'px;height:' + oc.offsetHeight + 'px;display:block;';
                                     cc.parentNode.replaceChild(img, cc);
                                 } else {
@@ -1671,10 +1650,7 @@ class WikiActivity : AppCompatActivity() {
                         }
                     }
 
-                    // --- Handle <video>, <audio>, and iframes ---
-                    // Show poster images only, no player chrome. Returns a Promise.
                     function cleanupMedia() {
-                        // Replace <video> elements with poster / frame / placeholder
                         var origVideos = bodyEl.querySelectorAll('video');
                         var cloneVideos = clone.querySelectorAll('video');
                         var posterPromises = [];
@@ -1735,13 +1711,7 @@ class WikiActivity : AppCompatActivity() {
                                 cv.parentNode.replaceChild(placeholder(ov.offsetWidth || 320, ov.offsetHeight || 180), cv);
                             }
                         }
-
-                        // Audio: hide the <audio> element to prevent html-to-image errors
                         clone.querySelectorAll('audio').forEach(function(a) { a.style.display = 'none'; });
-
-                        // Replace cross-origin iframes with thumbnails / placeholders.
-                        // html-to-image cannot serialise cross-origin iframes and throws
-                        // on failed embeds (e.g. YouTube Error 153).
                         var iframePromises = [];
                         var origIframes = bodyEl.querySelectorAll('iframe');
                         var cloneIframes = clone.querySelectorAll('iframe');
@@ -1751,7 +1721,6 @@ class WikiActivity : AppCompatActivity() {
                                 if (!ifSrc || ifSrc.indexOf('http://127.0.0.1') === 0) return;
                                 var iw = origIf.offsetWidth || 480;
                                 var ih = origIf.offsetHeight || 360;
-                                // Extract YouTube video ID for thumbnail
                                 var ytMatch = ifSrc.match(/youtube(?:-nocookie)?\.com\/embed\/([a-zA-Z0-9_-]+)/);
                                 if (ytMatch && ytMatch[1]) {
                                     var thumbUrl = 'https://img.youtube.com/vi/' + ytMatch[1] + '/hqdefault.jpg';
@@ -1771,7 +1740,6 @@ class WikiActivity : AppCompatActivity() {
                                                 tc.getContext('2d').drawImage(ti, 0, 0);
                                                 rep.src = tc.toDataURL();
                                             } catch(e) {
-                                                // CORS failed — use placeholder
                                                 if (rep.parentNode) rep.parentNode.replaceChild(placeholder(iw, ih), rep);
                                             }
                                             resolve();
@@ -1790,7 +1758,6 @@ class WikiActivity : AppCompatActivity() {
                                     });
                                     iframePromises.push(p);
                                 } else {
-                                    // Other cross-origin iframe: replace with placeholder
                                     if (cloneIf.parentNode) cloneIf.parentNode.replaceChild(placeholder(iw, ih), cloneIf);
                                 }
                             })(origIframes[ii], cloneIframes[ii]);
@@ -1799,54 +1766,37 @@ class WikiActivity : AppCompatActivity() {
                     }
 
                     var captureOpts = {
-                        quality: 0.92,
+                        quality: 0.85,
                         backgroundColor: '#ffffff',
-                        pixelRatio: 2,
+                        pixelRatio: 1,
                         imagePlaceholder: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVQI12NgAAIABQABNjN9GQAAAAlwSFlzAAAWJQAAFiUBSVIk8AAAAA0lEQVQI12P4z8BQDwAEgAF/QualzQAAAABJRU5ErkJggg==',
                         filter: function(node) {
                             try {
                                 if (!(node instanceof HTMLElement)) return true;
-                                // Always include <style> — they have display:none by default
-                                // but are needed for CSS rules in SVG foreignObject
                                 if (node.tagName === 'STYLE') return true;
                                 if (node.hidden || node.getAttribute('hidden') === 'true' || node.getAttribute('hidden') === '') return false;
                                 var style = window.getComputedStyle(node);
                                 if (style.display === 'none' || style.visibility === 'hidden') return false;
                                 if (node.tagName === 'IMG' && node.naturalWidth === 0 && node.complete) return false;
-                                // Safety net: skip any remaining iframes
                                 if (node.tagName === 'IFRAME') return false;
                                 return true;
                             } catch(e) { return true; }
                         }
                     };
-                    // --- Fix PDF containers for capture ---
-                    // PDF pages are lazily rendered as large PNG data-URL <img> elements.
-                    // html-to-image serialises them into SVG foreignObject + URL-encodes,
-                    // which can exceed browser limits. Fix by:
-                    // 1) Hiding unrendered (empty) page wraps to limit height
-                    // 2) Compressing rendered page images from PNG to JPEG
-                    // 3) Removing hidden original embed/object elements (large data URLs)
-                    // 4) Fixing sticky toolbar, scroll constraints, and overflow
-                    // 5) Removing transparent text layers (not needed for image capture)
+
                     function fixPdfContainers() {
-                        // Remove ALL embed/object elements inside PDF containers
-                        // (they may have large PDF data URLs that bloat the SVG)
                         clone.querySelectorAll('.td-pdf-container embed, .td-pdf-container object').forEach(function(el) {
                             el.remove();
                         });
-                        // Remove text selection layers (transparent overlays not needed in capture)
                         clone.querySelectorAll('.td-pdf-text-layer').forEach(function(tl) {
                             tl.remove();
                         });
                         clone.querySelectorAll('.td-pdf-container').forEach(function(pc) {
-                            // Fix container overflow — overflow:auto can clip in SVG foreignObject
                             pc.style.overflow = 'visible';
                             var tb = pc.querySelector('div[style*="sticky"]');
                             if (tb) tb.style.position = 'static';
                             var pw = pc.querySelector('.td-pdf-pages-wrap');
                             if (pw) { pw.style.maxHeight = 'none'; pw.style.overflow = 'visible'; }
-                            // Hide empty page wraps (unrendered pages) instead of removing
-                            // to preserve element count for fixLayout() parallel iteration
                             pc.querySelectorAll('.td-pdf-page-wrap').forEach(function(wrap) {
                                 if (!wrap.querySelector('img')) {
                                     wrap.style.display = 'none';
@@ -1854,9 +1804,6 @@ class WikiActivity : AppCompatActivity() {
                                 }
                             });
                         });
-                        // Downscale + compress rendered PDF page images for capture.
-                        // Native PDF renders are very high-res; downscale to max 800px wide
-                        // and use lower JPEG quality to keep the SVG data URL under ~2MB.
                         var MAX_PAGE_W = 800;
                         var origPdfImgs = bodyEl.querySelectorAll('.td-pdf-page-wrap img');
                         var clonePdfImgs = clone.querySelectorAll('.td-pdf-page-wrap img');
@@ -1886,9 +1833,16 @@ class WikiActivity : AppCompatActivity() {
                         convertCanvases();
                         return cleanupMedia();
                     }).then(function() {
-                        // Double-render: first pass warms up remaining resources
-                        // (web fonts, SVG refs), second pass produces reliable output
-                        return htmlToImage.toJpeg(wrapper, captureOpts);
+                        // Now that all images are compressed data URLs, append to
+                        // DOM. No server fetches will be triggered.
+                        document.body.appendChild(wrapper);
+                        console.log('[TiddlyDesktop] shareAsImage: size=' + wrapper.offsetWidth + 'x' + wrapper.offsetHeight);
+                        // Wait for images to decode and layout to settle
+                        return new Promise(function(resolve) {
+                            requestAnimationFrame(function() {
+                                requestAnimationFrame(function() { resolve(); });
+                            });
+                        });
                     }).then(function() {
                         return htmlToImage.toJpeg(wrapper, captureOpts);
                     }).then(function(dataUrl) {
@@ -1898,6 +1852,11 @@ class WikiActivity : AppCompatActivity() {
                     }).catch(function(err) {
                         wrapper.remove();
                         console.error('[TiddlyDesktop] shareAsImage: capture failed:', err);
+                        if (TiddlyDesktopShareCapture.onCaptureFailed) {
+                            TiddlyDesktopShareCapture.onCaptureFailed(
+                                'Image capture failed: ' + (err && err.message ? err.message : String(err))
+                            );
+                        }
                     });
                 }
                 if (typeof htmlToImage !== 'undefined') {
@@ -1906,7 +1865,12 @@ class WikiActivity : AppCompatActivity() {
                     var s = document.createElement('script');
                     s.src = '/_td/html-to-image.js';
                     s.onload = doCapture;
-                    s.onerror = function() { console.error('[TiddlyDesktop] Failed to load html-to-image.js'); };
+                    s.onerror = function() {
+                        console.error('[TiddlyDesktop] Failed to load html-to-image.js');
+                        if (TiddlyDesktopShareCapture.onCaptureFailed) {
+                            TiddlyDesktopShareCapture.onCaptureFailed('Failed to load image capture library');
+                        }
+                    };
                     document.head.appendChild(s);
                 }
             })();
@@ -1950,6 +1914,17 @@ class WikiActivity : AppCompatActivity() {
                 }
             } catch (t: Throwable) {
                 Log.e(TAG, "Failed to share image: ${t.message}", t)
+                runOnUiThread {
+                    Toast.makeText(this@WikiActivity, "Image capture failed: ${t.message}", Toast.LENGTH_LONG).show()
+                }
+            }
+        }
+
+        @JavascriptInterface
+        fun onCaptureFailed(message: String) {
+            Log.e(TAG, "shareAsImage capture failed: $message")
+            runOnUiThread {
+                Toast.makeText(this@WikiActivity, message, Toast.LENGTH_LONG).show()
             }
         }
     }
@@ -2205,6 +2180,65 @@ class WikiActivity : AppCompatActivity() {
             } catch (e: Exception) {
                 android.util.Log.e("TiddlyDesktopSync", "saveTombstones failed: ${e.message}")
             }
+        }
+
+        // ── Collaborative editing ─────────────────────────────────────
+
+        @JavascriptInterface
+        fun collabEditingStarted(wikiId: String, tiddlerTitle: String) {
+            Thread {
+                bridgePost("/_bridge/collab-editing-started", org.json.JSONObject().apply {
+                    put("wiki_id", wikiId)
+                    put("tiddler_title", tiddlerTitle)
+                })
+            }.start()
+        }
+
+        @JavascriptInterface
+        fun collabEditingStopped(wikiId: String, tiddlerTitle: String) {
+            Thread {
+                bridgePost("/_bridge/collab-editing-stopped", org.json.JSONObject().apply {
+                    put("wiki_id", wikiId)
+                    put("tiddler_title", tiddlerTitle)
+                })
+            }.start()
+        }
+
+        @JavascriptInterface
+        fun collabUpdate(wikiId: String, tiddlerTitle: String, updateBase64: String) {
+            Thread {
+                bridgePost("/_bridge/collab-update", org.json.JSONObject().apply {
+                    put("wiki_id", wikiId)
+                    put("tiddler_title", tiddlerTitle)
+                    put("update_base64", updateBase64)
+                })
+            }.start()
+        }
+
+        @JavascriptInterface
+        fun collabAwareness(wikiId: String, tiddlerTitle: String, updateBase64: String) {
+            Thread {
+                bridgePost("/_bridge/collab-awareness", org.json.JSONObject().apply {
+                    put("wiki_id", wikiId)
+                    put("tiddler_title", tiddlerTitle)
+                    put("update_base64", updateBase64)
+                })
+            }.start()
+        }
+
+        @JavascriptInterface
+        fun getRemoteEditors(wikiId: String, tiddlerTitle: String): String {
+            val port = bridgePort()
+            if (port <= 0) return "[]"
+            return try {
+                val url = java.net.URL("http://127.0.0.1:$port/_bridge/collab-editors?wiki_id=${java.net.URLEncoder.encode(wikiId, "UTF-8")}&tiddler_title=${java.net.URLEncoder.encode(tiddlerTitle, "UTF-8")}")
+                val conn = url.openConnection() as java.net.HttpURLConnection
+                conn.connectTimeout = 2000
+                conn.readTimeout = 2000
+                val body = conn.inputStream.bufferedReader().readText()
+                conn.disconnect()
+                body
+            } catch (_: Exception) { "[]" }
         }
     }
 
@@ -5891,9 +5925,10 @@ class WikiActivity : AppCompatActivity() {
             "if(!src)return '';" +
             "return decodeURIComponent(src.replace(/^https?:\\/\\/127\\.0\\.0\\.1:\\d+\\//,'').replace(/^\\/_file\\//,'').replace(/^\\/_relative\\//,''));" +
             "}" +
-            // Async share handler: gathers fields + rendered HTML, calls prepareShare
-            "async function __tdShareTiddler(title){" +
-            // Get tiddler fields as JSON
+            // Share handler: gathers fields as JSON + plain text, calls prepareShare.
+            // No rendered HTML is generated here — shareAsImage captures directly from
+            // the live DOM via html2canvas, and other formats use fieldsJson/plainText.
+            "function __tdShareTiddler(title){" +
             "var tiddler=\$tw.wiki.getTiddler(title);" +
             "var fields={};" +
             "if(tiddler){for(var k in tiddler.fields){" +
@@ -5901,76 +5936,8 @@ class WikiActivity : AppCompatActivity() {
             "if(v instanceof Date){fields[k]=\$tw.utils.stringifyDate(v);}else if(Array.isArray(v)){fields[k]=\$tw.utils.stringifyList(v);}else{fields[k]=String(v);}" +
             "}}" +
             "var fieldsJson=JSON.stringify(fields);" +
-            "var html='';var plainText=fields.text||'';" +
-            // Get the rendered body from the live DOM (fast, avoids re-rendering)
-            "if(tiddler){" +
-            "var bodyEl;document.querySelectorAll('[data-tiddler-title]').forEach(function(el){" +
-            "if(!bodyEl&&el.getAttribute('data-tiddler-title')===title){" +
-            "var b=el.querySelector('.tc-tiddler-body');if(b)bodyEl=b;" +
-            "}" +
-            "});" +
-            "if(bodyEl){html=bodyEl.innerHTML||'';}else{" +
-            // Fallback: render via TW5 API if tiddler not visible in DOM
-            "try{html=\$tw.wiki.renderTiddler('text/html',title)||'';}catch(e){console.error('[TiddlyDesktop] Share render error:',e);}" +
-            "}" +
-            "}" +
-            // Convert local URLs in rendered HTML to data URIs
-            "if(html){" +
-            "var tmp=document.createElement('div');" +
-            "tmp.innerHTML=html;" +
-            "var promises=[];" +
-            // Replace <video> with poster thumbnail as <img> (data URI)
-            "tmp.querySelectorAll('video').forEach(function(v){" +
-            "var src=v.getAttribute('src')||'';if(!src){var s=v.querySelector('source');if(s)src=s.getAttribute('src')||'';}" +
-            "if(src&&window.TiddlyDesktopPoster){" +
-            "try{" +
-            "var rel=__tdRelPath(src);" +
-            "var poster=TiddlyDesktopPoster.getPoster(rel);" +
-            "if(poster){var img=document.createElement('img');img.src=poster;img.style.maxWidth='100%';v.parentNode.replaceChild(img,v);return;}" +
-            "}catch(e){}" +
-            "}" +
-            "var t=document.createTextNode('[Video]');v.parentNode.replaceChild(t,v);" +
-            "});" +
-            // Convert <audio> src to data URI
-            "tmp.querySelectorAll('audio').forEach(function(a){" +
-            "var src=a.getAttribute('src')||'';if(!src){var s=a.querySelector('source');if(s)src=s.getAttribute('src')||'';}" +
-            "if(src&&src.indexOf('data:')!==0){" +
-            "promises.push(__tdToDataUri(src).then(function(d){" +
-            "if(d){a.removeAttribute('src');a.querySelectorAll('source').forEach(function(s){s.remove();});a.setAttribute('src',d);}" +
-            "else{var em=document.createElement('em');em.textContent='[Audio]';a.parentNode.replaceChild(em,a);}" +
-            "}));" +
-            "}});" +
-            // Convert <img> src to data URI (skip already-inlined data: URIs)
-            "tmp.querySelectorAll('img').forEach(function(img){" +
-            "var src=img.getAttribute('src')||'';" +
-            "if(src&&src.indexOf('data:')!==0){" +
-            "promises.push(__tdToDataUri(src).then(function(d){if(d)img.setAttribute('src',d);}));" +
-            "}" +
-            "});" +
-            // Convert <object>/<embed> to data URI <img> if image, else placeholder
-            "tmp.querySelectorAll('object,embed').forEach(function(obj){" +
-            "var src=obj.getAttribute('data')||obj.getAttribute('src')||'';" +
-            "var tp=(obj.getAttribute('type')||'').toLowerCase();" +
-            "if(src&&src.indexOf('data:')!==0&&(tp.indexOf('image/')===0||/\\.(png|jpe?g|gif|svg|webp|bmp)$/i.test(src))){" +
-            "var img=document.createElement('img');img.style.maxWidth='100%';" +
-            "promises.push(__tdToDataUri(src).then(function(d){if(d){img.src=d;obj.parentNode.replaceChild(img,obj);}else obj.remove();}));" +
-            "}else if(tp.indexOf('application/pdf')===0||/\\.pdf$/i.test(src)){" +
-            "var em=document.createElement('em');em.textContent='[PDF: '+(src.split('/').pop()||'document')+']';obj.parentNode.replaceChild(em,obj);" +
-            "}else{obj.remove();}" +
-            "});" +
-            // Convert <iframe> — replace with link or placeholder
-            "tmp.querySelectorAll('iframe').forEach(function(f){" +
-            "var src=f.getAttribute('src')||'';" +
-            "if(src&&src.indexOf('data:')!==0&&src.indexOf('about:')!==0){" +
-            "var a=document.createElement('a');a.href=src;a.textContent=src;a.style.display='block';f.parentNode.replaceChild(a,f);" +
-            "}else{f.remove();}" +
-            "});" +
-            // Wait for all async conversions
-            "if(promises.length)await Promise.all(promises);" +
-            "html=tmp.innerHTML||'';" +
-            "}" +
-            "console.log('[TiddlyDesktop] Share: html.length='+html.length);" +
-            "if(window.TiddlyDesktopShare)window.TiddlyDesktopShare.prepareShare(title,fieldsJson,html,plainText);" +
+            "var plainText=fields.text||'';" +
+            "if(window.TiddlyDesktopShare)window.TiddlyDesktopShare.prepareShare(title,fieldsJson,'',plainText);" +
             "}" +
             "\$tw.rootWidget.addEventListener('tm-tiddlydesktop-rs-share',function(e){" +
             "var t=e.param||e.tiddlerTitle;if(!t)return false;" +
@@ -6023,6 +5990,21 @@ class WikiActivity : AppCompatActivity() {
             "function activate(syncId){" +
             "console.log('[LAN Sync] Activated for wiki: '+syncId);" +
             "S.wikiOpened(syncId);" +
+            // Collab API for CM6 Yjs plugin
+            "var collabListeners={};" +
+            "function emitCollab(type,data){var ls=collabListeners[type];if(ls)for(var i=0;i<ls.length;i++){try{ls[i](data);}catch(e){}}}" +
+            "if(!window.TiddlyDesktop)window.TiddlyDesktop={};" +
+            "window.TiddlyDesktop.collab={" +
+            "startEditing:function(t){S.collabEditingStarted(syncId,t);}," +
+            "stopEditing:function(t){S.collabEditingStopped(syncId,t);}," +
+            "sendUpdate:function(t,b){S.collabUpdate(syncId,t,b);}," +
+            "sendAwareness:function(t,b){S.collabAwareness(syncId,t,b);}," +
+            "getRemoteEditors:function(t){try{return JSON.parse(S.getRemoteEditors(syncId,t)||'[]');}catch(e){return [];}}," +
+            "getRemoteEditorsAsync:function(t){return Promise.resolve(this.getRemoteEditors(t));}," +
+            "on:function(ev,cb){if(!collabListeners[ev])collabListeners[ev]=[];collabListeners[ev].push(cb);}," +
+            "off:function(ev,cb){if(!collabListeners[ev])return;collabListeners[ev]=collabListeners[ev].filter(function(c){return c!==cb;});}" +
+            "};" +
+            "console.log('[LAN Sync] Collab API initialized for wiki: '+syncId);" +
             // Use a Set to suppress re-broadcasting received changes.
             // TiddlyWiki dispatches change events asynchronously via $tw.utils.nextTick(),
             // so a boolean flag would already be cleared when the change listener fires.
@@ -6053,7 +6035,7 @@ class WikiActivity : AppCompatActivity() {
             "if(conflicts[t])continue;" +
             "var td=\$tw.wiki.getTiddler(t);" +
             "if(ch[t].deleted){var dm=\$tw.utils.stringifyDate(new Date());tomb[t]={modified:dm,time:Date.now()};S.saveTombstones(syncId,JSON.stringify(tomb));console.log('[LAN Sync] Outbound delete: '+t);S.tiddlerDeleted(syncId,t);}" +
-            "else if(td){console.log('[LAN Sync] Outbound change: '+t);S.tiddlerChanged(syncId,t,serFields(td.fields));}" +
+            "else{if(tomb[t]&&!tomb[t].cleared){tomb[t].cleared=true;S.saveTombstones(syncId,JSON.stringify(tomb));console.log('[LAN Sync] Cleared tombstone for re-created: '+t);}if(td){console.log('[LAN Sync] Outbound change: '+t);S.tiddlerChanged(syncId,t,serFields(td.fields));}}" +
             "}" +
             "});" +
             // Inbound: poll bridge for changes (batched application)
@@ -6077,7 +6059,7 @@ class WikiActivity : AppCompatActivity() {
             "if(\$tw.wiki.isShadowTiddler(t)&&!\$tw.wiki.tiddlerExists(t))continue;" +
             "var td=\$tw.wiki.getTiddler(t);if(td){var m=td.fields.modified;fps.push({title:t,modified:m?fts(m):''});seen[t]=1;}}" +
             "var ks=Object.keys(kst);for(var j=0;j<ks.length;j++){if(!seen[ks[j]])fps.push({title:ks[j],modified:kst[ks[j]]});}" +
-            "var tks=Object.keys(tomb);for(var k=0;k<tks.length;k++){if(!seen[tks[k]])fps.push({title:tks[k],modified:tomb[tks[k]].modified,deleted:true});else delete tomb[tks[k]];}" +
+            "var tks=Object.keys(tomb);var tc=false;for(var k=0;k<tks.length;k++){if(tomb[tks[k]].cleared)continue;if(!seen[tks[k]])fps.push({title:tks[k],modified:tomb[tks[k]].modified,deleted:true});else{tomb[tks[k]].cleared=true;tc=true;}}if(tc)S.saveTombstones(syncId,JSON.stringify(tomb));" +
             "return fps;}" +
             "function queueChange(d){" +
             "if(d.wiki_id!==syncId)return;" +
@@ -6086,6 +6068,7 @@ class WikiActivity : AppCompatActivity() {
             "if(d.type==='compare-fingerprints'){compareFingerprints(d.from_device_id,d.fingerprints);return;}" +
             "if(d.type==='attachment-received'){reloadAttachment(d.filename);return;}" +
             "if(d.type==='wiki-info-changed'){console.log('[LAN Sync] Wiki config changed from another device');\$tw.wiki.addTiddler(new \$tw.Tiddler({title:'\$:/temp/tiddlydesktop/config-reload-required',text:'yes'}));return;}" +
+            "if(d.type==='editing-started'||d.type==='editing-stopped'||d.type==='collab-update'||d.type==='collab-awareness'){emitCollab(d.type,d);return;}" +
             "queue.push(d);if(!batchTimer)batchTimer=setTimeout(applyBatch,50);" +
             "}" +
             "function applyBatch(){batchTimer=null;var b=queue;queue=[];if(!b.length)return;" +
@@ -6107,10 +6090,12 @@ class WikiActivity : AppCompatActivity() {
             "var remote={};var peerTombs={};for(var i=0;i<fps.length;i++){if(fps[i].deleted)peerTombs[fps[i].title]=fps[i].modified;else remote[fps[i].title]=fps[i].modified;}" +
             // Apply peer tombstones: delete local tiddlers that peer intentionally deleted
             "var tombNs=false;var ptks=Object.keys(peerTombs);for(var ti=0;ti<ptks.length;ti++){" +
-            "var tt=ptks[ti];var tm=peerTombs[tt];var lt=\$tw.wiki.getTiddler(tt);" +
+            "var tt=ptks[ti];var tm=peerTombs[tt];" +
+            "var lt2=tomb[tt];if(lt2&&lt2.cleared&&lt2.modified>=tm)continue;" +
+            "var lt=\$tw.wiki.getTiddler(tt);" +
             "if(lt){var lm2=lt.fields.modified?fts(lt.fields.modified):'';" +
             "if(!lm2||lm2<=tm){suppress.add(tt);\$tw.wiki.deleteTiddler(tt);tombNs=true;console.log('[LAN Sync] Applied tombstone deletion: '+tt);}}" +
-            "if(!tomb[tt]||tomb[tt].modified<tm)tomb[tt]={modified:tm,time:Date.now()};}" +
+            "if(!lt2||lt2.modified<tm)tomb[tt]={modified:tm,time:Date.now()};}" +
             "if(tombNs)scheduleSave();if(ptks.length>0)S.saveTombstones(syncId,JSON.stringify(tomb));" +
             "var all=\$tw.wiki.allTitles();var diffs=[];" +
             "for(var j=0;j<all.length;j++){var t=all[j];" +

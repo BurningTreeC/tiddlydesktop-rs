@@ -220,7 +220,7 @@ pub async fn connect_to_peer(
 
     let outbound_peer_id = peer_device_id.clone();
     let outbound = tokio::spawn(async move {
-        let mut ping_interval = tokio::time::interval(std::time::Duration::from_secs(20));
+        let mut ping_interval = tokio::time::interval(std::time::Duration::from_secs(2));
         ping_interval.tick().await;
         loop {
             tokio::select! {
@@ -430,7 +430,7 @@ pub async fn connect_to_paired_peer(
 
     let outbound_peer_id = peer_device_id.to_string();
     let outbound = tokio::spawn(async move {
-        let mut ping_interval = tokio::time::interval(std::time::Duration::from_secs(20));
+        let mut ping_interval = tokio::time::interval(std::time::Duration::from_secs(2));
         ping_interval.tick().await;
         loop {
             tokio::select! {

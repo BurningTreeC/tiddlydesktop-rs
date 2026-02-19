@@ -10,7 +10,7 @@
     "withGlobalTauri": true,
     "windows": [],
     "security": {
-      "csp": "default-src 'self' wikifile: tdasset: tdlib: http://127.0.0.1:*; script-src 'self' 'unsafe-inline' 'unsafe-eval' wikifile: tdlib: http://127.0.0.1:*; style-src 'self' 'unsafe-inline' wikifile: tdasset: tdlib: http://127.0.0.1:*; img-src 'self' data: blob: wikifile: tdasset: tdlib: http://127.0.0.1:* https:; connect-src 'self' wikifile: tdasset: tdlib: http://127.0.0.1:* https:; font-src 'self' data: wikifile: tdasset: tdlib:; media-src 'self' data: blob: wikifile: tdasset: tdlib: https:; frame-src 'self' wikifile: tdasset: tdlib: https:; object-src 'self' wikifile: tdasset: tdlib:; base-uri 'self'",
+      "csp": "default-src 'self' wikifile: tdasset: tdlib: http://127.0.0.1:*; script-src 'self' 'unsafe-inline' 'unsafe-eval' wikifile: tdlib: http://127.0.0.1:*; style-src 'self' 'unsafe-inline' wikifile: tdasset: tdlib: http://127.0.0.1:*; img-src 'self' data: blob: wikifile: tdasset: tdlib: http://127.0.0.1:* https:; connect-src 'self' wikifile: tdasset: tdlib: http://127.0.0.1:* ws://127.0.0.1:* https:; font-src 'self' data: wikifile: tdasset: tdlib:; media-src 'self' data: blob: wikifile: tdasset: tdlib: https:; frame-src 'self' wikifile: tdasset: tdlib: https:; object-src 'self' wikifile: tdasset: tdlib:; base-uri 'self'",
       "assetProtocol": {
         "enable": true,
         "scope": ["**/*"]
@@ -59,7 +59,7 @@
       "minimumSystemVersion": "10.13"
     },
     "android": {
-      "versionCode": 36
+      "versionCode": 38
     },
     "fileAssociations": [
       {

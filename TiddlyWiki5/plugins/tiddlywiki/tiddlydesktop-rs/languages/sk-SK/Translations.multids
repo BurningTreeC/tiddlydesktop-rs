@@ -97,3 +97,12 @@ LanSync/NoRemoteWikis: Žiadne nové wiki nie sú dostupné z pripojených zaria
 LanSync/From: z
 LanSync/GetWiki: Získať wiki
 LanSync/LinkWiki: Prepojiť
+
+Buttons/Plugins: pluginy
+PluginInstaller/Title: Správa pluginov
+PluginInstaller/For: pre:
+PluginInstaller/SelectPlugins: Vyberte pluginy
+PluginInstaller/Install: Použiť zmeny
+PluginInstaller/Installing: Aktualizácia pluginov...
+PluginInstaller/Installed: (nainštalované)
+PluginInstaller/RestartNeeded: Reštartujte wiki na použitie zmien.

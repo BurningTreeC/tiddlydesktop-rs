@@ -64,19 +64,12 @@ fn copy_node_to_jnilibs() {
     }
 }
 
-/// Create a ZIP file of all files in resources/tiddlywiki/ for faster Android extraction
+/// Create a ZIP file of all files in resources/tiddlywiki/ for Android extraction
 /// The ZIP is placed in OUT_DIR so it can be included via include_bytes! in the Rust code
-/// Also includes the Node.js binary for subprocess spawning
 fn create_tiddlywiki_zip() {
-    let resources_dir = Path::new("resources/tiddlywiki");
     // Put ZIP in OUT_DIR so it can be embedded directly into the binary via include_bytes!
     let out_dir = std::env::var("OUT_DIR").unwrap();
     let zip_path = Path::new(&out_dir).join("tiddlywiki.zip");
-
-    if !resources_dir.exists() {
-        eprintln!("Warning: resources/tiddlywiki directory not found, skipping ZIP creation");
-        return;
-    }
 
     // Create the ZIP file
     let zip_file = File::create(zip_path).expect("Failed to create tiddlywiki.zip");
@@ -86,9 +79,15 @@ fn create_tiddlywiki_zip() {
         .compression_method(zip::CompressionMethod::Deflated)
         .compression_level(Some(6));
 
-    // Walk the tiddlywiki directory and add all files to the ZIP
-    // Skip .git directories to avoid bundling 75MB+ of git history
     let mut file_count = 0;
+
+    let resources_dir = Path::new("resources/tiddlywiki");
+    if !resources_dir.exists() {
+        panic!("resources/tiddlywiki directory not found");
+    }
+
+    // Walk the directory and add all files to the ZIP
+    // Skip .git directories to avoid bundling 75MB+ of git history
     for entry in walkdir::WalkDir::new(resources_dir)
         .into_iter()
         .filter_entry(|e| {
@@ -100,7 +99,8 @@ fn create_tiddlywiki_zip() {
         let path = entry.path();
 
         if path.is_file() {
-            // Get path relative to resources/tiddlywiki, keep "tiddlywiki/" prefix in ZIP
+            // Keep path relative to "resources/" so ZIP contains "tiddlywiki/..."
+            // Then extraction to {app_data}/ puts them at {app_data}/tiddlywiki/
             if let Ok(relative) = path.strip_prefix("resources") {
                 let zip_path_str = relative.to_string_lossy().replace('\\', "/");
 

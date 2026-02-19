@@ -1726,13 +1726,17 @@ fn print_page(window: tauri::WebviewWindow) -> Result<(), String> {
 
 /// Show a save file dialog and write content to the selected file (used by tm-download-file)
 #[tauri::command]
+#[allow(unused_variables)]
 async fn download_file(
     app: tauri::AppHandle,
+    window: tauri::Window,
     filename: String,
     content: String,
     content_type: Option<String>,
 ) -> Result<String, String> {
     use tauri_plugin_dialog::DialogExt;
+
+    eprintln!("[download_file] Called: filename={}, content_type={:?}, content_len={}", filename, content_type, content.len());
 
     // Determine file filter based on content type or filename extension
     let extension = std::path::Path::new(&filename)
@@ -1760,13 +1764,25 @@ async fn download_file(
         ext => &[ext],
     };
 
-    // Show save dialog
-    let file_path = app
-        .dialog()
+    // Show save dialog (async variant to avoid blocking the tokio runtime,
+    // which can deadlock on Linux/WebKitGTK where dialogs need the GTK main loop).
+    // Parent window is set so the dialog appears correctly on desktop platforms.
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    let mut builder = app.dialog()
         .file()
         .set_file_name(&filename)
-        .add_filter(filter_name, extensions)
-        .blocking_save_file();
+        .add_filter(filter_name, extensions);
+    #[cfg(not(target_os = "android"))]
+    {
+        builder = builder.set_parent(&window);
+    }
+    builder.save_file(move |file_path| {
+        let _ = tx.send(file_path);
+    });
+
+    eprintln!("[download_file] Save dialog launched, waiting for user...");
+    let file_path = rx.await.map_err(|_| "Dialog channel closed".to_string())?;
+    eprintln!("[download_file] Dialog returned: {:?}", file_path.as_ref().map(|p| p.to_string()));
 
     match file_path {
         Some(path) => {
@@ -1775,10 +1791,142 @@ async fn download_file(
             tokio::fs::write(&path_str, &content)
                 .await
                 .map_err(|e| format!("Failed to write file: {}", e))?;
+            eprintln!("[download_file] File written successfully: {}", path_str);
             Ok(path_str)
         }
         None => Err("Save cancelled".to_string()),
     }
+}
+
+/// Fetch a URL via Rust (bypasses CORS restrictions for wikifile:// pages).
+/// Simple GET-only version used by plugin library loading.
+#[cfg(not(target_os = "android"))]
+#[tauri::command]
+async fn fetch_url(url: String) -> Result<String, String> {
+    let resp = reqwest::get(&url)
+        .await
+        .map_err(|e| format!("Fetch failed: {}", e))?;
+    if !resp.status().is_success() {
+        return Err(format!("HTTP {}", resp.status()));
+    }
+    resp.text()
+        .await
+        .map_err(|e| format!("Failed to read response: {}", e))
+}
+
+/// Fetch a single plugin/tiddler JSON from a TiddlyWiki plugin library.
+/// The library at e.g. https://tiddlywiki.com/library/v5.3.8/index.html serves
+/// individual plugin tiddlers as JSON at relative paths like
+/// recipes/library/tiddlers/{double-encoded-title}.json
+/// The title must be double-URI-encoded (the library stores files that way).
+#[cfg(not(target_os = "android"))]
+#[tauri::command]
+async fn fetch_library_plugin(url: String, title: String) -> Result<String, String> {
+    // Construct the plugin JSON URL from the library URL
+    // Library URL: https://tiddlywiki.com/library/v5.3.8/index.html
+    // Plugin URL:  https://tiddlywiki.com/library/v5.3.8/recipes/library/tiddlers/{double-encoded}.json
+    let base_url = url.trim_end_matches("index.html").trim_end_matches('/');
+
+    // Double-encode the title (library stores files with double-encoded names)
+    fn uri_encode(s: &str) -> String {
+        let mut result = String::new();
+        for byte in s.bytes() {
+            match byte {
+                b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                    result.push(byte as char);
+                }
+                _ => {
+                    result.push_str(&format!("%{:02X}", byte));
+                }
+            }
+        }
+        result
+    }
+    let double_encoded = uri_encode(&uri_encode(&title));
+    let plugin_url = format!("{}/recipes/library/tiddlers/{}.json", base_url, double_encoded);
+
+    eprintln!("[PluginLibrary] Fetching plugin: {}", plugin_url);
+    let resp = reqwest::get(&plugin_url)
+        .await
+        .map_err(|e| format!("Fetch failed: {}", e))?;
+    if !resp.status().is_success() {
+        return Err(format!("Plugin not found (HTTP {}): {}", resp.status(), title));
+    }
+    let json = resp.text()
+        .await
+        .map_err(|e| format!("Read failed: {}", e))?;
+    eprintln!("[PluginLibrary] Plugin fetched: {} bytes for {}", json.len(), title);
+    Ok(json)
+}
+
+/// Full HTTP request proxy for tm-http-request (bypasses CORS).
+/// Returns a JSON object with status, statusText, headers, and data fields.
+#[cfg(not(target_os = "android"))]
+#[tauri::command]
+async fn http_request(
+    url: String,
+    method: Option<String>,
+    body: Option<String>,
+    headers: Option<std::collections::HashMap<String, String>>,
+    binary: Option<bool>,
+    username: Option<String>,
+    password: Option<String>,
+    bearer_token: Option<String>,
+) -> Result<serde_json::Value, String> {
+    use base64::Engine;
+    let client = reqwest::Client::new();
+    let method_str = method.as_deref().unwrap_or("GET");
+    let req_method = reqwest::Method::from_bytes(method_str.as_bytes())
+        .map_err(|_| format!("Invalid HTTP method: {}", method_str))?;
+
+    let mut builder = client.request(req_method, &url);
+
+    // Set headers
+    if let Some(ref hdrs) = headers {
+        for (key, value) in hdrs {
+            builder = builder.header(key.as_str(), value.as_str());
+        }
+    }
+
+    // Set auth
+    if let Some(ref token) = bearer_token {
+        builder = builder.bearer_auth(token);
+    } else if let Some(ref user) = username {
+        builder = builder.basic_auth(user, password.as_deref());
+    }
+
+    // Set body
+    if let Some(ref b) = body {
+        builder = builder.body(b.clone());
+    }
+
+    let resp = builder.send().await.map_err(|e| format!("Request failed: {}", e))?;
+
+    let status = resp.status().as_u16();
+    let status_text = resp.status().canonical_reason().unwrap_or("").to_string();
+
+    // Collect response headers
+    let mut resp_headers = serde_json::Map::new();
+    for (key, value) in resp.headers() {
+        if let Ok(v) = value.to_str() {
+            resp_headers.insert(key.as_str().to_string(), serde_json::Value::String(v.to_string()));
+        }
+    }
+
+    // Read body
+    let data = if binary.unwrap_or(false) {
+        let bytes = resp.bytes().await.map_err(|e| format!("Failed to read response: {}", e))?;
+        base64::engine::general_purpose::STANDARD.encode(&bytes)
+    } else {
+        resp.text().await.map_err(|e| format!("Failed to read response: {}", e))?
+    };
+
+    Ok(serde_json::json!({
+        "status": status,
+        "statusText": status_text,
+        "headers": resp_headers,
+        "data": data
+    }))
 }
 
 /// Extract a video poster frame using ffmpeg (desktop only)
@@ -3313,18 +3461,28 @@ async fn open_wiki_folder(app: tauri::AppHandle, path: String, _tiddler_title: O
         cmd.env(ipc::AUTH_TOKEN_ENV_VAR, token);
     }
 
-    // Set TIDDLYWIKI_PLUGIN_PATH so Node.js can find user plugins.
-    // Include our {app_data}/plugins dir and any existing global TIDDLYWIKI_PLUGIN_PATH.
+    // Pass collab WS port so child process can connect
+    #[cfg(not(target_os = "android"))]
+    {
+        let collab_port = lan_sync::get_collab_port();
+        if collab_port > 0 {
+            cmd.env("COLLAB_WS_PORT", collab_port.to_string());
+        }
+    }
+
+    // Set TIDDLYWIKI_PLUGIN_PATH so Node.js can find user-installed plugins from {app_data}/plugins/.
+    // Bundled plugins live in tiddlywiki/plugins/ and are found automatically by TiddlyWiki.
     if let Ok(data_dir) = app.path().app_data_dir() {
         let plugins_dir = data_dir.join("plugins");
         let _ = std::fs::create_dir_all(&plugins_dir);
         let sep = if cfg!(windows) { ";" } else { ":" };
-        let plugin_path = match std::env::var("TIDDLYWIKI_PLUGIN_PATH") {
-            Ok(existing) if !existing.is_empty() => {
-                format!("{}{}{}", plugins_dir.display(), sep, existing)
+        let mut paths = vec![plugins_dir.to_string_lossy().to_string()];
+        if let Ok(existing) = std::env::var("TIDDLYWIKI_PLUGIN_PATH") {
+            if !existing.is_empty() {
+                paths.push(existing);
             }
-            _ => plugins_dir.to_string_lossy().to_string(),
-        };
+        }
+        let plugin_path = paths.join(sep);
         cmd.env("TIDDLYWIKI_PLUGIN_PATH", &plugin_path);
         eprintln!("[TiddlyDesktop] Set TIDDLYWIKI_PLUGIN_PATH={}", plugin_path);
     }
@@ -3699,19 +3857,21 @@ async fn get_available_plugins(app: tauri::AppHandle) -> Result<Vec<PluginInfo>,
                 if plugin_info_path.exists() {
                     if let Ok(content) = std::fs::read_to_string(&plugin_info_path) {
                         if let Ok(info) = serde_json::from_str::<serde_json::Value>(&content) {
-                            let id = path.file_name()
+                            let short_id = path.file_name()
                                 .and_then(|n| n.to_str())
                                 .unwrap_or("")
                                 .to_string();
+                            // Use tiddlywiki/{name} format to match tiddlywiki.info convention
+                            let id = format!("tiddlywiki/{}", short_id);
 
                             // Skip internal/core plugins
-                            if id == "tiddlyweb" || id == "filesystem" || id == "tiddlydesktop-rs" || id.starts_with("test") {
+                            if short_id == "tiddlyweb" || short_id == "filesystem" || short_id == "tiddlydesktop-rs" || short_id.starts_with("test") {
                                 continue;
                             }
 
                             let name = info.get("name")
                                 .and_then(|v| v.as_str())
-                                .unwrap_or(&id)
+                                .unwrap_or(&short_id)
                                 .to_string();
 
                             let description = info.get("description")
@@ -3720,11 +3880,11 @@ async fn get_available_plugins(app: tauri::AppHandle) -> Result<Vec<PluginInfo>,
                                 .to_string();
 
                             // Determine category
-                            let category = if editor_plugins.iter().any(|p| id.starts_with(p)) {
+                            let category = if editor_plugins.iter().any(|p| short_id.starts_with(p)) {
                                 "Editor"
-                            } else if utility_plugins.contains(&id.as_str()) {
+                            } else if utility_plugins.contains(&short_id.as_str()) {
                                 "Utility"
-                            } else if storage_plugins.contains(&id.as_str()) {
+                            } else if storage_plugins.contains(&short_id.as_str()) {
                                 "Storage"
                             } else {
                                 "Other"
@@ -3736,6 +3896,60 @@ async fn get_available_plugins(app: tauri::AppHandle) -> Result<Vec<PluginInfo>,
                                 description,
                                 category,
                             });
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Scan user-installed plugins from {app_data}/plugins/ (two-level: {author}/{name}/plugin.info)
+    {
+        if let Ok(data_dir) = app.path().app_data_dir() {
+            let user_plugins_dir = data_dir.join("plugins");
+            let existing_ids: std::collections::HashSet<String> = plugins.iter().map(|p| p.id.clone()).collect();
+            if user_plugins_dir.exists() {
+                if let Ok(author_entries) = std::fs::read_dir(&user_plugins_dir) {
+                    for author_entry in author_entries.flatten() {
+                        let author_path = author_entry.path();
+                        if !author_path.is_dir() { continue; }
+                        let author_name = author_path.file_name()
+                            .and_then(|n| n.to_str())
+                            .unwrap_or("")
+                            .to_string();
+                        if let Ok(plugin_entries) = std::fs::read_dir(&author_path) {
+                            for plugin_entry in plugin_entries.flatten() {
+                                let plugin_path = plugin_entry.path();
+                                if !plugin_path.is_dir() { continue; }
+                                let plugin_info_path = plugin_path.join("plugin.info");
+                                if !plugin_info_path.exists() { continue; }
+                                let plugin_name = plugin_path.file_name()
+                                    .and_then(|n| n.to_str())
+                                    .unwrap_or("")
+                                    .to_string();
+                                let id = format!("{}/{}", author_name, plugin_name);
+                                if existing_ids.contains(&plugin_name) || existing_ids.contains(&id) {
+                                    continue;
+                                }
+                                if let Ok(content) = std::fs::read_to_string(&plugin_info_path) {
+                                    if let Ok(info) = serde_json::from_str::<serde_json::Value>(&content) {
+                                        let name = info.get("name")
+                                            .and_then(|v| v.as_str())
+                                            .unwrap_or(&plugin_name)
+                                            .to_string();
+                                        let description = info.get("description")
+                                            .and_then(|v| v.as_str())
+                                            .unwrap_or("")
+                                            .to_string();
+                                        plugins.push(PluginInfo {
+                                            id,
+                                            name,
+                                            description,
+                                            category: "Custom".to_string(),
+                                        });
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -3827,6 +4041,387 @@ async fn get_available_plugins(app: tauri::AppHandle) -> Result<Vec<PluginInfo>,
     Ok(plugins)
 }
 
+/// Get the list of plugins currently installed in a wiki
+#[tauri::command]
+async fn get_wiki_installed_plugins(app: tauri::AppHandle, path: String, is_folder: bool) -> Result<Vec<String>, String> {
+    if is_folder {
+        // For folder wikis: read tiddlywiki.info plugins array + scan tiddlers/ for plugin tiddler files
+        // On Android, folder wiki paths are SAF JSON URIs — resolve to local mirror
+        #[cfg(target_os = "android")]
+        let local_path = android::node_bridge::get_or_create_local_copy(&path)?;
+        #[cfg(not(target_os = "android"))]
+        let local_path = path.clone();
+        let path_buf = PathBuf::from(&local_path);
+        let mut installed = Vec::new();
+
+        // 1. Read tiddlywiki.info plugins array
+        let info_path = path_buf.join("tiddlywiki.info");
+        if info_path.exists() {
+            let content = std::fs::read_to_string(&info_path)
+                .map_err(|e| format!("Failed to read tiddlywiki.info: {}", e))?;
+            if let Ok(info) = serde_json::from_str::<serde_json::Value>(&content) {
+                if let Some(plugins) = info.get("plugins").and_then(|v| v.as_array()) {
+                    for p in plugins {
+                        if let Some(name) = p.as_str() {
+                            installed.push(name.to_string());
+                        }
+                    }
+                }
+            }
+        }
+
+        // 2. Scan tiddlers/ for drag-and-dropped plugin tiddler files
+        let tiddlers_dir = path_buf.join("tiddlers");
+        if tiddlers_dir.exists() {
+            if let Ok(entries) = std::fs::read_dir(&tiddlers_dir) {
+                for entry in entries.flatten() {
+                    let file_path = entry.path();
+                    if file_path.is_file() {
+                        let ext = file_path.extension().and_then(|e| e.to_str()).unwrap_or("");
+                        match ext {
+                            "tid" => {
+                                // Read header lines of .tid file looking for plugin-type and title
+                                if let Ok(content) = std::fs::read_to_string(&file_path) {
+                                    let mut has_plugin_type = false;
+                                    let mut title = None;
+                                    for line in content.lines() {
+                                        if line.is_empty() { break; } // End of headers
+                                        if line.starts_with("plugin-type: plugin") {
+                                            has_plugin_type = true;
+                                        }
+                                        if let Some(t) = line.strip_prefix("title: ") {
+                                            title = Some(t.to_string());
+                                        }
+                                    }
+                                    if has_plugin_type {
+                                        if let Some(t) = title {
+                                            let id = t.strip_prefix("$:/plugins/").unwrap_or(&t);
+                                            if !installed.contains(&id.to_string()) {
+                                                installed.push(id.to_string());
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            "json" => {
+                                // Parse JSON looking for plugin-type field
+                                if let Ok(content) = std::fs::read_to_string(&file_path) {
+                                    if let Ok(json) = serde_json::from_str::<serde_json::Value>(&content) {
+                                        if json.get("plugin-type").and_then(|v| v.as_str()) == Some("plugin") {
+                                            if let Some(t) = json.get("title").and_then(|v| v.as_str()) {
+                                                let id = t.strip_prefix("$:/plugins/").unwrap_or(t);
+                                                if !installed.contains(&id.to_string()) {
+                                                    installed.push(id.to_string());
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(installed)
+    } else {
+        // For single-file wikis: use Node.js to extract plugin list
+        let temp_dir = std::env::temp_dir().join(format!("tiddlydesktop-plugins-{}", std::process::id()));
+        std::fs::create_dir_all(&temp_dir)
+            .map_err(|e| format!("Failed to create temp directory: {}", e))?;
+        // Create empty tiddlers dir
+        let _ = std::fs::create_dir_all(temp_dir.join("tiddlers"));
+        // Write minimal tiddlywiki.info
+        std::fs::write(temp_dir.join("tiddlywiki.info"), r#"{"plugins":[]}"#)
+            .map_err(|e| format!("Failed to write tiddlywiki.info: {}", e))?;
+
+        let temp_dir_str = temp_dir.to_string_lossy().to_string();
+
+        #[cfg(target_os = "android")]
+        let run_result = {
+            // On Android, wiki path is a SAF JSON URI — copy to local temp file first
+            let wiki_uri: serde_json::Value = serde_json::from_str(&path)
+                .map_err(|e| format!("Failed to parse wiki path JSON: {}", e))?;
+            let uri = wiki_uri.get("uri").and_then(|v| v.as_str())
+                .ok_or("Missing 'uri' in wiki path JSON")?;
+            let wiki_bytes = android::saf::read_document_bytes(uri)?;
+            let local_wiki = temp_dir.join("source_wiki.html");
+            std::fs::write(&local_wiki, &wiki_bytes)
+                .map_err(|e| format!("Failed to write local wiki copy: {}", e))?;
+            let local_wiki_str = local_wiki.to_string_lossy().to_string();
+
+            let args: Vec<&str> = vec![
+                &temp_dir_str,
+                "--load", &local_wiki_str,
+                "--output", &temp_dir_str,
+                "--render", "$:/core/save/all", "plugins.txt", "text/plain",
+                "$:/core/templates/plain-text-tiddler",
+                "[plugin-type[plugin]removeprefix[$:/plugins/]]",
+            ];
+            android::node_bridge::run_tiddlywiki_command(&args)
+        };
+
+        #[cfg(not(target_os = "android"))]
+        let run_result = {
+            let node_path = get_node_path(&app)?;
+            let tw_path = get_tiddlywiki_path(&app)?;
+            let tw_dir = tw_path.parent().ok_or("Failed to get TiddlyWiki directory")?;
+
+            let mut cmd = Command::new(&node_path);
+            cmd.arg(&tw_path)
+                .arg(&temp_dir)
+                .arg("--load")
+                .arg(&path)
+                .arg("--output")
+                .arg(&temp_dir)
+                .arg("--render")
+                .arg("$:/core/save/all")
+                .arg("plugins.txt")
+                .arg("text/plain")
+                .arg("$:/core/templates/plain-text-tiddler")
+                .arg("[plugin-type[plugin]removeprefix[$:/plugins/]]")
+                .current_dir(tw_dir);
+            #[cfg(target_os = "windows")]
+            cmd.creation_flags(CREATE_NO_WINDOW);
+
+            let output = cmd.output()
+                .map_err(|e| format!("Failed to run TiddlyWiki: {}", e))?;
+            if output.status.success() {
+                Ok(String::from_utf8_lossy(&output.stdout).to_string())
+            } else {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                Err(format!("Failed to extract plugins: {}", stderr))
+            }
+        };
+
+        let result = match run_result {
+            Ok(_) => {
+                let plugins_file = temp_dir.join("plugins.txt");
+                if plugins_file.exists() {
+                    let content = std::fs::read_to_string(&plugins_file)
+                        .map_err(|e| format!("Failed to read plugins output: {}", e))?;
+                    Ok(content.lines()
+                        .map(|l| l.trim())
+                        .filter(|l| !l.is_empty())
+                        .map(|l| l.to_string())
+                        .collect())
+                } else {
+                    Ok(Vec::new())
+                }
+            }
+            Err(e) => Err(e),
+        };
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        result
+    }
+}
+
+/// Install/update plugins in an existing wiki
+#[tauri::command]
+async fn install_plugins_to_wiki(app: tauri::AppHandle, path: String, is_folder: bool, plugins: Vec<String>) -> Result<(), String> {
+    if is_folder {
+        // For folder wikis: update tiddlywiki.info plugins array
+        // On Android, folder wiki paths are SAF JSON URIs — resolve to local mirror
+        #[cfg(target_os = "android")]
+        let local_path = android::node_bridge::get_or_create_local_copy(&path)?;
+        #[cfg(not(target_os = "android"))]
+        let local_path = path.clone();
+        let path_buf = PathBuf::from(&local_path);
+
+        let info_path = path_buf.join("tiddlywiki.info");
+        if !info_path.exists() {
+            return Err("tiddlywiki.info not found in wiki folder".to_string());
+        }
+        let content = std::fs::read_to_string(&info_path)
+            .map_err(|e| format!("Failed to read tiddlywiki.info: {}", e))?;
+        let mut info: serde_json::Value = serde_json::from_str(&content)
+            .map_err(|e| format!("Failed to parse tiddlywiki.info: {}", e))?;
+
+        // Build new plugins array, keeping tiddlyweb and filesystem if they were present
+        let old_plugins: Vec<String> = info.get("plugins")
+            .and_then(|v| v.as_array())
+            .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+            .unwrap_or_default();
+
+        let mut new_plugins: Vec<String> = plugins.clone();
+        // Ensure server plugins are preserved for folder wikis
+        for server_plugin in &["tiddlywiki/tiddlyweb", "tiddlywiki/filesystem"] {
+            if old_plugins.contains(&server_plugin.to_string()) && !new_plugins.contains(&server_plugin.to_string()) {
+                new_plugins.push(server_plugin.to_string());
+            }
+        }
+
+        info["plugins"] = serde_json::Value::Array(
+            new_plugins.iter().map(|p| serde_json::Value::String(p.clone())).collect()
+        );
+
+        let updated = serde_json::to_string_pretty(&info)
+            .map_err(|e| format!("Failed to serialize tiddlywiki.info: {}", e))?;
+        std::fs::write(&info_path, &updated)
+            .map_err(|e| format!("Failed to write tiddlywiki.info: {}", e))?;
+
+        // On Android, sync the updated tiddlywiki.info back to SAF
+        #[cfg(target_os = "android")]
+        {
+            // Find tiddlywiki.info in the SAF folder and write it back
+            if let Ok(Some(info_uri)) = android::saf::find_in_directory(&path, "tiddlywiki.info") {
+                android::saf::write_document_string(&info_uri, &updated)?;
+            }
+        }
+
+        Ok(())
+    } else {
+        // For single-file wikis: rebuild with new plugin set via Node.js
+        // Create temp directory for the rebuild
+        let temp_dir = std::env::temp_dir().join(format!("tiddlydesktop-rebuild-{}", std::process::id()));
+        std::fs::create_dir_all(&temp_dir)
+            .map_err(|e| format!("Failed to create temp directory: {}", e))?;
+        let _ = std::fs::create_dir_all(temp_dir.join("tiddlers"));
+
+        // Write tiddlywiki.info with the desired plugins
+        let info = serde_json::json!({
+            "plugins": plugins
+        });
+        std::fs::write(temp_dir.join("tiddlywiki.info"), serde_json::to_string_pretty(&info).unwrap())
+            .map_err(|e| format!("Failed to write tiddlywiki.info: {}", e))?;
+
+        // Strip server plugins
+        strip_server_plugins_from_info(&temp_dir.join("tiddlywiki.info"))?;
+
+        let temp_dir_str = temp_dir.to_string_lossy().to_string();
+        let output_dir = temp_dir.join("output");
+        let output_dir_str = output_dir.to_string_lossy().to_string();
+        let output_filename = "wiki.html";
+
+        #[cfg(target_os = "android")]
+        let build_result = {
+            // On Android, wiki path is a SAF JSON URI — copy to local temp file first
+            let wiki_uri: serde_json::Value = serde_json::from_str(&path)
+                .map_err(|e| format!("Failed to parse wiki path JSON: {}", e))?;
+            let uri = wiki_uri.get("uri").and_then(|v| v.as_str())
+                .ok_or("Missing 'uri' in wiki path JSON")?.to_string();
+            let wiki_bytes = android::saf::read_document_bytes(&uri)?;
+            let local_wiki = temp_dir.join("source_wiki.html");
+            std::fs::write(&local_wiki, &wiki_bytes)
+                .map_err(|e| format!("Failed to write local wiki copy: {}", e))?;
+            let local_wiki_str = local_wiki.to_string_lossy().to_string();
+
+            let args: Vec<&str> = vec![
+                &temp_dir_str,
+                "--load", &local_wiki_str,
+                "--output", &output_dir_str,
+                "--render", "$:/core/save/all", output_filename, "text/plain",
+            ];
+            let result = android::node_bridge::run_tiddlywiki_command(&args);
+
+            // On success, write rebuilt wiki back to SAF
+            if result.is_ok() {
+                let built_file = output_dir.join(output_filename);
+                if built_file.exists() {
+                    let built_bytes = std::fs::read(&built_file)
+                        .map_err(|e| format!("Failed to read rebuilt wiki: {}", e))?;
+                    android::saf::write_document_bytes(&uri, &built_bytes)?;
+                }
+            }
+            result
+        };
+
+        #[cfg(not(target_os = "android"))]
+        let build_result = {
+            let wiki_path = PathBuf::from(&path);
+            if !wiki_path.exists() {
+                let _ = std::fs::remove_dir_all(&temp_dir);
+                return Err("Wiki file not found".to_string());
+            }
+
+            // Create backup before rebuilding
+            {
+                let entries = wiki_storage::load_recent_files_from_disk(&app);
+                let entry = entries.iter().find(|e| utils::paths_equal(&e.path, &path));
+                let backups_enabled = entry.map(|e| e.backups_enabled).unwrap_or(true);
+                if backups_enabled {
+                    let backup_dir = get_wiki_backup_dir(&app, &path)
+                        .map(PathBuf::from)
+                        .unwrap_or_else(|| {
+                            wiki_path.parent().unwrap_or(std::path::Path::new(".")).join("backups")
+                        });
+                    let _ = std::fs::create_dir_all(&backup_dir);
+                    let filename = wiki_path.file_name().unwrap_or_default().to_string_lossy();
+                    let backup_name = format!("{}.plugin-backup.{}", filename, chrono::Local::now().format("%Y%m%d-%H%M%S"));
+                    let _ = std::fs::copy(&wiki_path, backup_dir.join(&backup_name));
+                }
+            }
+
+            let wiki_path_str = wiki_path.to_string_lossy().to_string();
+            let node_path = get_node_path(&app)?;
+            let tw_path = get_tiddlywiki_path(&app)?;
+            let tw_dir = tw_path.parent().ok_or("Failed to get TiddlyWiki directory")?;
+
+            // Use original filename for desktop output
+            let desktop_output_filename = wiki_path.file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("wiki.html");
+
+            let mut build_cmd = Command::new(&node_path);
+            build_cmd.arg(&tw_path)
+                .arg(&temp_dir)
+                .arg("--load")
+                .arg(&wiki_path)
+                .arg("--output")
+                .arg(&output_dir)
+                .arg("--render")
+                .arg("$:/core/save/all")
+                .arg(desktop_output_filename)
+                .arg("text/plain")
+                .current_dir(tw_dir);
+
+            // Set TIDDLYWIKI_PLUGIN_PATH for user-installed plugins
+            if let Ok(data_dir) = app.path().app_data_dir() {
+                let sep = if cfg!(windows) { ";" } else { ":" };
+                let plugins_dir = data_dir.join("plugins");
+                let _ = std::fs::create_dir_all(&plugins_dir);
+                let mut paths = vec![plugins_dir.to_string_lossy().to_string()];
+                if let Ok(existing) = std::env::var("TIDDLYWIKI_PLUGIN_PATH") {
+                    if !existing.is_empty() {
+                        paths.push(existing);
+                    }
+                }
+                build_cmd.env("TIDDLYWIKI_PLUGIN_PATH", paths.join(sep));
+            }
+
+            #[cfg(target_os = "windows")]
+            build_cmd.creation_flags(CREATE_NO_WINDOW);
+
+            let build_output = build_cmd.output()
+                .map_err(|e| format!("Failed to rebuild wiki: {}", e))?;
+            if build_output.status.success() {
+                // Copy output back over original
+                let built_file = output_dir.join(desktop_output_filename);
+                if built_file.exists() {
+                    std::fs::copy(&built_file, &wiki_path)
+                        .map_err(|e| format!("Failed to copy rebuilt wiki: {}", e))?;
+                }
+                Ok(String::new())
+            } else {
+                let stderr = String::from_utf8_lossy(&build_output.stderr);
+                let stdout = String::from_utf8_lossy(&build_output.stdout);
+                Err(format!("Wiki rebuild failed:\n{}\n{}", stdout, stderr))
+            }
+        };
+
+        if let Err(e) = build_result {
+            let _ = std::fs::remove_dir_all(&temp_dir);
+            return Err(e);
+        }
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        Ok(())
+    }
+}
+
 /// Initialize a new wiki folder with the specified edition and plugins
 #[cfg(not(target_os = "android"))]
 #[tauri::command]
@@ -3888,6 +4483,19 @@ async fn init_wiki_folder(app: tauri::AppHandle, path: String, edition: String, 
             _ => user_editions_dir.to_string_lossy().to_string(),
         };
         cmd.env("TIDDLYWIKI_EDITION_PATH", &edition_path);
+    }
+    // Set TIDDLYWIKI_PLUGIN_PATH for user-installed plugins
+    if let Ok(data_dir) = app.path().app_data_dir() {
+        let plugins_dir = data_dir.join("plugins");
+        let _ = std::fs::create_dir_all(&plugins_dir);
+        let sep = if cfg!(windows) { ";" } else { ":" };
+        let mut paths = vec![plugins_dir.to_string_lossy().to_string()];
+        if let Ok(existing) = std::env::var("TIDDLYWIKI_PLUGIN_PATH") {
+            if !existing.is_empty() {
+                paths.push(existing);
+            }
+        }
+        cmd.env("TIDDLYWIKI_PLUGIN_PATH", paths.join(sep));
     }
     #[cfg(target_os = "windows")]
     cmd.creation_flags(CREATE_NO_WINDOW);
@@ -4395,13 +5003,13 @@ async fn create_wiki_file(app: tauri::AppHandle, path: String, edition: String, 
         let sep = if cfg!(windows) { ";" } else { ":" };
         let plugins_dir = data_dir.join("plugins");
         let _ = std::fs::create_dir_all(&plugins_dir);
-        let plugin_path = match std::env::var("TIDDLYWIKI_PLUGIN_PATH") {
-            Ok(existing) if !existing.is_empty() => {
-                format!("{}{}{}", plugins_dir.display(), sep, existing)
+        let mut plugin_paths = vec![plugins_dir.to_string_lossy().to_string()];
+        if let Ok(existing) = std::env::var("TIDDLYWIKI_PLUGIN_PATH") {
+            if !existing.is_empty() {
+                plugin_paths.push(existing);
             }
-            _ => plugins_dir.to_string_lossy().to_string(),
-        };
-        build_cmd.env("TIDDLYWIKI_PLUGIN_PATH", &plugin_path);
+        }
+        build_cmd.env("TIDDLYWIKI_PLUGIN_PATH", plugin_paths.join(sep));
         let editions_dir = data_dir.join("editions");
         let _ = std::fs::create_dir_all(&editions_dir);
         let edition_path = match std::env::var("TIDDLYWIKI_EDITION_PATH") {
@@ -5352,6 +5960,15 @@ async fn open_wiki_window(
         cmd.env(ipc::AUTH_TOKEN_ENV_VAR, token);
     }
 
+    // Pass collab WS port so child process can connect
+    #[cfg(not(target_os = "android"))]
+    {
+        let collab_port = lan_sync::get_collab_port();
+        if collab_port > 0 {
+            cmd.env("COLLAB_WS_PORT", collab_port.to_string());
+        }
+    }
+
     // Platform-specific process configuration
     #[cfg(target_os = "windows")]
     {
@@ -5752,6 +6369,15 @@ fn spawn_wiki_process_sync(wiki_path: &str) -> Result<u32, String> {
         cmd.env(ipc::AUTH_TOKEN_ENV_VAR, token);
     }
 
+    // Pass collab WS port so child process can connect
+    #[cfg(not(target_os = "android"))]
+    {
+        let collab_port = lan_sync::get_collab_port();
+        if collab_port > 0 {
+            cmd.env("COLLAB_WS_PORT", collab_port.to_string());
+        }
+    }
+
     // Platform-specific process configuration
     #[cfg(target_os = "windows")]
     {
@@ -5799,6 +6425,15 @@ fn spawn_tiddler_process(wiki_path: &str, tiddler_title: &str, startup_tiddler: 
     // Pass IPC auth token to child process via environment variable
     if let Some(token) = ipc::get_auth_token() {
         cmd.env(ipc::AUTH_TOKEN_ENV_VAR, token);
+    }
+
+    // Pass collab WS port so child process can connect
+    #[cfg(not(target_os = "android"))]
+    {
+        let collab_port = lan_sync::get_collab_port();
+        if collab_port > 0 {
+            cmd.env("COLLAB_WS_PORT", collab_port.to_string());
+        }
     }
 
     // Platform-specific process configuration
@@ -5954,7 +6589,7 @@ async fn check_for_updates() -> Result<UpdateCheckResult, String> {
 
 /// Android version - separate from desktop versioning (must match build.gradle.kts versionName)
 #[cfg(target_os = "android")]
-const ANDROID_VERSION: &str = "0.0.17";
+const ANDROID_VERSION: &str = "0.0.18";
 
 /// Check for updates on Android via version file on GitHub, linking to Play Store
 #[cfg(target_os = "android")]
@@ -7994,6 +8629,9 @@ fn run_wiki_mode(args: WikiModeArgs) {
             print_page,
             set_zoom_level,
             download_file,
+            fetch_url,
+            fetch_library_plugin,
+            http_request,
             is_directory,
             get_window_state_info,
             get_saved_window_state,
@@ -8029,6 +8667,12 @@ fn run_wiki_mode(args: WikiModeArgs) {
             lan_sync::lan_sync_poll_ipc,
             lan_sync::lan_sync_load_tombstones,
             lan_sync::lan_sync_save_tombstones,
+            lan_sync::lan_sync_collab_editing_started,
+            lan_sync::lan_sync_collab_editing_stopped,
+            lan_sync::lan_sync_collab_update,
+            lan_sync::lan_sync_collab_awareness,
+            lan_sync::lan_sync_get_remote_editors,
+            lan_sync::lan_sync_get_collab_port,
         ])
         .build(tauri::generate_context!())
         .expect("error while building wiki-mode application")
@@ -8379,6 +9023,9 @@ fn run_wiki_folder_mode(args: WikiFolderModeArgs) {
             print_page,
             set_zoom_level,
             download_file,
+            fetch_url,
+            fetch_library_plugin,
+            http_request,
             is_directory,
             get_window_state_info,
             get_saved_window_state,
@@ -8430,6 +9077,12 @@ fn run_wiki_folder_mode(args: WikiFolderModeArgs) {
             lan_sync::lan_sync_poll_ipc,
             lan_sync::lan_sync_load_tombstones,
             lan_sync::lan_sync_save_tombstones,
+            lan_sync::lan_sync_collab_editing_started,
+            lan_sync::lan_sync_collab_editing_stopped,
+            lan_sync::lan_sync_collab_update,
+            lan_sync::lan_sync_collab_awareness,
+            lan_sync::lan_sync_get_remote_editors,
+            lan_sync::lan_sync_get_collab_port,
         ])
         .build(tauri::generate_context!())
         .expect("error while building wiki-folder-mode application")
@@ -9072,7 +9725,15 @@ pub fn run() {
             lan_sync::lan_sync_broadcast_manifest,
             lan_sync::lan_sync_poll_ipc,
             lan_sync::lan_sync_load_tombstones,
-            lan_sync::lan_sync_save_tombstones
+            lan_sync::lan_sync_save_tombstones,
+            lan_sync::lan_sync_collab_editing_started,
+            lan_sync::lan_sync_collab_editing_stopped,
+            lan_sync::lan_sync_collab_update,
+            lan_sync::lan_sync_collab_awareness,
+            lan_sync::lan_sync_get_remote_editors,
+            lan_sync::lan_sync_get_collab_port,
+            get_wiki_installed_plugins,
+            install_plugins_to_wiki
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

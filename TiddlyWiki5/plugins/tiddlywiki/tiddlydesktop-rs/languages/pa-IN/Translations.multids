@@ -97,3 +97,12 @@ LanSync/NoRemoteWikis: ਜੁੜੇ ਡਿਵਾਈਸਾਂ ਤੋਂ ਕੋਈ
 LanSync/From: ਤੋਂ
 LanSync/GetWiki: ਵਿਕੀ ਪ੍ਰਾਪਤ ਕਰੋ
 LanSync/LinkWiki: ਲਿੰਕ
+
+Buttons/Plugins: ਪਲੱਗਇਨ
+PluginInstaller/Title: ਪਲੱਗਇਨ ਪ੍ਰਬੰਧਿਤ ਕਰੋ
+PluginInstaller/For: ਲਈ:
+PluginInstaller/SelectPlugins: ਪਲੱਗਇਨ ਚੁਣੋ
+PluginInstaller/Install: ਬਦਲਾਅ ਲਾਗੂ ਕਰੋ
+PluginInstaller/Installing: ਪਲੱਗਇਨ ਅੱਪਡੇਟ ਹੋ ਰਹੇ ਹਨ...
+PluginInstaller/Installed: (ਸਥਾਪਿਤ)
+PluginInstaller/RestartNeeded: ਬਦਲਾਅ ਲਾਗੂ ਕਰਨ ਲਈ ਵਿਕੀ ਨੂੰ ਮੁੜ ਚਾਲੂ ਕਰੋ।

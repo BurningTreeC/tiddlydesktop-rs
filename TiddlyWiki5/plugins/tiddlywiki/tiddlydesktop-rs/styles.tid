@@ -283,6 +283,16 @@ tags: $:/tags/Stylesheet
 	background: #d0e0f0;
 }
 
+.td-button-plugins {
+	background: #f0ecf8;
+	border-color: #c0b0e0;
+	color: #5a3d8a;
+}
+
+.td-button-plugins:hover {
+	background: #e0d8f0;
+}
+
 .td-button-remove {
 	background: #f8e8e8;
 	border-color: #e0a0a0;

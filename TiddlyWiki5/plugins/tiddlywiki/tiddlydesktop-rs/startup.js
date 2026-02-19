@@ -872,6 +872,110 @@ exports.startup = function(callback) {
 		$tw.wiki.deleteTiddler("$:/temp/tiddlydesktop-rs/create-mode");
 	});
 
+	// Message handler: show plugin installer modal for a wiki
+	$tw.rootWidget.addEventListener("tm-tiddlydesktop-rs-show-plugin-installer", function(event) {
+		var path = event.paramObject && event.paramObject.path;
+		var isFolder = event.paramObject && event.paramObject.isFolder === "true";
+		var filename = event.paramObject && event.paramObject.filename;
+		if (!path) return;
+
+		// Store wiki info in temp tiddlers
+		$tw.wiki.setText("$:/temp/tiddlydesktop-rs/plugin-install-wiki-path", "text", null, path);
+		$tw.wiki.setText("$:/temp/tiddlydesktop-rs/plugin-install-wiki-name", "text", null, filename || path);
+		$tw.wiki.setText("$:/temp/tiddlydesktop-rs/plugin-install-is-folder", "text", null, isFolder ? "true" : "false");
+
+		// Load available plugins and installed plugins in parallel
+		Promise.all([
+			invoke("get_available_plugins"),
+			invoke("get_wiki_installed_plugins", { path: path, isFolder: isFolder })
+		]).then(function(results) {
+			var availablePlugins = results[0];
+			var installedPlugins = results[1];
+
+			// Clear existing install-plugins entries
+			$tw.wiki.filterTiddlers("[prefix[$:/temp/tiddlydesktop-rs/install-plugins/]]").forEach(function(title) {
+				$tw.wiki.deleteTiddler(title);
+			});
+
+			// Add plugin entries
+			availablePlugins.forEach(function(plugin) {
+				var isInstalled = installedPlugins.indexOf(plugin.id) !== -1 ||
+					installedPlugins.indexOf("tiddlywiki/" + plugin.id) !== -1;
+				// Also check if the short name matches (e.g. "markdown" vs "tiddlywiki/markdown")
+				var shortId = plugin.id.indexOf("/") !== -1 ? plugin.id.split("/").pop() : plugin.id;
+				if (!isInstalled) {
+					isInstalled = installedPlugins.some(function(ip) {
+						var ipShort = ip.indexOf("/") !== -1 ? ip.split("/").pop() : ip;
+						return ipShort === shortId;
+					});
+				}
+				$tw.wiki.addTiddler({
+					title: "$:/temp/tiddlydesktop-rs/install-plugins/" + plugin.id,
+					id: plugin.id,
+					name: plugin.name,
+					description: plugin.description,
+					category: plugin.category,
+					selected: isInstalled ? "yes" : "no",
+					installed: isInstalled ? "yes" : "no",
+					text: ""
+				});
+			});
+
+			// Show the modal
+			$tw.wiki.setText("$:/temp/tiddlydesktop-rs/show-plugin-installer", "text", null, "yes");
+		}).catch(function(err) {
+			console.error("Failed to load plugins:", err);
+			alert("Failed to load plugins: " + err);
+		});
+	});
+
+	// Message handler: apply plugin changes to a wiki
+	$tw.rootWidget.addEventListener("tm-tiddlydesktop-rs-do-install-plugins", function(event) {
+		var path = $tw.wiki.getTiddlerText("$:/temp/tiddlydesktop-rs/plugin-install-wiki-path");
+		var isFolder = $tw.wiki.getTiddlerText("$:/temp/tiddlydesktop-rs/plugin-install-is-folder") === "true";
+		if (!path) return;
+
+		// Collect all selected plugins
+		var selectedPlugins = [];
+		$tw.wiki.filterTiddlers("[prefix[$:/temp/tiddlydesktop-rs/install-plugins/]]").forEach(function(title) {
+			var tiddler = $tw.wiki.getTiddler(title);
+			if (tiddler && tiddler.fields.selected === "yes" && tiddler.fields.id) {
+				selectedPlugins.push(tiddler.fields.id);
+			}
+		});
+
+		// Hide modal, show loading spinner
+		$tw.wiki.setText("$:/temp/tiddlydesktop-rs/show-plugin-installer", "text", null, "no");
+		$tw.wiki.setText("$:/temp/tiddlydesktop-rs/plugin-install-loading", "text", null, "yes");
+
+		invoke("install_plugins_to_wiki", { path: path, isFolder: isFolder, plugins: selectedPlugins }).then(function() {
+			$tw.wiki.setText("$:/temp/tiddlydesktop-rs/plugin-install-loading", "text", null, "no");
+			// Clean up temp tiddlers
+			$tw.wiki.filterTiddlers("[prefix[$:/temp/tiddlydesktop-rs/install-plugins/]]").forEach(function(title) {
+				$tw.wiki.deleteTiddler(title);
+			});
+			$tw.wiki.deleteTiddler("$:/temp/tiddlydesktop-rs/plugin-install-wiki-path");
+			$tw.wiki.deleteTiddler("$:/temp/tiddlydesktop-rs/plugin-install-wiki-name");
+			$tw.wiki.deleteTiddler("$:/temp/tiddlydesktop-rs/plugin-install-is-folder");
+		}).catch(function(err) {
+			console.error("install_plugins_to_wiki error:", err);
+			$tw.wiki.setText("$:/temp/tiddlydesktop-rs/plugin-install-loading", "text", null, "no");
+			alert("Failed to update plugins: " + err);
+		});
+	});
+
+	// Message handler: cancel plugin installer
+	$tw.rootWidget.addEventListener("tm-tiddlydesktop-rs-cancel-plugin-install", function(event) {
+		$tw.wiki.setText("$:/temp/tiddlydesktop-rs/show-plugin-installer", "text", null, "no");
+		// Clean up temp tiddlers
+		$tw.wiki.filterTiddlers("[prefix[$:/temp/tiddlydesktop-rs/install-plugins/]]").forEach(function(title) {
+			$tw.wiki.deleteTiddler(title);
+		});
+		$tw.wiki.deleteTiddler("$:/temp/tiddlydesktop-rs/plugin-install-wiki-path");
+		$tw.wiki.deleteTiddler("$:/temp/tiddlydesktop-rs/plugin-install-wiki-name");
+		$tw.wiki.deleteTiddler("$:/temp/tiddlydesktop-rs/plugin-install-is-folder");
+	});
+
 	// Message handler: open a specific wiki path (auto-detect file vs folder)
 	$tw.rootWidget.addEventListener("tm-tiddlydesktop-rs-open-path", function(event) {
 		var path = event.param || event.paramObject.path;

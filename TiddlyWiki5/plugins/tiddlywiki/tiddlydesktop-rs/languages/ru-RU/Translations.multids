@@ -97,3 +97,12 @@ LanSync/NoRemoteWikis: Нет новых вики, доступных с под�
 LanSync/From: с
 LanSync/GetWiki: Получить вики
 LanSync/LinkWiki: Связать
+
+Buttons/Plugins: плагины
+PluginInstaller/Title: Управление плагинами
+PluginInstaller/For: для:
+PluginInstaller/SelectPlugins: Выберите плагины
+PluginInstaller/Install: Применить изменения
+PluginInstaller/Installing: Обновление плагинов...
+PluginInstaller/Installed: (установлено)
+PluginInstaller/RestartNeeded: Перезапустите вики для применения изменений.

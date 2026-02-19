@@ -97,3 +97,12 @@ LanSync/NoRemoteWikis: لا توجد ويكي جديدة متاحة من الأ�
 LanSync/From: من
 LanSync/GetWiki: الحصول على ويكي
 LanSync/LinkWiki: ربط
+
+Buttons/Plugins: إضافات
+PluginInstaller/Title: إدارة الإضافات
+PluginInstaller/For: لـ:
+PluginInstaller/SelectPlugins: اختيار الإضافات
+PluginInstaller/Install: تطبيق التغييرات
+PluginInstaller/Installing: جارٍ تحديث الإضافات...
+PluginInstaller/Installed: (مُثبَّت)
+PluginInstaller/RestartNeeded: أعد تشغيل الويكي لتطبيق التغييرات.

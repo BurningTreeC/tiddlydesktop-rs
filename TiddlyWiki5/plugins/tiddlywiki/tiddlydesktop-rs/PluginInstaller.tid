@@ -1,0 +1,63 @@
+title: $:/plugins/tiddlywiki/tiddlydesktop-rs/PluginInstaller
+tags: $:/tags/PageTemplate
+
+<$reveal state="$:/temp/tiddlydesktop-rs/show-plugin-installer" type="match" text="yes" animate="yes">
+<div class="td-modal-overlay">
+<div class="td-modal">
+<div class="td-modal-header">
+<h2><<td-lingo PluginInstaller/Title>></h2>
+<div class="td-modal-subtitle">
+<<td-lingo PluginInstaller/For>> <strong>{{$:/temp/tiddlydesktop-rs/plugin-install-wiki-name}}</strong>
+</div>
+</div>
+
+<div class="td-modal-body">
+<div class="td-section">
+<h3><<td-lingo PluginInstaller/SelectPlugins>></h3>
+<div class="td-plugin-list">
+<$list filter="[prefix[$:/temp/tiddlydesktop-rs/install-plugins/]sort[name]]" variable="pluginTitle">
+<$let isInstalled={{{ [<pluginTitle>get[installed]] }}} isSelected={{{ [<pluginTitle>get[selected]] }}}>
+<$list filter="[<isInstalled>match[yes]]" variable="ignore">
+<div class="td-plugin-item td-plugin-selected td-plugin-installed">
+<span class="td-check">{{$:/core/images/done-button}}</span>
+<span class="td-plugin-name"><$transclude tiddler=<<pluginTitle>> field="name"/></span>
+<span class="td-plugin-desc"> - <$transclude tiddler=<<pluginTitle>> field="description"/></span>
+<span class="td-plugin-installed-label"> <<td-lingo PluginInstaller/Installed>></span>
+</div>
+</$list>
+<$list filter="[<isInstalled>!match[yes]]" variable="ignore">
+<$button class={{{ [<isSelected>match[yes]then[td-plugin-item td-plugin-selected]else[td-plugin-item]] }}} actions="""<$action-setfield $tiddler=<<pluginTitle>> selected={{{ [<pluginTitle>get[selected]match[yes]then[no]else[yes]] }}}/>""">
+<$reveal stateTitle=<<pluginTitle>> stateField="selected" type="match" text="yes" default="no">
+<span class="td-check">{{$:/core/images/done-button}}</span>
+</$reveal>
+<$reveal stateTitle=<<pluginTitle>> stateField="selected" type="nomatch" text="yes" default="no">
+<span class="td-check td-unchecked"></span>
+</$reveal>
+<span class="td-plugin-name"><$transclude tiddler=<<pluginTitle>> field="name"/></span>
+<span class="td-plugin-desc"> - <$transclude tiddler=<<pluginTitle>> field="description"/></span>
+</$button>
+</$list>
+</$let>
+</$list>
+</div>
+</div>
+</div>
+
+<div class="td-modal-footer">
+<$button message="tm-tiddlydesktop-rs-cancel-plugin-install" class="td-button td-button-cancel"><<td-lingo Buttons/Cancel>></$button>
+<$button message="tm-tiddlydesktop-rs-do-install-plugins" class="td-button td-button-create">
+<<td-lingo PluginInstaller/Install>>
+</$button>
+</div>
+</div>
+</div>
+</$reveal>
+
+<$reveal state="$:/temp/tiddlydesktop-rs/plugin-install-loading" type="match" text="yes" animate="yes">
+<div class="td-modal-overlay">
+<div class="td-modal td-modal-loading">
+<div class="td-loading-spinner"></div>
+<div class="td-loading-text"><<td-lingo PluginInstaller/Installing>></div>
+</div>
+</div>
+</$reveal>

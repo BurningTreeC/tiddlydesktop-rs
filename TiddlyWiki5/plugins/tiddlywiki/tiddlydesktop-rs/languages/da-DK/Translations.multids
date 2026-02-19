@@ -97,3 +97,12 @@ LanSync/NoRemoteWikis: Ingen nye wikier tilgængelige fra tilsluttede enheder.
 LanSync/From: fra
 LanSync/GetWiki: Hent wiki
 LanSync/LinkWiki: Kobl
+
+Buttons/Plugins: plugins
+PluginInstaller/Title: Administrer plugins
+PluginInstaller/For: for:
+PluginInstaller/SelectPlugins: Vælg plugins
+PluginInstaller/Install: Anvend ændringer
+PluginInstaller/Installing: Opdaterer plugins...
+PluginInstaller/Installed: (installeret)
+PluginInstaller/RestartNeeded: Genstart wikien for at anvende ændringerne.

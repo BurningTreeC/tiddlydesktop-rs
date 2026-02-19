@@ -97,3 +97,12 @@ LanSync/NoRemoteWikis: No hi ha wikis nous disponibles des dels dispositius conn
 LanSync/From: de
 LanSync/GetWiki: Obtenir wiki
 LanSync/LinkWiki: Enllaçar
+
+Buttons/Plugins: connectors
+PluginInstaller/Title: Gestió de connectors
+PluginInstaller/For: per a:
+PluginInstaller/SelectPlugins: Seleccioneu connectors
+PluginInstaller/Install: Aplica els canvis
+PluginInstaller/Installing: S'estan actualitzant els connectors...
+PluginInstaller/Installed: (instal·lat)
+PluginInstaller/RestartNeeded: Reinicieu el wiki per aplicar els canvis.

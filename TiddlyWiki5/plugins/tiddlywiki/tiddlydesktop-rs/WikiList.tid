@@ -56,6 +56,10 @@ title: $:/plugins/tiddlywiki/tiddlydesktop-rs/WikiList
 <$list filter="[{$:/temp/tiddlydesktop-rs/is-mobile}!match[yes]]" variable="ignore">
 <$button message="tm-tiddlydesktop-rs-reveal" param=<<path>> class="tc-btn-invisible td-button td-button-reveal"><<td-lingo Buttons/Reveal>></$button>
 </$list>
+<$button class="tc-btn-invisible td-button td-button-plugins">
+<$action-sendmessage $message="tm-tiddlydesktop-rs-show-plugin-installer" path=<<path>> isFolder=<<isFolder>> filename=<<filename>>/>
+<<td-lingo Buttons/Plugins>>
+</$button>
 </$list>
 <!-- Remove button always shown -->
 <$button message="tm-tiddlydesktop-rs-remove" param=<<path>> class="tc-btn-invisible td-button td-button-remove"><<td-lingo Buttons/Remove>></$button>

@@ -97,3 +97,12 @@ LanSync/NoRemoteWikis: 已連線的裝置冇可用嘅新維基。
 LanSync/From: 來自
 LanSync/GetWiki: 取得維基
 LanSync/LinkWiki: 關聯
+
+Buttons/Plugins: 外掛
+PluginInstaller/Title: 管理外掛
+PluginInstaller/For: 適用於：
+PluginInstaller/SelectPlugins: 選擇外掛
+PluginInstaller/Install: 套用變更
+PluginInstaller/Installing: 正在更新外掛...
+PluginInstaller/Installed: (已安裝)
+PluginInstaller/RestartNeeded: 重新啟動維基以套用變更。

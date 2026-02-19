@@ -97,3 +97,12 @@ LanSync/NoRemoteWikis: Нема нови вики-а достапни од по�
 LanSync/From: од
 LanSync/GetWiki: Преземи вики
 LanSync/LinkWiki: Поврзи
+
+Buttons/Plugins: додатоци
+PluginInstaller/Title: Управување со додатоци
+PluginInstaller/For: за:
+PluginInstaller/SelectPlugins: Изберете додатоци
+PluginInstaller/Install: Примени промени
+PluginInstaller/Installing: Ажурирање на додатоци...
+PluginInstaller/Installed: (инсталирано)
+PluginInstaller/RestartNeeded: Рестартирајте го викито за да се применат промените.

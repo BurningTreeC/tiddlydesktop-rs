@@ -97,3 +97,12 @@ LanSync/NoRemoteWikis: Δεν υπάρχουν νέα wiki διαθέσιμα α
 LanSync/From: από
 LanSync/GetWiki: Λήψη wiki
 LanSync/LinkWiki: Σύνδεση
+
+Buttons/Plugins: πρόσθετα
+PluginInstaller/Title: Διαχείριση προσθέτων
+PluginInstaller/For: για:
+PluginInstaller/SelectPlugins: Επιλογή προσθέτων
+PluginInstaller/Install: Εφαρμογή αλλαγών
+PluginInstaller/Installing: Ενημέρωση προσθέτων...
+PluginInstaller/Installed: (εγκατεστημένο)
+PluginInstaller/RestartNeeded: Επανεκκινήστε το wiki για να εφαρμοστούν οι αλλαγές.

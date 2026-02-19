@@ -482,8 +482,12 @@ pub fn set_wiki_sync(app: tauri::AppHandle, path: String, enabled: bool) -> Resu
     for entry in entries.iter_mut() {
         if utils::paths_equal(&entry.path, &path) {
             entry.sync_enabled = enabled;
-            if enabled && entry.sync_id.is_none() {
+            if enabled {
+                // Always generate a fresh sync_id when enabling
                 entry.sync_id = Some(crate::lan_sync::pairing::generate_random_id());
+            } else {
+                // Clear the sync_id when disabling so re-enabling gets a new one
+                entry.sync_id = None;
             }
             sync_id = entry.sync_id.clone().unwrap_or_default();
             break;

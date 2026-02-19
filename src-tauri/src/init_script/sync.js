@@ -145,6 +145,239 @@
                 return false;
             });
 
+            // Override plugin library loading to use Rust-proxied fetch (bypasses CORS).
+            // TiddlyWiki's default browser-messaging.js creates a hidden iframe pointing to
+            // https://tiddlywiki.com/library/... and communicates via postMessage. This fails
+            // in Tauri because the parent page is on wikifile:// (custom scheme) and WebKitGTK
+            // blocks cross-origin iframe communication from custom scheme pages.
+            // Fix: use invoke('fetch_url') which fetches via Rust's reqwest (no CORS restrictions).
+            (function() {
+                // Override plugin library loading to bypass CORS/iframe issues.
+                // TW5's original handler uses an iframe + postMessage to fetch
+                // plugin data, but cross-origin iframes don't work from wikifile://.
+                // Listing: fetch tiddlers.json via Rust (small JSON, works fine).
+                // Individual plugins: fetch_library_plugin fetches the ~10MB library
+                // HTML in Rust, parses the storeArea server-side, and returns only
+                // the small HTML fragment for the requested tiddler via IPC.
+                if ($tw.rootWidget.eventListeners) {
+                    $tw.rootWidget.eventListeners['tm-load-plugin-library'] = [];
+                    $tw.rootWidget.eventListeners['tm-load-plugin-from-library'] = [];
+                    $tw.rootWidget.eventListeners['tm-unload-plugin-library'] = [];
+                }
+
+                $tw.rootWidget.addEventListener('tm-load-plugin-library', function(event) {
+                    var paramObject = event.paramObject || {};
+                    var url = paramObject.url;
+                    if (!url) return false;
+
+                    $tw.wiki.addTiddler(new $tw.Tiddler($tw.wiki.getCreationFields(), {
+                        title: '$:/temp/ServerConnection/' + url,
+                        text: 'loading',
+                        tags: ['$:/tags/ServerConnection'],
+                        url: url
+                    }, $tw.wiki.getModificationFields()));
+
+                    var infoTitlePrefix = paramObject.infoTitlePrefix || '$:/temp/RemoteAssetInfo/';
+                    var baseUrl = url.replace(/\/index\.html$/, '');
+                    var tiddlersUrl = baseUrl + '/recipes/library/tiddlers.json';
+
+                    invoke('fetch_url', { url: tiddlersUrl }).then(function(body) {
+                        var tiddlers = JSON.parse(body);
+                        $tw.wiki.addTiddler(new $tw.Tiddler($tw.wiki.getCreationFields(), {
+                            title: '$:/temp/ServerConnection/' + url,
+                            text: 'loaded',
+                            tags: ['$:/tags/ServerConnection'],
+                            url: url
+                        }, $tw.wiki.getModificationFields()));
+
+                        $tw.utils.each(tiddlers, function(tiddler) {
+                            $tw.wiki.addTiddler(new $tw.Tiddler($tw.wiki.getCreationFields(), tiddler, {
+                                title: infoTitlePrefix + url + '/' + tiddler.title,
+                                'original-title': tiddler.title,
+                                text: '',
+                                type: 'text/vnd.tiddlywiki',
+                                'original-type': tiddler.type,
+                                'plugin-type': undefined,
+                                'original-plugin-type': tiddler['plugin-type'],
+                                'module-type': undefined,
+                                'original-module-type': tiddler['module-type'],
+                                tags: ['$:/tags/RemoteAssetInfo'],
+                                'original-tags': $tw.utils.stringifyList(tiddler.tags || []),
+                                'server-url': url
+                            }, $tw.wiki.getModificationFields()));
+                        });
+                        console.log('[TiddlyDesktop] Plugin library loaded: ' + tiddlers.length + ' plugins from ' + url);
+                    }).catch(function(err) {
+                        console.error('[TiddlyDesktop] Failed to load plugin library:', err);
+                        alert($tw.language.getString('Error/LoadingPluginLibrary') + ': ' + url);
+                    });
+
+                    return false;
+                });
+
+                $tw.rootWidget.addEventListener('tm-load-plugin-from-library', function(event) {
+                    var paramObject = event.paramObject || {};
+                    var url = paramObject.url;
+                    var title = paramObject.title;
+                    if (!url || !title) return false;
+
+                    console.log('[TiddlyDesktop] Installing plugin from library: ' + title);
+                    invoke('fetch_library_plugin', { url: url, title: title }).then(function(json) {
+                        var fields = JSON.parse(json);
+                        $tw.wiki.addTiddler(new $tw.Tiddler(fields));
+                        console.log('[TiddlyDesktop] Plugin installed from library: ' + title);
+                    }).catch(function(err) {
+                        console.error('[TiddlyDesktop] Failed to install plugin:', err);
+                        alert('Failed to install plugin: ' + title);
+                    });
+
+                    return false;
+                });
+
+                $tw.rootWidget.addEventListener('tm-unload-plugin-library', function(event) {
+                    var paramObject = event.paramObject || {};
+                    var url = paramObject.url;
+                    if (url) {
+                        $tw.utils.each(
+                            $tw.wiki.filterTiddlers("[[$:/temp/ServerConnection/" + url + "]] [prefix[$:/temp/RemoteAssetInfo/" + url + "/]]"),
+                            function(title) {
+                                $tw.wiki.deleteTiddler(title);
+                            }
+                        );
+                    }
+                    return false;
+                });
+            })();
+
+            // Override tm-download-file to show a native save dialog via Rust.
+            // TW5's built-in handler creates a <a download> element and clicks it,
+            // which doesn't show a file chooser in Tauri webviews. We replace it
+            // entirely with a direct invoke to Rust's download_file command.
+            (function() {
+                if ($tw.rootWidget.eventListeners) {
+                    $tw.rootWidget.eventListeners['tm-download-file'] = [];
+                }
+                $tw.rootWidget.addEventListener('tm-download-file', function(event) {
+                    var paramObject = event.paramObject || {};
+                    var filename = paramObject.filename || 'tiddlywiki.json';
+                    var text;
+
+                    if (paramObject.exportFilter) {
+                        // exportType is the FULL tiddler title of the exporter template
+                        // (e.g. "$:/core/templates/exporters/JsonFile"), NOT a suffix
+                        var exportType = paramObject.exportType || '$:/core/templates/exporters/JsonFile';
+                        text = $tw.wiki.renderTiddler(
+                            'text/plain',
+                            exportType,
+                            { variables: { exportFilter: paramObject.exportFilter } }
+                        );
+                    } else {
+                        text = paramObject.text || '';
+                    }
+
+                    console.log('[TiddlyDesktop Download] tm-download-file: filename=' + filename + ', len=' + text.length);
+                    invoke('download_file', {
+                        filename: filename,
+                        content: text,
+                        contentType: paramObject.type || 'text/plain'
+                    }).then(function(path) {
+                        console.log('[TiddlyDesktop] File saved to: ' + path);
+                        if (typeof $tw !== 'undefined' && $tw.notifier) {
+                            $tw.notifier.display('$:/language/Notifications/Save/Done');
+                        }
+                    }).catch(function(err) {
+                        if (err !== 'Save cancelled') {
+                            console.error('[TiddlyDesktop] Download failed:', err);
+                        }
+                    });
+                    return false;
+                });
+            })();
+
+            // Override $tw.utils.httpRequest for external URLs to bypass CORS.
+            // Wiki pages on wikifile:// can't make XHR to https:// due to cross-origin
+            // restrictions in WebKitGTK. We proxy external requests through Rust's reqwest.
+            // Local requests (127.0.0.1, wikifile:, localhost) use the original XHR.
+            (function() {
+                var origHttpRequest = $tw.utils.httpRequest;
+                $tw.utils.httpRequest = function(options) {
+                    var url = options.url || '';
+                    // Only proxy external URLs — local requests use native XHR
+                    if (url.indexOf('http://127.0.0.1') === 0 ||
+                        url.indexOf('http://localhost') === 0 ||
+                        url.indexOf('wikifile:') === 0 ||
+                        url.indexOf('/') === 0) {
+                        return origHttpRequest.call(this, options);
+                    }
+                    // Build params for Rust http_request command
+                    var params = {
+                        url: url,
+                        method: options.type || 'GET',
+                    };
+                    if (options.data) params.body = options.data;
+                    if (options.headers) params.headers = options.headers;
+                    // Binary mode
+                    if (options.responseType === 'arraybuffer') params.binary = true;
+                    // Auth (from headers if set)
+                    if (options.headers) {
+                        var authHeader = options.headers['Authorization'] || options.headers['authorization'];
+                        if (authHeader) {
+                            if (authHeader.indexOf('Bearer ') === 0) {
+                                params.bearerToken = authHeader.substring(7);
+                            } else if (authHeader.indexOf('Basic ') === 0) {
+                                try {
+                                    var decoded = atob(authHeader.substring(6));
+                                    var colonIdx = decoded.indexOf(':');
+                                    if (colonIdx !== -1) {
+                                        params.username = decoded.substring(0, colonIdx);
+                                        params.password = decoded.substring(colonIdx + 1);
+                                    }
+                                } catch(_e) {}
+                            }
+                        }
+                    }
+                    // Fake XHR object for cancellation support
+                    var aborted = false;
+                    var fakeXhr = {
+                        status: 0,
+                        statusText: '',
+                        responseText: '',
+                        responseHeaders: '',
+                        getAllResponseHeaders: function() { return this.responseHeaders; },
+                        abort: function() { aborted = true; }
+                    };
+                    invoke('http_request', params).then(function(result) {
+                        if (aborted) return;
+                        fakeXhr.status = result.status;
+                        fakeXhr.statusText = result.statusText;
+                        fakeXhr.responseText = result.data;
+                        // Format headers as string (key: value\r\n)
+                        var headerStr = '';
+                        if (result.headers) {
+                            for (var k in result.headers) {
+                                if (result.headers.hasOwnProperty(k)) {
+                                    headerStr += k + ': ' + result.headers[k] + '\r\n';
+                                }
+                            }
+                        }
+                        fakeXhr.responseHeaders = headerStr;
+                        if (options.callback) {
+                            if (result.status >= 200 && result.status < 300) {
+                                options.callback(null, result.data, fakeXhr);
+                            } else {
+                                options.callback('XMLHttpRequest error code: ' + result.status, result.data, fakeXhr);
+                            }
+                        }
+                    }).catch(function(err) {
+                        if (aborted) return;
+                        if (options.callback) {
+                            options.callback(err, null, fakeXhr);
+                        }
+                    });
+                    return fakeXhr;
+                };
+            })();
+
             // Intercept Blob downloads - TW's download saver creates a Blob,
             // builds an <a download="filename"> element, and clicks it.
             // We intercept that click, read the Blob, and show Tauri's save dialog instead.
@@ -166,6 +399,7 @@
                 var href = anchor.href || anchor.getAttribute('href') || '';
                 var filename = anchor.download || anchor.getAttribute('download') || 'download';
                 var blob = _pendingBlobs[href];
+                console.log('[TiddlyDesktop Download] Intercepted: filename=' + filename + ', href=' + href.substring(0, 60) + ', hasBlob=' + !!blob);
 
                 // Handle blob: URLs
                 if (blob) {

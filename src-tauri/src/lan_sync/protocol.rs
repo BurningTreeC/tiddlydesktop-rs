@@ -222,6 +222,34 @@ pub enum SyncMessage {
         wiki_id: String,
         plugin_name: String,
     },
+    // ── Collaborative editing (Yjs transport layer) ────────────────────
+
+    /// A device started editing a tiddler (for awareness display)
+    EditingStarted {
+        wiki_id: String,
+        tiddler_title: String,
+        device_id: String,
+        device_name: String,
+    },
+    /// A device stopped editing a tiddler
+    EditingStopped {
+        wiki_id: String,
+        tiddler_title: String,
+        device_id: String,
+    },
+    /// Opaque Yjs document update (base64-encoded binary)
+    CollabUpdate {
+        wiki_id: String,
+        tiddler_title: String,
+        update_base64: String,
+    },
+    /// Opaque Yjs awareness update (base64-encoded binary)
+    CollabAwareness {
+        wiki_id: String,
+        tiddler_title: String,
+        update_base64: String,
+    },
+
     /// Keepalive
     Ping,
     Pong,

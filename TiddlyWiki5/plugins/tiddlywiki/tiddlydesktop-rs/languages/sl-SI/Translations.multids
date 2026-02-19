@@ -97,3 +97,12 @@ LanSync/NoRemoteWikis: Ni novih wikijev na voljo iz povezanih naprav.
 LanSync/From: iz
 LanSync/GetWiki: Pridobi wiki
 LanSync/LinkWiki: Poveži
+
+Buttons/Plugins: vtičniki
+PluginInstaller/Title: Upravljanje vtičnikov
+PluginInstaller/For: za:
+PluginInstaller/SelectPlugins: Izberite vtičnike
+PluginInstaller/Install: Uporabi spremembe
+PluginInstaller/Installing: Posodabljanje vtičnikov...
+PluginInstaller/Installed: (nameščeno)
+PluginInstaller/RestartNeeded: Znova zaženite wiki za uveljavitev sprememb.

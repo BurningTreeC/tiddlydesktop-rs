@@ -97,3 +97,12 @@ LanSync/NoRemoteWikis: Inga nya wikis tillgängliga från anslutna enheter.
 LanSync/From: från
 LanSync/GetWiki: Hämta wiki
 LanSync/LinkWiki: Länka
+
+Buttons/Plugins: plugins
+PluginInstaller/Title: Hantera plugins
+PluginInstaller/For: för:
+PluginInstaller/SelectPlugins: Välj plugins
+PluginInstaller/Install: Tillämpa ändringar
+PluginInstaller/Installing: Uppdaterar plugins...
+PluginInstaller/Installed: (installerad)
+PluginInstaller/RestartNeeded: Starta om wikin för att tillämpa ändringarna.

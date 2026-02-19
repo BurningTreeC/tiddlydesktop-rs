@@ -97,3 +97,12 @@ LanSync/NoRemoteWikis: Keine neuen Wikis von verbundenen Geräten verfügbar.
 LanSync/From: von
 LanSync/GetWiki: Wiki holen
 LanSync/LinkWiki: Verknüpfen
+
+Buttons/Plugins: Plugins
+PluginInstaller/Title: Plugins verwalten
+PluginInstaller/For: für:
+PluginInstaller/SelectPlugins: Plugins auswählen
+PluginInstaller/Install: Änderungen übernehmen
+PluginInstaller/Installing: Plugins werden aktualisiert...
+PluginInstaller/Installed: (installiert)
+PluginInstaller/RestartNeeded: Starten Sie das Wiki neu, um die Änderungen zu übernehmen.

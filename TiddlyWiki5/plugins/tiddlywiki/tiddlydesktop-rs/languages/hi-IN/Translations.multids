@@ -97,3 +97,12 @@ LanSync/NoRemoteWikis: जुड़े उपकरणों से कोई �
 LanSync/From: से
 LanSync/GetWiki: विकी प्राप्त करें
 LanSync/LinkWiki: लिंक
+
+Buttons/Plugins: प्लगइन
+PluginInstaller/Title: प्लगइन प्रबंधित करें
+PluginInstaller/For: के लिए:
+PluginInstaller/SelectPlugins: प्लगइन चुनें
+PluginInstaller/Install: परिवर्तन लागू करें
+PluginInstaller/Installing: प्लगइन अपडेट हो रहे हैं...
+PluginInstaller/Installed: (स्थापित)
+PluginInstaller/RestartNeeded: परिवर्तन लागू करने के लिए विकी को पुनः आरंभ करें।

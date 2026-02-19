@@ -442,6 +442,99 @@ fn run_bridge_server(
                 let _ = request.respond(cors_response(&resp, 200));
             }
 
+            // ── Collaborative editing ─────────────────────────────────
+
+            ("POST", "/_bridge/collab-editing-started") => {
+                if let Some(body) = read_body(&mut request) {
+                    if let Ok(json) = serde_json::from_str::<serde_json::Value>(&body) {
+                        let wiki_id = json["wiki_id"].as_str().unwrap_or("").to_string();
+                        let tiddler_title = json["tiddler_title"].as_str().unwrap_or("").to_string();
+                        if !wiki_id.is_empty() && !tiddler_title.is_empty() {
+                            if let Some(mgr) = super::get_sync_manager() {
+                                mgr.notify_collab_editing_started(&wiki_id, &tiddler_title);
+                            }
+                        }
+                    }
+                }
+                let _ = request.respond(cors_response("{\"ok\":true}", 200));
+            }
+
+            ("POST", "/_bridge/collab-editing-stopped") => {
+                if let Some(body) = read_body(&mut request) {
+                    if let Ok(json) = serde_json::from_str::<serde_json::Value>(&body) {
+                        let wiki_id = json["wiki_id"].as_str().unwrap_or("").to_string();
+                        let tiddler_title = json["tiddler_title"].as_str().unwrap_or("").to_string();
+                        if !wiki_id.is_empty() && !tiddler_title.is_empty() {
+                            if let Some(mgr) = super::get_sync_manager() {
+                                mgr.notify_collab_editing_stopped(&wiki_id, &tiddler_title);
+                            }
+                        }
+                    }
+                }
+                let _ = request.respond(cors_response("{\"ok\":true}", 200));
+            }
+
+            ("POST", "/_bridge/collab-update") => {
+                if let Some(body) = read_body(&mut request) {
+                    if let Ok(json) = serde_json::from_str::<serde_json::Value>(&body) {
+                        let wiki_id = json["wiki_id"].as_str().unwrap_or("").to_string();
+                        let tiddler_title = json["tiddler_title"].as_str().unwrap_or("").to_string();
+                        let update_base64 = json["update_base64"].as_str().unwrap_or("").to_string();
+                        if !wiki_id.is_empty() && !tiddler_title.is_empty() && !update_base64.is_empty() {
+                            if let Some(mgr) = super::get_sync_manager() {
+                                mgr.send_collab_update(&wiki_id, &tiddler_title, &update_base64);
+                            }
+                        }
+                    }
+                }
+                let _ = request.respond(cors_response("{\"ok\":true}", 200));
+            }
+
+            ("POST", "/_bridge/collab-awareness") => {
+                if let Some(body) = read_body(&mut request) {
+                    if let Ok(json) = serde_json::from_str::<serde_json::Value>(&body) {
+                        let wiki_id = json["wiki_id"].as_str().unwrap_or("").to_string();
+                        let tiddler_title = json["tiddler_title"].as_str().unwrap_or("").to_string();
+                        let update_base64 = json["update_base64"].as_str().unwrap_or("").to_string();
+                        if !wiki_id.is_empty() && !tiddler_title.is_empty() && !update_base64.is_empty() {
+                            if let Some(mgr) = super::get_sync_manager() {
+                                mgr.send_collab_awareness(&wiki_id, &tiddler_title, &update_base64);
+                            }
+                        }
+                    }
+                }
+                let _ = request.respond(cors_response("{\"ok\":true}", 200));
+            }
+
+            ("GET", url) if url.starts_with("/_bridge/collab-editors?") => {
+                // Parse query: wiki_id=...&tiddler_title=...
+                let query = url.strip_prefix("/_bridge/collab-editors?").unwrap_or("");
+                let mut wiki_id = String::new();
+                let mut tiddler_title = String::new();
+                for param in query.split('&') {
+                    if let Some(val) = param.strip_prefix("wiki_id=") {
+                        wiki_id = urlencoding::decode(val).unwrap_or_else(|_| val.into()).to_string();
+                    } else if let Some(val) = param.strip_prefix("tiddler_title=") {
+                        tiddler_title = urlencoding::decode(val).unwrap_or_else(|_| val.into()).to_string();
+                    }
+                }
+                let editors = if !wiki_id.is_empty() && !tiddler_title.is_empty() {
+                    if let Some(mgr) = super::get_sync_manager() {
+                        mgr.get_remote_editors(&wiki_id, &tiddler_title)
+                    } else {
+                        vec![]
+                    }
+                } else {
+                    vec![]
+                };
+                let result: Vec<serde_json::Value> = editors
+                    .into_iter()
+                    .map(|(did, dname)| serde_json::json!({"deviceId": did, "deviceName": dname}))
+                    .collect();
+                let resp = serde_json::to_string(&result).unwrap_or_else(|_| "[]".to_string());
+                let _ = request.respond(cors_response(&resp, 200));
+            }
+
             _ => {
                 let _ = request.respond(cors_response("{\"error\":\"not found\"}", 404));
             }

@@ -133,6 +133,9 @@
 
         activeSyncState = setupSyncHandlers(syncId);
 
+        // Set up collab API for external CM6 plugin
+        setupCollabApi(syncId);
+
         // Notify Rust that this wiki window is now open and ready for sync.
         notifyWikiOpened(syncId);
 
@@ -177,6 +180,9 @@
       if (activeSyncState.unlistenFns) {
         activeSyncState.unlistenFns.forEach(function(fn) { fn(); });
       }
+
+      // Tear down collab API
+      teardownCollabApi();
 
       activeSyncState = null;
       rsLog('[LAN Sync] Sync deactivated');
@@ -435,9 +441,14 @@
           fps.push({ title: knownKeys[j], modified: knownSyncTitles[knownKeys[j]] });
         }
       }
-      // Include deletion tombstones (skip if tiddler was re-created locally)
+      // Include deletion tombstones (skip if tiddler was re-created locally or cleared)
       var tombKeys = Object.keys(deletionTombstones);
+      var tombstonesChanged = false;
       for (var k = 0; k < tombKeys.length; k++) {
+        if (deletionTombstones[tombKeys[k]].cleared) {
+          // Tombstone was cleared (tiddler re-created) — don't include in fingerprints
+          continue;
+        }
         if (!seen[tombKeys[k]]) {
           fps.push({
             title: tombKeys[k],
@@ -445,9 +456,13 @@
             deleted: true
           });
         } else {
-          // Tiddler was re-created — remove stale tombstone
-          delete deletionTombstones[tombKeys[k]];
+          // Tiddler was re-created — mark tombstone as cleared
+          deletionTombstones[tombKeys[k]].cleared = true;
+          tombstonesChanged = true;
         }
+      }
+      if (tombstonesChanged) {
+        saveTombstones(wikiId, JSON.stringify(deletionTombstones));
       }
       return fps;
     }
@@ -487,6 +502,13 @@
           saveTombstones(wikiId, JSON.stringify(deletionTombstones));
           pendingOutbound[title] = { deleted: true, tiddlerJson: null };
         } else {
+          // If this tiddler had a deletion tombstone, mark it cleared
+          // so the tombstone won't re-delete it on the next fingerprint sync
+          if (deletionTombstones[title] && !deletionTombstones[title].cleared) {
+            deletionTombstones[title].cleared = true;
+            saveTombstones(wikiId, JSON.stringify(deletionTombstones));
+            _log('[LAN Sync] Cleared tombstone for re-created tiddler: ' + title);
+          }
           var tiddler = $tw.wiki.getTiddler(title);
           if (tiddler) {
             pendingOutbound[title] = { deleted: false, tiddlerJson: serializeTiddlerFields(tiddler.fields) };
@@ -552,6 +574,13 @@
           title: "$:/temp/tiddlydesktop/config-reload-required",
           text: "yes"
         }));
+        return;
+      }
+
+      // Collaborative editing messages — route to collab API
+      if (data.type === 'editing-started' || data.type === 'editing-stopped' ||
+          data.type === 'collab-update' || data.type === 'collab-awareness') {
+        handleCollabMessage(data);
         return;
       }
 
@@ -687,6 +716,14 @@
         var tombTitle = tombKeys[t];
         var tombModified = peerTombstones[tombTitle];
 
+        // If we previously cleared a tombstone for this title (tiddler was
+        // re-created locally), skip if the peer's tombstone is not newer
+        var localTomb = deletionTombstones[tombTitle];
+        if (localTomb && localTomb.cleared && localTomb.modified >= tombModified) {
+          // Peer's tombstone is same or older than the one we cleared — skip
+          continue;
+        }
+
         var localTiddler = $tw.wiki.getTiddler(tombTitle);
         if (localTiddler) {
           var localMod = localTiddler.fields.modified ? fieldToString(localTiddler.fields.modified) : '';
@@ -701,8 +738,7 @@
         }
 
         // Record peer's tombstone locally (propagate to other peers)
-        if (!deletionTombstones[tombTitle] ||
-            deletionTombstones[tombTitle].modified < tombModified) {
+        if (!localTomb || localTomb.modified < tombModified) {
           deletionTombstones[tombTitle] = { modified: tombModified, time: Date.now() };
         }
       }
@@ -895,6 +931,12 @@
                       text: "yes"
                     }));
                     break;
+                  case 'editing-started':
+                  case 'editing-stopped':
+                  case 'collab-update':
+                  case 'collab-awareness':
+                    handleCollabMessage(data);
+                    break;
                 }
               } catch (e) {
                 _log('[LAN Sync] IPC poll parse error: ' + e);
@@ -1046,6 +1088,269 @@
     var newSrc = appendCacheBuster(originalSrc);
     element.setAttribute('src', newSrc);
     console.log('[LAN Sync] Reloaded element:', element.tagName, originalSrc);
+  }
+
+  // ── Collaborative editing API ───────────────────────────────────────
+  // Exposes window.TiddlyDesktop.collab for the external CM6 Yjs plugin.
+  // Uses a local WebSocket to the Rust collab server for low-latency push.
+
+  var collabWs = null;
+  var collabListeners = {};
+  // Cache of remote editors per tiddler (updated by editing-started/stopped events)
+  // Key: tiddlerTitle → Array<{device_id, device_name}>
+  var remoteEditorsCache = {};
+
+  function setupCollabApi(wikiId) {
+    if (!window.TiddlyDesktop) window.TiddlyDesktop = {};
+
+    collabListeners = {};
+    remoteEditorsCache = {};
+
+    var api = {
+      startEditing: function(tiddlerTitle) {
+        sendCollabOutbound('startEditing', wikiId, tiddlerTitle);
+      },
+      stopEditing: function(tiddlerTitle) {
+        sendCollabOutbound('stopEditing', wikiId, tiddlerTitle);
+      },
+      sendUpdate: function(tiddlerTitle, base64) {
+        sendCollabOutbound('sendUpdate', wikiId, tiddlerTitle, base64);
+      },
+      sendAwareness: function(tiddlerTitle, base64) {
+        sendCollabOutbound('sendAwareness', wikiId, tiddlerTitle, base64);
+      },
+      getRemoteEditors: function(tiddlerTitle) {
+        if (isAndroid) {
+          try {
+            var json = window.TiddlyDesktopSync.getRemoteEditors(wikiId, tiddlerTitle);
+            return JSON.parse(json || '[]');
+          } catch (e) { return []; }
+        }
+        // Desktop: return from JS-side cache (updated by editing-started/stopped events)
+        return remoteEditorsCache[tiddlerTitle] || [];
+      },
+      getRemoteEditorsAsync: function(tiddlerTitle) {
+        if (hasTauri) {
+          return window.__TAURI__.core.invoke('lan_sync_get_remote_editors', {
+            wikiId: wikiId, tiddlerTitle: tiddlerTitle
+          }).catch(function() { return []; });
+        }
+        return Promise.resolve(this.getRemoteEditors(tiddlerTitle));
+      },
+      on: function(eventType, callback) {
+        if (!collabListeners[eventType]) collabListeners[eventType] = [];
+        collabListeners[eventType].push(callback);
+      },
+      off: function(eventType, callback) {
+        if (!collabListeners[eventType]) return;
+        collabListeners[eventType] = collabListeners[eventType].filter(function(cb) {
+          return cb !== callback;
+        });
+      }
+    };
+
+    window.TiddlyDesktop.collab = api;
+
+    // Connect collab WebSocket (desktop only — gives sub-ms push delivery)
+    if (hasTauri && !isAndroid) {
+      connectCollabWs(wikiId);
+    }
+
+    _log('[LAN Sync] Collab API initialized for wiki: ' + wikiId);
+
+    // Notify any deferred collab.js setups that the API is now available
+    try { window.dispatchEvent(new Event("collab-api-ready")); } catch(_e) {}
+  }
+
+  function teardownCollabApi() {
+    if (collabWs) {
+      try { collabWs.close(); } catch (e) {}
+      collabWs = null;
+    }
+    collabListeners = {};
+    remoteEditorsCache = {};
+    if (window.TiddlyDesktop) {
+      window.TiddlyDesktop.collab = null;
+    }
+  }
+
+  function emitCollabEvent(eventType, data) {
+    var listeners = collabListeners[eventType];
+    _log('[Collab] emitCollabEvent: type=' + eventType + ', listeners=' + (listeners ? listeners.length : 0) + ', tiddler=' + (data && data.tiddler_title || 'none'));
+    if (listeners) {
+      for (var i = 0; i < listeners.length; i++) {
+        _log('[Collab] Calling handler ' + i + ' for ' + eventType);
+        try {
+          listeners[i](data);
+          _log('[Collab] Handler ' + i + ' for ' + eventType + ' completed OK');
+        } catch (e) {
+          _log('[Collab] Handler ' + i + ' for ' + eventType + ' THREW: ' + (e && e.message ? e.message : String(e)) + '\n' + (e && e.stack ? e.stack : ''));
+        }
+      }
+    }
+  }
+
+  function handleCollabMessage(data) {
+    if (!data || !data.type) return;
+    switch (data.type) {
+      case 'editing-started':
+        // Update remote editors cache
+        if (data.tiddler_title && data.device_id) {
+          if (!remoteEditorsCache[data.tiddler_title]) remoteEditorsCache[data.tiddler_title] = [];
+          var found = false;
+          for (var i = 0; i < remoteEditorsCache[data.tiddler_title].length; i++) {
+            if (remoteEditorsCache[data.tiddler_title][i].device_id === data.device_id) {
+              found = true;
+              break;
+            }
+          }
+          if (!found) {
+            remoteEditorsCache[data.tiddler_title].push({
+              device_id: data.device_id,
+              device_name: data.device_name || ''
+            });
+          }
+          _log('[Collab] Cache: added editor for ' + data.tiddler_title + ', now ' + remoteEditorsCache[data.tiddler_title].length + ' remote editors');
+        }
+        emitCollabEvent('editing-started', data);
+        break;
+      case 'editing-stopped':
+        // Update remote editors cache
+        if (data.tiddler_title && data.device_id && remoteEditorsCache[data.tiddler_title]) {
+          remoteEditorsCache[data.tiddler_title] = remoteEditorsCache[data.tiddler_title].filter(function(e) {
+            return e.device_id !== data.device_id;
+          });
+          if (remoteEditorsCache[data.tiddler_title].length === 0) {
+            delete remoteEditorsCache[data.tiddler_title];
+          }
+          _log('[Collab] Cache: removed editor for ' + data.tiddler_title + ', now ' + (remoteEditorsCache[data.tiddler_title] ? remoteEditorsCache[data.tiddler_title].length : 0) + ' remote editors');
+        }
+        emitCollabEvent('editing-stopped', data);
+        break;
+      case 'collab-update':
+        emitCollabEvent('collab-update', data);
+        break;
+      case 'collab-awareness':
+        emitCollabEvent('collab-awareness', data);
+        break;
+    }
+  }
+
+  function sendCollabOutbound(type, wikiId, tiddlerTitle, base64) {
+    // Try WebSocket first (instant)
+    if (collabWs && collabWs.readyState === WebSocket.OPEN) {
+      var msg = { type: type, wiki_id: wikiId, tiddler_title: tiddlerTitle };
+      if (base64) msg.update_base64 = base64;
+      collabWs.send(JSON.stringify(msg));
+      return;
+    }
+
+    // Fall back to Tauri invoke / Android bridge
+    if (isAndroid) {
+      switch (type) {
+        case 'startEditing':
+          window.TiddlyDesktopSync.collabEditingStarted(wikiId, tiddlerTitle);
+          break;
+        case 'stopEditing':
+          window.TiddlyDesktopSync.collabEditingStopped(wikiId, tiddlerTitle);
+          break;
+        case 'sendUpdate':
+          window.TiddlyDesktopSync.collabUpdate(wikiId, tiddlerTitle, base64);
+          break;
+        case 'sendAwareness':
+          window.TiddlyDesktopSync.collabAwareness(wikiId, tiddlerTitle, base64);
+          break;
+      }
+    } else if (hasTauri) {
+      switch (type) {
+        case 'startEditing':
+          window.__TAURI__.core.invoke('lan_sync_collab_editing_started', {
+            wikiId: wikiId, tiddlerTitle: tiddlerTitle
+          }).catch(function() {});
+          break;
+        case 'stopEditing':
+          window.__TAURI__.core.invoke('lan_sync_collab_editing_stopped', {
+            wikiId: wikiId, tiddlerTitle: tiddlerTitle
+          }).catch(function() {});
+          break;
+        case 'sendUpdate':
+          window.__TAURI__.core.invoke('lan_sync_collab_update', {
+            wikiId: wikiId, tiddlerTitle: tiddlerTitle, updateBase64: base64
+          }).catch(function() {});
+          break;
+        case 'sendAwareness':
+          window.__TAURI__.core.invoke('lan_sync_collab_awareness', {
+            wikiId: wikiId, tiddlerTitle: tiddlerTitle, updateBase64: base64
+          }).catch(function() {});
+          break;
+      }
+    }
+  }
+
+  var collabWsReconnects = 0;
+  var collabWsPort = 0;
+
+  function connectCollabWs(wikiId, attempt) {
+    if (!hasTauri || isAndroid) return;
+    attempt = attempt || 1;
+
+    function doConnect(port) {
+      _log('[Collab WS] Connecting to ws://127.0.0.1:' + port);
+      var ws = new WebSocket('ws://127.0.0.1:' + port);
+
+      ws.onopen = function() {
+        _log('[Collab WS] Connected');
+        collabWs = ws;
+        collabWsReconnects = 0;
+        ws.send(JSON.stringify({ type: 'identify', wiki_id: wikiId }));
+      };
+
+      ws.onmessage = function(event) {
+        try {
+          var data = JSON.parse(event.data);
+          handleCollabMessage(data);
+        } catch (e) {
+          console.error('[Collab WS] Parse error:', e);
+        }
+      };
+
+      ws.onerror = function(e) {
+        _log('[Collab WS] Error: ' + (e.message || 'unknown'));
+      };
+
+      ws.onclose = function() {
+        if (collabWs === ws) collabWs = null;
+        collabWsReconnects++;
+        if (collabWsReconnects <= 10) {
+          var delay = Math.min(1000 * Math.pow(2, collabWsReconnects - 1), 30000);
+          _log('[Collab WS] Disconnected, reconnecting in ' + delay + 'ms (attempt ' + collabWsReconnects + ')');
+          setTimeout(function() { doConnect(port); }, delay);
+        } else {
+          _log('[Collab WS] Disconnected, giving up after ' + collabWsReconnects + ' attempts');
+        }
+      };
+    }
+
+    // Use cached port if available
+    if (collabWsPort > 0) {
+      doConnect(collabWsPort);
+      return;
+    }
+
+    window.__TAURI__.core.invoke('lan_sync_get_collab_port').then(function(port) {
+      if (!port || port === 0) {
+        if (attempt < 30) {
+          setTimeout(function() { connectCollabWs(wikiId, attempt + 1); }, 500);
+        } else {
+          _log('[Collab WS] No collab port available after ' + attempt + ' attempts');
+        }
+        return;
+      }
+      collabWsPort = port;
+      doConnect(port);
+    }).catch(function(e) {
+      _log('[Collab WS] Failed to get port: ' + e);
+    });
   }
 })();
 

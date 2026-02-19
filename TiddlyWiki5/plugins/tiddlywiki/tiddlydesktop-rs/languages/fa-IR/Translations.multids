@@ -97,3 +97,12 @@ LanSync/NoRemoteWikis: ویکی جدیدی از دستگاه‌های متصل �
 LanSync/From: از
 LanSync/GetWiki: دریافت ویکی
 LanSync/LinkWiki: پیوند
+
+Buttons/Plugins: افزونه‌ها
+PluginInstaller/Title: مدیریت افزونه‌ها
+PluginInstaller/For: برای:
+PluginInstaller/SelectPlugins: انتخاب افزونه‌ها
+PluginInstaller/Install: اعمال تغییرات
+PluginInstaller/Installing: در حال به‌روزرسانی افزونه‌ها...
+PluginInstaller/Installed: (نصب شده)
+PluginInstaller/RestartNeeded: ویکی را مجدداً راه‌اندازی کنید تا تغییرات اعمال شوند.

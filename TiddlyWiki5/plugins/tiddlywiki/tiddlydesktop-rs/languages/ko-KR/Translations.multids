@@ -97,3 +97,12 @@ LanSync/NoRemoteWikis: 연결된 피어에서 사용 가능한 새 위키가 없
 LanSync/From: 출처:
 LanSync/GetWiki: 위키 가져오기
 LanSync/LinkWiki: 연결
+
+Buttons/Plugins: 플러그인
+PluginInstaller/Title: 플러그인 관리
+PluginInstaller/For: 대상:
+PluginInstaller/SelectPlugins: 플러그인 선택
+PluginInstaller/Install: 변경 적용
+PluginInstaller/Installing: 플러그인 업데이트 중...
+PluginInstaller/Installed: (설치됨)
+PluginInstaller/RestartNeeded: 변경 사항을 적용하려면 위키를 다시 시작하세요.

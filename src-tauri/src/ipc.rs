@@ -188,6 +188,31 @@ pub enum IpcMessage {
         wiki_id: String,
         payload_json: String,
     },
+
+    // ── LAN Sync collaborative editing IPC messages ─────────────────
+
+    /// Wiki process → main process: started editing a tiddler
+    LanSyncCollabEditingStarted {
+        wiki_id: String,
+        tiddler_title: String,
+    },
+    /// Wiki process → main process: stopped editing a tiddler
+    LanSyncCollabEditingStopped {
+        wiki_id: String,
+        tiddler_title: String,
+    },
+    /// Wiki process → main process: Yjs document update
+    LanSyncCollabUpdate {
+        wiki_id: String,
+        tiddler_title: String,
+        update_base64: String,
+    },
+    /// Wiki process → main process: Yjs awareness update
+    LanSyncCollabAwareness {
+        wiki_id: String,
+        tiddler_title: String,
+        update_base64: String,
+    },
 }
 
 /// A connected wiki process
@@ -738,6 +763,55 @@ fn handle_client(
                                 }
                             }
 
+                            // ── LAN Sync collaborative editing ──────────────
+                            IpcMessage::LanSyncCollabEditingStarted { wiki_id, tiddler_title } => {
+                                if !client_authenticated {
+                                    continue;
+                                }
+                                #[cfg(not(target_os = "android"))]
+                                {
+                                    if let Some(mgr) = crate::lan_sync::get_sync_manager() {
+                                        mgr.notify_collab_editing_started(wiki_id, tiddler_title);
+                                    }
+                                }
+                            }
+
+                            IpcMessage::LanSyncCollabEditingStopped { wiki_id, tiddler_title } => {
+                                if !client_authenticated {
+                                    continue;
+                                }
+                                #[cfg(not(target_os = "android"))]
+                                {
+                                    if let Some(mgr) = crate::lan_sync::get_sync_manager() {
+                                        mgr.notify_collab_editing_stopped(wiki_id, tiddler_title);
+                                    }
+                                }
+                            }
+
+                            IpcMessage::LanSyncCollabUpdate { wiki_id, tiddler_title, update_base64 } => {
+                                if !client_authenticated {
+                                    continue;
+                                }
+                                #[cfg(not(target_os = "android"))]
+                                {
+                                    if let Some(mgr) = crate::lan_sync::get_sync_manager() {
+                                        mgr.send_collab_update(wiki_id, tiddler_title, update_base64);
+                                    }
+                                }
+                            }
+
+                            IpcMessage::LanSyncCollabAwareness { wiki_id, tiddler_title, update_base64 } => {
+                                if !client_authenticated {
+                                    continue;
+                                }
+                                #[cfg(not(target_os = "android"))]
+                                {
+                                    if let Some(mgr) = crate::lan_sync::get_sync_manager() {
+                                        mgr.send_collab_awareness(wiki_id, tiddler_title, update_base64);
+                                    }
+                                }
+                            }
+
                             _ => {}
                         }
                     }
@@ -945,6 +1019,42 @@ impl IpcClient {
         self.send(&IpcMessage::LanSyncBroadcastFingerprints {
             wiki_id: wiki_id.to_string(),
             fingerprints_json: fingerprints_json.to_string(),
+        })
+    }
+
+    // ── Collaborative editing IPC helpers ────────────────────────────
+
+    /// Notify main process that we started editing a tiddler
+    pub fn send_lan_sync_collab_editing_started(&mut self, wiki_id: &str, tiddler_title: &str) -> std::io::Result<()> {
+        self.send(&IpcMessage::LanSyncCollabEditingStarted {
+            wiki_id: wiki_id.to_string(),
+            tiddler_title: tiddler_title.to_string(),
+        })
+    }
+
+    /// Notify main process that we stopped editing a tiddler
+    pub fn send_lan_sync_collab_editing_stopped(&mut self, wiki_id: &str, tiddler_title: &str) -> std::io::Result<()> {
+        self.send(&IpcMessage::LanSyncCollabEditingStopped {
+            wiki_id: wiki_id.to_string(),
+            tiddler_title: tiddler_title.to_string(),
+        })
+    }
+
+    /// Send a Yjs document update to main process for LAN sync
+    pub fn send_lan_sync_collab_update(&mut self, wiki_id: &str, tiddler_title: &str, update_base64: &str) -> std::io::Result<()> {
+        self.send(&IpcMessage::LanSyncCollabUpdate {
+            wiki_id: wiki_id.to_string(),
+            tiddler_title: tiddler_title.to_string(),
+            update_base64: update_base64.to_string(),
+        })
+    }
+
+    /// Send a Yjs awareness update to main process for LAN sync
+    pub fn send_lan_sync_collab_awareness(&mut self, wiki_id: &str, tiddler_title: &str, update_base64: &str) -> std::io::Result<()> {
+        self.send(&IpcMessage::LanSyncCollabAwareness {
+            wiki_id: wiki_id.to_string(),
+            tiddler_title: tiddler_title.to_string(),
+            update_base64: update_base64.to_string(),
         })
     }
 }

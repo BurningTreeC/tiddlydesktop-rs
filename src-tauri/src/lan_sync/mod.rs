@@ -196,6 +196,19 @@ pub struct SyncManager {
     /// Android bridge for cross-process communication with :wiki process
     #[cfg(target_os = "android")]
     android_bridge: std::sync::Mutex<Option<android_bridge::AndroidBridge>>,
+
+    // ── Collaborative editing state ──────────────────────────────────
+
+    /// Remote editors: (wiki_id, tiddler_title) → HashSet<(device_id, device_name)>
+    collab_editors: std::sync::Mutex<HashMap<(String, String), HashSet<(String, String)>>>,
+    /// Local editors: (wiki_id, tiddler_title) — tiddlers this device is currently editing
+    local_collab_editors: std::sync::Mutex<HashSet<(String, String)>>,
+    /// Port of the local collab WebSocket server (0 if not running)
+    collab_ws_port: std::sync::atomic::AtomicU16,
+    /// Connected collab WebSocket clients: wiki_id → list of sender handles
+    collab_ws_clients: std::sync::Mutex<HashMap<String, Vec<tokio::sync::mpsc::UnboundedSender<String>>>>,
+    /// Shutdown signal for collab WebSocket server
+    collab_ws_shutdown: tokio::sync::watch::Sender<bool>,
 }
 
 /// State for an incoming wiki file transfer
@@ -285,6 +298,11 @@ impl SyncManager {
             incoming_plugin_transfers: std::sync::Mutex::new(HashMap::new()),
             #[cfg(target_os = "android")]
             android_bridge: std::sync::Mutex::new(None),
+            collab_editors: std::sync::Mutex::new(HashMap::new()),
+            local_collab_editors: std::sync::Mutex::new(HashSet::new()),
+            collab_ws_port: std::sync::atomic::AtomicU16::new(0),
+            collab_ws_clients: std::sync::Mutex::new(HashMap::new()),
+            collab_ws_shutdown: tokio::sync::watch::channel(false).0,
         });
 
         // Store globally
@@ -418,6 +436,13 @@ impl SyncManager {
         // Store server immediately so it's tracked even if mDNS fails
         self.running.store(true, std::sync::atomic::Ordering::Release);
         *self.server.write().await = Some(server);
+
+        // Start local collab WebSocket server for low-latency Yjs transport
+        #[cfg(not(target_os = "android"))]
+        {
+            let self_arc = get_sync_manager().unwrap();
+            self_arc.start_collab_ws_server().await;
+        }
 
         // Start UDP broadcast discovery (non-fatal — sync works without it, just no auto-discovery)
         let (discovery_tx, mut discovery_rx) = mpsc::unbounded_channel();
@@ -761,6 +786,19 @@ impl SyncManager {
         self.discovered_peers.write().await.clear();
         self.remote_wikis.write().await.clear();
         self.last_known_addrs.write().await.clear();
+
+        // Stop collab WebSocket server
+        let _ = self.collab_ws_shutdown.send(true);
+        self.collab_ws_port.store(0, std::sync::atomic::Ordering::Relaxed);
+        if let Ok(mut clients) = self.collab_ws_clients.lock() {
+            clients.clear();
+        }
+        if let Ok(mut editors) = self.collab_editors.lock() {
+            editors.clear();
+        }
+        if let Ok(mut local) = self.local_collab_editors.lock() {
+            local.clear();
+        }
 
         // Stop Android bridge
         #[cfg(target_os = "android")]
@@ -1219,6 +1257,305 @@ impl SyncManager {
         });
     }
 
+    // ── Collaborative editing methods ────────────────────────────────
+
+    /// Notify peers that we started editing a tiddler
+    pub fn notify_collab_editing_started(&self, wiki_id: &str, tiddler_title: &str) {
+        eprintln!("[Collab] notify_collab_editing_started: wiki={}, tiddler={}", wiki_id, tiddler_title);
+        // Track locally so we can re-broadcast on peer reconnect
+        if let Ok(mut local) = self.local_collab_editors.lock() {
+            local.insert((wiki_id.to_string(), tiddler_title.to_string()));
+        }
+        let device_id = self.pairing_manager.device_id().to_string();
+        let device_name = self.pairing_manager.device_name().to_string();
+        let _ = self.wiki_tx.send(WikiToSync::CollabEditingStarted {
+            wiki_id: wiki_id.to_string(),
+            tiddler_title: tiddler_title.to_string(),
+            device_id,
+            device_name,
+        });
+    }
+
+    /// Notify peers that we stopped editing a tiddler
+    pub fn notify_collab_editing_stopped(&self, wiki_id: &str, tiddler_title: &str) {
+        eprintln!("[Collab] notify_collab_editing_stopped: wiki={}, tiddler={}", wiki_id, tiddler_title);
+        // Remove from local tracking
+        if let Ok(mut local) = self.local_collab_editors.lock() {
+            local.remove(&(wiki_id.to_string(), tiddler_title.to_string()));
+        }
+        let device_id = self.pairing_manager.device_id().to_string();
+        let _ = self.wiki_tx.send(WikiToSync::CollabEditingStopped {
+            wiki_id: wiki_id.to_string(),
+            tiddler_title: tiddler_title.to_string(),
+            device_id,
+        });
+    }
+
+    /// Send a Yjs document update to peers
+    pub fn send_collab_update(&self, wiki_id: &str, tiddler_title: &str, update_base64: &str) {
+        eprintln!("[Collab] send_collab_update: wiki={}, tiddler={}, len={}", wiki_id, tiddler_title, update_base64.len());
+        let _ = self.wiki_tx.send(WikiToSync::CollabUpdate {
+            wiki_id: wiki_id.to_string(),
+            tiddler_title: tiddler_title.to_string(),
+            update_base64: update_base64.to_string(),
+        });
+    }
+
+    /// Send a Yjs awareness update to peers
+    pub fn send_collab_awareness(&self, wiki_id: &str, tiddler_title: &str, update_base64: &str) {
+        eprintln!("[Collab] send_collab_awareness: wiki={}, tiddler={}, len={}", wiki_id, tiddler_title, update_base64.len());
+        let _ = self.wiki_tx.send(WikiToSync::CollabAwareness {
+            wiki_id: wiki_id.to_string(),
+            tiddler_title: tiddler_title.to_string(),
+            update_base64: update_base64.to_string(),
+        });
+    }
+
+    /// Get remote editors for a tiddler
+    pub fn get_remote_editors(&self, wiki_id: &str, tiddler_title: &str) -> Vec<(String, String)> {
+        let key = (wiki_id.to_string(), tiddler_title.to_string());
+        if let Ok(editors) = self.collab_editors.lock() {
+            editors
+                .get(&key)
+                .map(|set| set.iter().cloned().collect())
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        }
+    }
+
+    /// Get the collab WebSocket server port (0 if not running)
+    pub fn get_collab_ws_port(&self) -> u16 {
+        self.collab_ws_port.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Send a JSON message to all collab WebSocket clients for a wiki
+    fn send_collab_ws_message(&self, wiki_id: &str, msg: &str) {
+        if let Ok(clients) = self.collab_ws_clients.lock() {
+            if let Some(senders) = clients.get(wiki_id) {
+                for sender in senders {
+                    let _ = sender.send(msg.to_string());
+                }
+            }
+        }
+    }
+
+    /// Send a collab message to JS via WebSocket (preferred) or IPC fallback
+    fn emit_collab_to_wiki(&self, wiki_id: &str, payload: serde_json::Value) {
+        let msg_type = payload.get("type").and_then(|v| v.as_str()).unwrap_or("unknown");
+        eprintln!("[Collab] emit_collab_to_wiki: wiki={}, type={}", wiki_id, msg_type);
+        let msg = serde_json::to_string(&payload).unwrap_or_default();
+
+        // Try collab WebSocket first (low-latency push)
+        let mut sent_ws = false;
+        if let Ok(clients) = self.collab_ws_clients.lock() {
+            if let Some(senders) = clients.get(wiki_id) {
+                if !senders.is_empty() {
+                    eprintln!("[Collab] emit_collab_to_wiki: sending via WS to {} clients", senders.len());
+                    for sender in senders {
+                        let _ = sender.send(msg.clone());
+                    }
+                    sent_ws = true;
+                }
+            }
+        }
+
+        // Fallback to regular emit_to_wiki (IPC on desktop, bridge on Android)
+        if !sent_ws {
+            eprintln!("[Collab] emit_collab_to_wiki: no WS clients, using IPC/bridge fallback");
+            Self::emit_to_wiki(wiki_id, "lan-sync-collab", payload);
+        }
+    }
+
+    /// Start the local collab WebSocket server (called from start())
+    #[cfg(not(target_os = "android"))]
+    async fn start_collab_ws_server(self: &Arc<Self>) {
+        use tokio::net::TcpListener;
+
+        let listener = match TcpListener::bind("127.0.0.1:0").await {
+            Ok(l) => l,
+            Err(e) => {
+                eprintln!("[Collab WS] Failed to bind: {}", e);
+                return;
+            }
+        };
+        let port = listener.local_addr().map(|a| a.port()).unwrap_or(0);
+        if port == 0 {
+            eprintln!("[Collab WS] Bound to port 0, aborting");
+            return;
+        }
+        self.collab_ws_port.store(port, std::sync::atomic::Ordering::Relaxed);
+        eprintln!("[Collab WS] Server listening on port {}", port);
+
+        let mgr = Arc::clone(self);
+        let mut shutdown_rx = self.collab_ws_shutdown.subscribe();
+
+        tokio::spawn(async move {
+            loop {
+                tokio::select! {
+                    result = listener.accept() => {
+                        match result {
+                            Ok((stream, addr)) => {
+                                eprintln!("[Collab WS] New connection from {}", addr);
+                                let mgr2 = Arc::clone(&mgr);
+                                tokio::spawn(async move {
+                                    mgr2.handle_collab_ws_connection(stream).await;
+                                });
+                            }
+                            Err(e) => {
+                                eprintln!("[Collab WS] Accept error: {}", e);
+                            }
+                        }
+                    }
+                    _ = shutdown_rx.changed() => {
+                        eprintln!("[Collab WS] Shutdown signal received");
+                        break;
+                    }
+                }
+            }
+        });
+    }
+
+    /// Handle a single collab WebSocket connection
+    #[cfg(not(target_os = "android"))]
+    async fn handle_collab_ws_connection(self: Arc<Self>, stream: tokio::net::TcpStream) {
+        use futures_util::{SinkExt, StreamExt};
+        use tokio_tungstenite::accept_async;
+
+        let ws_stream = match accept_async(stream).await {
+            Ok(ws) => ws,
+            Err(e) => {
+                eprintln!("[Collab WS] Handshake error: {}", e);
+                return;
+            }
+        };
+
+        let (mut ws_sender, mut ws_receiver) = ws_stream.split();
+
+        // Create a channel for outbound messages (Rust → JS)
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+
+        // Wiki ID is set when the client sends an "identify" message
+        let wiki_id: Arc<tokio::sync::Mutex<Option<String>>> = Arc::new(tokio::sync::Mutex::new(None));
+
+        // Spawn outbound message forwarder
+        let wiki_id_out = Arc::clone(&wiki_id);
+        let outbound = tokio::spawn(async move {
+            while let Some(msg) = rx.recv().await {
+                if ws_sender
+                    .send(tokio_tungstenite::tungstenite::Message::Text(msg.into()))
+                    .await
+                    .is_err()
+                {
+                    break;
+                }
+            }
+            let _ = wiki_id_out; // prevent warning
+        });
+
+        // Process inbound messages
+        while let Some(msg) = ws_receiver.next().await {
+            let msg = match msg {
+                Ok(m) => m,
+                Err(_) => break,
+            };
+
+            if msg.is_close() {
+                break;
+            }
+
+            let text = match msg.into_text() {
+                Ok(t) => t,
+                Err(_) => continue,
+            };
+
+            // Parse JSON message
+            let json: serde_json::Value = match serde_json::from_str(&text) {
+                Ok(v) => v,
+                Err(_) => continue,
+            };
+
+            let msg_type = json["type"].as_str().unwrap_or("");
+
+            match msg_type {
+                "identify" => {
+                    let wid = json["wiki_id"].as_str().unwrap_or("").to_string();
+                    if !wid.is_empty() {
+                        eprintln!("[Collab WS] Client identified for wiki: {}", wid);
+                        // Register this sender for the wiki
+                        if let Ok(mut clients) = self.collab_ws_clients.lock() {
+                            clients.entry(wid.clone()).or_insert_with(Vec::new).push(tx.clone());
+                        }
+                        // Send current remote editing sessions so the client knows immediately
+                        if let Ok(editors) = self.collab_editors.lock() {
+                            for ((eid_wiki, eid_title), device_set) in editors.iter() {
+                                if eid_wiki == &wid {
+                                    for (device_id, device_name) in device_set {
+                                        let msg = serde_json::json!({
+                                            "type": "editing-started",
+                                            "wiki_id": eid_wiki,
+                                            "tiddler_title": eid_title,
+                                            "device_id": device_id,
+                                            "device_name": device_name,
+                                        });
+                                        let _ = tx.send(msg.to_string());
+                                    }
+                                }
+                            }
+                        }
+                        *wiki_id.lock().await = Some(wid);
+                    }
+                }
+                "startEditing" => {
+                    let wid = json["wiki_id"].as_str().unwrap_or("");
+                    let title = json["tiddler_title"].as_str().unwrap_or("");
+                    if !wid.is_empty() && !title.is_empty() {
+                        self.notify_collab_editing_started(wid, title);
+                    }
+                }
+                "stopEditing" => {
+                    let wid = json["wiki_id"].as_str().unwrap_or("");
+                    let title = json["tiddler_title"].as_str().unwrap_or("");
+                    if !wid.is_empty() && !title.is_empty() {
+                        self.notify_collab_editing_stopped(wid, title);
+                    }
+                }
+                "sendUpdate" => {
+                    let wid = json["wiki_id"].as_str().unwrap_or("");
+                    let title = json["tiddler_title"].as_str().unwrap_or("");
+                    let data = json["update_base64"].as_str().unwrap_or("");
+                    if !wid.is_empty() && !title.is_empty() && !data.is_empty() {
+                        self.send_collab_update(wid, title, data);
+                    }
+                }
+                "sendAwareness" => {
+                    let wid = json["wiki_id"].as_str().unwrap_or("");
+                    let title = json["tiddler_title"].as_str().unwrap_or("");
+                    let data = json["update_base64"].as_str().unwrap_or("");
+                    if !wid.is_empty() && !title.is_empty() && !data.is_empty() {
+                        self.send_collab_awareness(wid, title, data);
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        // Cleanup: remove this sender from collab_ws_clients
+        if let Some(wid) = wiki_id.lock().await.as_ref() {
+            if let Ok(mut clients) = self.collab_ws_clients.lock() {
+                if let Some(senders) = clients.get_mut(wid) {
+                    senders.retain(|s| !s.is_closed());
+                    if senders.is_empty() {
+                        clients.remove(wid);
+                    }
+                }
+            }
+        }
+
+        outbound.abort();
+        eprintln!("[Collab WS] Connection closed");
+    }
+
     /// Main event loop processing server events, wiki changes, and attachment events
     #[cfg(not(target_os = "android"))]
     async fn run_event_loop(
@@ -1567,6 +1904,23 @@ impl SyncManager {
 
                 // Send cached tiddlywiki.info for folder wikis
                 self.send_wiki_info_to_peer(&device_id).await;
+
+                // Re-broadcast local collab editing sessions so the peer knows what we're editing
+                if let Ok(local) = self.local_collab_editors.lock() {
+                    if !local.is_empty() {
+                        eprintln!("[Collab] Re-broadcasting {} local editing sessions to reconnected peer {}", local.len(), device_id);
+                        let my_device_id = self.pairing_manager.device_id().to_string();
+                        let my_device_name = self.pairing_manager.device_name().to_string();
+                        for (wiki_id, tiddler_title) in local.iter() {
+                            let _ = self.wiki_tx.send(WikiToSync::CollabEditingStarted {
+                                wiki_id: wiki_id.clone(),
+                                tiddler_title: tiddler_title.clone(),
+                                device_id: my_device_id.clone(),
+                                device_name: my_device_name.clone(),
+                            });
+                        }
+                    }
+                }
             }
             ServerEvent::PeerDisconnected { device_id } => {
                 eprintln!("[LAN Sync] Peer disconnected: {}", device_id);
@@ -1576,6 +1930,33 @@ impl SyncManager {
                 }
                 // Remove remote wikis from this peer
                 self.remote_wikis.write().await.remove(&device_id);
+
+                // Clean up collab editors from this peer and emit editing-stopped events
+                if let Ok(mut editors) = self.collab_editors.lock() {
+                    let keys: Vec<(String, String)> = editors.keys().cloned().collect();
+                    for key in keys {
+                        if let Some(set) = editors.get_mut(&key) {
+                            let removed: Vec<(String, String)> = set.iter()
+                                .filter(|(did, _)| did == &device_id)
+                                .cloned()
+                                .collect();
+                            for (did, _) in &removed {
+                                set.retain(|(d, _)| d != did);
+                                // Emit editing-stopped for each removed editor
+                                self.emit_collab_to_wiki(&key.0, serde_json::json!({
+                                    "type": "editing-stopped",
+                                    "wiki_id": key.0,
+                                    "tiddler_title": key.1,
+                                    "device_id": did,
+                                }));
+                            }
+                            if set.is_empty() {
+                                editors.remove(&key);
+                            }
+                        }
+                    }
+                }
+
                 if let Some(app) = GLOBAL_APP_HANDLE.get() {
                     let _ = app.emit("lan-sync-peer-disconnected", serde_json::json!({
                         "device_id": device_id,
@@ -1654,6 +2035,10 @@ impl SyncManager {
                     SyncMessage::RequestPluginFiles { ref plugin_name, .. } => format!("RequestPluginFiles({})", plugin_name),
                     SyncMessage::PluginFileChunk { ref plugin_name, ref rel_path, chunk_index, .. } => format!("PluginFileChunk({}/{} #{})", plugin_name, rel_path, chunk_index),
                     SyncMessage::PluginFilesComplete { ref plugin_name, .. } => format!("PluginFilesComplete({})", plugin_name),
+                    SyncMessage::EditingStarted { ref tiddler_title, ref device_id, .. } => format!("EditingStarted({}, {})", tiddler_title, device_id),
+                    SyncMessage::EditingStopped { ref tiddler_title, ref device_id, .. } => format!("EditingStopped({}, {})", tiddler_title, device_id),
+                    SyncMessage::CollabUpdate { ref tiddler_title, .. } => format!("CollabUpdate({})", tiddler_title),
+                    SyncMessage::CollabAwareness { ref tiddler_title, .. } => format!("CollabAwareness({})", tiddler_title),
                     _ => "Other".to_string(),
                 };
                 eprintln!("[LAN Sync] << {} from {}", msg_type, from_device_id);
@@ -1682,7 +2067,11 @@ impl SyncManager {
                         SyncMessage::PluginManifest { wiki_id, .. } |
                         SyncMessage::RequestPluginFiles { wiki_id, .. } |
                         SyncMessage::PluginFileChunk { wiki_id, .. } |
-                        SyncMessage::PluginFilesComplete { wiki_id, .. } => Some(wiki_id.as_str()),
+                        SyncMessage::PluginFilesComplete { wiki_id, .. } |
+                        SyncMessage::EditingStarted { wiki_id, .. } |
+                        SyncMessage::EditingStopped { wiki_id, .. } |
+                        SyncMessage::CollabUpdate { wiki_id, .. } |
+                        SyncMessage::CollabAwareness { wiki_id, .. } => Some(wiki_id.as_str()),
                         // Device-level and wiki-transfer messages are always processed
                         _ => None,
                     };
@@ -1846,6 +2235,81 @@ impl SyncManager {
                     } => {
                         self.handle_plugin_files_complete(wiki_id, plugin_name);
                     }
+
+                    // ── Collaborative editing messages ──────────────────
+                    SyncMessage::EditingStarted {
+                        ref wiki_id,
+                        ref tiddler_title,
+                        ref device_id,
+                        ref device_name,
+                    } => {
+                        eprintln!("[Collab] INBOUND EditingStarted: wiki={}, tiddler={}, from_device={}", wiki_id, tiddler_title, device_id);
+                        // Track remote editor
+                        let key = (wiki_id.clone(), tiddler_title.clone());
+                        if let Ok(mut editors) = self.collab_editors.lock() {
+                            editors.entry(key).or_insert_with(HashSet::new)
+                                .insert((device_id.clone(), device_name.clone()));
+                        }
+                        // Forward to JS
+                        self.emit_collab_to_wiki(wiki_id, serde_json::json!({
+                            "type": "editing-started",
+                            "wiki_id": wiki_id,
+                            "tiddler_title": tiddler_title,
+                            "device_id": device_id,
+                            "device_name": device_name,
+                        }));
+                    }
+                    SyncMessage::EditingStopped {
+                        ref wiki_id,
+                        ref tiddler_title,
+                        ref device_id,
+                    } => {
+                        eprintln!("[Collab] INBOUND EditingStopped: wiki={}, tiddler={}, from_device={}", wiki_id, tiddler_title, device_id);
+                        // Remove remote editor
+                        let key = (wiki_id.clone(), tiddler_title.clone());
+                        if let Ok(mut editors) = self.collab_editors.lock() {
+                            if let Some(set) = editors.get_mut(&key) {
+                                set.retain(|(did, _)| did != device_id);
+                                if set.is_empty() {
+                                    editors.remove(&key);
+                                }
+                            }
+                        }
+                        // Forward to JS
+                        self.emit_collab_to_wiki(wiki_id, serde_json::json!({
+                            "type": "editing-stopped",
+                            "wiki_id": wiki_id,
+                            "tiddler_title": tiddler_title,
+                            "device_id": device_id,
+                        }));
+                    }
+                    SyncMessage::CollabUpdate {
+                        ref wiki_id,
+                        ref tiddler_title,
+                        ref update_base64,
+                    } => {
+                        eprintln!("[Collab] INBOUND CollabUpdate: wiki={}, tiddler={}, len={}", wiki_id, tiddler_title, update_base64.len());
+                        self.emit_collab_to_wiki(wiki_id, serde_json::json!({
+                            "type": "collab-update",
+                            "wiki_id": wiki_id,
+                            "tiddler_title": tiddler_title,
+                            "update_base64": update_base64,
+                        }));
+                    }
+                    SyncMessage::CollabAwareness {
+                        ref wiki_id,
+                        ref tiddler_title,
+                        ref update_base64,
+                    } => {
+                        eprintln!("[Collab] INBOUND CollabAwareness: wiki={}, tiddler={}, len={}", wiki_id, tiddler_title, update_base64.len());
+                        self.emit_collab_to_wiki(wiki_id, serde_json::json!({
+                            "type": "collab-awareness",
+                            "wiki_id": wiki_id,
+                            "tiddler_title": tiddler_title,
+                            "update_base64": update_base64,
+                        }));
+                    }
+
                     SyncMessage::TiddlerFingerprints {
                         ref wiki_id,
                         ref from_device_id,
@@ -4525,6 +4989,14 @@ pub fn get_sync_manager() -> Option<Arc<SyncManager>> {
     SYNC_MANAGER.get().cloned()
 }
 
+/// Get the collab WS port (for passing to child processes via env var)
+#[cfg(not(target_os = "android"))]
+pub fn get_collab_port() -> u16 {
+    get_sync_manager()
+        .map(|mgr| mgr.get_collab_ws_port())
+        .unwrap_or(0)
+}
+
 /// Register the IPC client so wiki-process Tauri commands can route to the main process.
 /// Called from lib.rs when running in wiki mode on desktop.
 #[cfg(not(target_os = "android"))]
@@ -4841,6 +5313,131 @@ pub async fn lan_sync_save_tombstones(
     let file_path = tombstone_dir.join(format!("{}.json", safe_name));
     tokio::fs::write(&file_path, tombstones_json).await.map_err(|e| e.to_string())?;
     Ok(())
+}
+
+// ── Collaborative editing Tauri commands ─────────────────────────────────
+
+#[tauri::command]
+pub fn lan_sync_collab_editing_started(wiki_id: String, tiddler_title: String) -> Result<(), String> {
+    eprintln!("[Collab CMD] lan_sync_collab_editing_started: wiki={}, tiddler={}", wiki_id, tiddler_title);
+    if let Some(mgr) = get_sync_manager() {
+        mgr.notify_collab_editing_started(&wiki_id, &tiddler_title);
+        return Ok(());
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        eprintln!("[Collab CMD] No sync manager, trying IPC client");
+        if let Some(ipc) = IPC_CLIENT_FOR_SYNC.get() {
+            let mut guard = ipc.lock().unwrap();
+            if let Some(ref mut client) = *guard {
+                eprintln!("[Collab CMD] Sending via IPC client");
+                let _ = client.send_lan_sync_collab_editing_started(&wiki_id, &tiddler_title);
+            } else {
+                eprintln!("[Collab CMD] IPC client is None");
+            }
+        } else {
+            eprintln!("[Collab CMD] IPC_CLIENT_FOR_SYNC not initialized");
+        }
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub fn lan_sync_collab_editing_stopped(wiki_id: String, tiddler_title: String) -> Result<(), String> {
+    eprintln!("[Collab CMD] lan_sync_collab_editing_stopped: wiki={}, tiddler={}", wiki_id, tiddler_title);
+    if let Some(mgr) = get_sync_manager() {
+        mgr.notify_collab_editing_stopped(&wiki_id, &tiddler_title);
+        return Ok(());
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        if let Some(ipc) = IPC_CLIENT_FOR_SYNC.get() {
+            let mut guard = ipc.lock().unwrap();
+            if let Some(ref mut client) = *guard {
+                let _ = client.send_lan_sync_collab_editing_stopped(&wiki_id, &tiddler_title);
+            }
+        }
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub fn lan_sync_collab_update(
+    wiki_id: String,
+    tiddler_title: String,
+    update_base64: String,
+) -> Result<(), String> {
+    eprintln!("[Collab CMD] lan_sync_collab_update: wiki={}, tiddler={}, len={}", wiki_id, tiddler_title, update_base64.len());
+    if let Some(mgr) = get_sync_manager() {
+        mgr.send_collab_update(&wiki_id, &tiddler_title, &update_base64);
+        return Ok(());
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        eprintln!("[Collab CMD] No sync manager, trying IPC client for update");
+        if let Some(ipc) = IPC_CLIENT_FOR_SYNC.get() {
+            let mut guard = ipc.lock().unwrap();
+            if let Some(ref mut client) = *guard {
+                let _ = client.send_lan_sync_collab_update(&wiki_id, &tiddler_title, &update_base64);
+            }
+        }
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub fn lan_sync_collab_awareness(
+    wiki_id: String,
+    tiddler_title: String,
+    update_base64: String,
+) -> Result<(), String> {
+    eprintln!("[Collab CMD] lan_sync_collab_awareness: wiki={}, tiddler={}, len={}", wiki_id, tiddler_title, update_base64.len());
+    if let Some(mgr) = get_sync_manager() {
+        mgr.send_collab_awareness(&wiki_id, &tiddler_title, &update_base64);
+        return Ok(());
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        if let Some(ipc) = IPC_CLIENT_FOR_SYNC.get() {
+            let mut guard = ipc.lock().unwrap();
+            if let Some(ref mut client) = *guard {
+                let _ = client.send_lan_sync_collab_awareness(&wiki_id, &tiddler_title, &update_base64);
+            }
+        }
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub fn lan_sync_get_remote_editors(
+    wiki_id: String,
+    tiddler_title: String,
+) -> Result<Vec<serde_json::Value>, String> {
+    if let Some(mgr) = get_sync_manager() {
+        let editors = mgr.get_remote_editors(&wiki_id, &tiddler_title);
+        let result: Vec<serde_json::Value> = editors
+            .into_iter()
+            .map(|(device_id, device_name)| {
+                serde_json::json!({"deviceId": device_id, "deviceName": device_name})
+            })
+            .collect();
+        return Ok(result);
+    }
+    Ok(Vec::new())
+}
+
+#[tauri::command]
+pub fn lan_sync_get_collab_port() -> Result<u16, String> {
+    if let Some(mgr) = get_sync_manager() {
+        return Ok(mgr.get_collab_ws_port());
+    }
+    // Fallback for wiki child processes: read port from env var set by main process
+    if let Ok(val) = std::env::var("COLLAB_WS_PORT") {
+        if let Ok(port) = val.parse::<u16>() {
+            return Ok(port);
+        }
+    }
+    Ok(0)
 }
 
 /// A tiddler in a full sync batch from JS

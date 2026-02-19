@@ -35,6 +35,34 @@ pub enum WikiToSync {
     WikiClosed {
         wiki_id: String,
     },
+
+    // ── Collaborative editing ────────────────────────────────────────
+
+    /// Local device started editing a tiddler
+    CollabEditingStarted {
+        wiki_id: String,
+        tiddler_title: String,
+        device_id: String,
+        device_name: String,
+    },
+    /// Local device stopped editing a tiddler
+    CollabEditingStopped {
+        wiki_id: String,
+        tiddler_title: String,
+        device_id: String,
+    },
+    /// Outbound Yjs document update
+    CollabUpdate {
+        wiki_id: String,
+        tiddler_title: String,
+        update_base64: String,
+    },
+    /// Outbound Yjs awareness update
+    CollabAwareness {
+        wiki_id: String,
+        tiddler_title: String,
+        update_base64: String,
+    },
 }
 
 /// Messages from LAN sync to wiki processes
@@ -391,6 +419,66 @@ impl SyncBridge {
             }
             WikiToSync::WikiClosed { wiki_id } => {
                 eprintln!("[LAN Sync] Wiki closed: {}", wiki_id);
+            }
+
+            // ── Collaborative editing ────────────────────────────────────
+            WikiToSync::CollabEditingStarted {
+                wiki_id,
+                tiddler_title,
+                device_id,
+                device_name,
+            } => {
+                eprintln!("[Collab] OUTBOUND broadcast EditingStarted: wiki={}, tiddler={}", wiki_id, tiddler_title);
+                server
+                    .broadcast(&SyncMessage::EditingStarted {
+                        wiki_id,
+                        tiddler_title,
+                        device_id,
+                        device_name,
+                    })
+                    .await;
+            }
+            WikiToSync::CollabEditingStopped {
+                wiki_id,
+                tiddler_title,
+                device_id,
+            } => {
+                eprintln!("[Collab] OUTBOUND broadcast EditingStopped: wiki={}, tiddler={}", wiki_id, tiddler_title);
+                server
+                    .broadcast(&SyncMessage::EditingStopped {
+                        wiki_id,
+                        tiddler_title,
+                        device_id,
+                    })
+                    .await;
+            }
+            WikiToSync::CollabUpdate {
+                wiki_id,
+                tiddler_title,
+                update_base64,
+            } => {
+                eprintln!("[Collab] OUTBOUND broadcast CollabUpdate: wiki={}, tiddler={}, len={}", wiki_id, tiddler_title, update_base64.len());
+                server
+                    .broadcast(&SyncMessage::CollabUpdate {
+                        wiki_id,
+                        tiddler_title,
+                        update_base64,
+                    })
+                    .await;
+            }
+            WikiToSync::CollabAwareness {
+                wiki_id,
+                tiddler_title,
+                update_base64,
+            } => {
+                eprintln!("[Collab] OUTBOUND broadcast CollabAwareness: wiki={}, tiddler={}, len={}", wiki_id, tiddler_title, update_base64.len());
+                server
+                    .broadcast(&SyncMessage::CollabAwareness {
+                        wiki_id,
+                        tiddler_title,
+                        update_base64,
+                    })
+                    .await;
             }
         }
     }

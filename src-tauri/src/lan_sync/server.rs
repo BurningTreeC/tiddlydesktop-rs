@@ -21,7 +21,7 @@ use super::protocol::*;
 pub const PEER_CHANNEL_BOUND: usize = 16;
 
 /// If no pong is received within this duration after a ping, consider the connection dead.
-pub const PONG_TIMEOUT_SECS: u64 = 60;
+pub const PONG_TIMEOUT_SECS: u64 = 6;
 
 /// WebSocket configuration with large write buffer for sync batches.
 /// Default max_write_buffer_size is 512KB which is too small for FullSyncBatch
@@ -497,7 +497,7 @@ async fn handle_connection(
     // messages come next, then bulk attachment data at lowest priority.
     let outbound_peer_id = peer_device_id.clone();
     let outbound = tokio::spawn(async move {
-        let mut ping_interval = tokio::time::interval(std::time::Duration::from_secs(20));
+        let mut ping_interval = tokio::time::interval(std::time::Duration::from_secs(2));
         ping_interval.tick().await; // skip immediate first tick
         loop {
             tokio::select! {

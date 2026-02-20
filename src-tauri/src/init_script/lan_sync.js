@@ -18,6 +18,83 @@
   var isAndroid = false;
   var hasTauri = false;
 
+  // ── Collab API (always available) ──────────────────────────────────
+  // Created immediately so the CM6 collab plugin can find it at any time,
+  // even before LAN sync activates.  Outbound methods queue until sync
+  // is active, then the queue is flushed.
+
+  var collabWs = null;
+  var collabListeners = {};
+  var remoteEditorsCache = {};
+  var _collabSyncActive = false;
+  var _collabWikiId = null;
+  var _collabOutboundQueue = [];
+
+  if (!window.TiddlyDesktop) window.TiddlyDesktop = {};
+
+  window.TiddlyDesktop.collab = {
+    startEditing: function(tiddlerTitle) {
+      if (_collabSyncActive) {
+        sendCollabOutbound('startEditing', _collabWikiId, tiddlerTitle);
+      } else {
+        _collabOutboundQueue.push(['startEditing', tiddlerTitle]);
+      }
+    },
+    stopEditing: function(tiddlerTitle) {
+      if (_collabSyncActive) {
+        sendCollabOutbound('stopEditing', _collabWikiId, tiddlerTitle);
+      } else {
+        _collabOutboundQueue.push(['stopEditing', tiddlerTitle]);
+      }
+    },
+    sendUpdate: function(tiddlerTitle, base64) {
+      if (_collabSyncActive) {
+        sendCollabOutbound('sendUpdate', _collabWikiId, tiddlerTitle, base64);
+      } else {
+        _collabOutboundQueue.push(['sendUpdate', tiddlerTitle, base64]);
+      }
+    },
+    sendAwareness: function(tiddlerTitle, base64) {
+      if (_collabSyncActive) {
+        sendCollabOutbound('sendAwareness', _collabWikiId, tiddlerTitle, base64);
+      } else {
+        _collabOutboundQueue.push(['sendAwareness', tiddlerTitle, base64]);
+      }
+    },
+    getRemoteEditors: function(tiddlerTitle) {
+      if (!_collabSyncActive) return [];
+      if (isAndroid) {
+        try {
+          var json = window.TiddlyDesktopSync.getRemoteEditors(_collabWikiId, tiddlerTitle);
+          return JSON.parse(json || '[]');
+        } catch (e) { return []; }
+      }
+      return remoteEditorsCache[tiddlerTitle] || [];
+    },
+    getRemoteEditorsAsync: function(tiddlerTitle) {
+      if (!_collabSyncActive) return Promise.resolve([]);
+      if (hasTauri) {
+        return window.__TAURI__.core.invoke('lan_sync_get_remote_editors', {
+          wikiId: _collabWikiId, tiddlerTitle: tiddlerTitle
+        }).catch(function() { return []; });
+      }
+      return Promise.resolve(this.getRemoteEditors(tiddlerTitle));
+    },
+    on: function(eventType, callback) {
+      if (!collabListeners[eventType]) collabListeners[eventType] = [];
+      collabListeners[eventType].push(callback);
+    },
+    off: function(eventType, callback) {
+      if (!collabListeners[eventType]) return;
+      collabListeners[eventType] = collabListeners[eventType].filter(function(cb) {
+        return cb !== callback;
+      });
+    }
+  };
+
+  // Dispatch collab-api-ready immediately
+  try { window.dispatchEvent(new Event("collab-api-ready")); } catch(_e) {}
+
   // Wait for TiddlyWiki AND transport to be ready
   var checkInterval = setInterval(function() {
     // Re-check transport each tick (Tauri IPC bridge loads asynchronously)
@@ -133,8 +210,26 @@
 
         activeSyncState = setupSyncHandlers(syncId);
 
-        // Set up collab API for external CM6 plugin
-        setupCollabApi(syncId);
+        // Activate collab API (set active flag, flush queued outbound messages)
+        _collabSyncActive = true;
+        _collabWikiId = syncId;
+        collabListeners = {};
+        remoteEditorsCache = {};
+
+        // Flush queued outbound messages
+        var queued = _collabOutboundQueue;
+        _collabOutboundQueue = [];
+        for (var qi = 0; qi < queued.length; qi++) {
+          var q = queued[qi];
+          sendCollabOutbound(q[0], syncId, q[1], q[2]);
+        }
+
+        // Connect collab WebSocket (desktop only — gives sub-ms push delivery)
+        if (hasTauri && !isAndroid) {
+          connectCollabWs(syncId);
+        }
+
+        rsLog('[LAN Sync] Collab API activated for wiki: ' + syncId);
 
         // Notify Rust that this wiki window is now open and ready for sync.
         notifyWikiOpened(syncId);
@@ -181,8 +276,16 @@
         activeSyncState.unlistenFns.forEach(function(fn) { fn(); });
       }
 
-      // Tear down collab API
-      teardownCollabApi();
+      // Deactivate collab (keep API object alive so CM6 plugin references remain valid)
+      _collabSyncActive = false;
+      _collabWikiId = null;
+      _collabOutboundQueue = [];
+      collabListeners = {};
+      remoteEditorsCache = {};
+      if (collabWs) {
+        try { collabWs.close(); } catch (e) {}
+        collabWs = null;
+      }
 
       activeSyncState = null;
       rsLog('[LAN Sync] Sync deactivated');
@@ -1090,89 +1193,7 @@
     console.log('[LAN Sync] Reloaded element:', element.tagName, originalSrc);
   }
 
-  // ── Collaborative editing API ───────────────────────────────────────
-  // Exposes window.TiddlyDesktop.collab for the external CM6 Yjs plugin.
-  // Uses a local WebSocket to the Rust collab server for low-latency push.
-
-  var collabWs = null;
-  var collabListeners = {};
-  // Cache of remote editors per tiddler (updated by editing-started/stopped events)
-  // Key: tiddlerTitle → Array<{device_id, device_name}>
-  var remoteEditorsCache = {};
-
-  function setupCollabApi(wikiId) {
-    if (!window.TiddlyDesktop) window.TiddlyDesktop = {};
-
-    collabListeners = {};
-    remoteEditorsCache = {};
-
-    var api = {
-      startEditing: function(tiddlerTitle) {
-        sendCollabOutbound('startEditing', wikiId, tiddlerTitle);
-      },
-      stopEditing: function(tiddlerTitle) {
-        sendCollabOutbound('stopEditing', wikiId, tiddlerTitle);
-      },
-      sendUpdate: function(tiddlerTitle, base64) {
-        sendCollabOutbound('sendUpdate', wikiId, tiddlerTitle, base64);
-      },
-      sendAwareness: function(tiddlerTitle, base64) {
-        sendCollabOutbound('sendAwareness', wikiId, tiddlerTitle, base64);
-      },
-      getRemoteEditors: function(tiddlerTitle) {
-        if (isAndroid) {
-          try {
-            var json = window.TiddlyDesktopSync.getRemoteEditors(wikiId, tiddlerTitle);
-            return JSON.parse(json || '[]');
-          } catch (e) { return []; }
-        }
-        // Desktop: return from JS-side cache (updated by editing-started/stopped events)
-        return remoteEditorsCache[tiddlerTitle] || [];
-      },
-      getRemoteEditorsAsync: function(tiddlerTitle) {
-        if (hasTauri) {
-          return window.__TAURI__.core.invoke('lan_sync_get_remote_editors', {
-            wikiId: wikiId, tiddlerTitle: tiddlerTitle
-          }).catch(function() { return []; });
-        }
-        return Promise.resolve(this.getRemoteEditors(tiddlerTitle));
-      },
-      on: function(eventType, callback) {
-        if (!collabListeners[eventType]) collabListeners[eventType] = [];
-        collabListeners[eventType].push(callback);
-      },
-      off: function(eventType, callback) {
-        if (!collabListeners[eventType]) return;
-        collabListeners[eventType] = collabListeners[eventType].filter(function(cb) {
-          return cb !== callback;
-        });
-      }
-    };
-
-    window.TiddlyDesktop.collab = api;
-
-    // Connect collab WebSocket (desktop only — gives sub-ms push delivery)
-    if (hasTauri && !isAndroid) {
-      connectCollabWs(wikiId);
-    }
-
-    _log('[LAN Sync] Collab API initialized for wiki: ' + wikiId);
-
-    // Notify any deferred collab.js setups that the API is now available
-    try { window.dispatchEvent(new Event("collab-api-ready")); } catch(_e) {}
-  }
-
-  function teardownCollabApi() {
-    if (collabWs) {
-      try { collabWs.close(); } catch (e) {}
-      collabWs = null;
-    }
-    collabListeners = {};
-    remoteEditorsCache = {};
-    if (window.TiddlyDesktop) {
-      window.TiddlyDesktop.collab = null;
-    }
-  }
+  // ── Collaborative editing helpers ────────────────────────────────────
 
   function emitCollabEvent(eventType, data) {
     var listeners = collabListeners[eventType];

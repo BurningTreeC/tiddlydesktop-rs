@@ -5974,6 +5974,23 @@ class WikiActivity : AppCompatActivity() {
             // polling handles waiting for the bridge to come online. This allows wikis
             // opened before LAN sync is started to activate sync when it starts later.
             "var wp=window.__WIKI_PATH__||'';if(!wp)return;" +
+            // Collab API: created immediately so CM6 plugin can find it before sync activates.
+            // Outbound methods queue until activate() sets syncActive=true.
+            "var collabListeners={};" +
+            "var _syncActive=false;var _syncId=null;var _collabQueue=[];" +
+            "function emitCollab(type,data){var ls=collabListeners[type];if(ls)for(var i=0;i<ls.length;i++){try{ls[i](data);}catch(e){}}}" +
+            "if(!window.TiddlyDesktop)window.TiddlyDesktop={};" +
+            "window.TiddlyDesktop.collab={" +
+            "startEditing:function(t){if(_syncActive){S.collabEditingStarted(_syncId,t);}else{_collabQueue.push(['startEditing',t]);}}," +
+            "stopEditing:function(t){if(_syncActive){S.collabEditingStopped(_syncId,t);}else{_collabQueue.push(['stopEditing',t]);}}," +
+            "sendUpdate:function(t,b){if(_syncActive){S.collabUpdate(_syncId,t,b);}else{_collabQueue.push(['sendUpdate',t,b]);}}," +
+            "sendAwareness:function(t,b){if(_syncActive){S.collabAwareness(_syncId,t,b);}else{_collabQueue.push(['sendAwareness',t,b]);}}," +
+            "getRemoteEditors:function(t){if(!_syncActive)return[];try{return JSON.parse(S.getRemoteEditors(_syncId,t)||'[]');}catch(e){return [];}}," +
+            "getRemoteEditorsAsync:function(t){return Promise.resolve(this.getRemoteEditors(t));}," +
+            "on:function(ev,cb){if(!collabListeners[ev])collabListeners[ev]=[];collabListeners[ev].push(cb);}," +
+            "off:function(ev,cb){if(!collabListeners[ev])return;collabListeners[ev]=collabListeners[ev].filter(function(c){return c!==cb;});}" +
+            "};" +
+            "try{window.dispatchEvent(new Event('collab-api-ready'));}catch(e){}" +
             "function init(){" +
             "if(typeof \$tw==='undefined'||!\$tw.wiki||!\$tw.wiki.addEventListener||!\$tw.rootWidget){setTimeout(init,100);return;}" +
             "var sid=S.getSyncId(wp);" +
@@ -5990,21 +6007,16 @@ class WikiActivity : AppCompatActivity() {
             "function activate(syncId){" +
             "console.log('[LAN Sync] Activated for wiki: '+syncId);" +
             "S.wikiOpened(syncId);" +
-            // Collab API for CM6 Yjs plugin
-            "var collabListeners={};" +
-            "function emitCollab(type,data){var ls=collabListeners[type];if(ls)for(var i=0;i<ls.length;i++){try{ls[i](data);}catch(e){}}}" +
-            "if(!window.TiddlyDesktop)window.TiddlyDesktop={};" +
-            "window.TiddlyDesktop.collab={" +
-            "startEditing:function(t){S.collabEditingStarted(syncId,t);}," +
-            "stopEditing:function(t){S.collabEditingStopped(syncId,t);}," +
-            "sendUpdate:function(t,b){S.collabUpdate(syncId,t,b);}," +
-            "sendAwareness:function(t,b){S.collabAwareness(syncId,t,b);}," +
-            "getRemoteEditors:function(t){try{return JSON.parse(S.getRemoteEditors(syncId,t)||'[]');}catch(e){return [];}}," +
-            "getRemoteEditorsAsync:function(t){return Promise.resolve(this.getRemoteEditors(t));}," +
-            "on:function(ev,cb){if(!collabListeners[ev])collabListeners[ev]=[];collabListeners[ev].push(cb);}," +
-            "off:function(ev,cb){if(!collabListeners[ev])return;collabListeners[ev]=collabListeners[ev].filter(function(c){return c!==cb;});}" +
-            "};" +
-            "console.log('[LAN Sync] Collab API initialized for wiki: '+syncId);" +
+            // Activate collab: set flag, flush queued outbound messages
+            "_syncActive=true;_syncId=syncId;collabListeners={};" +
+            "var q=_collabQueue;_collabQueue=[];" +
+            "for(var qi=0;qi<q.length;qi++){var qe=q[qi];" +
+            "if(qe[0]==='startEditing')S.collabEditingStarted(syncId,qe[1]);" +
+            "else if(qe[0]==='stopEditing')S.collabEditingStopped(syncId,qe[1]);" +
+            "else if(qe[0]==='sendUpdate')S.collabUpdate(syncId,qe[1],qe[2]);" +
+            "else if(qe[0]==='sendAwareness')S.collabAwareness(syncId,qe[1],qe[2]);" +
+            "}" +
+            "console.log('[LAN Sync] Collab API activated for wiki: '+syncId);" +
             // Use a Set to suppress re-broadcasting received changes.
             // TiddlyWiki dispatches change events asynchronously via $tw.utils.nextTick(),
             // so a boolean flag would already be cleared when the change listener fires.

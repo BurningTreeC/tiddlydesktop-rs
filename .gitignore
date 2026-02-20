@@ -71,6 +71,14 @@ src-tauri/resources/*
 # Custom/modified JS libraries must be tracked (Plyr 4 + PDF.js with local changes)
 !src-tauri/resources/tdlib/
 !src-tauri/resources/tdlib/**/dist/
+# Custom CM6 collab plugin must be tracked
+!src-tauri/resources/tiddlywiki/
+src-tauri/resources/tiddlywiki/*
+!src-tauri/resources/tiddlywiki/plugins/
+src-tauri/resources/tiddlywiki/plugins/*
+!src-tauri/resources/tiddlywiki/plugins/tiddlywiki/
+src-tauri/resources/tiddlywiki/plugins/tiddlywiki/*
+!src-tauri/resources/tiddlywiki/plugins/tiddlywiki/codemirror-6-collab/
 
 # Local JDK for Android builds
 .jdk/

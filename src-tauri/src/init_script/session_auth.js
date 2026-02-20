@@ -110,7 +110,22 @@
             delete TD.pluginTiddlers[title];
         }
 
+        // Debounced registration: multiple callers (session_auth, drag_drop) add
+        // their tiddlers and call registerPlugin(); only one actual registration
+        // fires after all callers in the same event-loop vicinity have finished.
+        var _registerPluginTimer = null;
+
         function registerPlugin() {
+            if (_registerPluginTimer !== null) {
+                clearTimeout(_registerPluginTimer);
+            }
+            _registerPluginTimer = setTimeout(function() {
+                _registerPluginTimer = null;
+                _doRegisterPlugin();
+            }, 10);
+        }
+
+        function _doRegisterPlugin() {
             // Capture dirty state - plugin registration should not mark wiki as modified
             var origNumChanges = $tw.saverHandler ? $tw.saverHandler.numChanges : 0;
 

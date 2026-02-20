@@ -39,6 +39,9 @@
     <string name="share_json">JSON (.json)</string>
     <string name="share_tid">TID (.tid)</string>
     <string name="share_csv">CSV (.csv)</string>
+    <string name="share_image_too_large">محتوای تیدلر برای اشتراک‌گذاری به عنوان تصویر بیش از حد بزرگ است (%s). یک تیدلر کوتاه‌تر را امتحان کنید.</string>
+    <string name="share_image_failed">ضبط تصویر ناموفق بود</string>
+    <string name="share_image_too_many_pixels">تیدلر برای ضبط به عنوان تصویر بیش از حد بزرگ است (%s)</string>
     <string name="unsaved_title">تغییرات ذخیره‌نشده</string>
     <string name="unsaved_message">شما %d تغییر ذخیره‌نشده دارید. چه کاری می‌خواهید انجام دهید؟</string>
     <string name="unsaved_save_close">ذخیره &amp; بستن</string>

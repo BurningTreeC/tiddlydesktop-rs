@@ -39,6 +39,9 @@
     <string name="share_json">JSON (.json)</string>
     <string name="share_tid">TID (.tid)</string>
     <string name="share_csv">CSV (.csv)</string>
+    <string name="share_image_too_large">Содержимое тиддлера слишком велико для отправки как изображение (%s). Попробуйте отправить более короткий тиддлер.</string>
+    <string name="share_image_failed">Не удалось захватить изображение</string>
+    <string name="share_image_too_many_pixels">Тиддлер слишком большой для захвата как изображение (%s)</string>
     <string name="unsaved_title">Несохранённые изменения</string>
     <string name="unsaved_message">У вас %d несохранённых изменений. Что вы хотите сделать?</string>
     <string name="unsaved_save_close">Сохранить &amp; Закрыть</string>

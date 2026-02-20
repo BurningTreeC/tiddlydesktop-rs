@@ -39,6 +39,9 @@
     <string name="share_json">JSON (.json)</string>
     <string name="share_tid">TID (.tid)</string>
     <string name="share_csv">CSV (.csv)</string>
+    <string name="share_image_too_large">Tiddlerの内容が大きすぎて画像として共有できません（%s）。より短いTiddlerを共有してください。</string>
+    <string name="share_image_failed">画像のキャプチャに失敗しました</string>
+    <string name="share_image_too_many_pixels">Tiddlerが大きすぎて画像としてキャプチャできません（%s）</string>
     <string name="unsaved_title">未保存の変更</string>
     <string name="unsaved_message">%d件の未保存の変更があります。どうしますか?</string>
     <string name="unsaved_save_close">保存して閉じる</string>

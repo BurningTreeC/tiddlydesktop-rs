@@ -39,6 +39,9 @@
     <string name="share_json">JSON (.json)</string>
     <string name="share_tid">TID (.tid)</string>
     <string name="share_csv">CSV (.csv)</string>
+    <string name="share_image_too_large">Содржината на тидлерот е преголема за споделување како слика (%s). Обидете се да споделите покус тидлер.</string>
+    <string name="share_image_failed">Фаќањето на сликата не успеа</string>
+    <string name="share_image_too_many_pixels">Тидлерот е преголем за фаќање како слика (%s)</string>
     <string name="unsaved_title">Незачувани промени</string>
     <string name="unsaved_message">Имате %d незачувана/и промена/и. Што сакате да направите?</string>
     <string name="unsaved_save_close">Зачувај &amp; Затвори</string>

@@ -39,6 +39,9 @@
     <string name="share_json">JSON (.json)</string>
     <string name="share_tid">TID (.tid)</string>
     <string name="share_csv">CSV (.csv)</string>
+    <string name="share_image_too_large">El contingut del tiddler és massa gran per compartir com a imatge (%s). Prova de compartir un tiddler més curt.</string>
+    <string name="share_image_failed">No s\'ha pogut capturar la imatge</string>
+    <string name="share_image_too_many_pixels">El tiddler és massa gran per capturar-lo com a imatge (%s)</string>
     <string name="unsaved_title">Canvis sense desar</string>
     <string name="unsaved_message">Tens %d canvi(s) sense desar. Què vols fer?</string>
     <string name="unsaved_save_close">Desa &amp; tanca</string>

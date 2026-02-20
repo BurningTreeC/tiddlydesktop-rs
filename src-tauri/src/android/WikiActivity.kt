@@ -1,11 +1,13 @@
 package com.burningtreec.tiddlydesktop_rs
 
+import android.Manifest
 import android.annotation.SuppressLint
 import android.app.ActivityManager
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.Color
 import android.media.MediaMetadataRetriever
@@ -39,6 +41,7 @@ import androidx.activity.result.ActivityResultLauncher
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
@@ -448,6 +451,13 @@ class WikiActivity : AppCompatActivity() {
     // File chooser support for import functionality
     private var filePathCallback: ValueCallback<Array<Uri>>? = null
     private lateinit var fileChooserLauncher: ActivityResultLauncher<Intent>
+
+    // WebView permission request support (camera, microphone, geolocation)
+    private var pendingPermissionRequest: android.webkit.PermissionRequest? = null
+    private var pendingGeolocationOrigin: String? = null
+    private var pendingGeolocationCallback: android.webkit.GeolocationPermissions.Callback? = null
+    private lateinit var permissionRequestLauncher: ActivityResultLauncher<Array<String>>
+    private lateinit var geolocationPermissionLauncher: ActivityResultLauncher<Array<String>>
 
     // Export/save file support
     private lateinit var createDocumentLauncher: ActivityResultLauncher<Intent>
@@ -1458,9 +1468,10 @@ class WikiActivity : AppCompatActivity() {
 
     private fun shareAsImage(title: String) {
         // Use html-to-image library to capture the tiddler body as a JPEG.
-        // Key optimization: images are downscaled to max 800px and JPEG-compressed
-        // during inlining to keep the SVG foreignObject string small (~2.5MB for
-        // 50 images instead of ~1GB with full-resolution PNG data URLs).
+        // Captures at 2x pixelRatio for sharp output on high-DPI screens,
+        // with automatic fallback to 1x if the canvas is too large / OOM.
+        // Images are downscaled to max 800px and JPEG-compressed during
+        // inlining to keep the SVG foreignObject string manageable.
         val escapedTitle = title.replace("\\", "\\\\").replace("'", "\\'").replace("\n", "\\n")
         webView?.evaluateJavascript("""
             (function() {
@@ -1475,6 +1486,16 @@ class WikiActivity : AppCompatActivity() {
                     if (!bodyEl) {
                         console.error('[TiddlyDesktop] shareAsImage: tiddler element not found for: ' + title);
                         TiddlyDesktopShareCapture.onCaptureFailed('Tiddler element not found');
+                        return;
+                    }
+                    // Early size check — abort before heavy processing if
+                    // the tiddler is clearly too large to capture.
+                    var MAX_CAPTURE_PIXELS = 25000000; // 25M pixels
+                    var estW = bodyEl.offsetWidth || 800;
+                    var estH = bodyEl.scrollHeight || 600;
+                    if (estW * estH > MAX_CAPTURE_PIXELS) {
+                        console.error('[TiddlyDesktop] shareAsImage: tiddler too large (' + estW + 'x' + estH + ' = ' + (estW * estH) + ' pixels)');
+                        TiddlyDesktopShareCapture.onCaptureTooManyPixels(estW + '\u00D7' + estH);
                         return;
                     }
                     var wrapper = document.createElement('div');
@@ -1497,7 +1518,11 @@ class WikiActivity : AppCompatActivity() {
                                 ph.textContent = 'PDF: ' + (src.split('/').pop() || 'document');
                                 if (el.parentNode) el.parentNode.replaceChild(ph, el);
                             } else {
-                                el.remove();
+                                var eph = document.createElement('div');
+                                var eName = src ? decodeURIComponent(src.split('/').pop().split('?')[0]) : (tp || 'Embedded content');
+                                eph.style.cssText = 'background:#525659;color:#fff;padding:40px 20px;text-align:center;font:16px sans-serif;border-radius:4px;';
+                                eph.textContent = eName;
+                                if (el.parentNode) el.parentNode.replaceChild(eph, el);
                             }
                         }
                     });
@@ -1550,10 +1575,23 @@ class WikiActivity : AppCompatActivity() {
                         }
                     }
 
-                    // Inline images with aggressive compression to keep SVG
-                    // foreignObject memory-safe. Max 400px + JPEG 0.5 ≈ 10-15KB
-                    // each. For 50 images: ~500KB-750KB in SVG string.
-                    var MAX_IMG_DIM = 400;
+                    // Adaptive image quality based on count. More images →
+                    // smaller dimensions + lower quality to avoid OOM.
+                    // Adaptive image quality based on count. More images →
+                    // smaller dimensions + lower quality to keep the SVG
+                    // foreignObject data URL under the WebView renderer limit.
+                    var imgCount = bodyEl.querySelectorAll('img').length;
+                    var MAX_IMG_DIM, imgQuality, forceRatio1 = false;
+                    if (imgCount > 50) {
+                        MAX_IMG_DIM = 200; imgQuality = 0.3; forceRatio1 = true;
+                    } else if (imgCount > 30) {
+                        MAX_IMG_DIM = 400; imgQuality = 0.5; forceRatio1 = true;
+                    } else if (imgCount > 15) {
+                        MAX_IMG_DIM = 600; imgQuality = 0.6;
+                    } else {
+                        MAX_IMG_DIM = 800; imgQuality = 0.7;
+                    }
+                    console.log('[TiddlyDesktop] shareAsImage: imgCount=' + imgCount + ' MAX_IMG_DIM=' + MAX_IMG_DIM + ' imgQuality=' + imgQuality + ' forceRatio1=' + forceRatio1);
                     function inlineImages() {
                         var origImgs = bodyEl.querySelectorAll('img');
                         var cloneImgs = clone.querySelectorAll('img');
@@ -1578,7 +1616,7 @@ class WikiActivity : AppCompatActivity() {
                                                 if (isSvg) {
                                                     cloneImg.setAttribute('src', c.toDataURL('image/png'));
                                                 } else {
-                                                    cloneImg.setAttribute('src', c.toDataURL('image/jpeg', 0.5));
+                                                    cloneImg.setAttribute('src', c.toDataURL('image/jpeg', imgQuality));
                                                 }
                                                 cloneImg.removeAttribute('srcset');
                                                 // Release canvas backing store immediately
@@ -1711,7 +1749,9 @@ class WikiActivity : AppCompatActivity() {
                                 cv.parentNode.replaceChild(placeholder(ov.offsetWidth || 320, ov.offsetHeight || 180), cv);
                             }
                         }
-                        clone.querySelectorAll('audio').forEach(function(a) { a.style.display = 'none'; });
+                        // Audio elements: leave in clone as-is. html-to-image
+                        // renders via SVG foreignObject, and the browser renders
+                        // native <audio controls> in that context.
                         var iframePromises = [];
                         var origIframes = bodyEl.querySelectorAll('iframe');
                         var cloneIframes = clone.querySelectorAll('iframe');
@@ -1768,7 +1808,7 @@ class WikiActivity : AppCompatActivity() {
                     var captureOpts = {
                         quality: 0.85,
                         backgroundColor: '#ffffff',
-                        pixelRatio: 1,
+                        pixelRatio: 2,
                         imagePlaceholder: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVQI12NgAAIABQABNjN9GQAAAAlwSFlzAAAWJQAAFiUBSVIk8AAAAA0lEQVQI12P4z8BQDwAEgAF/QualzQAAAABJRU5ErkJggg==',
                         filter: function(node) {
                             try {
@@ -1826,6 +1866,19 @@ class WikiActivity : AppCompatActivity() {
                         }
                     }
 
+                    // Early complexity check — html-to-image clones the DOM,
+                    // computes styles for every element, decodes all images,
+                    // and renders via SVG foreignObject. This all happens in
+                    // the WebView renderer process which has limited memory.
+                    // Too many elements + images causes renderer OOM kill.
+                    var elementCount = clone.querySelectorAll('*').length;
+                    console.log('[TiddlyDesktop] shareAsImage: pre-check elements=' + elementCount + ' imgCount=' + imgCount);
+                    if (elementCount + imgCount * 3 > 500) {
+                        console.error('[TiddlyDesktop] shareAsImage: too complex (elements=' + elementCount + ', images=' + imgCount + '), aborting');
+                        TiddlyDesktopShareCapture.onCaptureTooLarge(elementCount + ' elements, ' + imgCount + ' images');
+                        return;
+                    }
+
                     fixBlockSpacing();
                     fixLayout();
                     fixPdfContainers();
@@ -1836,7 +1889,6 @@ class WikiActivity : AppCompatActivity() {
                         // Now that all images are compressed data URLs, append to
                         // DOM. No server fetches will be triggered.
                         document.body.appendChild(wrapper);
-                        console.log('[TiddlyDesktop] shareAsImage: size=' + wrapper.offsetWidth + 'x' + wrapper.offsetHeight);
                         // Wait for images to decode and layout to settle
                         return new Promise(function(resolve) {
                             requestAnimationFrame(function() {
@@ -1844,19 +1896,52 @@ class WikiActivity : AppCompatActivity() {
                             });
                         });
                     }).then(function() {
-                        return htmlToImage.toJpeg(wrapper, captureOpts);
-                    }).then(function(dataUrl) {
-                        wrapper.remove();
-                        console.log('[TiddlyDesktop] shareAsImage: captured, length=' + dataUrl.length);
-                        TiddlyDesktopShareCapture.onImageReady(title, dataUrl);
-                    }).catch(function(err) {
-                        wrapper.remove();
-                        console.error('[TiddlyDesktop] shareAsImage: capture failed:', err);
-                        if (TiddlyDesktopShareCapture.onCaptureFailed) {
-                            TiddlyDesktopShareCapture.onCaptureFailed(
-                                'Image capture failed: ' + (err && err.message ? err.message : String(err))
-                            );
+                        // Pre-capture canvas size check.
+                        var wrapW = wrapper.offsetWidth;
+                        var wrapH = wrapper.offsetHeight;
+                        var ratio = forceRatio1 ? 1 : 2;
+                        if (wrapW * ratio * wrapH * ratio > MAX_CAPTURE_PIXELS) {
+                            ratio = 1;
                         }
+                        if (wrapW * ratio * wrapH * ratio > MAX_CAPTURE_PIXELS) {
+                            wrapper.remove();
+                            console.error('[TiddlyDesktop] shareAsImage: tiddler too large (' + wrapW + 'x' + wrapH + ')');
+                            TiddlyDesktopShareCapture.onCaptureTooManyPixels(wrapW + '\u00D7' + wrapH);
+                            return;
+                        }
+                        console.log('[TiddlyDesktop] shareAsImage: size=' + wrapW + 'x' + wrapH + ' pixelRatio=' + ratio);
+                        captureOpts.pixelRatio = ratio;
+                        return htmlToImage.toJpeg(wrapper, captureOpts).then(function(dataUrl) {
+                            wrapper.remove();
+                            console.log('[TiddlyDesktop] shareAsImage: captured at ' + ratio + 'x, length=' + dataUrl.length);
+                            TiddlyDesktopShareCapture.onImageReady(title, dataUrl);
+                        }).catch(function(err) {
+                            if (ratio > 1) {
+                                console.warn('[TiddlyDesktop] shareAsImage: ' + ratio + 'x failed, retrying at 1x:', err);
+                                captureOpts.pixelRatio = 1;
+                                return htmlToImage.toJpeg(wrapper, captureOpts).then(function(dataUrl) {
+                                    wrapper.remove();
+                                    console.log('[TiddlyDesktop] shareAsImage: captured at 1x fallback, length=' + dataUrl.length);
+                                    TiddlyDesktopShareCapture.onImageReady(title, dataUrl);
+                                }).catch(function(err2) {
+                                    wrapper.remove();
+                                    console.error('[TiddlyDesktop] shareAsImage: capture failed at both resolutions:', err2);
+                                    if (TiddlyDesktopShareCapture.onCaptureFailed) {
+                                        TiddlyDesktopShareCapture.onCaptureFailed(
+                                            'Image capture failed: ' + (err2 && err2.message ? err2.message : String(err2))
+                                        );
+                                    }
+                                });
+                            } else {
+                                wrapper.remove();
+                                console.error('[TiddlyDesktop] shareAsImage: capture failed:', err);
+                                if (TiddlyDesktopShareCapture.onCaptureFailed) {
+                                    TiddlyDesktopShareCapture.onCaptureFailed(
+                                        'Image capture failed: ' + (err && err.message ? err.message : String(err))
+                                    );
+                                }
+                            }
+                        });
                     });
                 }
                 if (typeof htmlToImage !== 'undefined') {
@@ -1915,7 +2000,7 @@ class WikiActivity : AppCompatActivity() {
             } catch (t: Throwable) {
                 Log.e(TAG, "Failed to share image: ${t.message}", t)
                 runOnUiThread {
-                    Toast.makeText(this@WikiActivity, "Image capture failed: ${t.message}", Toast.LENGTH_LONG).show()
+                    Toast.makeText(this@WikiActivity, getString(R.string.share_image_failed), Toast.LENGTH_LONG).show()
                 }
             }
         }
@@ -1924,9 +2009,26 @@ class WikiActivity : AppCompatActivity() {
         fun onCaptureFailed(message: String) {
             Log.e(TAG, "shareAsImage capture failed: $message")
             runOnUiThread {
-                Toast.makeText(this@WikiActivity, message, Toast.LENGTH_LONG).show()
+                Toast.makeText(this@WikiActivity, getString(R.string.share_image_failed), Toast.LENGTH_LONG).show()
             }
         }
+
+        @JavascriptInterface
+        fun onCaptureTooLarge(detail: String) {
+            Log.e(TAG, "shareAsImage: content too large: $detail")
+            runOnUiThread {
+                Toast.makeText(this@WikiActivity, getString(R.string.share_image_too_large, detail), Toast.LENGTH_LONG).show()
+            }
+        }
+
+        @JavascriptInterface
+        fun onCaptureTooManyPixels(detail: String) {
+            Log.e(TAG, "shareAsImage: too many pixels: $detail")
+            runOnUiThread {
+                Toast.makeText(this@WikiActivity, getString(R.string.share_image_too_many_pixels, detail), Toast.LENGTH_LONG).show()
+            }
+        }
+
     }
 
     private fun shareAsFile(title: String, content: String, extension: String, mimeType: String) {
@@ -2707,6 +2809,39 @@ class WikiActivity : AppCompatActivity() {
             filePathCallback = null
         }
 
+        // Register permission launcher for camera/microphone WebView requests
+        permissionRequestLauncher = registerForActivityResult(
+            ActivityResultContracts.RequestMultiplePermissions()
+        ) { grants ->
+            val req = pendingPermissionRequest
+            pendingPermissionRequest = null
+            if (req == null) return@registerForActivityResult
+
+            val allGranted = grants.values.all { it }
+            if (allGranted) {
+                req.grant(req.resources)
+                Log.d(TAG, "WebView permission granted: ${req.resources.joinToString()}")
+            } else {
+                req.deny()
+                Log.d(TAG, "WebView permission denied by user")
+            }
+        }
+
+        // Register permission launcher for geolocation WebView requests
+        geolocationPermissionLauncher = registerForActivityResult(
+            ActivityResultContracts.RequestMultiplePermissions()
+        ) { grants ->
+            val origin = pendingGeolocationOrigin
+            val callback = pendingGeolocationCallback
+            pendingGeolocationOrigin = null
+            pendingGeolocationCallback = null
+            if (origin == null || callback == null) return@registerForActivityResult
+
+            val granted = grants.values.any { it }
+            callback.invoke(origin, granted, false)
+            Log.d(TAG, "Geolocation permission ${if (granted) "granted" else "denied"} for $origin")
+        }
+
         // Register the create document launcher for export/save functionality
         createDocumentLauncher = registerForActivityResult(
             ActivityResultContracts.StartActivityForResult()
@@ -2965,6 +3100,8 @@ class WikiActivity : AppCompatActivity() {
                 useWideViewPort = true
                 @Suppress("DEPRECATION")
                 mediaPlaybackRequiresUserGesture = false
+                @Suppress("DEPRECATION")
+                setGeolocationEnabled(true)
             }
 
             // Enable third-party cookies for iframe embeds (YouTube, Vimeo, etc.)
@@ -3063,6 +3200,72 @@ class WikiActivity : AppCompatActivity() {
                     } else {
                         @Suppress("DEPRECATION")
                         window.decorView.systemUiVisibility = View.SYSTEM_UI_FLAG_VISIBLE
+                    }
+                }
+
+                override fun onPermissionRequest(request: android.webkit.PermissionRequest?) {
+                    if (request == null) return
+                    Log.d(TAG, "onPermissionRequest: ${request.resources.joinToString()}")
+
+                    val androidPermissions = mutableListOf<String>()
+                    for (resource in request.resources) {
+                        when (resource) {
+                            android.webkit.PermissionRequest.RESOURCE_VIDEO_CAPTURE ->
+                                androidPermissions.add(Manifest.permission.CAMERA)
+                            android.webkit.PermissionRequest.RESOURCE_AUDIO_CAPTURE ->
+                                androidPermissions.add(Manifest.permission.RECORD_AUDIO)
+                        }
+                    }
+
+                    if (androidPermissions.isEmpty()) {
+                        // No Android runtime permissions needed (e.g. RESOURCE_PROTECTED_MEDIA_ID)
+                        request.grant(request.resources)
+                        return
+                    }
+
+                    // Check if all permissions are already granted
+                    val allGranted = androidPermissions.all {
+                        ContextCompat.checkSelfPermission(this@WikiActivity, it) == PackageManager.PERMISSION_GRANTED
+                    }
+
+                    if (allGranted) {
+                        request.grant(request.resources)
+                        Log.d(TAG, "WebView permissions already granted")
+                    } else {
+                        pendingPermissionRequest = request
+                        permissionRequestLauncher.launch(androidPermissions.toTypedArray())
+                    }
+                }
+
+                override fun onPermissionRequestCanceled(request: android.webkit.PermissionRequest?) {
+                    if (request == pendingPermissionRequest) {
+                        pendingPermissionRequest = null
+                    }
+                }
+
+                override fun onGeolocationPermissionsShowPrompt(
+                    origin: String?,
+                    callback: android.webkit.GeolocationPermissions.Callback?
+                ) {
+                    if (origin == null || callback == null) return
+                    Log.d(TAG, "onGeolocationPermissionsShowPrompt: $origin")
+
+                    val permissions = arrayOf(
+                        Manifest.permission.ACCESS_FINE_LOCATION,
+                        Manifest.permission.ACCESS_COARSE_LOCATION
+                    )
+
+                    val anyGranted = permissions.any {
+                        ContextCompat.checkSelfPermission(this@WikiActivity, it) == PackageManager.PERMISSION_GRANTED
+                    }
+
+                    if (anyGranted) {
+                        callback.invoke(origin, true, false)
+                        Log.d(TAG, "Geolocation already granted for $origin")
+                    } else {
+                        pendingGeolocationOrigin = origin
+                        pendingGeolocationCallback = callback
+                        geolocationPermissionLauncher.launch(permissions)
                     }
                 }
             }
@@ -3261,7 +3464,25 @@ class WikiActivity : AppCompatActivity() {
                     delete pluginTiddlers[title];
                 }
 
+                // Debounced registration: multiple callers add their tiddlers and call
+                // registerPlugin(); only one actual registration fires after all callers
+                // in the same event-loop vicinity have finished.
+                var _registerPluginTimer = null;
+
                 function registerPlugin() {
+                    if (_registerPluginTimer !== null) {
+                        clearTimeout(_registerPluginTimer);
+                    }
+                    _registerPluginTimer = setTimeout(function() {
+                        _registerPluginTimer = null;
+                        _doRegisterPlugin();
+                    }, 10);
+                }
+
+                function _doRegisterPlugin() {
+                    // Capture dirty state - plugin registration should not mark wiki as modified
+                    var origNumChanges = ${'$'}tw.saverHandler ? ${'$'}tw.saverHandler.numChanges : 0;
+
                     // Build plugin content
                     var pluginContent = { tiddlers: {} };
                     Object.keys(pluginTiddlers).forEach(function(title) {
@@ -3294,6 +3515,14 @@ class WikiActivity : AppCompatActivity() {
 
                     // Trigger UI refresh
                     ${'$'}tw.rootWidget.refresh({});
+
+                    // Restore dirty state after event loop completes
+                    setTimeout(function() {
+                        if (${'$'}tw.saverHandler) {
+                            ${'$'}tw.saverHandler.numChanges = origNumChanges;
+                            ${'$'}tw.saverHandler.updateDirtyStatus();
+                        }
+                    }, 0);
 
                     console.log("[TiddlyDesktop] Plugin registered with " + Object.keys(pluginTiddlers).length + " shadow tiddlers");
                 }
@@ -6035,7 +6264,7 @@ class WikiActivity : AppCompatActivity() {
             "for(var i=0;i<keys.length;i++){" +
             "var t=keys[i];" +
             "if(suppress.delete(t))continue;" +
-            "if(t==='\$:/StoryList'||t==='\$:/HistoryList'||t==='\$:/library/sjcl.js'||t==='\$:/Import'||t==='\$:/language'||t==='\$:/theme'||t==='\$:/palette'||t==='\$:/isEncrypted')continue;" +
+            "if(t==='\$:/StoryList'||t==='\$:/HistoryList'||t==='\$:/library/sjcl.js'||t==='\$:/Import'||t==='\$:/language'||t==='\$:/theme'||t==='\$:/palette'||t==='\$:/isEncrypted'||t==='\$:/view'||t==='\$:/layout')continue;" +
             "if(isDraft(t))continue;" +
             "if(t.indexOf('\$:/TiddlyDesktopRS/Conflicts/')==0)continue;" +
             "if(t.indexOf('\$:/state/')==0)continue;" +
@@ -6062,7 +6291,7 @@ class WikiActivity : AppCompatActivity() {
             // collectFingerprints: includes knownSyncTitles for convergence
             "function cfps(){var all=\$tw.wiki.allTitles();var seen={};var fps=[];" +
             "for(var i=0;i<all.length;i++){var t=all[i];" +
-            "if(t==='\$:/StoryList'||t==='\$:/HistoryList'||t==='\$:/library/sjcl.js'||t==='\$:/Import'||t==='\$:/language'||t==='\$:/theme'||t==='\$:/palette'||t==='\$:/isEncrypted')continue;" +
+            "if(t==='\$:/StoryList'||t==='\$:/HistoryList'||t==='\$:/library/sjcl.js'||t==='\$:/Import'||t==='\$:/language'||t==='\$:/theme'||t==='\$:/palette'||t==='\$:/isEncrypted'||t==='\$:/view'||t==='\$:/layout')continue;" +
             "if(isDraft(t))continue;" +
             "if(t.indexOf('\$:/TiddlyDesktopRS/Conflicts/')==0)continue;" +
             "if(t.indexOf('\$:/state/')==0||t.indexOf('\$:/status/')==0||t.indexOf('\$:/temp/')==0)continue;" +
@@ -6111,7 +6340,7 @@ class WikiActivity : AppCompatActivity() {
             "if(tombNs)scheduleSave();if(ptks.length>0)S.saveTombstones(syncId,JSON.stringify(tomb));" +
             "var all=\$tw.wiki.allTitles();var diffs=[];" +
             "for(var j=0;j<all.length;j++){var t=all[j];" +
-            "if(t==='\$:/StoryList'||t==='\$:/HistoryList'||t==='\$:/library/sjcl.js'||t==='\$:/Import'||t==='\$:/language'||t==='\$:/theme'||t==='\$:/palette'||t==='\$:/isEncrypted')continue;" +
+            "if(t==='\$:/StoryList'||t==='\$:/HistoryList'||t==='\$:/library/sjcl.js'||t==='\$:/Import'||t==='\$:/language'||t==='\$:/theme'||t==='\$:/palette'||t==='\$:/isEncrypted'||t==='\$:/view'||t==='\$:/layout')continue;" +
             "if(isDraft(t))continue;" +
             "if(t.indexOf('\$:/TiddlyDesktopRS/Conflicts/')==0)continue;" +
             "if(t.indexOf('\$:/state/')==0||t.indexOf('\$:/status/')==0||t.indexOf('\$:/temp/')==0)continue;" +
@@ -6143,7 +6372,7 @@ class WikiActivity : AppCompatActivity() {
             "console.log('[LAN Sync] Dumping '+all.length+' tiddlers to '+toDevId);" +
             "function send(si){var batch=[];var bytes=0;var i=si;" +
             "while(i<all.length&&(batch.length===0||bytes<MX)){var t=all[i];i++;" +
-            "if(t==='\$:/StoryList'||t==='\$:/HistoryList'||t==='\$:/library/sjcl.js'||t==='\$:/Import'||t==='\$:/language'||t==='\$:/theme'||t==='\$:/palette'||t==='\$:/isEncrypted')continue;" +
+            "if(t==='\$:/StoryList'||t==='\$:/HistoryList'||t==='\$:/library/sjcl.js'||t==='\$:/Import'||t==='\$:/language'||t==='\$:/theme'||t==='\$:/palette'||t==='\$:/isEncrypted'||t==='\$:/view'||t==='\$:/layout')continue;" +
             "if(isDraft(t))continue;" +
             "if(t.indexOf('\$:/TiddlyDesktopRS/Conflicts/')==0)continue;" +
             "if(t.indexOf('\$:/state/')==0||t.indexOf('\$:/status/')==0||t.indexOf('\$:/temp/')==0)continue;" +

@@ -6,6 +6,13 @@
       "resources/tdlib/**/*",
       "resources/binaries/*",
       "resources/index.html"
-    ]
+    ],
+    "macOS": {
+      "infoPlist": {
+        "NSCameraUsageDescription": "TiddlyDesktopRS needs camera access for wiki content that uses your camera.",
+        "NSMicrophoneUsageDescription": "TiddlyDesktopRS needs microphone access for wiki content that uses your microphone.",
+        "NSLocationWhenInUseUsageDescription": "TiddlyDesktopRS needs location access for wiki content that uses your location."
+      }
+    }
   }
 }

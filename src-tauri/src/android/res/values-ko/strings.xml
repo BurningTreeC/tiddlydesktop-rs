@@ -39,6 +39,9 @@
     <string name="share_json">JSON (.json)</string>
     <string name="share_tid">TID (.tid)</string>
     <string name="share_csv">CSV (.csv)</string>
+    <string name="share_image_too_large">Tiddler 내용이 이미지로 공유하기에 너무 큽니다 (%s). 더 짧은 tiddler를 공유해 보세요.</string>
+    <string name="share_image_failed">이미지 캡처 실패</string>
+    <string name="share_image_too_many_pixels">Tiddler가 이미지로 캡처하기에 너무 큽니다 (%s)</string>
     <string name="unsaved_title">저장되지 않은 변경 사항</string>
     <string name="unsaved_message">저장되지 않은 변경 사항이 %d개 있습니다. 어떻게 하시겠습니까?</string>
     <string name="unsaved_save_close">저장 &amp; 닫기</string>

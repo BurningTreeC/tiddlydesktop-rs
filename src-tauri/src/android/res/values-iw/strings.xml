@@ -39,6 +39,9 @@
     <string name="share_json">JSON (.json)</string>
     <string name="share_tid">TID (.tid)</string>
     <string name="share_csv">CSV (.csv)</string>
+    <string name="share_image_too_large">תוכן ה-Tiddler גדול מדי לשיתוף כתמונה (%s). נסה לשתף tiddler קצר יותר.</string>
+    <string name="share_image_failed">לכידת התמונה נכשלה</string>
+    <string name="share_image_too_many_pixels">ה-Tiddler גדול מדי ללכידה כתמונה (%s)</string>
     <string name="unsaved_title">שינויים שלא נשמרו</string>
     <string name="unsaved_message">יש לך %d שינוי/ים שלא נשמרו. מה תרצה לעשות?</string>
     <string name="unsaved_save_close">שמור &amp; סגור</string>

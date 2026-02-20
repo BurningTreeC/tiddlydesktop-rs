@@ -39,6 +39,9 @@
     <string name="share_json">JSON (.json)</string>
     <string name="share_tid">TID (.tid)</string>
     <string name="share_csv">CSV (.csv)</string>
+    <string name="share_image_too_large">محتوى التيدلر كبير جدًا للمشاركة كصورة (%s). حاول مشاركة تيدلر أقصر.</string>
+    <string name="share_image_failed">فشل التقاط الصورة</string>
+    <string name="share_image_too_many_pixels">التيدلر كبير جدًا لالتقاطه كصورة (%s)</string>
     <string name="unsaved_title">تغييرات غير محفوظة</string>
     <string name="unsaved_message">لديك %d تغيير(ات) غير محفوظة. ماذا تريد أن تفعل؟</string>
     <string name="unsaved_save_close">حفظ &amp; إغلاق</string>

@@ -200,6 +200,7 @@ jobs:
         run: |
           cp -r tiddlydesktop-rs/TiddlyWiki5/plugins/tiddlywiki/tiddlydesktop-rs TiddlyWiki5/plugins/tiddlywiki/
           cp -r tiddlydesktop-rs/TiddlyWiki5/plugins/tiddlywiki/tiddlydesktop-rs-commands TiddlyWiki5/plugins/tiddlywiki/
+          cp -r tiddlydesktop-rs/TiddlyWiki5/plugins/tiddlywiki/codemirror-6-collab TiddlyWiki5/plugins/tiddlywiki/
           cp -r tiddlydesktop-rs/TiddlyWiki5/editions/tiddlydesktop-rs TiddlyWiki5/editions/
 
       - name: Install system dependencies
@@ -293,6 +294,7 @@ jobs:
         run: |
           cp -r tiddlydesktop-rs/TiddlyWiki5/plugins/tiddlywiki/tiddlydesktop-rs TiddlyWiki5/plugins/tiddlywiki/
           cp -r tiddlydesktop-rs/TiddlyWiki5/plugins/tiddlywiki/tiddlydesktop-rs-commands TiddlyWiki5/plugins/tiddlywiki/
+          cp -r tiddlydesktop-rs/TiddlyWiki5/plugins/tiddlywiki/codemirror-6-collab TiddlyWiki5/plugins/tiddlywiki/
           cp -r tiddlydesktop-rs/TiddlyWiki5/editions/tiddlydesktop-rs TiddlyWiki5/editions/
 
       - name: Setup Node.js
@@ -386,6 +388,7 @@ jobs:
         run: |
           cp -r tiddlydesktop-rs/TiddlyWiki5/plugins/tiddlywiki/tiddlydesktop-rs TiddlyWiki5/plugins/tiddlywiki/
           cp -r tiddlydesktop-rs/TiddlyWiki5/plugins/tiddlywiki/tiddlydesktop-rs-commands TiddlyWiki5/plugins/tiddlywiki/
+          cp -r tiddlydesktop-rs/TiddlyWiki5/plugins/tiddlywiki/codemirror-6-collab TiddlyWiki5/plugins/tiddlywiki/
           cp -r tiddlydesktop-rs/TiddlyWiki5/editions/tiddlydesktop-rs TiddlyWiki5/editions/
 
       - name: Setup Node.js
@@ -485,6 +488,7 @@ jobs:
         run: |
           cp -r tiddlydesktop-rs/TiddlyWiki5/plugins/tiddlywiki/tiddlydesktop-rs TiddlyWiki5/plugins/tiddlywiki/
           cp -r tiddlydesktop-rs/TiddlyWiki5/plugins/tiddlywiki/tiddlydesktop-rs-commands TiddlyWiki5/plugins/tiddlywiki/
+          cp -r tiddlydesktop-rs/TiddlyWiki5/plugins/tiddlywiki/codemirror-6-collab TiddlyWiki5/plugins/tiddlywiki/
           cp -r tiddlydesktop-rs/TiddlyWiki5/editions/tiddlydesktop-rs TiddlyWiki5/editions/
 
       - name: Setup Node.js
@@ -588,6 +592,7 @@ jobs:
         run: |
           cp -r tiddlydesktop-rs/TiddlyWiki5/plugins/tiddlywiki/tiddlydesktop-rs TiddlyWiki5/plugins/tiddlywiki/
           cp -r tiddlydesktop-rs/TiddlyWiki5/plugins/tiddlywiki/tiddlydesktop-rs-commands TiddlyWiki5/plugins/tiddlywiki/
+          cp -r tiddlydesktop-rs/TiddlyWiki5/plugins/tiddlywiki/codemirror-6-collab TiddlyWiki5/plugins/tiddlywiki/
           cp -r tiddlydesktop-rs/TiddlyWiki5/editions/tiddlydesktop-rs TiddlyWiki5/editions/
 
       - name: Setup Node.js
@@ -686,6 +691,7 @@ jobs:
         run: |
           cp -r tiddlydesktop-rs/TiddlyWiki5/plugins/tiddlywiki/tiddlydesktop-rs TiddlyWiki5/plugins/tiddlywiki/
           cp -r tiddlydesktop-rs/TiddlyWiki5/plugins/tiddlywiki/tiddlydesktop-rs-commands TiddlyWiki5/plugins/tiddlywiki/
+          cp -r tiddlydesktop-rs/TiddlyWiki5/plugins/tiddlywiki/codemirror-6-collab TiddlyWiki5/plugins/tiddlywiki/
           cp -r tiddlydesktop-rs/TiddlyWiki5/editions/tiddlydesktop-rs TiddlyWiki5/editions/
 
       - name: Setup Java

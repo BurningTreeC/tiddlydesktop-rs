@@ -39,6 +39,9 @@
     <string name="share_json">JSON (.json)</string>
     <string name="share_tid">TID (.tid)</string>
     <string name="share_csv">CSV (.csv)</string>
+    <string name="share_image_too_large">Tiddler-inhoud te groot om te delen als afbeelding (%s). Probeer een kortere tiddler te delen.</string>
+    <string name="share_image_failed">Afbeeldingsopname mislukt</string>
+    <string name="share_image_too_many_pixels">Tiddler is te groot om vast te leggen als afbeelding (%s)</string>
     <string name="unsaved_title">Niet-opgeslagen wijzigingen</string>
     <string name="unsaved_message">U heeft %d niet-opgeslagen wijziging(en). Wat wilt u doen?</string>
     <string name="unsaved_save_close">Opslaan &amp; sluiten</string>

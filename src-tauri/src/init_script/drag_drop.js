@@ -2387,7 +2387,7 @@
         }
 
         function injectConfigTiddlers(config) {
-            if (typeof $tw === 'undefined' || !$tw.wiki || !$tw.saverHandler) {
+            if (typeof $tw === 'undefined' || !$tw.wiki) {
                 setTimeout(function() { injectConfigTiddlers(config); }, 100);
                 return;
             }

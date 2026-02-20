@@ -39,6 +39,9 @@
     <string name="share_json">JSON (.json)</string>
     <string name="share_tid">TID (.tid)</string>
     <string name="share_csv">CSV (.csv)</string>
+    <string name="share_image_too_large">Tiddler-indholdet er for stort til at dele som billede (%s). Prøv at dele en kortere tiddler.</string>
+    <string name="share_image_failed">Billedopsamling mislykkedes</string>
+    <string name="share_image_too_many_pixels">Tiddleren er for stor til at opsamle som billede (%s)</string>
     <string name="unsaved_title">Ikke-gemte ændringer</string>
     <string name="unsaved_message">Du har %d ikke-gemte ændring(er). Hvad vil du gøre?</string>
     <string name="unsaved_save_close">Gem &amp; luk</string>

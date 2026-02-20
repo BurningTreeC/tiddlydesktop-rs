@@ -602,6 +602,10 @@ fn validate_window_position(
 /// Platform-specific drag-drop handling
 mod drag_drop;
 
+/// Auto-grant WebView permissions (camera, mic, geolocation) on desktop
+#[cfg(not(target_os = "android"))]
+mod permissions;
+
 /// Force-link FFI functions for wry fork on Windows
 /// The wry fork declares these as `extern "C"` and expects them to be provided.
 /// Without this, the linker may not include them in the final binary.
@@ -6589,7 +6593,7 @@ async fn check_for_updates() -> Result<UpdateCheckResult, String> {
 
 /// Android version - separate from desktop versioning (must match build.gradle.kts versionName)
 #[cfg(target_os = "android")]
-const ANDROID_VERSION: &str = "0.0.19";
+const ANDROID_VERSION: &str = "0.0.20";
 
 /// Check for updates on Android via version file on GitHub, linking to Play Store
 #[cfg(target_os = "android")]
@@ -8330,7 +8334,8 @@ fn run_wiki_mode(args: WikiModeArgs) {
 
     let builder = tauri::Builder::default()
         .with_platform_plugins()
-        .plugin(drag_drop::init_plugin());
+        .plugin(drag_drop::init_plugin())
+        .plugin(permissions::init_plugin());
     let builder = builder.setup(move |app| {
             // Initialize PDFium for native PDF rendering
             init_pdfium_from_resources(&app.handle());
@@ -9350,6 +9355,8 @@ pub fn run() {
     let builder = tauri::Builder::default()
         .with_platform_plugins()
         .plugin(drag_drop::init_plugin());
+    #[cfg(not(target_os = "android"))]
+    let builder = builder.plugin(permissions::init_plugin());
     let builder = builder.setup(|app| {
             // Replace default menu bar with minimal one on macOS (keeps essential shortcuts)
             #[cfg(target_os = "macos")]

@@ -39,6 +39,9 @@
     <string name="share_json">JSON (.json)</string>
     <string name="share_tid">TID (.tid)</string>
     <string name="share_csv">CSV (.csv)</string>
+    <string name="share_image_too_large">Obsah tiddleru je příliš velký pro sdílení jako obrázek (%s). Zkuste sdílet kratší tiddler.</string>
+    <string name="share_image_failed">Zachycení obrázku se nezdařilo</string>
+    <string name="share_image_too_many_pixels">Tiddler je příliš velký pro zachycení jako obrázek (%s)</string>
     <string name="unsaved_title">Neuložené změny</string>
     <string name="unsaved_message">Máte %d neuloženou změnu/změn. Co chcete udělat?</string>
     <string name="unsaved_save_close">Uložit &amp; zavřít</string>

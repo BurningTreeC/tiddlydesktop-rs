@@ -45,6 +45,9 @@
     <string name="share_json">JSON (.json)</string>
     <string name="share_tid">TID (.tid)</string>
     <string name="share_csv">CSV (.csv)</string>
+    <string name="share_image_too_large">Tiddler content too large to share as image (%s). Try sharing a shorter tiddler.</string>
+    <string name="share_image_failed">Image capture failed</string>
+    <string name="share_image_too_many_pixels">Tiddler is too large to capture as image (%s)</string>
     <string name="unsaved_title">Unsaved Changes</string>
     <string name="unsaved_message">You have %d unsaved change(s). What would you like to do?</string>
     <string name="unsaved_save_close">Save &amp; Close</string>

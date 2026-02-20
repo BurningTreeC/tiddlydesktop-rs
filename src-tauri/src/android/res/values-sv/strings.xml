@@ -39,6 +39,9 @@
     <string name="share_json">JSON (.json)</string>
     <string name="share_tid">TID (.tid)</string>
     <string name="share_csv">CSV (.csv)</string>
+    <string name="share_image_too_large">Tiddler-innehållet är för stort för att delas som bild (%s). Försök dela en kortare tiddler.</string>
+    <string name="share_image_failed">Bildfångst misslyckades</string>
+    <string name="share_image_too_many_pixels">Tiddlern är för stor för att fångas som bild (%s)</string>
     <string name="unsaved_title">Osparade ändringar</string>
     <string name="unsaved_message">Du har %d osparad(e) ändring(ar). Vad vill du göra?</string>
     <string name="unsaved_save_close">Spara &amp; stäng</string>

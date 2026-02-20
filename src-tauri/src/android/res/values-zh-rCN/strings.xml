@@ -39,6 +39,9 @@
     <string name="share_json">JSON (.json)</string>
     <string name="share_tid">TID (.tid)</string>
     <string name="share_csv">CSV (.csv)</string>
+    <string name="share_image_too_large">条目内容太大，无法作为图片分享（%s）。请尝试分享较短的条目。</string>
+    <string name="share_image_failed">图片捕获失败</string>
+    <string name="share_image_too_many_pixels">条目太大，无法捕获为图片（%s）</string>
     <string name="unsaved_title">未保存的更改</string>
     <string name="unsaved_message">您有 %d 个未保存的更改。您想怎么做？</string>
     <string name="unsaved_save_close">保存 &amp; 关闭</string>

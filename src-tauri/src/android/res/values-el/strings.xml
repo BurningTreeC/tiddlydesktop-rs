@@ -39,6 +39,9 @@
     <string name="share_json">JSON (.json)</string>
     <string name="share_tid">TID (.tid)</string>
     <string name="share_csv">CSV (.csv)</string>
+    <string name="share_image_too_large">Το περιεχόμενο του tiddler είναι πολύ μεγάλο για κοινοποίηση ως εικόνα (%s). Δοκιμάστε να κοινοποιήσετε ένα μικρότερο tiddler.</string>
+    <string name="share_image_failed">Η σύλληψη εικόνας απέτυχε</string>
+    <string name="share_image_too_many_pixels">Το tiddler είναι πολύ μεγάλο για σύλληψη ως εικόνα (%s)</string>
     <string name="unsaved_title">Μη αποθηκευμένες αλλαγές</string>
     <string name="unsaved_message">Έχετε %d μη αποθηκευμένη(-ες) αλλαγή(-ές). Τι θέλετε να κάνετε;</string>
     <string name="unsaved_save_close">Αποθήκευση &amp; Κλείσιμο</string>

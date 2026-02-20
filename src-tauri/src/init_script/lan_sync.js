@@ -417,12 +417,23 @@
     return JSON.stringify(out);
   }
 
+  // Check if a title is a draft tiddler (including numbered drafts like "Draft 2 of 'Title'")
+  function isDraft(title) {
+    if (title.indexOf("Draft of '") === 0) return true;
+    if (title.indexOf("Draft ") === 0) {
+      var rest = title.substring(6);
+      var p = rest.indexOf(" of '");
+      if (p > 0 && /^\d+$/.test(rest.substring(0, p))) return true;
+    }
+    return false;
+  }
+
   // Check if a title should be excluded from sync
   function isSyncExcluded(title) {
     if (title === '$:/StoryList' || title === '$:/HistoryList' || title === '$:/library/sjcl.js' ||
         title === '$:/Import' || title === '$:/language' || title === '$:/theme' || title === '$:/palette' ||
-        title === '$:/isEncrypted') return true;
-    if (title.indexOf("Draft of '") === 0) return true;
+        title === '$:/isEncrypted' || title === '$:/view' || title === '$:/layout') return true;
+    if (isDraft(title)) return true;
     if (title.indexOf('$:/TiddlyDesktopRS/Conflicts/') === 0) return true;
     if (title.indexOf('$:/state/') === 0) return true;
     if (title.indexOf('$:/status/') === 0) return true;

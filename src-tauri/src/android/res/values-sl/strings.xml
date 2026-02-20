@@ -39,6 +39,9 @@
     <string name="share_json">JSON (.json)</string>
     <string name="share_tid">TID (.tid)</string>
     <string name="share_csv">CSV (.csv)</string>
+    <string name="share_image_too_large">Vsebina tiddlerja je prevelika za deljenje kot slika (%s). Poskusite deliti krajši tiddler.</string>
+    <string name="share_image_failed">Zajemanje slike ni uspelo</string>
+    <string name="share_image_too_many_pixels">Tiddler je prevelik za zajemanje kot slika (%s)</string>
     <string name="unsaved_title">Neshranjene spremembe</string>
     <string name="unsaved_message">Imate %d neshranjenih sprememb. Kaj želite storiti?</string>
     <string name="unsaved_save_close">Shrani &amp; Zapri</string>

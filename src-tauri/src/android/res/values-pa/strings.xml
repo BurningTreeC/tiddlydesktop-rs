@@ -39,6 +39,9 @@
     <string name="share_json">JSON (.json)</string>
     <string name="share_tid">TID (.tid)</string>
     <string name="share_csv">CSV (.csv)</string>
+    <string name="share_image_too_large">Tiddler ਦੀ ਸਮੱਗਰੀ ਚਿੱਤਰ ਵਜੋਂ ਸਾਂਝੀ ਕਰਨ ਲਈ ਬਹੁਤ ਵੱਡੀ ਹੈ (%s)। ਇੱਕ ਛੋਟਾ tiddler ਸਾਂਝਾ ਕਰਨ ਦੀ ਕੋਸ਼ਿਸ਼ ਕਰੋ।</string>
+    <string name="share_image_failed">ਚਿੱਤਰ ਕੈਪਚਰ ਅਸਫਲ</string>
+    <string name="share_image_too_many_pixels">Tiddler ਚਿੱਤਰ ਵਜੋਂ ਕੈਪਚਰ ਕਰਨ ਲਈ ਬਹੁਤ ਵੱਡਾ ਹੈ (%s)</string>
     <string name="unsaved_title">ਅਣ-ਸੁਰੱਖਿਅਤ ਤਬਦੀਲੀਆਂ</string>
     <string name="unsaved_message">ਤੁਹਾਡੇ ਕੋਲ %d ਅਣ-ਸੁਰੱਖਿਅਤ ਤਬਦੀਲੀ(ਆਂ) ਹਨ। ਤੁਸੀਂ ਕੀ ਕਰਨਾ ਚਾਹੋਗੇ?</string>
     <string name="unsaved_save_close">ਸੁਰੱਖਿਅਤ ਕਰੋ &amp; ਬੰਦ ਕਰੋ</string>

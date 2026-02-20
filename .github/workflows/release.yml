@@ -232,9 +232,9 @@ jobs:
         working-directory: tiddlydesktop-rs
         run: |
           mkdir -p src-tauri/resources
+          rm -rf ../TiddlyWiki5/.git
+          rm -rf ../TiddlyWiki5/editions/tiddlywiki-surveys
           cp -r ../TiddlyWiki5 src-tauri/resources/tiddlywiki
-          rm -rf src-tauri/resources/tiddlywiki/.git
-          rm -rf src-tauri/resources/tiddlywiki/editions/tiddlywiki-surveys
           cp src/index.html src-tauri/resources/index.html
 
       - name: Download PDFium
@@ -331,9 +331,9 @@ jobs:
         shell: bash
         run: |
           mkdir -p src-tauri/resources
+          rm -rf ../TiddlyWiki5/.git
+          rm -rf ../TiddlyWiki5/editions/tiddlywiki-surveys
           cp -r ../TiddlyWiki5 src-tauri/resources/tiddlywiki
-          rm -rf src-tauri/resources/tiddlywiki/.git
-          rm -rf src-tauri/resources/tiddlywiki/editions/tiddlywiki-surveys
           # Copy index.html to resources for bundling (avoids WiX issues with map format)
           cp src/index.html src-tauri/resources/index.html
 
@@ -413,9 +413,9 @@ jobs:
         shell: bash
         run: |
           mkdir -p src-tauri/resources
+          rm -rf ../TiddlyWiki5/.git
+          rm -rf ../TiddlyWiki5/editions/tiddlywiki-surveys
           cp -r ../TiddlyWiki5 src-tauri/resources/tiddlywiki
-          rm -rf src-tauri/resources/tiddlywiki/.git
-          rm -rf src-tauri/resources/tiddlywiki/editions/tiddlywiki-surveys
           # Copy index.html to resources for bundling (avoids WiX issues with map format)
           cp src/index.html src-tauri/resources/index.html
 
@@ -526,9 +526,9 @@ jobs:
         working-directory: tiddlydesktop-rs
         run: |
           mkdir -p src-tauri/resources
+          rm -rf ../TiddlyWiki5/.git
+          rm -rf ../TiddlyWiki5/editions/tiddlywiki-surveys
           cp -r ../TiddlyWiki5 src-tauri/resources/tiddlywiki
-          rm -rf src-tauri/resources/tiddlywiki/.git
-          rm -rf src-tauri/resources/tiddlywiki/editions/tiddlywiki-surveys
           # Copy index.html to resources for bundling
           cp src/index.html src-tauri/resources/index.html
 
@@ -612,9 +612,9 @@ jobs:
         working-directory: tiddlydesktop-rs
         run: |
           mkdir -p src-tauri/resources
+          rm -rf ../TiddlyWiki5/.git
+          rm -rf ../TiddlyWiki5/editions/tiddlywiki-surveys
           cp -r ../TiddlyWiki5 src-tauri/resources/tiddlywiki
-          rm -rf src-tauri/resources/tiddlywiki/.git
-          rm -rf src-tauri/resources/tiddlywiki/editions/tiddlywiki-surveys
           # Copy index.html to resources for bundling
           cp src/index.html src-tauri/resources/index.html
 
@@ -730,9 +730,9 @@ jobs:
         working-directory: tiddlydesktop-rs
         run: |
           mkdir -p src-tauri/resources
+          rm -rf ../TiddlyWiki5/.git
+          rm -rf ../TiddlyWiki5/editions/tiddlywiki-surveys
           cp -r ../TiddlyWiki5 src-tauri/resources/tiddlywiki
-          rm -rf src-tauri/resources/tiddlywiki/.git
-          rm -rf src-tauri/resources/tiddlywiki/editions/tiddlywiki-surveys
           cp src/index.html src-tauri/resources/index.html
 
       - name: Build Tauri Android (arm64-v8a)

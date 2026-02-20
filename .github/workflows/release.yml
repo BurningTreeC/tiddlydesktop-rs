@@ -348,7 +348,7 @@ jobs:
 
       - name: Build Tauri (Windows)
         working-directory: tiddlydesktop-rs
-        run: npm run tauri build -- -c src-tauri/tauri.windows.conf.json
+        run: npm run tauri build -- --verbose -c src-tauri/tauri.windows.conf.json
 
       - name: Upload Windows artifacts
         uses: actions/upload-artifact@v4
@@ -430,7 +430,7 @@ jobs:
 
       - name: Build Tauri (Windows without bundled Node.js)
         working-directory: tiddlydesktop-rs
-        run: npm run tauri build -- -c src-tauri/tauri.windows.no-nodejs.conf.json
+        run: npm run tauri build -- --verbose -c src-tauri/tauri.windows.no-nodejs.conf.json
 
       - name: Rename artifacts with PROVIDE_YOUR_OWN_NODEJS prefix
         working-directory: tiddlydesktop-rs

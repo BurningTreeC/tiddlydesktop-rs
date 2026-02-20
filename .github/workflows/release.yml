@@ -269,7 +269,7 @@ jobs:
 
   build-windows:
     needs: increment-version
-    runs-on: windows-latest
+    runs-on: windows-2022
     steps:
       - name: Enable long paths
         run: |
@@ -304,9 +304,6 @@ jobs:
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
-
-      - name: Install WiX Toolset
-        run: choco install wixtoolset -y
 
       - name: Install npm dependencies
         working-directory: tiddlydesktop-rs
@@ -363,7 +360,7 @@ jobs:
 
   build-windows-no-nodejs:
     needs: increment-version
-    runs-on: windows-latest
+    runs-on: windows-2022
     steps:
       - name: Enable long paths
         run: |
@@ -398,9 +395,6 @@ jobs:
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
-
-      - name: Install WiX Toolset
-        run: choco install wixtoolset -y
 
       - name: Install npm dependencies
         working-directory: tiddlydesktop-rs

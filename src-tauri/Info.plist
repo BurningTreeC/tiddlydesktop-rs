@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>NSCameraUsageDescription</key>
+	<string>TiddlyDesktopRS needs camera access for wiki content that uses your camera.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>TiddlyDesktopRS needs microphone access for wiki content that uses your microphone.</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>TiddlyDesktopRS needs location access for wiki content that uses your location.</string>
+</dict>
+</plist>

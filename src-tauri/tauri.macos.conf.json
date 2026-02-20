@@ -8,7 +8,7 @@
       "resources/index.html"
     ],
     "macOS": {
-      "infoPlist": "<key>NSCameraUsageDescription</key>\n<string>TiddlyDesktopRS needs camera access for wiki content that uses your camera.</string>\n<key>NSMicrophoneUsageDescription</key>\n<string>TiddlyDesktopRS needs microphone access for wiki content that uses your microphone.</string>\n<key>NSLocationWhenInUseUsageDescription</key>\n<string>TiddlyDesktopRS needs location access for wiki content that uses your location.</string>"
+      "infoPlist": "Info.plist"
     }
   }
 }

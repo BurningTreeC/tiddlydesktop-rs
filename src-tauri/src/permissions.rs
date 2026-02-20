@@ -53,8 +53,7 @@ fn setup_windows(window: &tauri::WebviewWindow) {
             args: Ref<'_, ICoreWebView2PermissionRequestedEventArgs>,
         ) -> windows::core::Result<()> {
             unsafe {
-                let args: &ICoreWebView2PermissionRequestedEventArgs = &args;
-                args.SetState(COREWEBVIEW2_PERMISSION_STATE_ALLOW)?;
+                (*args).SetState(COREWEBVIEW2_PERMISSION_STATE_ALLOW)?;
             }
             Ok(())
         }

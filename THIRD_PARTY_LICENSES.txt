@@ -1868,17 +1868,17 @@ Used by:
 - cfg-if 1.0.4 (https://github.com/rust-lang/cfg-if)
 - filetime 0.2.27 (https://github.com/alexcrichton/filetime)
 - find-msvc-tools 0.1.9 (https://github.com/rust-lang/cc-rs)
-- js-sys 0.3.85 (https://github.com/wasm-bindgen/wasm-bindgen/tree/master/crates/js-sys)
+- js-sys 0.3.86 (https://github.com/wasm-bindgen/wasm-bindgen/tree/master/crates/js-sys)
 - pkg-config 0.3.32 (https://github.com/rust-lang/pkg-config-rs)
 - socket2 0.5.10 (https://github.com/rust-lang/socket2)
 - socket2 0.6.2 (https://github.com/rust-lang/socket2)
 - toml_datetime 0.6.3 (https://github.com/toml-rs/toml)
-- wasm-bindgen-futures 0.4.58 (https://github.com/wasm-bindgen/wasm-bindgen/tree/master/crates/futures)
-- wasm-bindgen-macro-support 0.2.108 (https://github.com/wasm-bindgen/wasm-bindgen/tree/master/crates/macro-support)
-- wasm-bindgen-macro 0.2.108 (https://github.com/wasm-bindgen/wasm-bindgen/tree/master/crates/macro)
-- wasm-bindgen-shared 0.2.108 (https://github.com/wasm-bindgen/wasm-bindgen/tree/master/crates/shared)
-- wasm-bindgen 0.2.108 (https://github.com/wasm-bindgen/wasm-bindgen)
-- web-sys 0.3.85 (https://github.com/wasm-bindgen/wasm-bindgen/tree/master/crates/web-sys)
+- wasm-bindgen-futures 0.4.59 (https://github.com/wasm-bindgen/wasm-bindgen/tree/master/crates/futures)
+- wasm-bindgen-macro-support 0.2.109 (https://github.com/wasm-bindgen/wasm-bindgen/tree/master/crates/macro-support)
+- wasm-bindgen-macro 0.2.109 (https://github.com/wasm-bindgen/wasm-bindgen/tree/master/crates/macro)
+- wasm-bindgen-shared 0.2.109 (https://github.com/wasm-bindgen/wasm-bindgen/tree/master/crates/shared)
+- wasm-bindgen 0.2.109 (https://github.com/wasm-bindgen/wasm-bindgen)
+- web-sys 0.3.86 (https://github.com/wasm-bindgen/wasm-bindgen/tree/master/crates/web-sys)
 
 License text:
 ```
@@ -7112,7 +7112,7 @@ Used by:
 - webview2-com-macros 0.8.1 (https://github.com/wravery/webview2-rs)
 - webview2-com-sys 0.38.2 (https://github.com/wravery/webview2-rs)
 - webview2-com 0.38.2 (https://github.com/wravery/webview2-rs)
-- tiddlydesktop-rs 0.4.5
+- tiddlydesktop-rs 0.4.6
 - block2 0.6.2 (https://github.com/madsmtm/objc2)
 - brotli-decompressor 5.0.0 (https://github.com/dropbox/rust-brotli-decompressor)
 - cargo_toml 0.22.3 (https://gitlab.com/lib.rs/cargo_toml)

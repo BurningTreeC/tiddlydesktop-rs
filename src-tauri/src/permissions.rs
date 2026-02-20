@@ -53,6 +53,7 @@ fn setup_windows(window: &tauri::WebviewWindow) {
             args: Ref<'_, ICoreWebView2PermissionRequestedEventArgs>,
         ) -> windows::core::Result<()> {
             unsafe {
+                let args: &ICoreWebView2PermissionRequestedEventArgs = &args;
                 args.SetState(COREWEBVIEW2_PERMISSION_STATE_ALLOW)?;
             }
             Ok(())
@@ -64,12 +65,11 @@ fn setup_windows(window: &tauri::WebviewWindow) {
         #[cfg(windows)]
         unsafe {
             let controller = webview.controller();
-            let mut core: Option<ICoreWebView2> = None;
-            if controller.CoreWebView2(&mut core).is_ok() {
-                if let Some(core) = core {
+            match controller.CoreWebView2() {
+                Ok(core) => {
                     let handler: ICoreWebView2PermissionRequestedEventHandler =
                         PermissionHandler.into();
-                    let mut token = windows::Win32::System::WinRT::EventRegistrationToken::default();
+                    let mut token: i64 = 0;
                     match core.add_PermissionRequested(&handler, &mut token) {
                         Ok(()) => eprintln!(
                             "[TiddlyDesktop] Windows: Permission handler registered for '{}'",
@@ -81,6 +81,10 @@ fn setup_windows(window: &tauri::WebviewWindow) {
                         ),
                     }
                 }
+                Err(e) => eprintln!(
+                    "[TiddlyDesktop] Windows: Failed to get CoreWebView2: {:?}",
+                    e
+                ),
             }
         }
     });

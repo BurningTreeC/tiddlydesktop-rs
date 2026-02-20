@@ -48,6 +48,8 @@ const COMBINED_INIT_SCRIPT: &str = concat!(
     include_str!("init_script/favicon_sync.js"),
     "\n",
     include_str!("init_script/lan_sync.js"),
+    "\n",
+    include_str!("init_script/conflict_ui.js"),
 );
 
 /// Full JavaScript initialization script for wiki windows - sets all necessary variables early

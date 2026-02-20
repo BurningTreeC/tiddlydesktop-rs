@@ -6407,6 +6407,145 @@ class WikiActivity : AppCompatActivity() {
             "setTimeout(init,100);" +
             "})()"
 
+        // Conflict resolution UI: shows banner when LAN sync conflicts exist, modal to review/resolve
+        val conflictUiScript = "(function(){" +
+            "'use strict';" +
+            "if(!window.__WIKI_PATH__)return;" +
+            "var CONFLICT_PREFIX='" + "\$:/TiddlyDesktopRS/Conflicts/';" +
+            "var banner=null,bannerDismissed=false,modalOverlay=null;" +
+            // getColour - self-contained palette color lookup
+            "function getColour(name,fallback,depth){depth=depth||0;if(depth>10)return fallback;" +
+            "if(typeof " + "\$tw!=='undefined'&&" + "\$tw.wiki){try{var pn=" + "\$tw.wiki.getTiddlerText('" + "\$:/palette');" +
+            "if(pn){pn=pn.trim();var pt=" + "\$tw.wiki.getTiddler(pn);" +
+            "if(pt){var tx=pt.fields.text||'';var ls=tx.split('\\n');" +
+            "for(var i=0;i<ls.length;i++){var ln=ls[i].trim();var ci=ln.indexOf(':');" +
+            "if(ci>0){var cn=ln.substring(0,ci).trim();var cv=ln.substring(ci+1).trim();" +
+            "if(cn===name&&cv){var mt=cv.match(/<<colour\\s+([^>]+)>>/);" +
+            "if(mt)return getColour(mt[1].trim(),fallback,depth+1);return cv;}}}}}}catch(e){}}return fallback;}" +
+            // getConflictTitles
+            "function getConflictTitles(){var t=[];" + "\$tw.wiki.each(function(td,title){if(title.indexOf(CONFLICT_PREFIX)===0)t.push(title);});return t;}" +
+            // formatTimestamp
+            "function fmtTs(iso){if(!iso)return '';try{return new Date(iso).toLocaleString();}catch(e){return iso;}}" +
+            // getContrastingColor
+            "function gcc(bg){try{var h=bg.replace('#','');if(h.length===3)h=h[0]+h[0]+h[1]+h[1]+h[2]+h[2];" +
+            "var r=parseInt(h.substr(0,2),16)/255,g=parseInt(h.substr(2,2),16)/255,b=parseInt(h.substr(4,2),16)/255;" +
+            "r=r<=0.03928?r/12.92:Math.pow((r+0.055)/1.055,2.4);" +
+            "g=g<=0.03928?g/12.92:Math.pow((g+0.055)/1.055,2.4);" +
+            "b=b<=0.03928?b/12.92:Math.pow((b+0.055)/1.055,2.4);" +
+            "return(0.2126*r+0.7152*g+0.0722*b)>0.179?'#000000':'#ffffff';}catch(e){return '#333333';}}" +
+            // createBanner
+            "function createBanner(){if(banner)return banner;" +
+            "banner=document.createElement('div');banner.id='td-conflict-banner';" +
+            "banner.style.cssText='display:none;position:fixed;top:0;left:0;right:0;z-index:9999;background:#fff3cd;color:#856404;border-bottom:2px solid #ffc107;padding:8px 16px;font-size:14px;font-family:system-ui,sans-serif;align-items:center;gap:8px;box-shadow:0 2px 4px rgba(0,0,0,0.1);';" +
+            "var ts=document.createElement('span');ts.style.cssText='flex:1;';banner.__ts=ts;" +
+            "var rb=document.createElement('button');rb.textContent='Resolve';" +
+            "rb.style.cssText='padding:4px 12px;border:1px solid #ffc107;border-radius:4px;background:#ffc107;color:#333;cursor:pointer;font-size:13px;font-weight:500;';" +
+            "rb.onclick=function(){showModal();};" +
+            "var db=document.createElement('button');db.textContent='\\u00d7';" +
+            "db.style.cssText='padding:2px 8px;border:none;background:transparent;color:#856404;cursor:pointer;font-size:18px;line-height:1;';" +
+            "db.onclick=function(){bannerDismissed=true;banner.style.display='none';};" +
+            "banner.appendChild(ts);banner.appendChild(rb);banner.appendChild(db);document.body.appendChild(banner);return banner;}" +
+            // updateBanner
+            "function updateBanner(){var c=getConflictTitles();if(c.length===0){if(banner)banner.style.display='none';bannerDismissed=false;return;}" +
+            "if(bannerDismissed)return;if(!banner)createBanner();" +
+            "banner.__ts.textContent='\\u26a0 '+c.length+' sync conflict'+(c.length!==1?'s':'')+' detected';" +
+            "banner.style.display='flex';}" +
+            // renderDiff
+            "function renderDiff(lt,rt){var c=document.createElement('div');" +
+            "c.style.cssText='font-family:monospace;font-size:13px;white-space:pre-wrap;word-break:break-word;padding:8px;border-radius:4px;max-height:300px;overflow:auto;background:'+getColour('tiddler-background','#ffffff')+';border:1px solid '+getColour('tiddler-border','#cccccc')+';';" +
+            "try{var m=" + "\$tw.modules.execute('" + "\$:/core/modules/utils/diff-match-patch/diff_match_patch.js');" +
+            "var d=new m.diff_match_patch();var df=d.diff_main(lt||'',rt||'');d.diff_cleanupSemantic(df);" +
+            "for(var i=0;i<df.length;i++){var s=document.createElement('span');s.textContent=df[i][1];" +
+            "if(df[i][0]===-1)s.style.cssText='background:#fdd;color:#900;text-decoration:line-through;';" +
+            "else if(df[i][0]===1)s.style.cssText='background:#dfd;color:#060;';" +
+            "c.appendChild(s);}}catch(e){c.textContent='Unable to compute diff';}return c;}" +
+            // resolveConflict
+            "function resolveConflict(ct,action){try{var cf=" + "\$tw.wiki.getTiddler(ct);if(!cf)return;" +
+            "if(action==='local'){var ot=cf.fields['conflict-original-title'];" +
+            "if(ot){\$tw.wiki.addTiddler(new \$tw.Tiddler(cf,{title:ot,'conflict-original-title':undefined,'conflict-timestamp':undefined,'conflict-source':undefined}));}}" +
+            "\$tw.wiki.deleteTiddler(ct);}catch(e){console.error('[TiddlyDesktop] resolveConflict error:',e);}}" +
+            // resolveAll
+            "function resolveAll(action){var c=getConflictTitles();for(var i=0;i<c.length;i++)resolveConflict(c[i],action);closeModal();updateBanner();}" +
+            // afterResolve
+            "function afterResolve(){if(modalOverlay){var r=modalOverlay.querySelectorAll('[data-conflict-title]');if(r.length===0)closeModal();}updateBanner();}" +
+            // closeModal
+            "function closeModal(){if(modalOverlay){if(modalOverlay.__esc)document.removeEventListener('keydown',modalOverlay.__esc);modalOverlay.remove();modalOverlay=null;}}" +
+            // showModal
+            "function showModal(){if(modalOverlay)closeModal();var conflicts=getConflictTitles();if(conflicts.length===0)return;" +
+            "var mbg=getColour('modal-background',getColour('tiddler-background','#ffffff'));" +
+            "var mbd=getColour('modal-border',getColour('tiddler-border','#cccccc'));" +
+            "var fg=getColour('foreground','#333333');" +
+            "var mfg=getColour('muted-foreground','#999999');" +
+            "var pbg=getColour('page-background','#f4f4f4');" +
+            "var pri=getColour('primary','#5778d8');" +
+            "var pt=gcc(pri);var bbg=getColour('button-background','#f0f0f0');" +
+            "var bfg=gcc(bbg);var bbd=getColour('button-border','#cccccc');" +
+            // overlay
+            "modalOverlay=document.createElement('div');modalOverlay.id='td-conflict-modal-overlay';" +
+            "modalOverlay.style.cssText='position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.5);z-index:10001;display:flex;align-items:flex-start;justify-content:center;padding:40px 20px;overflow:auto;';" +
+            // modal container
+            "var modal=document.createElement('div');" +
+            "modal.style.cssText='background:'+pbg+';color:'+fg+';border-radius:8px;border:1px solid '+mbd+';box-shadow:0 8px 32px rgba(0,0,0,0.3);max-width:700px;width:100%;max-height:calc(100vh - 80px);display:flex;flex-direction:column;';" +
+            // header
+            "var hdr=document.createElement('div');hdr.style.cssText='display:flex;align-items:center;padding:16px 20px;border-bottom:1px solid '+mbd+';background:'+mbg+';border-radius:8px 8px 0 0;flex-shrink:0;';" +
+            "var ht=document.createElement('span');ht.textContent='Sync Conflicts';ht.style.cssText='flex:1;font-size:18px;font-weight:600;';" +
+            "var cb=document.createElement('button');cb.textContent='Close';cb.style.cssText='padding:6px 14px;background:'+bbg+';color:'+bfg+';border:1px solid '+bbd+';border-radius:4px;cursor:pointer;font-size:13px;';" +
+            "cb.onclick=function(){closeModal();};hdr.appendChild(ht);hdr.appendChild(cb);" +
+            // body
+            "var body=document.createElement('div');body.style.cssText='padding:16px 20px;overflow-y:auto;flex:1;';" +
+            "for(var i=0;i<conflicts.length;i++){body.appendChild(renderCard(conflicts[i],mbg,mbd,fg,mfg,pri,pt,bbg,bfg,bbd));}" +
+            // footer
+            "var ftr=document.createElement('div');ftr.style.cssText='padding:12px 20px;border-top:1px solid '+mbd+';background:'+mbg+';border-radius:0 0 8px 8px;display:flex;justify-content:flex-end;gap:8px;flex-shrink:0;';" +
+            "var alb=document.createElement('button');alb.textContent='Resolve All: Keep Local';alb.style.cssText='padding:8px 16px;background:'+bbg+';color:'+bfg+';border:1px solid '+bbd+';border-radius:4px;cursor:pointer;font-size:13px;';" +
+            "alb.onclick=function(){resolveAll('local');};" +
+            "var arb=document.createElement('button');arb.textContent='Resolve All: Keep Remote';arb.style.cssText='padding:8px 16px;background:'+pri+';color:'+pt+';border:1px solid '+pri+';border-radius:4px;cursor:pointer;font-size:13px;';" +
+            "arb.onclick=function(){resolveAll('remote');};" +
+            "ftr.appendChild(alb);ftr.appendChild(arb);" +
+            "modal.appendChild(hdr);modal.appendChild(body);modal.appendChild(ftr);modalOverlay.appendChild(modal);document.body.appendChild(modalOverlay);" +
+            "modalOverlay.addEventListener('click',function(e){if(e.target===modalOverlay)closeModal();});" +
+            "modalOverlay.__esc=function(e){if(e.key==='Escape')closeModal();};document.addEventListener('keydown',modalOverlay.__esc);}" +
+            // renderCard
+            "function renderCard(ct,mbg,mbd,fg,mfg,pri,pt,bbg,bfg,bbd){" +
+            "var cf=" + "\$tw.wiki.getTiddler(ct);if(!cf)return document.createElement('div');" +
+            "var ot=cf.fields['conflict-original-title']||'';var ts=cf.fields['conflict-timestamp']||'';var orig=" + "\$tw.wiki.getTiddler(ot);" +
+            "var card=document.createElement('div');card.style.cssText='background:'+mbg+';border:1px solid '+mbd+';border-radius:6px;padding:16px;margin-bottom:12px;';" +
+            "card.setAttribute('data-conflict-title',ct);" +
+            // title
+            "var tl=document.createElement('div');tl.style.cssText='font-size:15px;font-weight:600;margin-bottom:4px;';tl.textContent=ot;card.appendChild(tl);" +
+            // timestamp
+            "var tsd=document.createElement('div');tsd.style.cssText='font-size:12px;color:'+mfg+';margin-bottom:12px;';tsd.textContent='Conflicted at: '+fmtTs(ts);card.appendChild(tsd);" +
+            // fields
+            "var lf=cf.fields;var rf=orig?orig.fields:{};" +
+            "var skip={'title':1,'conflict-original-title':1,'conflict-timestamp':1,'conflict-source':1};" +
+            "var af={};var k;for(k in lf){if(!skip[k])af[k]=1;}for(k in rf){if(!skip[k])af[k]=1;}" +
+            "var fns=Object.keys(af).sort();var hasDiffs=false;" +
+            "for(var i=0;i<fns.length;i++){var fn=fns[i];var lv=lf[fn];var rv=rf[fn];var ls=lv!=null?String(lv):'';var rs=rv!=null?String(rv):'';" +
+            "if(ls===rs)continue;hasDiffs=true;" +
+            "var fs=document.createElement('div');fs.style.cssText='margin-bottom:10px;';" +
+            "var fl=document.createElement('div');fl.style.cssText='font-size:12px;font-weight:600;color:'+mfg+';text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px;';fl.textContent=fn;fs.appendChild(fl);" +
+            "if(fn==='text'){fs.appendChild(renderDiff(ls,rs));}else{" +
+            "var cmp=document.createElement('div');cmp.style.cssText='font-size:13px;padding:6px 8px;border:1px solid '+mbd+';border-radius:4px;background:'+getColour('tiddler-background','#ffffff')+';';" +
+            "var ll=document.createElement('div');ll.style.cssText='margin-bottom:2px;';" +
+            "var llb=document.createElement('span');llb.textContent='Local: ';llb.style.cssText='font-weight:600;color:#900;';" +
+            "var llv=document.createElement('span');llv.textContent=ls||'(empty)';ll.appendChild(llb);ll.appendChild(llv);" +
+            "var rl=document.createElement('div');var rlb=document.createElement('span');rlb.textContent='Remote: ';rlb.style.cssText='font-weight:600;color:#060;';" +
+            "var rlv=document.createElement('span');rlv.textContent=rs||'(empty)';rl.appendChild(rlb);rl.appendChild(rlv);" +
+            "cmp.appendChild(ll);cmp.appendChild(rl);fs.appendChild(cmp);}card.appendChild(fs);}" +
+            "if(!hasDiffs){var nd=document.createElement('div');nd.style.cssText='font-size:13px;color:'+mfg+';font-style:italic;margin-bottom:10px;';nd.textContent='All fields are identical (conflict may have been resolved externally).';card.appendChild(nd);}" +
+            // action buttons
+            "var acts=document.createElement('div');acts.style.cssText='display:flex;gap:8px;margin-top:8px;';" +
+            "var klb=document.createElement('button');klb.textContent='Keep Local';klb.style.cssText='padding:6px 14px;background:'+bbg+';color:'+bfg+';border:1px solid '+bbd+';border-radius:4px;cursor:pointer;font-size:13px;';" +
+            "klb.onclick=(function(c,cd){return function(){resolveConflict(c,'local');cd.remove();afterResolve();};})(ct,card);" +
+            "var krb=document.createElement('button');krb.textContent='Keep Remote';krb.style.cssText='padding:6px 14px;background:'+pri+';color:'+pt+';border:1px solid '+pri+';border-radius:4px;cursor:pointer;font-size:13px;';" +
+            "krb.onclick=(function(c,cd){return function(){resolveConflict(c,'remote');cd.remove();afterResolve();};})(ct,card);" +
+            "acts.appendChild(klb);acts.appendChild(krb);card.appendChild(acts);return card;}" +
+            // init
+            "function init(){if(typeof " + "\$tw==='undefined'||!\$tw.wiki){setTimeout(init,200);return;}" +
+            "updateBanner();" +
+            "\$tw.wiki.addEventListener('change',function(changes){var rel=false;for(var t in changes){if(t.indexOf(CONFLICT_PREFIX)===0){rel=true;break;}}if(rel){bannerDismissed=false;updateBanner();}});}" +
+            "if(document.readyState==='loading'){document.addEventListener('DOMContentLoaded',function(){init();});}else{init();}" +
+            "})()"
+
         // Add a WebViewClient that injects the script after page load
         webView.webViewClient = object : WebViewClient() {
             private fun handleUrl(url: String): Boolean {
@@ -6609,6 +6748,8 @@ class WikiActivity : AppCompatActivity() {
                     view.evaluateJavascript(sharePluginScript, null)
                     // Inject LAN sync script (change hooks + inbound polling)
                     view.evaluateJavascript(lanSyncScript, null)
+                    // Inject conflict resolution UI (banner + modal for sync conflicts)
+                    view.evaluateJavascript(conflictUiScript, null)
                     // Import pending Quick Captures
                     importPendingCaptures()
                 }

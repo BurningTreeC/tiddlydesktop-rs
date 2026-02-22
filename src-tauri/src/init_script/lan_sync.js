@@ -235,7 +235,9 @@
         // Activate collab API (set active flag, flush queued outbound messages)
         _collabSyncActive = true;
         _collabWikiId = syncId;
-        collabListeners = {};
+        // NOTE: Do NOT reset collabListeners here — CM6 editors created before
+        // sync activation have already registered their inbound listeners via
+        // collab.on(). Wiping them would break inbound message delivery.
         remoteEditorsCache = {};
 
         // Flush queued outbound messages
@@ -252,6 +254,11 @@
         }
 
         rsLog('[LAN Sync] Collab API activated for wiki: ' + syncId);
+
+        // Notify CM6 collab plugins that sync transport is now active.
+        // Editors created before the collab API existed (Android: evaluateJavascript
+        // runs after page load) listen for this to trigger late Phase 2 connection.
+        try { window.dispatchEvent(new Event('collab-sync-activated')); } catch(_e) {}
 
         // Notify Rust that this wiki window is now open and ready for sync.
         notifyWikiOpened(syncId);

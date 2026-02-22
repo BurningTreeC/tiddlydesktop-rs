@@ -940,8 +940,26 @@ exports.plugin = {
 					_clog("[Collab] _connectTransport error (non-fatal): " + (ce && ce.message ? ce.message : String(ce)));
 				}
 			} else {
-				// Collab API not available (running outside TiddlyDesktop or unexpected state)
-				_clog("[Collab] WARNING: window.TiddlyDesktop.collab not found for " + tiddlerTitle + " — collab transport not connected");
+				// Collab API not available yet — editor created before lan_sync.js ran
+				// (Android: evaluateJavascript runs after onPageFinished).
+				// Listen for the collab-sync-activated event to connect transport late.
+				_clog("[Collab] collab API not found for " + tiddlerTitle + " — waiting for collab-sync-activated event");
+				var _lateEngine = engine;
+				var _onSyncActivated = function() {
+					window.removeEventListener("collab-sync-activated", _onSyncActivated);
+					if(state) state._syncActivatedListener = null;
+					var collabApi = window.TiddlyDesktop && window.TiddlyDesktop.collab;
+					if(collabApi && _lateEngine._collabState && !_lateEngine._collabState.destroyed && !_lateEngine._collabState._transportConnected) {
+						_clog("[Collab] Late Phase 2: connecting transport for " + tiddlerTitle);
+						try {
+							_connectTransport(_lateEngine, collabApi);
+						} catch(ce) {
+							_clog("[Collab] Late Phase 2 error: " + (ce && ce.message ? ce.message : String(ce)));
+						}
+					}
+				};
+				if(state) state._syncActivatedListener = _onSyncActivated;
+				window.addEventListener("collab-sync-activated", _onSyncActivated);
 			}
 
 			return [compartment.of(exts)];
@@ -955,6 +973,12 @@ exports.plugin = {
 		var state = engine._collabState;
 		if(!state || state.destroyed) return;
 		state.destroyed = true;
+
+		// Clean up pending collab-sync-activated listener (editor created before sync)
+		if(state._syncActivatedListener) {
+			window.removeEventListener("collab-sync-activated", state._syncActivatedListener);
+			state._syncActivatedListener = null;
+		}
 
 		// Clean up join timer
 		if(state._joinTimer) {

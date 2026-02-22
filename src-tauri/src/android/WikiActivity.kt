@@ -6225,7 +6225,9 @@ class WikiActivity : AppCompatActivity() {
             "console.log('[LAN Sync] Activated for wiki: '+syncId);" +
             "S.wikiOpened(syncId);" +
             // Activate collab: set flag, flush queued outbound messages
-            "_syncActive=true;_syncId=syncId;collabListeners={};" +
+            // NOTE: Do NOT reset collabListeners — CM6 editors created before sync
+            // activation already registered their inbound listeners via collab.on().
+            "_syncActive=true;_syncId=syncId;" +
             "var q=_collabQueue;_collabQueue=[];" +
             "for(var qi=0;qi<q.length;qi++){var qe=q[qi];" +
             "if(qe[0]==='startEditing')S.collabEditingStarted(syncId,qe[1]);" +
@@ -6234,6 +6236,8 @@ class WikiActivity : AppCompatActivity() {
             "else if(qe[0]==='sendAwareness')S.collabAwareness(syncId,qe[1],qe[2]);" +
             "}" +
             "console.log('[LAN Sync] Collab API activated for wiki: '+syncId);" +
+            // Notify CM6 collab plugins that transport is active (for late Phase 2)
+            "try{window.dispatchEvent(new Event('collab-sync-activated'));}catch(e){}" +
             // Use a Set to suppress re-broadcasting received changes.
             // TiddlyWiki dispatches change events asynchronously via $tw.utils.nextTick(),
             // so a boolean flag would already be cleared when the change listener fires.

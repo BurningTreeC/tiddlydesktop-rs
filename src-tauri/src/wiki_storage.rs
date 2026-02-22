@@ -598,6 +598,15 @@ pub async fn lan_sync_link_wiki(app: tauri::AppHandle, path: String, sync_id: St
     }
 
     eprintln!("[LAN Sync] Linked wiki for sync: {} -> {} (room: {:?})", path, sync_id, room_code);
+
+    // Broadcast updated wiki manifest so peers know we now have this wiki
+    if let Some(mgr) = crate::lan_sync::get_sync_manager() {
+        let mgr = mgr.clone();
+        tauri::async_runtime::spawn(async move {
+            mgr.broadcast_wiki_manifest().await;
+        });
+    }
+
     Ok(())
 }
 

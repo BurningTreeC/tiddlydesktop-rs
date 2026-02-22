@@ -1252,7 +1252,13 @@ async fn save_wiki(app: tauri::AppHandle, path: String, content: String) -> Resu
     if should_create_backup(&app, &state, &path) {
         let backup_dir = get_wiki_backup_dir(&app, &path);
         let backup_count = wiki_storage::get_wiki_backup_count(&app, &path);
-        create_backup(&validated_path, backup_dir.as_deref(), backup_count).await?;
+        match create_backup(&validated_path, backup_dir.as_deref(), backup_count).await {
+            Ok(()) => {},
+            Err(e) => {
+                // Log but don't block the save — backup failure should not prevent saving
+                eprintln!("[TiddlyDesktop] Backup failed (non-fatal): {}", e);
+            }
+        }
     }
 
     // Write to a temp file first, then rename for atomic operation
@@ -1569,18 +1575,22 @@ fn should_create_backup(app: &tauri::AppHandle, state: &AppState, path: &str) ->
     // Don't backup the main TiddlyDesktop wiki
     // Use canonicalized paths for robust comparison (handles symlinks, relative paths, etc.)
     let path_buf = PathBuf::from(path);
-    if let (Ok(canonical_path), Ok(canonical_main)) = (
-        dunce::canonicalize(&path_buf),
-        dunce::canonicalize(&state.main_wiki_path)
-    ) {
-        if canonical_path == canonical_main {
-            return false;
-        }
-    } else {
-        // Fallback to string comparison if canonicalization fails
-        let main_wiki = state.main_wiki_path.to_string_lossy();
-        if utils::paths_equal(path, &main_wiki) {
-            return false;
+    let main_wiki = &state.main_wiki_path;
+    // Empty main_wiki_path means we're in a wiki child process — skip the main wiki check
+    if main_wiki.as_os_str().len() > 0 {
+        if let (Ok(canonical_path), Ok(canonical_main)) = (
+            dunce::canonicalize(&path_buf),
+            dunce::canonicalize(main_wiki)
+        ) {
+            if canonical_path == canonical_main {
+                return false;
+            }
+        } else {
+            // Fallback to string comparison if canonicalization fails
+            let main_wiki_str = main_wiki.to_string_lossy();
+            if utils::paths_equal(path, &main_wiki_str) {
+                return false;
+            }
         }
     }
     // Check if backups are enabled for this wiki in the recent files list
@@ -6273,7 +6283,7 @@ async fn check_for_updates() -> Result<UpdateCheckResult, String> {
 
 /// Android version - separate from desktop versioning (must match build.gradle.kts versionName)
 #[cfg(target_os = "android")]
-const ANDROID_VERSION: &str = "0.0.26";
+const ANDROID_VERSION: &str = "0.0.27";
 
 /// Check for updates on Android via version file on GitHub, linking to Play Store
 #[cfg(target_os = "android")]
@@ -8060,7 +8070,7 @@ fn run_wiki_mode(args: WikiModeArgs) {
                 }),
                 wiki_processes: Mutex::new(HashMap::new()), // Not used in wiki mode
                 next_port: Mutex::new(8080),
-                main_wiki_path: wiki_path_clone.clone(), // Use wiki path as "main" for this process
+                main_wiki_path: PathBuf::new(), // Empty sentinel — wiki child process never saves the landing page
 
                 folder_wiki_paths: Mutex::new(HashMap::new()),
                 saf_wiki_mappings: Mutex::new(HashMap::new()),
@@ -8117,6 +8127,11 @@ fn run_wiki_mode(args: WikiModeArgs) {
                 .initialization_script(&init_script::get_wiki_init_script(&wiki_path_clone.to_string_lossy(), &label, false))
                 .zoom_hotkeys_enabled(true)
                 .devtools(cfg!(debug_assertions)); // Only enable in debug builds
+
+            // Isolate session data (cookies, localStorage) per wiki
+            if let Some(session_dir) = get_wiki_session_dir(app.handle(), &wiki_path_clone.to_string_lossy()) {
+                builder = builder.data_directory(session_dir);
+            }
 
             #[cfg(target_os = "linux")]
             let mut builder = builder.user_agent(LINUX_USER_AGENT);
@@ -8577,6 +8592,11 @@ fn run_wiki_folder_mode(args: WikiFolderModeArgs) {
             .zoom_hotkeys_enabled(true)
             .devtools(cfg!(debug_assertions)); // Only enable in debug builds
 
+            // Isolate session data (cookies, localStorage) per wiki
+            if let Some(session_dir) = get_wiki_session_dir(app.handle(), &folder_path_for_state.to_string_lossy()) {
+                builder = builder.data_directory(session_dir);
+            }
+
             // Inject embed proxy port so external iframes can be proxied through HTTP
             if let Some(state) = app.try_state::<MediaServerState>() {
                 let port = state.server.port();
@@ -8615,7 +8635,7 @@ fn run_wiki_folder_mode(args: WikiFolderModeArgs) {
                 open_wikis: Mutex::new(HashMap::new()),
                 wiki_processes: Mutex::new(HashMap::new()),
                 next_port: Mutex::new(port + 1),
-                main_wiki_path: folder_path_for_state.clone(),
+                main_wiki_path: PathBuf::new(), // Empty sentinel — folder wiki child process never saves the landing page
 
                 folder_wiki_paths: Mutex::new(HashMap::new()),
                 saf_wiki_mappings: Mutex::new(HashMap::new()),

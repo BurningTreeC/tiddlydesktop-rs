@@ -483,10 +483,11 @@ impl SyncManager {
             if let Err(e) = relay.start_all().await {
                 eprintln!("[Relay] Failed to start auto-connect rooms: {}", e);
             }
-            // If any rooms connected, start LAN server + foreground service
-            if !relay.get_connected_room_codes().await.is_empty() {
+            // Start LAN server + discovery whenever rooms are configured,
+            // even if relay connection failed (enables LAN-only sync)
+            if relay.has_any_rooms().await {
                 if let Err(e) = self.start().await {
-                    eprintln!("[LAN Sync] Auto-start LAN server on relay connect failed: {}", e);
+                    eprintln!("[LAN Sync] Auto-start LAN server failed: {}", e);
                 }
                 #[cfg(target_os = "android")]
                 start_sync_foreground_service();
@@ -5956,6 +5957,14 @@ pub async fn relay_sync_add_room(
         // Refresh LAN room keys and discovery beacons
         mgr.update_room_keys().await;
         mgr.update_active_room_codes().await;
+        // Auto-start LAN server for LAN-only discovery
+        if result.is_ok() && mgr.server.read().await.is_none() {
+            if let Err(e) = mgr.start().await {
+                eprintln!("[LAN Sync] Auto-start LAN server failed: {}", e);
+            }
+            #[cfg(target_os = "android")]
+            start_sync_foreground_service();
+        }
         result
     } else {
         Err("Relay sync not available".to_string())
@@ -5970,6 +5979,12 @@ pub async fn relay_sync_remove_room(room_code: String) -> Result<(), String> {
         // Refresh LAN room keys and discovery beacons
         mgr.update_room_keys().await;
         mgr.update_active_room_codes().await;
+        // Stop LAN server if no rooms remain
+        if !relay.has_any_rooms().await {
+            mgr.stop().await;
+            #[cfg(target_os = "android")]
+            stop_sync_foreground_service();
+        }
         result
     } else {
         Err("Relay sync not available".to_string())
@@ -5984,19 +5999,16 @@ pub async fn relay_sync_connect_room(room_code: String) -> Result<(), String> {
         // Refresh LAN room keys and discovery beacons
         mgr.update_room_keys().await;
         mgr.update_active_room_codes().await;
-        // Auto-start LAN server + discovery + IPC if not already running
-        if result.is_ok() {
-            if mgr.server.read().await.is_none() {
-                if let Err(e) = mgr.start().await {
-                    eprintln!("[LAN Sync] Auto-start LAN server failed: {}", e);
-                }
+        // Always start LAN server + discovery if not running — enables
+        // LAN-only sync even when relay connection fails (no internet)
+        if mgr.server.read().await.is_none() {
+            if let Err(e) = mgr.start().await {
+                eprintln!("[LAN Sync] Auto-start LAN server failed: {}", e);
             }
         }
         // Start foreground service to keep process alive (Android only)
         #[cfg(target_os = "android")]
-        if result.is_ok() {
-            start_sync_foreground_service();
-        }
+        start_sync_foreground_service();
         result
     } else {
         Err("Relay sync not available".to_string())
@@ -6011,9 +6023,9 @@ pub async fn relay_sync_disconnect_room(room_code: String) -> Result<(), String>
         // Refresh discovery beacons
         mgr.update_active_room_codes().await;
         mgr.update_room_keys().await;
-        // Auto-stop LAN server + foreground service if no rooms are connected
-        let any_relay = !relay.get_connected_room_codes().await.is_empty();
-        if !any_relay {
+        // Only stop LAN server if no rooms remain configured at all
+        // (keep running for LAN-only discovery of other rooms)
+        if !relay.has_any_rooms().await {
             mgr.stop().await;
             #[cfg(target_os = "android")]
             stop_sync_foreground_service();

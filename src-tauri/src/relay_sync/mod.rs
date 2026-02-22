@@ -1172,6 +1172,11 @@ impl RelaySyncManager {
         self.rooms.read().await.keys().cloned().collect()
     }
 
+    /// Check if any rooms are configured (regardless of connection status)
+    pub async fn has_any_rooms(&self) -> bool {
+        !self.config.read().await.rooms.is_empty()
+    }
+
     /// Get all device IDs connected in a specific room
     pub async fn get_room_members(&self, room_code: &str) -> Vec<String> {
         let rooms = self.rooms.read().await;

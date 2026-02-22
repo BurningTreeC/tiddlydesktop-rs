@@ -20,6 +20,7 @@ const EXCLUDED_TIDDLERS: &[&str] = &[
     "$:/language",
     "$:/theme",
     "$:/palette",
+    "$:/DefaultTiddlers",
 ];
 
 /// Prefix for draft tiddlers (excluded from sync).

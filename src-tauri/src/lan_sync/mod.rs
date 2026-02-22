@@ -2658,8 +2658,9 @@ impl SyncManager {
                         ref wiki_id,
                         ref plugin_name,
                         ref files,
+                        ref version,
                     } => {
-                        self.handle_plugin_manifest(&from_device_id, wiki_id, plugin_name, files).await;
+                        self.handle_plugin_manifest(&from_device_id, wiki_id, plugin_name, files, version.as_deref()).await;
                     }
                     SyncMessage::RequestPluginFiles {
                         ref wiki_id,
@@ -3453,6 +3454,11 @@ impl SyncManager {
         let new_themes = wiki_info::new_items(&local_info.themes, &remote_info.themes);
         let new_languages = wiki_info::new_items(&local_info.languages, &remote_info.languages);
 
+        // Determine which items exist on both sides (for version update checking)
+        let shared_plugins = wiki_info::shared_items(&local_info.plugins, &remote_info.plugins);
+        let shared_themes = wiki_info::shared_items(&local_info.themes, &remote_info.themes);
+        let shared_languages = wiki_info::shared_items(&local_info.languages, &remote_info.languages);
+
         // Check availability of new items and request transfers for non-bundled ones
         let resources_dir = self.get_resources_dir();
         let synced_dir = self.get_synced_plugins_dir();
@@ -3492,6 +3498,18 @@ impl SyncManager {
             }
         }
 
+        // Collect shared items that need version comparison (request manifests)
+        let mut items_needing_version_check: Vec<(String, String)> = Vec::new();
+        for plugin in &shared_plugins {
+            items_needing_version_check.push(("plugins".to_string(), plugin.clone()));
+        }
+        for theme in &shared_themes {
+            items_needing_version_check.push(("themes".to_string(), theme.clone()));
+        }
+        for language in &shared_languages {
+            items_needing_version_check.push(("languages".to_string(), language.clone()));
+        }
+
         // Write merged tiddlywiki.info
         if let Err(e) = std::fs::write(&info_path, &merged_json) {
             eprintln!(
@@ -3528,12 +3546,12 @@ impl SyncManager {
             }),
         );
 
-        // Request plugin files for items that need transfer
+        // Request plugin files for items that need transfer (new plugins)
         if !items_needing_transfer.is_empty() {
             for (category, name) in &items_needing_transfer {
                 let plugin_key = format!("{}/{}", category, name);
                 eprintln!(
-                    "[Sync] Requesting plugin manifest for '{}' from peer {}",
+                    "[Sync] Requesting plugin manifest for new '{}' from peer {}",
                     plugin_key, from_device_id
                 );
                 let _ = self.send_to_peer_any(
@@ -3545,6 +3563,23 @@ impl SyncManager {
                     },
                 ).await;
             }
+        }
+
+        // Request manifests for shared items to check for version updates
+        for (category, name) in &items_needing_version_check {
+            let plugin_key = format!("{}/{}", category, name);
+            eprintln!(
+                "[Sync] Requesting plugin manifest for shared '{}' from peer {} (version check)",
+                plugin_key, from_device_id
+            );
+            let _ = self.send_to_peer_any(
+                from_device_id,
+                &SyncMessage::RequestPluginFiles {
+                    wiki_id: wiki_id.to_string(),
+                    plugin_name: plugin_key,
+                    needed_files: vec![],
+                },
+            ).await;
         }
 
         // Broadcast our updated wiki info to other peers
@@ -3585,12 +3620,14 @@ impl SyncManager {
 
         let resources_dir = self.get_resources_dir();
         let synced_dir = self.get_synced_plugins_dir();
+        let extra_dirs = self.get_extra_plugin_dirs();
         let wiki_folder = std::path::PathBuf::from(&wiki_path);
 
         let item_dir = match wiki_info::find_item_dir(
             &wiki_folder,
             &resources_dir,
             &synced_dir,
+            &extra_dirs,
             category,
             name,
         ) {
@@ -3607,9 +3644,11 @@ impl SyncManager {
         if needed_files.is_empty() {
             // Send manifest first
             let manifest = wiki_info::item_dir_manifest(&item_dir);
+            let version = wiki_info::read_plugin_version(&item_dir);
             eprintln!(
-                "[LAN Sync] Sending PluginManifest for '{}' ({} files) to peer {}",
+                "[LAN Sync] Sending PluginManifest for '{}' v{} ({} files) to peer {}",
                 plugin_name,
+                version.as_deref().unwrap_or("?"),
                 manifest.len(),
                 from_device_id
             );
@@ -3617,6 +3656,7 @@ impl SyncManager {
                 wiki_id: wiki_id.to_string(),
                 plugin_name: plugin_name.to_string(),
                 files: manifest,
+                version,
             };
             let _ = self.send_to_peer_any(from_device_id, &msg).await;
         } else {
@@ -3687,15 +3727,19 @@ impl SyncManager {
         let _ = self.send_to_peer_any(to_device_id, &msg).await;
     }
 
-    /// Handle PluginManifest from a peer — compare with local and request missing files
+    /// Handle PluginManifest from a peer — compare with local and request missing/updated files
     async fn handle_plugin_manifest(
         &self,
         from_device_id: &str,
         wiki_id: &str,
         plugin_name: &str,
         remote_files: &[protocol::AttachmentFileInfo],
+        remote_version: Option<&str>,
     ) {
-        let synced_dir = self.get_synced_plugins_dir();
+        let app = match crate::GLOBAL_APP_HANDLE.get() {
+            Some(a) => a,
+            None => return,
+        };
 
         // Parse category/name from plugin_name
         let (category, name) = match plugin_name.split_once('/') {
@@ -3705,12 +3749,47 @@ impl SyncManager {
             _ => return,
         };
 
-        let local_dir = synced_dir.join(category).join(name);
-        let local_manifest = if local_dir.is_dir() {
-            wiki_info::item_dir_manifest(&local_dir)
-        } else {
-            vec![]
+        let resources_dir = self.get_resources_dir();
+        let synced_dir = self.get_synced_plugins_dir();
+        let extra_dirs = self.get_extra_plugin_dirs();
+        let wiki_path = crate::wiki_storage::get_wiki_path_by_sync_id(app, wiki_id)
+            .unwrap_or_default();
+        let wiki_folder = std::path::PathBuf::from(&wiki_path);
+
+        // Find the local copy of this plugin (wiki-local, synced, extra paths, or bundled)
+        let local_dir = wiki_info::find_item_dir(
+            &wiki_folder,
+            &resources_dir,
+            &synced_dir,
+            &extra_dirs,
+            category,
+            name,
+        );
+
+        let local_manifest = match &local_dir {
+            Some(dir) => wiki_info::item_dir_manifest(dir),
+            None => vec![],
         };
+
+        // If plugin exists locally, compare versions to determine direction
+        if !local_manifest.is_empty() {
+            if let (Some(remote_ver), Some(ref dir)) = (remote_version, &local_dir) {
+                let local_ver = wiki_info::read_plugin_version(dir);
+                if let Some(ref lv) = local_ver {
+                    if !wiki_info::version_is_newer(remote_ver, lv) {
+                        eprintln!(
+                            "[LAN Sync] Plugin '{}' local v{} >= remote v{} — skipping",
+                            plugin_name, lv, remote_ver
+                        );
+                        return;
+                    }
+                    eprintln!(
+                        "[LAN Sync] Plugin '{}' remote v{} > local v{} — updating",
+                        plugin_name, remote_ver, lv
+                    );
+                }
+            }
+        }
 
         // Build hash map of local files
         let local_hashes: std::collections::HashMap<&str, &str> = local_manifest
@@ -3904,6 +3983,48 @@ impl SyncManager {
         let dir = self.data_dir.join("plugins");
         let _ = std::fs::create_dir_all(&dir);
         dir
+    }
+
+    /// Get extra plugin search paths from TIDDLYWIKI_PLUGIN_PATH env var
+    /// and custom plugin path setting. These are directories that contain
+    /// plugin subdirectories (e.g. {path}/tiddlywiki/markdown/).
+    fn get_extra_plugin_dirs(&self) -> Vec<std::path::PathBuf> {
+        let mut dirs = Vec::new();
+        // Check TIDDLYWIKI_PLUGIN_PATH env var
+        if let Ok(env_path) = std::env::var("TIDDLYWIKI_PLUGIN_PATH") {
+            let sep = if cfg!(windows) { ';' } else { ':' };
+            for p in env_path.split(sep) {
+                if !p.is_empty() {
+                    let pb = std::path::PathBuf::from(p);
+                    if pb.is_dir() {
+                        dirs.push(pb);
+                    }
+                }
+            }
+        }
+        // Check custom plugin path from app settings
+        if let Some(app) = crate::GLOBAL_APP_HANDLE.get() {
+            let settings = crate::wiki_storage::load_app_settings(app).unwrap_or_default();
+            if let Some(ref custom_uri) = settings.custom_plugin_path_uri {
+                if !custom_uri.is_empty() {
+                    // On Android this is a SAF URI — the synced local copy lives at
+                    // {app_data}/custom_plugins/ (synced by node_bridge::sync_custom_plugins_from_saf)
+                    let custom_local = self.data_dir.join("custom_plugins");
+                    if custom_local.is_dir() {
+                        dirs.push(custom_local);
+                    }
+                    // On desktop, try as a regular filesystem path
+                    #[cfg(not(target_os = "android"))]
+                    {
+                        let pb = std::path::PathBuf::from(custom_uri);
+                        if pb.is_dir() && !dirs.contains(&pb) {
+                            dirs.push(pb);
+                        }
+                    }
+                }
+            }
+        }
+        dirs
     }
 
     /// Handle a RequestWikiFile from a peer — read the wiki and send it back in chunks.

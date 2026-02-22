@@ -461,7 +461,8 @@
   function isSyncExcluded(title) {
     if (title === '$:/StoryList' || title === '$:/HistoryList' || title === '$:/library/sjcl.js' ||
         title === '$:/Import' || title === '$:/language' || title === '$:/theme' || title === '$:/palette' ||
-        title === '$:/isEncrypted' || title === '$:/view' || title === '$:/layout') return true;
+        title === '$:/isEncrypted' || title === '$:/view' || title === '$:/layout' ||
+        title === '$:/DefaultTiddlers') return true;
     if (isDraft(title)) return true;
     if (title.indexOf('$:/TiddlyDesktopRS/Conflicts/') === 0) return true;
     if (title.indexOf('$:/state/') === 0) return true;
@@ -743,6 +744,7 @@
       _log('[LAN Sync] Applying batch of ' + batch.length + ' inbound changes');
 
       var needSave = false;
+      var pluginsChanged = false;
       for (var i = 0; i < batch.length; i++) {
         var data = batch[i];
 
@@ -760,6 +762,10 @@
               suppressOutbound.add(fields.title);
               $tw.wiki.addTiddler(new $tw.Tiddler(fields));
               needSave = true;
+              // Track plugin tiddler updates for shadow re-extraction
+              if (fields.title.indexOf('$:/plugins/') === 0 && fields['plugin-type']) {
+                pluginsChanged = true;
+              }
             } else {
               _log('[LAN Sync] Skipped identical tiddler: ' + fields.title);
               // Track so we include it in fingerprints (peer will stop re-sending)
@@ -803,6 +809,17 @@
             $tw.wiki.addTiddler(new $tw.Tiddler(conflictFields));
             setTimeout(function() { conflictTitles.delete(conflictTitle); }, 500);
           }
+        }
+      }
+      // If plugin tiddlers were updated, re-extract shadow tiddlers
+      if (pluginsChanged) {
+        _log('[LAN Sync] Plugin tiddler(s) updated — re-registering plugins');
+        try {
+          $tw.wiki.readPluginInfo();
+          $tw.wiki.registerPluginTiddlers('plugin');
+          $tw.wiki.unpackPluginTiddlers();
+        } catch (e) {
+          console.error('[LAN Sync] Failed to re-register plugins:', e);
         }
       }
       if (needSave) scheduleSave();

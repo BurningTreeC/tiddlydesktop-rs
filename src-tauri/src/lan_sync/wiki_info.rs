@@ -144,12 +144,13 @@ pub fn is_synced_item(synced_dir: &Path, category: &str, name: &str) -> bool {
 }
 
 /// Find plugin directory on source device (for sending).
-/// Checks wiki folder first, then synced plugins, then bundled.
-/// Returns the path and category ("plugins", "themes", or "languages").
+/// Checks wiki folder first, then synced plugins, then extra paths
+/// (TIDDLYWIKI_PLUGIN_PATH / custom plugin path), then bundled.
 pub fn find_item_dir(
     wiki_folder: &Path,
     resources_dir: &Path,
     synced_dir: &Path,
+    extra_plugin_dirs: &[PathBuf],
     category: &str,
     name: &str,
 ) -> Option<PathBuf> {
@@ -165,7 +166,15 @@ pub fn find_item_dir(
         return Some(synced);
     }
 
-    // 3. Check bundled resources
+    // 3. Check extra plugin paths (TIDDLYWIKI_PLUGIN_PATH, custom plugin dir)
+    for extra_dir in extra_plugin_dirs {
+        let candidate = extra_dir.join(name);
+        if candidate.is_dir() {
+            return Some(candidate);
+        }
+    }
+
+    // 4. Check bundled resources
     let bundled = resources_dir.join(category).join(name);
     if bundled.is_dir() {
         return Some(bundled);
@@ -230,6 +239,55 @@ pub fn new_items(local: &[String], remote: &[String]) -> Vec<String> {
         .filter(|item| !existing.contains(item.as_str()))
         .cloned()
         .collect()
+}
+
+/// Get the list of shared items (in both local and remote) for a specific category
+pub fn shared_items(local: &[String], remote: &[String]) -> Vec<String> {
+    let existing: HashSet<&str> = local.iter().map(|s| s.as_str()).collect();
+    remote
+        .iter()
+        .filter(|item| existing.contains(item.as_str()))
+        .cloned()
+        .collect()
+}
+
+/// Read the version string from a plugin.info file in a plugin directory.
+/// Returns None if plugin.info doesn't exist or has no version field.
+pub fn read_plugin_version(item_dir: &Path) -> Option<String> {
+    let info_path = item_dir.join("plugin.info");
+    let content = std::fs::read_to_string(&info_path).ok()?;
+    let json: serde_json::Value = serde_json::from_str(&content).ok()?;
+    json.get("version")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+}
+
+/// Compare two version strings (e.g. "0.0.3" vs "0.0.2").
+/// Returns true if `a` is newer than `b`.
+/// Falls back to lexicographic comparison if not purely numeric segments.
+pub fn version_is_newer(a: &str, b: &str) -> bool {
+    let a_parts: Vec<&str> = a.split('.').collect();
+    let b_parts: Vec<&str> = b.split('.').collect();
+    let max_len = std::cmp::max(a_parts.len(), b_parts.len());
+    for i in 0..max_len {
+        let a_seg = a_parts.get(i).copied().unwrap_or("0");
+        let b_seg = b_parts.get(i).copied().unwrap_or("0");
+        // Try numeric comparison first
+        match (a_seg.parse::<u64>(), b_seg.parse::<u64>()) {
+            (Ok(an), Ok(bn)) => {
+                if an != bn {
+                    return an > bn;
+                }
+            }
+            _ => {
+                // Fall back to lexicographic
+                if a_seg != b_seg {
+                    return a_seg > b_seg;
+                }
+            }
+        }
+    }
+    false // equal
 }
 
 #[cfg(test)]

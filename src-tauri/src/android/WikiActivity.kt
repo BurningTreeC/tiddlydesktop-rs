@@ -6257,7 +6257,7 @@ class WikiActivity : AppCompatActivity() {
             "for(var i=0;i<keys.length;i++){" +
             "var t=keys[i];" +
             "if(suppress.delete(t))continue;" +
-            "if(t==='\$:/StoryList'||t==='\$:/HistoryList'||t==='\$:/library/sjcl.js'||t==='\$:/Import'||t==='\$:/language'||t==='\$:/theme'||t==='\$:/palette'||t==='\$:/isEncrypted'||t==='\$:/view'||t==='\$:/layout')continue;" +
+            "if(t==='\$:/StoryList'||t==='\$:/HistoryList'||t==='\$:/library/sjcl.js'||t==='\$:/Import'||t==='\$:/language'||t==='\$:/theme'||t==='\$:/palette'||t==='\$:/isEncrypted'||t==='\$:/view'||t==='\$:/layout'||t==='\$:/DefaultTiddlers')continue;" +
             "if(isDraft(t))continue;" +
             "if(t.indexOf('\$:/TiddlyDesktopRS/Conflicts/')==0)continue;" +
             "if(t.indexOf('\$:/state/')==0)continue;" +
@@ -6284,7 +6284,7 @@ class WikiActivity : AppCompatActivity() {
             // collectFingerprints: includes knownSyncTitles for convergence
             "function cfps(){var all=\$tw.wiki.allTitles();var seen={};var fps=[];" +
             "for(var i=0;i<all.length;i++){var t=all[i];" +
-            "if(t==='\$:/StoryList'||t==='\$:/HistoryList'||t==='\$:/library/sjcl.js'||t==='\$:/Import'||t==='\$:/language'||t==='\$:/theme'||t==='\$:/palette'||t==='\$:/isEncrypted'||t==='\$:/view'||t==='\$:/layout')continue;" +
+            "if(t==='\$:/StoryList'||t==='\$:/HistoryList'||t==='\$:/library/sjcl.js'||t==='\$:/Import'||t==='\$:/language'||t==='\$:/theme'||t==='\$:/palette'||t==='\$:/isEncrypted'||t==='\$:/view'||t==='\$:/layout'||t==='\$:/DefaultTiddlers')continue;" +
             "if(isDraft(t))continue;" +
             "if(t.indexOf('\$:/TiddlyDesktopRS/Conflicts/')==0)continue;" +
             "if(t.indexOf('\$:/state/')==0||t.indexOf('\$:/status/')==0||t.indexOf('\$:/temp/')==0)continue;" +
@@ -6307,14 +6307,15 @@ class WikiActivity : AppCompatActivity() {
             "}" +
             "function applyBatch(){batchTimer=null;var b=queue;queue=[];if(!b.length)return;" +
             "console.log('[LAN Sync] Applying batch of '+b.length+' changes');" +
-            "var ns=false;" +
+            "var ns=false;var pc=false;" +
             "for(var i=0;i<b.length;i++){var d=b[i];" +
-            "if(d.type==='apply-change'){try{var f=JSON.parse(d.tiddler_json);if(tomb[f.title])delete tomb[f.title];if(tiddlerDiffers(f)){if(f.created)f.created=\$tw.utils.parseDate(f.created);if(f.modified)f.modified=\$tw.utils.parseDate(f.modified);suppress.add(f.title);\$tw.wiki.addTiddler(new \$tw.Tiddler(f));ns=true;}else{kst[f.title]=f.modified?String(f.modified):'';}}catch(e){}}" +
+            "if(d.type==='apply-change'){try{var f=JSON.parse(d.tiddler_json);if(tomb[f.title])delete tomb[f.title];if(tiddlerDiffers(f)){if(f.created)f.created=\$tw.utils.parseDate(f.created);if(f.modified)f.modified=\$tw.utils.parseDate(f.modified);suppress.add(f.title);\$tw.wiki.addTiddler(new \$tw.Tiddler(f));ns=true;if(f.title.indexOf('\$:/plugins/')===0&&f['plugin-type'])pc=true;}else{kst[f.title]=f.modified?String(f.modified):'';}}catch(e){}}" +
             "else if(d.type==='apply-deletion'){try{if(\$tw.wiki.tiddlerExists(d.title)){suppress.add(d.title);\$tw.wiki.deleteTiddler(d.title);ns=true;}var ddm=\$tw.utils.stringifyDate(new Date());if(!tomb[d.title]||tomb[d.title].modified<ddm){tomb[d.title]={modified:ddm,time:Date.now()};S.saveTombstones(syncId,JSON.stringify(tomb));}}catch(e){}}" +
             "else if(d.type==='conflict'){var lt=\$tw.wiki.getTiddler(d.title);if(lt){var ct='\$:/TiddlyDesktopRS/Conflicts/'+d.title;" +
             "conflicts[ct]=1;var cf=Object.assign({},lt.fields,{title:ct,'conflict-original-title':d.title,'conflict-timestamp':new Date().toISOString(),'conflict-source':'local'});" +
             "\$tw.wiki.addTiddler(new \$tw.Tiddler(cf));delete conflicts[ct];}}" +
             "}" +
+            "if(pc){try{\$tw.wiki.readPluginInfo();\$tw.wiki.registerPluginTiddlers('plugin');\$tw.wiki.unpackPluginTiddlers();}catch(e){}}" +
             "if(ns)scheduleSave();}" +
             // Fingerprint-based diff sync
             "function sendFingerprints(toDevId){var fps=cfps();S.sendFingerprints(syncId,toDevId,JSON.stringify(fps));}" +
@@ -6333,7 +6334,7 @@ class WikiActivity : AppCompatActivity() {
             "if(tombNs)scheduleSave();if(ptks.length>0)S.saveTombstones(syncId,JSON.stringify(tomb));" +
             "var all=\$tw.wiki.allTitles();var diffs=[];" +
             "for(var j=0;j<all.length;j++){var t=all[j];" +
-            "if(t==='\$:/StoryList'||t==='\$:/HistoryList'||t==='\$:/library/sjcl.js'||t==='\$:/Import'||t==='\$:/language'||t==='\$:/theme'||t==='\$:/palette'||t==='\$:/isEncrypted'||t==='\$:/view'||t==='\$:/layout')continue;" +
+            "if(t==='\$:/StoryList'||t==='\$:/HistoryList'||t==='\$:/library/sjcl.js'||t==='\$:/Import'||t==='\$:/language'||t==='\$:/theme'||t==='\$:/palette'||t==='\$:/isEncrypted'||t==='\$:/view'||t==='\$:/layout'||t==='\$:/DefaultTiddlers')continue;" +
             "if(isDraft(t))continue;" +
             "if(t.indexOf('\$:/TiddlyDesktopRS/Conflicts/')==0)continue;" +
             "if(t.indexOf('\$:/state/')==0||t.indexOf('\$:/status/')==0||t.indexOf('\$:/temp/')==0)continue;" +
@@ -6365,7 +6366,7 @@ class WikiActivity : AppCompatActivity() {
             "console.log('[LAN Sync] Dumping '+all.length+' tiddlers to '+toDevId);" +
             "function send(si){var batch=[];var bytes=0;var i=si;" +
             "while(i<all.length&&(batch.length===0||bytes<MX)){var t=all[i];i++;" +
-            "if(t==='\$:/StoryList'||t==='\$:/HistoryList'||t==='\$:/library/sjcl.js'||t==='\$:/Import'||t==='\$:/language'||t==='\$:/theme'||t==='\$:/palette'||t==='\$:/isEncrypted'||t==='\$:/view'||t==='\$:/layout')continue;" +
+            "if(t==='\$:/StoryList'||t==='\$:/HistoryList'||t==='\$:/library/sjcl.js'||t==='\$:/Import'||t==='\$:/language'||t==='\$:/theme'||t==='\$:/palette'||t==='\$:/isEncrypted'||t==='\$:/view'||t==='\$:/layout'||t==='\$:/DefaultTiddlers')continue;" +
             "if(isDraft(t))continue;" +
             "if(t.indexOf('\$:/TiddlyDesktopRS/Conflicts/')==0)continue;" +
             "if(t.indexOf('\$:/state/')==0||t.indexOf('\$:/status/')==0||t.indexOf('\$:/temp/')==0)continue;" +

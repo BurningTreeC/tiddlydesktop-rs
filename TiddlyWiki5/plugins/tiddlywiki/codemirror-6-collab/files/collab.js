@@ -522,7 +522,17 @@ function _buildSyncPlugin(core, collabState) {
 						if(tid && tid.fields[editField] !== newText) {
 							var fields = {};
 							fields[editField] = newText;
-							$tw.wiki.addTiddler(new $tw.Tiddler(tid, fields, {modified: tid.fields.modified}));
+							// Update tiddler store SILENTLY (no change/refresh event).
+					// Using addTiddler would enqueue a deferred refresh; if the
+					// user types before that refresh fires, the editTextWidget
+					// sees a mismatch and resets the editor — moving the cursor.
+					// By storing directly, we keep the tiddler in sync without
+					// triggering a refresh. The CM6 engine's own saveChanges
+					// (via updateListener) will later do a proper addTiddler.
+					var newTid = new $tw.Tiddler(tid, fields, {modified: tid.fields.modified});
+					$tw.wiki.tiddlers[collabState.tiddlerTitle] = newTid;
+					$tw.wiki.clearCache(collabState.tiddlerTitle);
+					$tw.wiki.clearGlobalCache();
 						}
 					}
 				} catch(e) {

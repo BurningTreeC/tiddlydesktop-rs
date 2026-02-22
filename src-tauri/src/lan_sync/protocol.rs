@@ -199,6 +199,9 @@ pub enum SyncMessage {
         plugin_name: String,
         /// List of (relative_path, sha256_hash, file_size) for each file in the plugin
         files: Vec<AttachmentFileInfo>,
+        /// Version string from plugin.info (for update direction comparison)
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        version: Option<String>,
     },
     /// Request specific plugin files
     RequestPluginFiles {

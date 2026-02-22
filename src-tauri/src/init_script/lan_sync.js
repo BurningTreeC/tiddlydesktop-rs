@@ -1166,7 +1166,9 @@
       // Broadcast fingerprints (includes tombstones) for catch-up
       var fps = collectFingerprints();
       _log('[LAN Sync] Broadcasting ' + fps.length + ' fingerprints for catch-up');
-      broadcastFingerprints(wikiId, fps);
+      broadcastFingerprints(wikiId, fps).catch(function(e) {
+        _log('[LAN Sync] Broadcast fingerprints error: ' + e);
+      });
     });
 
     // ── Periodic re-sync (5s safety net) ──────────────────────────────
@@ -1176,7 +1178,9 @@
     var resyncIntervalId = setInterval(function() {
       try {
         var fps = collectFingerprints();
-        broadcastFingerprints(wikiId, fps);
+        broadcastFingerprints(wikiId, fps).catch(function(e) {
+          _log('[LAN Sync] Periodic resync error: ' + e);
+        });
       } catch (e) {
         _log('[LAN Sync] Periodic resync error: ' + e);
       }

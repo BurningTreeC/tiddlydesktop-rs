@@ -5998,6 +5998,7 @@ async fn open_tiddler_window(
         .map_err(|e| format!("Failed to set icon: {}", e))?
         .window_classname("tiddlydesktop-rs")
         .initialization_script(&init_script::get_wiki_init_script(&wiki_path, &label, false))
+        .on_document_title_changed(|ww, title| { let _ = ww.set_title(&title); })
         .zoom_hotkeys_enabled(true)
         .devtools(cfg!(debug_assertions)); // Only enable in debug builds
 
@@ -8129,6 +8130,7 @@ fn run_wiki_mode(args: WikiModeArgs) {
                 .icon(icon)?
                 .window_classname("tiddlydesktop-rs-wiki")
                 .initialization_script(&init_script::get_wiki_init_script(&wiki_path_clone.to_string_lossy(), &label, false))
+                .on_document_title_changed(|ww, title| { let _ = ww.set_title(&title); })
                 .zoom_hotkeys_enabled(true)
                 .devtools(cfg!(debug_assertions)); // Only enable in debug builds
 
@@ -8598,6 +8600,7 @@ fn run_wiki_folder_mode(args: WikiFolderModeArgs) {
                 &label_for_state,
                 false
             ))
+            .on_document_title_changed(|ww, title| { let _ = ww.set_title(&title); })
             .zoom_hotkeys_enabled(true)
             .devtools(cfg!(debug_assertions)); // Only enable in debug builds
 

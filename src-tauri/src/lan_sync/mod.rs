@@ -2813,9 +2813,7 @@ impl SyncManager {
                                     from_device_id, wiki_id
                                 );
                             } else {
-                                let fps = self.local_fingerprint_cache.lock()
-                                    .ok()
-                                    .and_then(|cache| cache.get(wiki_id).cloned())
+                                let fps = self.get_accurate_cached_fingerprints(wiki_id)
                                     .unwrap_or_default();
                                 eprintln!(
                                     "[LAN Sync] Sending {} reciprocal fingerprints to {} for wiki {}",

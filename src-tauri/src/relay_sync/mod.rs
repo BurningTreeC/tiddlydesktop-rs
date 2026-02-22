@@ -221,6 +221,37 @@ fn save_config_sync(config_path: &std::path::Path, device_key: &[u8; 32], config
     }
 }
 
+/// Normalize a relay URL: ensure it has a `wss://` scheme and `:8443` port.
+/// Handles bare domains like `relay.example.com` → `wss://relay.example.com:8443`.
+fn normalize_relay_url(url: &str) -> String {
+    let url = url.trim();
+    // Add scheme if missing
+    let url = if url.starts_with("wss://") || url.starts_with("ws://") {
+        url.to_string()
+    } else {
+        format!("wss://{}", url)
+    };
+    // Upgrade ws:// to wss://
+    let url = if url.starts_with("ws://") {
+        format!("wss://{}", &url[5..])
+    } else {
+        url
+    };
+    // Add default port if missing (no colon after the host)
+    let after_scheme = &url[6..]; // skip "wss://"
+    let has_port = after_scheme.split('/').next().unwrap_or("").contains(':');
+    if !has_port {
+        // Insert :8443 before the first / (path) or at the end
+        if let Some(slash_pos) = after_scheme.find('/') {
+            format!("wss://{}:8443{}", &after_scheme[..slash_pos], &after_scheme[slash_pos..])
+        } else {
+            format!("{}:8443", url)
+        }
+    } else {
+        url
+    }
+}
+
 // ── Config ──────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -359,6 +390,12 @@ impl RelaySyncManager {
             eprintln!("[Relay] Migrating relay URL from ws:// to wss://");
             config.relay_url = DEFAULT_RELAY_URL.to_string();
             needs_save = true;
+        }
+
+        // Normalize relay URL: ensure it has a wss:// scheme and :8443 port
+        config.relay_url = normalize_relay_url(&config.relay_url);
+        if config.relay_url != DEFAULT_RELAY_URL {
+            eprintln!("[Relay] Normalized relay URL to: {}", config.relay_url);
         }
 
         // Decrypt passwords from encrypted_password, or migrate plain-text passwords
@@ -1127,7 +1164,7 @@ impl RelaySyncManager {
 
     /// Update the relay URL
     pub async fn set_relay_url(&self, url: String) {
-        self.config.write().await.relay_url = url;
+        self.config.write().await.relay_url = normalize_relay_url(&url);
         self.save_config().await;
     }
 

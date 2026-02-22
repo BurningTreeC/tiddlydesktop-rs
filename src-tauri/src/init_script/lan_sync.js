@@ -96,12 +96,25 @@
   try { window.dispatchEvent(new Event("collab-api-ready")); } catch(_e) {}
 
   // Wait for TiddlyWiki AND transport to be ready
+  var _initCheckCount = 0;
   var checkInterval = setInterval(function() {
+    _initCheckCount++;
     // Re-check transport each tick (Tauri IPC bridge loads asynchronously)
     isAndroid = typeof window.TiddlyDesktopSync !== 'undefined';
     hasTauri = !!(window.__TAURI__ && window.__TAURI__.core);
 
-    if (!isAndroid && !hasTauri) return; // transport not ready yet
+    if (!isAndroid && !hasTauri) {
+      // Log once at 2s to help diagnose Windows transport issues
+      if (_initCheckCount === 20) {
+        try {
+          var msg = '[LAN Sync] Transport not ready after 2s (hasTauri=' + hasTauri + ', __TAURI__=' + !!window.__TAURI__ + ')';
+          if (window.__TAURI__ && window.__TAURI__.core) {
+            window.__TAURI__.core.invoke('js_log', { message: msg }).catch(function() {});
+          }
+        } catch(_e) {}
+      }
+      return; // transport not ready yet
+    }
 
     // On Android, check that bridge is running
     if (isAndroid && window.TiddlyDesktopSync.getBridgePort() <= 0) return;
@@ -226,6 +239,12 @@
       if (activeSyncState) {
         deactivateSync();
       }
+
+      // Stop the pre-activation poll — sync is now active, setupSyncHandlers
+      // starts its own poll that handles all message types including activation.
+      // Without this, the pre-activation poll races with the main poll and
+      // discards non-activate IPC messages (apply-change, compare-fingerprints, etc.)
+      preActivationPollActive = false;
 
       try {
         rsLog('[LAN Sync] activateSync: ' + syncId);

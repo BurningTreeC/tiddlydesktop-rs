@@ -437,12 +437,17 @@
             event.stopPropagation();
         }, true);
 
-        // Block paste events on landing page to prevent import mechanism
-        document.addEventListener("paste", function(event) {
-            invoke("js_log", { message: "Landing page: paste blocked (preventing import)" });
-            event.preventDefault();
-            event.stopPropagation();
-        }, true);
+        // Allow paste events (copy-paste must work on landing page).
+        // Block tiddler imports via th-importing-tiddler hook instead.
+        (function blockLandingPageImport() {
+            if (typeof $tw !== 'undefined' && $tw.hooks) {
+                $tw.hooks.addHook("th-importing-tiddler", function(tiddler) {
+                    return false;
+                });
+                return;
+            }
+            setTimeout(blockLandingPageImport, 100);
+        })();
 
         // Handle drag motion - show visual feedback
         listen("td-drag-motion", function(event) {

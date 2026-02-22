@@ -5871,7 +5871,11 @@ pub async fn lan_sync_broadcast_manifest() -> Result<(), String> {
 pub fn lan_sync_poll_ipc() -> Vec<String> {
     let queue = IPC_SYNC_QUEUE.get_or_init(|| std::sync::Mutex::new(Vec::new()));
     let mut guard = queue.lock().unwrap();
-    guard.drain(..).collect()
+    let messages: Vec<String> = guard.drain(..).collect();
+    if !messages.is_empty() {
+        eprintln!("[LAN Sync] lan_sync_poll_ipc: JS drained {} messages", messages.len());
+    }
+    messages
 }
 
 /// No-op on Android (JS uses bridge polling instead).

@@ -531,13 +531,21 @@ pub fn set_wiki_sync(app: tauri::AppHandle, path: String, enabled: bool) -> Resu
 #[tauri::command]
 pub fn get_wiki_sync_id(app: tauri::AppHandle, path: String) -> String {
     let entries = load_recent_files_from_disk(&app);
+    eprintln!("[LAN Sync] get_wiki_sync_id: path={:?}, {} entries in recent_wikis", path, entries.len());
     for entry in &entries {
         if utils::paths_equal(&entry.path, &path) {
             if entry.sync_enabled {
-                return entry.sync_id.clone().unwrap_or_default();
+                let id = entry.sync_id.clone().unwrap_or_default();
+                eprintln!("[LAN Sync] get_wiki_sync_id: matched! sync_id={}", id);
+                return id;
             }
+            eprintln!("[LAN Sync] get_wiki_sync_id: matched but sync not enabled");
             return String::new();
         }
+    }
+    // Log all entry paths for debugging path matching issues
+    for entry in &entries {
+        eprintln!("[LAN Sync] get_wiki_sync_id: no match — entry.path={:?}", entry.path);
     }
     String::new()
 }

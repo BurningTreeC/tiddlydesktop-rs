@@ -2942,24 +2942,32 @@ fn get_tiddlywiki_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
         .ok_or_else(|| "Failed to get resource directory".to_string())?;
     let resource_path = utils::normalize_path(resource_path);
 
-    // Tarball structure has tiddlywiki directly in lib/tiddlydesktop-rs/tiddlywiki/
-    let tw_path = resource_path.join("tiddlywiki").join("tiddlywiki.js");
-    // Also check Tauri bundle structure with resources/ prefix
-    let tw_path_bundled = resource_path.join("resources").join("tiddlywiki").join("tiddlywiki.js");
+    // Try multiple possible locations for tiddlywiki.js:
+    let candidates = [
+        // Tarball structure: lib/tiddlydesktop-rs/tiddlywiki/tiddlywiki.js
+        resource_path.join("tiddlywiki").join("tiddlywiki.js"),
+        // Tauri bundle structure with resources/ prefix
+        resource_path.join("resources").join("tiddlywiki").join("tiddlywiki.js"),
+        // CI copies TiddlyWiki5 into existing resources/tiddlywiki/, creating a subdirectory
+        resource_path.join("tiddlywiki").join("TiddlyWiki5").join("tiddlywiki.js"),
+        resource_path.join("resources").join("tiddlywiki").join("TiddlyWiki5").join("tiddlywiki.js"),
+    ];
 
-    // Also check in the development path
-    let dev_path = PathBuf::from("src-tauri/resources/tiddlywiki/tiddlywiki.js");
-
-    if tw_path.exists() {
-        Ok(tw_path)
-    } else if tw_path_bundled.exists() {
-        Ok(tw_path_bundled)
-    } else if dev_path.exists() {
-        let canonical = dev_path.canonicalize().map_err(|e| e.to_string())?;
-        Ok(utils::normalize_path(canonical))
-    } else {
-        Err(format!("TiddlyWiki not found at {:?}, {:?}, or {:?}", tw_path, tw_path_bundled, dev_path))
+    for candidate in &candidates {
+        if candidate.exists() {
+            return Ok(candidate.clone());
+        }
     }
+
+    // Development path
+    let dev_path = PathBuf::from("src-tauri/resources/tiddlywiki/tiddlywiki.js");
+    if dev_path.exists() {
+        let canonical = dev_path.canonicalize().map_err(|e| e.to_string())?;
+        return Ok(utils::normalize_path(canonical));
+    }
+
+    Err(format!("TiddlyWiki not found at {:?}, {:?}, {:?}, {:?}, or {:?}",
+        candidates[0], candidates[1], candidates[2], candidates[3], dev_path))
 }
 
 /// Ensure required plugins and autosave are enabled for a wiki folder

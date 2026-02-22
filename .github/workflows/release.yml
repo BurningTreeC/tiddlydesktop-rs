@@ -199,7 +199,6 @@ jobs:
       - name: Copy plugin to TiddlyWiki5
         run: |
           cp -r tiddlydesktop-rs/TiddlyWiki5/plugins/tiddlywiki/tiddlydesktop-rs TiddlyWiki5/plugins/tiddlywiki/
-          cp -r tiddlydesktop-rs/TiddlyWiki5/plugins/tiddlywiki/tiddlydesktop-rs-commands TiddlyWiki5/plugins/tiddlywiki/
           cp -r tiddlydesktop-rs/TiddlyWiki5/plugins/tiddlywiki/codemirror-6-collab TiddlyWiki5/plugins/tiddlywiki/
           cp -r tiddlydesktop-rs/TiddlyWiki5/editions/tiddlydesktop-rs TiddlyWiki5/editions/
 
@@ -293,7 +292,6 @@ jobs:
         shell: bash
         run: |
           cp -r tiddlydesktop-rs/TiddlyWiki5/plugins/tiddlywiki/tiddlydesktop-rs TiddlyWiki5/plugins/tiddlywiki/
-          cp -r tiddlydesktop-rs/TiddlyWiki5/plugins/tiddlywiki/tiddlydesktop-rs-commands TiddlyWiki5/plugins/tiddlywiki/
           cp -r tiddlydesktop-rs/TiddlyWiki5/plugins/tiddlywiki/codemirror-6-collab TiddlyWiki5/plugins/tiddlywiki/
           cp -r tiddlydesktop-rs/TiddlyWiki5/editions/tiddlydesktop-rs TiddlyWiki5/editions/
 
@@ -384,7 +382,6 @@ jobs:
         shell: bash
         run: |
           cp -r tiddlydesktop-rs/TiddlyWiki5/plugins/tiddlywiki/tiddlydesktop-rs TiddlyWiki5/plugins/tiddlywiki/
-          cp -r tiddlydesktop-rs/TiddlyWiki5/plugins/tiddlywiki/tiddlydesktop-rs-commands TiddlyWiki5/plugins/tiddlywiki/
           cp -r tiddlydesktop-rs/TiddlyWiki5/plugins/tiddlywiki/codemirror-6-collab TiddlyWiki5/plugins/tiddlywiki/
           cp -r tiddlydesktop-rs/TiddlyWiki5/editions/tiddlydesktop-rs TiddlyWiki5/editions/
 
@@ -481,7 +478,6 @@ jobs:
       - name: Copy plugin to TiddlyWiki5
         run: |
           cp -r tiddlydesktop-rs/TiddlyWiki5/plugins/tiddlywiki/tiddlydesktop-rs TiddlyWiki5/plugins/tiddlywiki/
-          cp -r tiddlydesktop-rs/TiddlyWiki5/plugins/tiddlywiki/tiddlydesktop-rs-commands TiddlyWiki5/plugins/tiddlywiki/
           cp -r tiddlydesktop-rs/TiddlyWiki5/plugins/tiddlywiki/codemirror-6-collab TiddlyWiki5/plugins/tiddlywiki/
           cp -r tiddlydesktop-rs/TiddlyWiki5/editions/tiddlydesktop-rs TiddlyWiki5/editions/
 
@@ -585,7 +581,6 @@ jobs:
       - name: Copy plugin to TiddlyWiki5
         run: |
           cp -r tiddlydesktop-rs/TiddlyWiki5/plugins/tiddlywiki/tiddlydesktop-rs TiddlyWiki5/plugins/tiddlywiki/
-          cp -r tiddlydesktop-rs/TiddlyWiki5/plugins/tiddlywiki/tiddlydesktop-rs-commands TiddlyWiki5/plugins/tiddlywiki/
           cp -r tiddlydesktop-rs/TiddlyWiki5/plugins/tiddlywiki/codemirror-6-collab TiddlyWiki5/plugins/tiddlywiki/
           cp -r tiddlydesktop-rs/TiddlyWiki5/editions/tiddlydesktop-rs TiddlyWiki5/editions/
 
@@ -684,7 +679,6 @@ jobs:
       - name: Copy plugin to TiddlyWiki5
         run: |
           cp -r tiddlydesktop-rs/TiddlyWiki5/plugins/tiddlywiki/tiddlydesktop-rs TiddlyWiki5/plugins/tiddlywiki/
-          cp -r tiddlydesktop-rs/TiddlyWiki5/plugins/tiddlywiki/tiddlydesktop-rs-commands TiddlyWiki5/plugins/tiddlywiki/
           cp -r tiddlydesktop-rs/TiddlyWiki5/plugins/tiddlywiki/codemirror-6-collab TiddlyWiki5/plugins/tiddlywiki/
           cp -r tiddlydesktop-rs/TiddlyWiki5/editions/tiddlydesktop-rs TiddlyWiki5/editions/
 

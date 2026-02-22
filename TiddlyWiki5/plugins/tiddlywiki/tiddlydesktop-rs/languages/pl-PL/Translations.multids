@@ -76,28 +76,42 @@ CustomPaths/SelectFolder: Wybierz folder
 CustomPaths/Change: Zmień
 CustomPaths/Clear: Wyczyść
 
-LanSync/Title: Synchronizacja LAN
-LanSync/Start: Rozpocznij synchronizację LAN
-LanSync/Stop: Zatrzymaj synchronizację LAN
+LanSync/Title: Synchronizacja
 LanSync/DeviceName: To urządzenie:
-LanSync/Pairing: Parowanie urządzeń
-LanSync/PinLabel: Wprowadź ten PIN na drugim urządzeniu:
-LanSync/ShowPin: Sparuj nowe urządzenie
-LanSync/HidePairingCode: Ukryj
-LanSync/PairedDevices: Sparowane urządzenia
-LanSync/NoPairedDevices: Brak sparowanych urządzeń. Kliknij "Sparuj nowe urządzenie", aby połączyć inne urządzenie.
-LanSync/Unpair: Rozparuj
-LanSync/Connected: Połączony
-LanSync/Disconnected: Offline
-LanSync/DiscoveredDevices: Urządzenia w sieci
-LanSync/PinPlaceholder: PIN
-LanSync/Pair: Sparuj
 LanSync/AvailableWikis: Dostępne z urządzeń
 LanSync/NoRemoteWikis: Brak nowych wiki dostępnych z połączonych urządzeń.
 LanSync/From: z
 LanSync/GetWiki: Pobierz wiki
 LanSync/LinkWiki: Połącz
 
+RelaySync/Title: Sync Relay
+RelaySync/AutoConnect: Automatyczne łączenie
+RelaySync/Disconnect: Rozłącz
+RelaySync/Peers: urządzeń
+Labels/LAN: LAN
+Labels/Relay: Relay
+Labels/Both: LAN + Relay
+Tooltips/RelayAutoConnectOn: Automatyczne łączenie Relay włączone - kliknij, aby wyłączyć
+Tooltips/RelayAutoConnectOff: Automatyczne łączenie Relay wyłączone - kliknij, aby włączyć
+LanSync/NoUnsyncedWikis: Brak niesynchronizowanych wiki
+
+RelaySync/ServerUrl: URL serwera:
+RelaySync/SaveUrl: Zapisz URL
+RelaySync/Rooms: Pokoje
+RelaySync/CreateRoom: Utwórz pokój
+RelaySync/JoinRoom: Dołącz do pokoju
+RelaySync/RemoveRoom: Usuń
+RelaySync/RoomName: Nazwa:
+RelaySync/RoomCode: Kod:
+RelaySync/RoomPassword: Hasło:
+RelaySync/Connect: Połącz
+RelaySync/NoRooms: Brak skonfigurowanych pokojów. Utwórz nowy pokój lub dołącz do istniejącego.
+RelaySync/AssignRoom: Pokój:
+RelaySync/NoRoom: Brak
+RelaySync/Save: Zapisz
+RelaySync/Cancel: Anuluj
+RelaySync/RoomDetails: Szczegóły
+Tooltips/SelectRelayRoom: Przypisz to wiki do pokoju przekaźnikowego
 Buttons/Plugins: wtyczki
 PluginInstaller/Title: Zarządzaj wtyczkami
 PluginInstaller/For: dla:

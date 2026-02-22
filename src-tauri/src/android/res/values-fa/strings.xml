@@ -70,8 +70,8 @@
     <string name="widget_capture_desc">دکمه ضبط سریع برای TiddlyWiki</string>
 
     <!-- LanSyncService -->
-    <string name="sync_notif_channel_name">LAN Sync</string>
-    <string name="sync_notif_channel_desc">LAN Sync را برای همگام‌سازی ویکی در زمان واقعی فعال نگه می‌دارد</string>
-    <string name="sync_notif_title">LAN Sync فعال است</string>
+    <string name="sync_notif_channel_name">Sync</string>
+    <string name="sync_notif_channel_desc">Sync را برای همگام‌سازی ویکی در زمان واقعی فعال نگه می‌دارد</string>
+    <string name="sync_notif_title">Sync فعال است</string>
     <string name="sync_notif_text">همگام‌سازی ویکی‌ها با دستگاه‌های نزدیک</string>
 </resources>

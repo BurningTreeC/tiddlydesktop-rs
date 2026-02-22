@@ -356,7 +356,21 @@ impl SyncBridge {
                     return;
                 }
 
-                eprintln!("[LAN Sync] Broadcasting local change: '{}' in wiki {}", title, wiki_id);
+                // Get peers for this wiki via room membership
+                let peers = if let Some(app) = super::GLOBAL_APP_HANDLE.get() {
+                    if let Some(room_code) = crate::wiki_storage::get_wiki_relay_room_by_sync_id(app, &wiki_id) {
+                        server.peers_for_room(&room_code).await
+                    } else {
+                        return;
+                    }
+                } else {
+                    return;
+                };
+                if peers.is_empty() {
+                    return;
+                }
+
+                eprintln!("[LAN Sync] Broadcasting local change: '{}' in wiki {} to {} peers", title, wiki_id, peers.len());
                 let clock = conflict_manager.record_local_change(&wiki_id, &title);
                 let timestamp = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
@@ -364,7 +378,7 @@ impl SyncBridge {
                     .as_secs();
 
                 server
-                    .broadcast(&SyncMessage::TiddlerChanged {
+                    .send_to_peers(&peers, &SyncMessage::TiddlerChanged {
                         wiki_id,
                         title,
                         tiddler_json,
@@ -378,6 +392,20 @@ impl SyncBridge {
                     return;
                 }
 
+                // Get peers for this wiki via room membership
+                let peers = if let Some(app) = super::GLOBAL_APP_HANDLE.get() {
+                    if let Some(room_code) = crate::wiki_storage::get_wiki_relay_room_by_sync_id(app, &wiki_id) {
+                        server.peers_for_room(&room_code).await
+                    } else {
+                        return;
+                    }
+                } else {
+                    return;
+                };
+                if peers.is_empty() {
+                    return;
+                }
+
                 let clock = conflict_manager.record_local_deletion(&wiki_id, &title);
                 let timestamp = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
@@ -385,7 +413,7 @@ impl SyncBridge {
                     .as_secs();
 
                 server
-                    .broadcast(&SyncMessage::TiddlerDeleted {
+                    .send_to_peers(&peers, &SyncMessage::TiddlerDeleted {
                         wiki_id,
                         title,
                         vector_clock: clock,
@@ -398,23 +426,27 @@ impl SyncBridge {
                 ..
             } => {
                 conflict_manager.load_wiki_state(&wiki_id);
-                // Broadcast the FULL wiki manifest (all sync-enabled wikis),
-                // not just the one that was opened. The peer's handle_wiki_manifest
-                // replaces its entire record of our wikis, so a partial list would
-                // cause it to forget about other shared wikis.
+                // Send per-peer filtered WikiManifest to each connected peer
+                // (each peer only sees wikis assigned to the room they share with us)
                 if let Some(app) = super::GLOBAL_APP_HANDLE.get() {
-                    let sync_wikis = crate::wiki_storage::get_sync_enabled_wikis(app);
-                    let wikis: Vec<super::protocol::WikiInfo> = sync_wikis
-                        .into_iter()
-                        .map(|(sync_id, name, is_folder)| super::protocol::WikiInfo {
-                            wiki_id: sync_id,
-                            wiki_name: name,
-                            is_folder,
-                        })
-                        .collect();
-                    server
-                        .broadcast(&SyncMessage::WikiManifest { wikis })
-                        .await;
+                    let lan_peers = server.lan_connected_peers().await;
+                    for (peer_id, _) in &lan_peers {
+                        let room_code = server.peer_room_code(peer_id).await;
+                        let sync_wikis = if let Some(ref rc) = room_code {
+                            crate::wiki_storage::get_sync_wikis_for_room(app, rc)
+                        } else {
+                            vec![]
+                        };
+                        let wikis: Vec<super::protocol::WikiInfo> = sync_wikis
+                            .into_iter()
+                            .map(|(sync_id, name, is_folder)| super::protocol::WikiInfo {
+                                wiki_id: sync_id,
+                                wiki_name: name,
+                                is_folder,
+                            })
+                            .collect();
+                        let _ = server.send_to_peer(peer_id, &SyncMessage::WikiManifest { wikis }).await;
+                    }
                 }
             }
             WikiToSync::WikiClosed { wiki_id } => {
@@ -428,57 +460,85 @@ impl SyncBridge {
                 device_id,
                 device_name,
             } => {
-                eprintln!("[Collab] OUTBOUND broadcast EditingStarted: wiki={}, tiddler={}", wiki_id, tiddler_title);
-                server
-                    .broadcast(&SyncMessage::EditingStarted {
-                        wiki_id,
-                        tiddler_title,
-                        device_id,
-                        device_name,
-                    })
-                    .await;
+                let peers = if let Some(app) = super::GLOBAL_APP_HANDLE.get() {
+                    if let Some(room_code) = crate::wiki_storage::get_wiki_relay_room_by_sync_id(app, &wiki_id) {
+                        server.peers_for_room(&room_code).await
+                    } else { vec![] }
+                } else { vec![] };
+                if !peers.is_empty() {
+                    eprintln!("[Collab] OUTBOUND broadcast EditingStarted: wiki={}, tiddler={}", wiki_id, tiddler_title);
+                    server
+                        .send_to_peers(&peers, &SyncMessage::EditingStarted {
+                            wiki_id,
+                            tiddler_title,
+                            device_id,
+                            device_name,
+                        })
+                        .await;
+                }
             }
             WikiToSync::CollabEditingStopped {
                 wiki_id,
                 tiddler_title,
                 device_id,
             } => {
-                eprintln!("[Collab] OUTBOUND broadcast EditingStopped: wiki={}, tiddler={}", wiki_id, tiddler_title);
-                server
-                    .broadcast(&SyncMessage::EditingStopped {
-                        wiki_id,
-                        tiddler_title,
-                        device_id,
-                    })
-                    .await;
+                let peers = if let Some(app) = super::GLOBAL_APP_HANDLE.get() {
+                    if let Some(room_code) = crate::wiki_storage::get_wiki_relay_room_by_sync_id(app, &wiki_id) {
+                        server.peers_for_room(&room_code).await
+                    } else { vec![] }
+                } else { vec![] };
+                if !peers.is_empty() {
+                    eprintln!("[Collab] OUTBOUND broadcast EditingStopped: wiki={}, tiddler={}", wiki_id, tiddler_title);
+                    server
+                        .send_to_peers(&peers, &SyncMessage::EditingStopped {
+                            wiki_id,
+                            tiddler_title,
+                            device_id,
+                        })
+                        .await;
+                }
             }
             WikiToSync::CollabUpdate {
                 wiki_id,
                 tiddler_title,
                 update_base64,
             } => {
-                eprintln!("[Collab] OUTBOUND broadcast CollabUpdate: wiki={}, tiddler={}, len={}", wiki_id, tiddler_title, update_base64.len());
-                server
-                    .broadcast(&SyncMessage::CollabUpdate {
-                        wiki_id,
-                        tiddler_title,
-                        update_base64,
-                    })
-                    .await;
+                let peers = if let Some(app) = super::GLOBAL_APP_HANDLE.get() {
+                    if let Some(room_code) = crate::wiki_storage::get_wiki_relay_room_by_sync_id(app, &wiki_id) {
+                        server.peers_for_room(&room_code).await
+                    } else { vec![] }
+                } else { vec![] };
+                if !peers.is_empty() {
+                    eprintln!("[Collab] OUTBOUND broadcast CollabUpdate: wiki={}, tiddler={}, len={}", wiki_id, tiddler_title, update_base64.len());
+                    server
+                        .send_to_peers(&peers, &SyncMessage::CollabUpdate {
+                            wiki_id,
+                            tiddler_title,
+                            update_base64,
+                        })
+                        .await;
+                }
             }
             WikiToSync::CollabAwareness {
                 wiki_id,
                 tiddler_title,
                 update_base64,
             } => {
-                eprintln!("[Collab] OUTBOUND broadcast CollabAwareness: wiki={}, tiddler={}, len={}", wiki_id, tiddler_title, update_base64.len());
-                server
-                    .broadcast(&SyncMessage::CollabAwareness {
-                        wiki_id,
-                        tiddler_title,
-                        update_base64,
-                    })
-                    .await;
+                let peers = if let Some(app) = super::GLOBAL_APP_HANDLE.get() {
+                    if let Some(room_code) = crate::wiki_storage::get_wiki_relay_room_by_sync_id(app, &wiki_id) {
+                        server.peers_for_room(&room_code).await
+                    } else { vec![] }
+                } else { vec![] };
+                if !peers.is_empty() {
+                    eprintln!("[Collab] OUTBOUND broadcast CollabAwareness: wiki={}, tiddler={}, len={}", wiki_id, tiddler_title, update_base64.len());
+                    server
+                        .send_to_peers(&peers, &SyncMessage::CollabAwareness {
+                            wiki_id,
+                            tiddler_title,
+                            update_base64,
+                        })
+                        .await;
+                }
             }
         }
     }

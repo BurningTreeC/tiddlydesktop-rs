@@ -76,28 +76,42 @@ CustomPaths/SelectFolder: Selecionar pasta
 CustomPaths/Change: Alterar
 CustomPaths/Clear: Limpar
 
-LanSync/Title: Sincronização LAN
-LanSync/Start: Iniciar sincronização LAN
-LanSync/Stop: Parar sincronização LAN
+LanSync/Title: Sincronização
 LanSync/DeviceName: Este dispositivo:
-LanSync/Pairing: Emparelhamento de dispositivos
-LanSync/PinLabel: Digite este PIN no outro dispositivo:
-LanSync/ShowPin: Emparelhar novo dispositivo
-LanSync/HidePairingCode: Ocultar
-LanSync/PairedDevices: Dispositivos emparelhados
-LanSync/NoPairedDevices: Nenhum dispositivo emparelhado. Clique em "Emparelhar novo dispositivo" para conectar outro dispositivo.
-LanSync/Unpair: Desemparelhar
-LanSync/Connected: Conectado
-LanSync/Disconnected: Offline
-LanSync/DiscoveredDevices: Dispositivos na sua rede
-LanSync/PinPlaceholder: PIN
-LanSync/Pair: Emparelhar
 LanSync/AvailableWikis: Disponível de dispositivos
 LanSync/NoRemoteWikis: Nenhum wiki novo disponível de dispositivos conectados.
 LanSync/From: de
 LanSync/GetWiki: Obter wiki
 LanSync/LinkWiki: Vincular
 
+RelaySync/Title: Sync Relay
+RelaySync/AutoConnect: Conexão automática
+RelaySync/Disconnect: Desconectar
+RelaySync/Peers: dispositivos
+Labels/LAN: LAN
+Labels/Relay: Relay
+Labels/Both: LAN + Relay
+Tooltips/RelayAutoConnectOn: Conexão automática Relay ativada - clique para desativar
+Tooltips/RelayAutoConnectOff: Conexão automática Relay desativada - clique para ativar
+LanSync/NoUnsyncedWikis: Nenhum wiki não sincronizado disponível
+
+RelaySync/ServerUrl: URL do servidor:
+RelaySync/SaveUrl: Salvar URL
+RelaySync/Rooms: Salas
+RelaySync/CreateRoom: Criar sala
+RelaySync/JoinRoom: Entrar em uma sala
+RelaySync/RemoveRoom: Remover
+RelaySync/RoomName: Nome:
+RelaySync/RoomCode: Código:
+RelaySync/RoomPassword: Senha:
+RelaySync/Connect: Conectar
+RelaySync/NoRooms: Nenhuma sala configurada. Crie uma nova sala ou entre em uma existente.
+RelaySync/AssignRoom: Sala:
+RelaySync/NoRoom: Nenhuma
+RelaySync/Save: Salvar
+RelaySync/Cancel: Cancelar
+RelaySync/RoomDetails: Detalhes
+Tooltips/SelectRelayRoom: Atribuir este wiki a uma sala de retransmissão
 Buttons/Plugins: plugins
 PluginInstaller/Title: Gerenciar plugins
 PluginInstaller/For: para:

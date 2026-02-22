@@ -31,6 +31,8 @@ pub enum DiscoveryEvent {
         device_name: String,
         addr: String,
         port: u16,
+        /// Room codes the peer is currently in
+        rooms: Vec<String>,
     },
     /// A TiddlyDesktop instance went away
     PeerLost { device_id: String },
@@ -47,6 +49,9 @@ struct Beacon {
     name: String,
     /// WebSocket sync server port
     port: u16,
+    /// Room codes this device is currently in (for room-based auto-connect)
+    #[serde(default)]
+    rooms: Vec<String>,
 }
 
 /// The UDP broadcast discovery manager
@@ -58,12 +63,15 @@ impl DiscoveryManager {
     /// Start the discovery manager: broadcast our presence and listen for peers.
     /// `connected_peers` is checked before emitting PeerLost — peers with active
     /// WebSocket connections are never timed out by the discovery layer.
+    /// `active_room_codes` is a shared list of room codes we're currently in,
+    /// included in each beacon so peers can auto-connect for shared rooms.
     pub fn new(
         device_id: &str,
         device_name: &str,
         port: u16,
         event_tx: mpsc::UnboundedSender<DiscoveryEvent>,
         connected_peers: Arc<std::sync::RwLock<HashSet<String>>>,
+        active_room_codes: Arc<std::sync::RwLock<Vec<String>>>,
     ) -> Result<Self, String> {
         let shutdown = Arc::new(AtomicBool::new(false));
 
@@ -93,27 +101,12 @@ impl DiscoveryManager {
 
         let socket: std::net::UdpSocket = socket.into();
 
-        let beacon = Beacon {
-            td: 1,
-            id: device_id.to_string(),
-            name: device_name.to_string(),
-            port,
-        };
-        let beacon_data = serde_json::to_vec(&beacon)
-            .map_err(|e| format!("Failed to serialize beacon: {}", e))?;
+        let our_id = device_id.to_string();
+        let our_name = device_name.to_string();
+        let our_port = port;
 
         let our_device_id = device_id.to_string();
         let shutdown_clone = shutdown.clone();
-
-        // Goodbye beacon (td: 0) — sent when shutting down to notify peers immediately
-        let goodbye_beacon = Beacon {
-            td: 0,
-            id: device_id.to_string(),
-            name: device_name.to_string(),
-            port,
-        };
-        let goodbye_data = serde_json::to_vec(&goodbye_beacon)
-            .map_err(|e| format!("Failed to serialize goodbye beacon: {}", e))?;
 
         eprintln!(
             "[LAN Sync] UDP discovery started on port {} (beacon every {}s, timeout {}s)",
@@ -129,11 +122,27 @@ impl DiscoveryManager {
             let mut peers: HashMap<String, Instant> = HashMap::new();
             // Track when we last emitted PeerDiscovered per peer, for throttled re-emission
             let mut last_emitted: HashMap<String, Instant> = HashMap::new();
-            let mut buf = [0u8; 1024];
+            let mut buf = [0u8; 2048]; // Larger buffer for room codes
+
+            // Helper to serialize the beacon with current room codes
+            let make_beacon_data = |td: u8| -> Vec<u8> {
+                let rooms = active_room_codes.read()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .clone();
+                let beacon = Beacon {
+                    td,
+                    id: our_id.clone(),
+                    name: our_name.clone(),
+                    port: our_port,
+                    rooms,
+                };
+                serde_json::to_vec(&beacon).unwrap_or_default()
+            };
 
             // Send a burst of beacons on startup so peers detect us quickly
             // (UDP is unreliable — a single beacon could be lost)
             for i in 0..3 {
+                let beacon_data = make_beacon_data(1);
                 let _ = socket.send_to(&beacon_data, broadcast_addr);
                 if i < 2 {
                     std::thread::sleep(Duration::from_millis(200));
@@ -144,14 +153,16 @@ impl DiscoveryManager {
             loop {
                 if shutdown_clone.load(Ordering::Relaxed) {
                     // Send goodbye beacon so peers remove us immediately
+                    let goodbye_data = make_beacon_data(0);
                     for _ in 0..3 {
                         let _ = socket.send_to(&goodbye_data, broadcast_addr);
                     }
                     break;
                 }
 
-                // Send beacon periodically
+                // Send beacon periodically (re-serialize each time to pick up room changes)
                 if last_broadcast.elapsed() >= BEACON_INTERVAL {
+                    let beacon_data = make_beacon_data(1);
                     let _ = socket.send_to(&beacon_data, broadcast_addr);
                     last_broadcast = Instant::now();
 
@@ -233,8 +244,8 @@ impl DiscoveryManager {
                                 };
                                 if is_new {
                                     eprintln!(
-                                        "[LAN Sync] Discovered peer: {} ({}) at {}:{}",
-                                        beacon.name, beacon.id, addr, beacon.port
+                                        "[LAN Sync] Discovered peer: {} ({}) at {}:{} rooms={:?}",
+                                        beacon.name, beacon.id, addr, beacon.port, beacon.rooms
                                     );
                                 }
                                 let _ = event_tx.send(DiscoveryEvent::PeerDiscovered {
@@ -242,6 +253,7 @@ impl DiscoveryManager {
                                     device_name: beacon.name,
                                     addr,
                                     port: beacon.port,
+                                    rooms: beacon.rooms,
                                 });
                             }
                         }

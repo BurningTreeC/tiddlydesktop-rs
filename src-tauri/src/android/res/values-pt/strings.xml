@@ -70,8 +70,8 @@
     <string name="widget_capture_desc">Botão de captura rápida para TiddlyWiki</string>
 
     <!-- LanSyncService -->
-    <string name="sync_notif_channel_name">LAN Sync</string>
-    <string name="sync_notif_channel_desc">Mantém a sincronização LAN ativa para sincronização de wiki em tempo real</string>
-    <string name="sync_notif_title">Sincronização LAN ativa</string>
+    <string name="sync_notif_channel_name">Sync</string>
+    <string name="sync_notif_channel_desc">Mantém a sincronização ativa para sincronização de wiki em tempo real</string>
+    <string name="sync_notif_title">Sincronização ativa</string>
     <string name="sync_notif_text">Sincronizando wikis com dispositivos próximos</string>
 </resources>

@@ -76,28 +76,42 @@ CustomPaths/SelectFolder: انتخاب پوشه
 CustomPaths/Change: تغییر
 CustomPaths/Clear: پاک کردن
 
-LanSync/Title: همگام‌سازی شبکه محلی
-LanSync/Start: شروع همگام‌سازی شبکه محلی
-LanSync/Stop: توقف همگام‌سازی شبکه محلی
+LanSync/Title: همگام‌سازی
 LanSync/DeviceName: این دستگاه:
-LanSync/Pairing: جفت‌سازی دستگاه
-LanSync/PinLabel: این پین را در دستگاه دیگر وارد کنید:
-LanSync/ShowPin: جفت‌سازی دستگاه جدید
-LanSync/HidePairingCode: پنهان
-LanSync/PairedDevices: دستگاه‌های جفت‌شده
-LanSync/NoPairedDevices: دستگاه جفت‌شده‌ای وجود ندارد. روی "جفت‌سازی دستگاه جدید" کلیک کنید تا دستگاه دیگری متصل شود.
-LanSync/Unpair: لغو جفت‌سازی
-LanSync/Connected: متصل
-LanSync/Disconnected: آفلاین
-LanSync/DiscoveredDevices: دستگاه‌ها در شبکه
-LanSync/PinPlaceholder: PIN
-LanSync/Pair: جفت‌سازی
 LanSync/AvailableWikis: موجود از دستگاه‌ها
 LanSync/NoRemoteWikis: ویکی جدیدی از دستگاه‌های متصل موجود نیست.
 LanSync/From: از
 LanSync/GetWiki: دریافت ویکی
 LanSync/LinkWiki: پیوند
 
+RelaySync/Title: همگام‌سازی رله
+RelaySync/AutoConnect: اتصال خودکار
+RelaySync/Disconnect: قطع اتصال
+RelaySync/Peers: دستگاه‌ها
+Labels/LAN: شبکه محلی
+Labels/Relay: رله
+Labels/Both: شبکه محلی + رله
+Tooltips/RelayAutoConnectOn: اتصال خودکار رله فعال - برای غیرفعال کردن کلیک کنید
+Tooltips/RelayAutoConnectOff: اتصال خودکار رله غیرفعال - برای فعال کردن کلیک کنید
+LanSync/NoUnsyncedWikis: هیچ ویکی همگام‌نشده‌ای موجود نیست
+
+RelaySync/ServerUrl: آدرس سرور:
+RelaySync/SaveUrl: ذخیره آدرس
+RelaySync/Rooms: اتاق‌ها
+RelaySync/CreateRoom: ایجاد اتاق
+RelaySync/JoinRoom: پیوستن به اتاق
+RelaySync/RemoveRoom: حذف
+RelaySync/RoomName: نام:
+RelaySync/RoomCode: کد:
+RelaySync/RoomPassword: رمز عبور:
+RelaySync/Connect: اتصال
+RelaySync/NoRooms: هیچ اتاقی پیکربندی نشده است. اتاق جدیدی بسازید یا به اتاقی موجود بپیوندید.
+RelaySync/AssignRoom: اتاق:
+RelaySync/NoRoom: هیچکدام
+RelaySync/Save: ذخیره
+RelaySync/Cancel: لغو
+RelaySync/RoomDetails: جزئیات
+Tooltips/SelectRelayRoom: اختصاص این ویکی به یک اتاق رله
 Buttons/Plugins: افزونه‌ها
 PluginInstaller/Title: مدیریت افزونه‌ها
 PluginInstaller/For: برای:

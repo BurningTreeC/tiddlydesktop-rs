@@ -70,8 +70,8 @@
     <string name="widget_capture_desc">TiddlyWiki ਲਈ ਤੇਜ਼ ਕੈਪਚਰ ਬਟਨ</string>
 
     <!-- LanSyncService -->
-    <string name="sync_notif_channel_name">LAN Sync</string>
-    <string name="sync_notif_channel_desc">ਲੋਕਲ ਨੈਟਵਰਕ ਸਿੰਕ ਨੂੰ ਮਲਟੀ-ਸਿਸਟਮ ਵਿਕੀ ਸਿੰਕ ਲਈ ਕਿਰਿਆਸ਼ੀਲ ਰੱਖਦਾ ਹੈ</string>
-    <string name="sync_notif_title">LAN Sync ਕਿਰਿਆਸ਼ੀਲ</string>
+    <string name="sync_notif_channel_name">Sync</string>
+    <string name="sync_notif_channel_desc">ਸਿੰਕ ਨੂੰ ਮਲਟੀ-ਸਿਸਟਮ ਵਿਕੀ ਸਿੰਕ ਲਈ ਕਿਰਿਆਸ਼ੀਲ ਰੱਖਦਾ ਹੈ</string>
+    <string name="sync_notif_title">Sync ਕਿਰਿਆਸ਼ੀਲ</string>
     <string name="sync_notif_text">ਨਜ਼ਦੀਕੀ ਸਾਜ਼-ਸਮਾਨ ਨਾਲ ਵਿਕੀ ਨੂੰ ਸਿੰਕ ਕਰ ਰਹੇ ਹਨ</string>
 </resources>

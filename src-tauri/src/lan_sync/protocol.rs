@@ -21,38 +21,41 @@ pub const ATTACHMENT_CHUNK_SIZE: usize = 1024 * 1024;
 pub const LAN_SYNC_PORT_START: u16 = 45700;
 pub const LAN_SYNC_PORT_END: u16 = 45710;
 
-// ── Pairing Phase Messages (cleartext) ──────────────────────────────────────
+// ── Room Auth Messages (cleartext, for LAN connections) ──────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
-pub enum PairingMessage {
-    /// Initial SPAKE2 message from the device requesting pairing
-    PairingInit {
+pub enum RoomAuthMessage {
+    /// Initiator sends room credentials proof
+    RoomAuthInit {
         device_id: String,
         device_name: String,
-        #[serde(with = "base64_bytes")]
-        spake2_msg: Vec<u8>,
+        room_code: String,
+        /// HMAC proof of knowing the room password (derived from group key)
+        room_token: String,
     },
-    /// SPAKE2 response from the device displaying the PIN
-    PairingResponse {
+    /// Server accepts the auth
+    RoomAuthAccept {
         device_id: String,
         device_name: String,
-        #[serde(with = "base64_bytes")]
-        spake2_msg: Vec<u8>,
     },
-    /// Confirmation HMAC to verify both sides derived the same key
-    PairingConfirm {
-        #[serde(with = "base64_bytes")]
-        confirmation_hmac: Vec<u8>,
-    },
-    /// Pairing result
-    PairingResult {
-        success: bool,
-        message: Option<String>,
+    /// Server rejects the auth
+    RoomAuthReject {
+        message: String,
     },
 }
 
-// ── Sync Phase Messages (encrypted after pairing) ───────────────────────────
+/// Find the first shared room code between our rooms and a peer's rooms.
+/// Returns the first alphabetically-sorted shared room code.
+pub fn select_shared_room(our_rooms: &[String], peer_rooms: &[String]) -> Option<String> {
+    let mut shared: Vec<&String> = our_rooms.iter()
+        .filter(|r| peer_rooms.contains(r))
+        .collect();
+    shared.sort();
+    shared.first().map(|s| (*s).clone())
+}
+
+// ── Sync Phase Messages (encrypted after room auth) ──────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
@@ -168,10 +171,6 @@ pub enum SyncMessage {
         /// its own fingerprints (prevents infinite ping-pong).
         #[serde(default)]
         is_reply: bool,
-    },
-    /// Notify peer that we have unpaired them
-    DeviceUnpaired {
-        device_id: String,
     },
     /// Request a peer to send their tiddler fingerprints for a specific wiki.
     /// Sent when a wiki window is about to open and needs catch-up sync.
@@ -393,6 +392,7 @@ impl PartialEq for VectorClock {
 // ── Encryption ──────────────────────────────────────────────────────────────
 
 /// Per-connection encryption state
+#[derive(Clone)]
 pub struct SessionCipher {
     cipher: ChaCha20Poly1305,
     /// Counter for outgoing nonces (avoids nonce reuse)

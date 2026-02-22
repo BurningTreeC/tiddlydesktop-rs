@@ -76,28 +76,42 @@ CustomPaths/SelectFolder: Välj mapp
 CustomPaths/Change: Ändra
 CustomPaths/Clear: Rensa
 
-LanSync/Title: LAN-synkronisering
-LanSync/Start: Starta LAN-synkronisering
-LanSync/Stop: Stoppa LAN-synkronisering
+LanSync/Title: Synkronisering
 LanSync/DeviceName: Denna enhet:
-LanSync/Pairing: Enhetsparkoppling
-LanSync/PinLabel: Ange denna PIN på den andra enheten:
-LanSync/ShowPin: Parkoppla ny enhet
-LanSync/HidePairingCode: Dölj
-LanSync/PairedDevices: Parkopplade enheter
-LanSync/NoPairedDevices: Inga parkopplade enheter. Klicka på "Parkoppla ny enhet" för att ansluta en annan enhet.
-LanSync/Unpair: Avkoppla
-LanSync/Connected: Ansluten
-LanSync/Disconnected: Offline
-LanSync/DiscoveredDevices: Enheter på ditt nätverk
-LanSync/PinPlaceholder: PIN
-LanSync/Pair: Para
 LanSync/AvailableWikis: Tillgängligt från enheter
 LanSync/NoRemoteWikis: Inga nya wikis tillgängliga från anslutna enheter.
 LanSync/From: från
 LanSync/GetWiki: Hämta wiki
 LanSync/LinkWiki: Länka
 
+RelaySync/Title: Relay-synkronisering
+RelaySync/AutoConnect: Automatisk anslutning
+RelaySync/Disconnect: Koppla från
+RelaySync/Peers: enheter
+Labels/LAN: LAN
+Labels/Relay: Relay
+Labels/Both: LAN + Relay
+Tooltips/RelayAutoConnectOn: Relay automatisk anslutning aktiverad - klicka för att inaktivera
+Tooltips/RelayAutoConnectOff: Relay automatisk anslutning inaktiverad - klicka för att aktivera
+LanSync/NoUnsyncedWikis: Inga osynkroniserade wikis tillgängliga
+
+RelaySync/ServerUrl: Server-URL:
+RelaySync/SaveUrl: Spara URL
+RelaySync/Rooms: Rum
+RelaySync/CreateRoom: Skapa rum
+RelaySync/JoinRoom: Gå med i rum
+RelaySync/RemoveRoom: Ta bort
+RelaySync/RoomName: Namn:
+RelaySync/RoomCode: Kod:
+RelaySync/RoomPassword: Lösenord:
+RelaySync/Connect: Anslut
+RelaySync/NoRooms: Inga rum konfigurerade. Skapa ett nytt rum eller gå med i ett befintligt.
+RelaySync/AssignRoom: Rum:
+RelaySync/NoRoom: Inget
+RelaySync/Save: Spara
+RelaySync/Cancel: Avbryt
+RelaySync/RoomDetails: Detaljer
+Tooltips/SelectRelayRoom: Tilldela denna wiki till ett relay-rum
 Buttons/Plugins: plugins
 PluginInstaller/Title: Hantera plugins
 PluginInstaller/For: för:

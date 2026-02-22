@@ -76,28 +76,42 @@ CustomPaths/SelectFolder: Ordner auswählen
 CustomPaths/Change: Ändern
 CustomPaths/Clear: Löschen
 
-LanSync/Title: LAN-Sync
-LanSync/Start: LAN-Sync starten
-LanSync/Stop: LAN-Sync stoppen
+LanSync/Title: Sync
 LanSync/DeviceName: Dieses Gerät:
-LanSync/Pairing: Gerätekopplung
-LanSync/PinLabel: Geben Sie diese PIN auf dem anderen Gerät ein:
-LanSync/ShowPin: Neues Gerät koppeln
-LanSync/HidePairingCode: Ausblenden
-LanSync/PairedDevices: Gekoppelte Geräte
-LanSync/NoPairedDevices: Keine gekoppelten Geräte. Klicken Sie auf "Neues Gerät koppeln", um ein anderes Gerät zu verbinden.
-LanSync/Unpair: Entkoppeln
-LanSync/Connected: Verbunden
-LanSync/Disconnected: Offline
-LanSync/DiscoveredDevices: Geräte in Ihrem Netzwerk
-LanSync/PinPlaceholder: PIN
-LanSync/Pair: Koppeln
 LanSync/AvailableWikis: Von Geräten verfügbar
 LanSync/NoRemoteWikis: Keine neuen Wikis von verbundenen Geräten verfügbar.
 LanSync/From: von
 LanSync/GetWiki: Wiki holen
 LanSync/LinkWiki: Verknüpfen
 
+RelaySync/Title: Relay-Sync
+RelaySync/AutoConnect: Automatisch verbinden
+RelaySync/Disconnect: Trennen
+RelaySync/Peers: Geräte
+Labels/LAN: LAN
+Labels/Relay: Relay
+Labels/Both: LAN + Relay
+Tooltips/RelayAutoConnectOn: Automatische Relay-Verbindung aktiviert - klicken zum Deaktivieren
+Tooltips/RelayAutoConnectOff: Automatische Relay-Verbindung deaktiviert - klicken zum Aktivieren
+LanSync/NoUnsyncedWikis: Keine nicht synchronisierten Wikis verfügbar
+
+RelaySync/ServerUrl: Server-URL:
+RelaySync/SaveUrl: URL speichern
+RelaySync/Rooms: Räume
+RelaySync/CreateRoom: Raum erstellen
+RelaySync/JoinRoom: Raum beitreten
+RelaySync/RemoveRoom: Entfernen
+RelaySync/RoomName: Name:
+RelaySync/RoomCode: Code:
+RelaySync/RoomPassword: Passwort:
+RelaySync/Connect: Verbinden
+RelaySync/NoRooms: Keine Räume konfiguriert. Erstellen Sie einen neuen Raum oder treten Sie einem bestehenden bei.
+RelaySync/AssignRoom: Raum:
+RelaySync/NoRoom: Keiner
+RelaySync/Save: Speichern
+RelaySync/Cancel: Abbrechen
+RelaySync/RoomDetails: Details
+Tooltips/SelectRelayRoom: Dieses Wiki einem Relay-Raum zuweisen
 Buttons/Plugins: Plugins
 PluginInstaller/Title: Plugins verwalten
 PluginInstaller/For: für:

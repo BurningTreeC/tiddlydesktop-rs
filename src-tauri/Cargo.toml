@@ -1,6 +1,10 @@
 [package]
 name = "tiddlydesktop-rs"
+<<<<<<< Updated upstream
 version = "0.4.8"
+=======
+version = "0.5.0"
+>>>>>>> Stashed changes
 description = "A TiddlyWiki Tauri App"
 authors = ["BurningTreeC"]
 license = "MIT"
@@ -49,15 +53,15 @@ md5 = "0.8"
 pdfium-render = { version = "0.8", features = ["thread_safe", "image_025"] }
 image = { version = "0.25", default-features = false, features = ["png"] }
 
-# LAN Sync: encrypted WebSocket communication
+# LAN Sync + Relay Sync: encrypted WebSocket communication
 tokio-tungstenite = "0.24"
+# HTTP types for WebSocket request building (relay sync)
+http = "1"
 futures-util = "0.3"
 # LAN Sync: UDP broadcast discovery
 socket2 = "0.5"
 # LAN Sync: hostname detection
 hostname = "0.4"
-# LAN Sync: SPAKE2 password-authenticated key exchange for PIN pairing
-spake2 = "0.4"
 # LAN Sync: Key derivation
 hkdf = "0.12"
 sha2 = "0.10"

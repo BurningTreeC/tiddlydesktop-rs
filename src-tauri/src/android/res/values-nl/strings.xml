@@ -70,8 +70,8 @@
     <string name="widget_capture_desc">Snelle vastlegknop voor TiddlyWiki</string>
 
     <!-- LanSyncService -->
-    <string name="sync_notif_channel_name">LAN Sync</string>
-    <string name="sync_notif_channel_desc">Houdt LAN-synchronisatie actief voor real-time wiki-synchronisatie</string>
-    <string name="sync_notif_title">LAN-synchronisatie actief</string>
+    <string name="sync_notif_channel_name">Sync</string>
+    <string name="sync_notif_channel_desc">Houdt synchronisatie actief voor real-time wiki-synchronisatie</string>
+    <string name="sync_notif_title">Synchronisatie actief</string>
     <string name="sync_notif_text">Wiki\'s synchroniseren met nabijgelegen apparaten</string>
 </resources>

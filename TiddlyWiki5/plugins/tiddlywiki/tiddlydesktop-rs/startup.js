@@ -425,6 +425,13 @@ exports.startup = function(callback) {
 			if (existingEntry.sync_id) {
 				entry.sync_id = existingEntry.sync_id;
 			}
+			if (existingEntry.sync_peers && existingEntry.sync_peers.length > 0 && (!entry.sync_peers || entry.sync_peers.length === 0)) {
+				entry.sync_peers = existingEntry.sync_peers;
+			}
+			// Preserve relay room assignment
+			if (existingEntry.relay_room && !entry.relay_room) {
+				entry.relay_room = existingEntry.relay_room;
+			}
 		}
 		// Remove if already exists
 		entries = entries.filter(function(e) { return e.path !== entry.path; });
@@ -493,6 +500,8 @@ exports.startup = function(callback) {
 				group: entry.group || "",
 				sync_enabled: entry.sync_enabled ? "true" : "false",
 				sync_id: entry.sync_id || "",
+				sync_peers: entry.sync_peers ? JSON.stringify(entry.sync_peers) : "[]",
+				relay_room: entry.relay_room || "",
 				needs_reauth: "checking", // Will be updated by permission check on Android
 				text: ""
 			});
@@ -1111,8 +1120,6 @@ exports.startup = function(callback) {
 					}
 				}
 				saveWikiList(entries);
-				// Broadcast updated wiki manifest to connected peers
-				invoke("lan_sync_broadcast_manifest").catch(function() {});
 			}).catch(function(err) {
 				console.error("Failed to set wiki sync:", err);
 			});
@@ -1664,80 +1671,7 @@ exports.startup = function(callback) {
 		$tw.wiki.setText("$:/temp/tiddlydesktop-rs/update-available", "text", null, "no");
 	});
 
-	// ── LAN Sync message handlers ──────────────────────────────────────
-
-	// Start LAN sync
-	$tw.rootWidget.addEventListener("tm-tiddlydesktop-rs-lan-sync-start", function(event) {
-		invoke("lan_sync_start").then(function() {
-			refreshSyncStatus();
-			refreshDiscoveredPeers();
-			// Broadcast wiki manifest (peers may auto-connect from previous pairing)
-			invoke("lan_sync_broadcast_manifest").catch(function() {});
-		}).catch(function(err) {
-			console.error("Failed to start LAN sync:", err);
-		});
-	});
-
-	// Stop LAN sync
-	$tw.rootWidget.addEventListener("tm-tiddlydesktop-rs-lan-sync-stop", function(event) {
-		invoke("lan_sync_stop").then(function() {
-			$tw.wiki.setText("$:/temp/tiddlydesktop-rs/lan-sync-running", "text", null, "no");
-			$tw.wiki.setText("$:/temp/tiddlydesktop-rs/lan-sync-pin", "text", null, "");
-			// Clear discovered peers from UI
-			$tw.wiki.filterTiddlers("[prefix[$:/temp/tiddlydesktop-rs/discovered-peers/]]").forEach(function(title) {
-				$tw.wiki.deleteTiddler(title);
-			});
-		}).catch(function(err) {
-			console.error("Failed to stop LAN sync:", err);
-		});
-	});
-
-	// Generate and display pairing PIN
-	$tw.rootWidget.addEventListener("tm-tiddlydesktop-rs-lan-sync-show-pin", function(event) {
-		invoke("lan_sync_start_pairing").then(function(pin) {
-			$tw.wiki.setText("$:/temp/tiddlydesktop-rs/lan-sync-pin", "text", null, pin);
-		}).catch(function(err) {
-			console.error("Failed to generate PIN:", err);
-		});
-	});
-
-	// Cancel pairing
-	$tw.rootWidget.addEventListener("tm-tiddlydesktop-rs-lan-sync-cancel-pairing", function(event) {
-		invoke("lan_sync_cancel_pairing").then(function() {
-			$tw.wiki.setText("$:/temp/tiddlydesktop-rs/lan-sync-pin", "text", null, "");
-		}).catch(function(err) {
-			console.error("Failed to cancel pairing:", err);
-		});
-	});
-
-	// Unpair device
-	$tw.rootWidget.addEventListener("tm-tiddlydesktop-rs-unpair-device", function(event) {
-		var deviceId = event.paramObject ? event.paramObject.deviceId : "";
-		if (!deviceId) return;
-		invoke("lan_sync_unpair_device", { deviceId: deviceId }).then(function() {
-			refreshSyncStatus();
-		}).catch(function(err) {
-			console.error("Failed to unpair device:", err);
-		});
-	});
-
-	// Pair with a discovered device by entering PIN
-	$tw.rootWidget.addEventListener("tm-tiddlydesktop-rs-lan-sync-pair", function(event) {
-		var deviceId = event.paramObject ? event.paramObject.deviceId : "";
-		var pin = event.paramObject ? event.paramObject.pin : "";
-		if (!deviceId || !pin) return;
-
-		invoke("lan_sync_pair_with_device", { deviceId: deviceId, pin: pin }).then(function() {
-			console.log("[LAN Sync] Pairing initiated with device:", deviceId);
-			refreshSyncStatus();
-			refreshDiscoveredPeers();
-			// Broadcast wiki manifest to newly paired device
-			invoke("lan_sync_broadcast_manifest").catch(function() {});
-		}).catch(function(err) {
-			console.error("Failed to pair with device:", err);
-			alert("Pairing failed: " + err);
-		});
-	});
+	// ── Sync message handlers ─────────────────────────────────────────
 
 	// Request a wiki from a peer
 	$tw.rootWidget.addEventListener("tm-tiddlydesktop-rs-request-wiki", function(event) {
@@ -1806,21 +1740,29 @@ exports.startup = function(callback) {
 	$tw.rootWidget.addEventListener("tm-tiddlydesktop-rs-do-link-wiki", function(event) {
 		var wikiId = event.paramObject ? event.paramObject.wikiId : "";
 		var path = event.paramObject ? event.paramObject.path : "";
-		if (!wikiId || !path) return;
+		var fromDeviceId = event.paramObject ? event.paramObject.fromDeviceId : "";
+		if (!wikiId || !path) {
+			console.error("[LAN Sync] do-link-wiki: missing wikiId=" + wikiId + " or path=" + path);
+			return;
+		}
 
-		invoke("lan_sync_link_wiki", { path: path, syncId: wikiId }).then(function() {
+		invoke("lan_sync_link_wiki", { path: path, syncId: wikiId, fromDeviceId: fromDeviceId || null }).then(function() {
 			console.log("[LAN Sync] Linked wiki to sync ID " + wikiId);
-			// Update the wiki list tiddler to reflect the new sync state
-			var entries = getWikiListEntries();
-			for (var i = 0; i < entries.length; i++) {
-				if (entries[i].path === path) {
-					entries[i].sync_enabled = true;
-					entries[i].sync_id = wikiId;
-					break;
+			try {
+				// Update the wiki list tiddler to reflect the new sync state
+				var entries = getWikiListEntries();
+				for (var i = 0; i < entries.length; i++) {
+					if (entries[i].path === path) {
+						entries[i].sync_enabled = true;
+						entries[i].sync_id = wikiId;
+						break;
+					}
 				}
+				saveWikiList(entries);
+				refreshWikiList();
+			} catch(e) {
+				console.error("[LAN Sync] Error updating wiki list after link:", e);
 			}
-			saveWikiList(entries);
-			refreshWikiList();
 			invoke("lan_sync_get_available_wikis").then(function(wikis) {
 				refreshRemoteWikis(wikis);
 			}).catch(function() {});
@@ -1831,78 +1773,300 @@ exports.startup = function(callback) {
 		});
 	});
 
-	// Refresh sync status and update tiddlers
+	// ── Relay Sync message handlers ─────────────────────────────────────
+
+	// Add a relay room
+	$tw.rootWidget.addEventListener("tm-tiddlydesktop-rs-relay-add-room", function(event) {
+		var p = event.paramObject || {};
+		if (!p.name || !p.roomCode || !p.password) return;
+		invoke("relay_sync_add_room", {
+			name: p.name, roomCode: p.roomCode, password: p.password, autoConnect: true
+		}).then(function() {
+			// Auto-connect the new room, then refresh UI once
+			invoke("relay_sync_connect_room", { roomCode: p.roomCode }).then(function() {
+				refreshSyncStatus();
+			}).catch(function() {
+				// Still refresh even if connect fails — room was added
+				refreshSyncStatus();
+			});
+		}).catch(function(err) {
+			console.error("Failed to add relay room:", err);
+			alert("Failed to add room: " + err);
+		});
+	});
+
+	// Remove a relay room
+	$tw.rootWidget.addEventListener("tm-tiddlydesktop-rs-relay-remove-room", function(event) {
+		var roomCode = event.paramObject ? event.paramObject.roomCode : "";
+		if (!roomCode) return;
+		// Tell Rust to remove the room first, then clean up UI
+		invoke("relay_sync_remove_room", { roomCode: roomCode }).then(function() {
+			// Clean up all temp tiddlers for this room
+			var roomTitle = "$:/temp/tiddlydesktop-rs/relay-room/" + roomCode;
+			$tw.wiki.deleteTiddler(roomTitle);
+			$tw.wiki.deleteTiddler("$:/temp/tiddlydesktop-rs/relay-room-details/" + roomCode);
+			$tw.wiki.deleteTiddler("$:/temp/tiddlydesktop-rs/relay-room-password/" + roomCode);
+			$tw.wiki.deleteTiddler("$:/temp/tiddlydesktop-rs/relay-room-name-edit/" + roomCode);
+			$tw.wiki.deleteTiddler("$:/state/relay-room-details/" + roomCode);
+			$tw.wiki.each(function(tiddler, title) {
+				if (title.indexOf("$:/temp/tiddlydesktop-rs/relay-room-peer/" + roomCode + "/") === 0) {
+					$tw.wiki.deleteTiddler(title);
+				}
+			});
+			refreshSyncStatus();
+		}).catch(function(err) {
+			console.error("Failed to remove relay room:", err);
+			refreshSyncStatus();
+		});
+	});
+
+	// Connect to a relay room
+	$tw.rootWidget.addEventListener("tm-tiddlydesktop-rs-relay-connect-room", function(event) {
+		var roomCode = event.paramObject ? event.paramObject.roomCode : "";
+		if (!roomCode) return;
+		invoke("relay_sync_connect_room", { roomCode: roomCode }).then(function() {
+			refreshSyncStatus();
+		}).catch(function(err) {
+			console.error("Failed to connect relay room:", err);
+			refreshSyncStatus();
+		});
+	});
+
+	// Disconnect from a relay room
+	$tw.rootWidget.addEventListener("tm-tiddlydesktop-rs-relay-disconnect-room", function(event) {
+		var roomCode = event.paramObject ? event.paramObject.roomCode : "";
+		if (!roomCode) return;
+		invoke("relay_sync_disconnect_room", { roomCode: roomCode }).then(function() {
+			refreshSyncStatus();
+		}).catch(function(err) {
+			console.error("Failed to disconnect relay room:", err);
+		});
+	});
+
+	// Set auto-connect for a relay room
+	$tw.rootWidget.addEventListener("tm-tiddlydesktop-rs-relay-set-room-auto-connect", function(event) {
+		var p = event.paramObject || {};
+		var roomCode = p.roomCode;
+		var enabled = p.enabled === "true";
+		if (!roomCode) return;
+		invoke("relay_sync_set_room_auto_connect", { roomCode: roomCode, enabled: enabled }).then(function() {
+			refreshSyncStatus();
+		}).catch(function(err) {
+			console.error("Failed to set room auto-connect:", err);
+		});
+	});
+
+	// Set Relay room password
+	$tw.rootWidget.addEventListener("tm-tiddlydesktop-rs-relay-set-room-password", function(event) {
+		var p = event.paramObject || {};
+		var roomCode = p.roomCode;
+		var password = p.password;
+		if (!roomCode || !password) return;
+		invoke("relay_sync_set_room_password", { roomCode: roomCode, password: password }).then(function() {
+			refreshSyncStatus();
+		}).catch(function(err) {
+			console.error("Failed to set room password:", err);
+		});
+	});
+
+	// Set Relay room name
+	$tw.rootWidget.addEventListener("tm-tiddlydesktop-rs-relay-set-room-name", function(event) {
+		var p = event.paramObject || {};
+		var roomCode = p.roomCode;
+		var name = p.name;
+		if (!roomCode || !name) return;
+		invoke("relay_sync_set_room_name", { roomCode: roomCode, name: name }).then(function() {
+			refreshSyncStatus();
+		}).catch(function(err) {
+			console.error("Failed to set room name:", err);
+		});
+	});
+
+	// Load Relay room details (credentials) into temp tiddler
+	$tw.rootWidget.addEventListener("tm-tiddlydesktop-rs-relay-load-room-details", function(event) {
+		var p = event.paramObject || {};
+		var roomCode = p.roomCode;
+		if (!roomCode) return;
+		invoke("relay_sync_get_room_credentials", { roomCode: roomCode }).then(function(creds) {
+			var detailsTiddler = "$:/temp/tiddlydesktop-rs/relay-room-details/" + roomCode;
+			$tw.wiki.addTiddler(new $tw.Tiddler({
+				title: detailsTiddler,
+				password: creds.password,
+				room_code: creds.room_code,
+				room_name: creds.name
+			}));
+			// Pre-fill edit fields
+			$tw.wiki.setText("$:/temp/tiddlydesktop-rs/relay-room-password/" + roomCode, "text", null, creds.password);
+			$tw.wiki.setText("$:/temp/tiddlydesktop-rs/relay-room-name-edit/" + roomCode, "text", null, creds.name);
+		}).catch(function(err) {
+			console.error("Failed to load room credentials:", err);
+		});
+	});
+
+	// Set Relay server URL
+	$tw.rootWidget.addEventListener("tm-tiddlydesktop-rs-relay-sync-set-url", function(event) {
+		var url = event.paramObject && event.paramObject.url;
+		if (url) {
+			invoke("relay_sync_set_url", { url: url }).then(function() {
+				$tw.wiki.setText("$:/temp/tiddlydesktop-rs/relay-sync-url", "text", null, url);
+			}).catch(function(err) {
+				console.error("Failed to set relay URL:", err);
+			});
+		}
+	});
+
+	// Prepare add room form with auto-generated credentials
+	$tw.rootWidget.addEventListener("tm-tiddlydesktop-rs-relay-prepare-add-room", function(event) {
+		invoke("relay_sync_generate_credentials").then(function(creds) {
+			$tw.wiki.setText("$:/temp/tiddlydesktop-rs/relay-add-room-code", "text", null, creds.room_code);
+			$tw.wiki.setText("$:/temp/tiddlydesktop-rs/relay-add-room-password", "text", null, creds.password);
+			$tw.wiki.setText("$:/temp/tiddlydesktop-rs/relay-add-room-name", "text", null, "");
+		}).catch(function(err) {
+			console.error("Failed to generate room credentials:", err);
+		});
+	});
+
+	// Set wiki relay room assignment
+	$tw.rootWidget.addEventListener("tm-tiddlydesktop-rs-relay-set-wiki-room", function(event) {
+		var p = event.paramObject || {};
+		var path = p.path;
+		var roomCode = p.roomCode || null;
+		if (!path) return;
+		// Update the local wiki list entry (persistent tiddler)
+		var entries = getWikiListEntries();
+		for (var i = 0; i < entries.length; i++) {
+			if (entries[i].path === path) {
+				if (roomCode) {
+					entries[i].relay_room = roomCode;
+				} else {
+					delete entries[i].relay_room;
+				}
+				// Directly update the temp tiddler for immediate UI update
+				var tempTitle = "$:/temp/tiddlydesktop-rs/wikis/" + i;
+				$tw.wiki.setText(tempTitle, "relay_room", null, roomCode || "");
+				break;
+			}
+		}
+		saveWikiList(entries);
+		// Update the Rust backend
+		invoke("set_wiki_relay_room", { path: path, roomCode: roomCode || null }).catch(function(err) {
+			console.error("Failed to set wiki relay room:", err);
+		});
+		// Auto-connect the room if assigning (and not already connected)
+		if (roomCode) {
+			invoke("relay_sync_connect_room", { roomCode: roomCode }).catch(function() {});
+		}
+	});
+
+	// Refresh sync status and update tiddlers (debounced to avoid races)
+	var _refreshSyncTimer = null;
 	function refreshSyncStatus() {
+		if (_refreshSyncTimer) clearTimeout(_refreshSyncTimer);
+		_refreshSyncTimer = setTimeout(_doRefreshSyncStatus, 100);
+	}
+	function _doRefreshSyncStatus() {
 		invoke("lan_sync_get_status").then(function(status) {
 			$tw.wiki.setText("$:/temp/tiddlydesktop-rs/lan-sync-running", "text", null, status.running ? "yes" : "no");
 			var displayName = status.device_name + (status.device_id ? " (" + status.device_id + ")" : "");
 			$tw.wiki.setText("$:/temp/tiddlydesktop-rs/lan-sync-device-name", "text", null, displayName);
-			if (status.active_pin) {
-				$tw.wiki.setText("$:/temp/tiddlydesktop-rs/lan-sync-pin", "text", null, status.active_pin);
-			}
 
-			// Update paired devices list
-			if (status.paired_devices && status.paired_devices.length > 0) {
-				$tw.wiki.setText("$:/temp/tiddlydesktop-rs/lan-sync-paired-devices", "text", null, "yes");
-				var listTitles = [];
-				status.paired_devices.forEach(function(device) {
-					var tiddlerTitle = "$:/temp/tiddlydesktop-rs/lan-sync-device/" + device.device_id;
-					listTitles.push(tiddlerTitle);
-					$tw.wiki.addTiddler(new $tw.Tiddler({
-						title: tiddlerTitle,
-						device_id: device.device_id,
-						device_name: device.device_name,
-						paired_at: device.paired_at,
-						is_connected: device.is_connected ? "true" : "false"
-					}));
+			// Fetch relay status to update rooms and determine any-sync-running
+			invoke("relay_sync_get_status").then(function(relayStatus) {
+				var anyRoomConnected = false;
+				var rooms = relayStatus.rooms || [];
+				rooms.forEach(function(room) {
+					if (room.connected) anyRoomConnected = true;
 				});
-				$tw.wiki.setText("$:/temp/tiddlydesktop-rs/lan-sync-paired-devices-list", "list", null, listTitles.join(" "));
-			} else {
-				$tw.wiki.setText("$:/temp/tiddlydesktop-rs/lan-sync-paired-devices", "text", null, "");
-			}
+				var anyRunning = (status.running || anyRoomConnected) ? "yes" : "no";
+				$tw.wiki.setText("$:/temp/tiddlydesktop-rs/any-sync-running", "text", null, anyRunning);
+				if (relayStatus.relay_url) {
+					$tw.wiki.setText("$:/temp/tiddlydesktop-rs/relay-sync-url", "text", null, relayStatus.relay_url);
+					$tw.wiki.setText("$:/temp/tiddlydesktop-rs/relay-sync-url-input", "text", null, relayStatus.relay_url);
+				}
+				updateRelayRoomList(rooms);
+			}).catch(function(err) {
+				console.error("relay_sync_get_status failed (inner):", err);
+				$tw.wiki.setText("$:/temp/tiddlydesktop-rs/any-sync-running", "text", null, status.running ? "yes" : "no");
+			});
 		}).catch(function(err) {
 			// Sync not initialized yet — set defaults
 			$tw.wiki.setText("$:/temp/tiddlydesktop-rs/lan-sync-running", "text", null, "no");
+			invoke("relay_sync_get_status").then(function(relayStatus) {
+				var anyRoomConnected = false;
+				var rooms = relayStatus.rooms || [];
+				rooms.forEach(function(room) {
+					if (room.connected) anyRoomConnected = true;
+				});
+				$tw.wiki.setText("$:/temp/tiddlydesktop-rs/any-sync-running", "text", null, anyRoomConnected ? "yes" : "no");
+				if (relayStatus.relay_url) {
+					$tw.wiki.setText("$:/temp/tiddlydesktop-rs/relay-sync-url", "text", null, relayStatus.relay_url);
+					$tw.wiki.setText("$:/temp/tiddlydesktop-rs/relay-sync-url-input", "text", null, relayStatus.relay_url);
+				}
+				updateRelayRoomList(rooms);
+			}).catch(function(err) {
+				console.error("relay_sync_get_status failed (outer):", err);
+				$tw.wiki.setText("$:/temp/tiddlydesktop-rs/any-sync-running", "text", null, "no");
+			});
 		});
 	}
 
-	// Refresh available remote wikis and update tiddlers
-	// Refresh discovered peers (unpaired devices on LAN)
-	function refreshDiscoveredPeers() {
-		invoke("lan_sync_get_discovered_peers").then(function(peers) {
-			// Build set of current peer device_ids
-			var currentIds = {};
-			if (peers && peers.length > 0) {
-				peers.forEach(function(peer) {
-					currentIds[peer.device_id] = peer;
-				});
-			}
-
-			// Remove tiddlers for peers that are no longer discovered
-			$tw.wiki.filterTiddlers("[prefix[$:/temp/tiddlydesktop-rs/discovered-peers/]]").forEach(function(title) {
-				var tiddler = $tw.wiki.getTiddler(title);
-				if (tiddler) {
-					var existingId = tiddler.fields.device_id;
-					if (!currentIds[existingId]) {
-						$tw.wiki.deleteTiddler(title);
-					}
+	// Update relay room list tiddlers for UI display
+	function updateRelayRoomList(rooms) {
+		// Build set of current room codes and peer titles
+		var currentRoomTitles = {};
+		var currentPeerTitles = {};
+		var roomListTitles = [];
+		if (rooms && rooms.length > 0) {
+			rooms.forEach(function(room) {
+				var roomTitle = "$:/temp/tiddlydesktop-rs/relay-room/" + room.room_code;
+				currentRoomTitles[roomTitle] = true;
+				roomListTitles.push(roomTitle);
+				// Create/update peer tiddlers for this room
+				var peerTitles = [];
+				if (room.connected_peers) {
+					room.connected_peers.forEach(function(peer) {
+						var peerTitle = "$:/temp/tiddlydesktop-rs/relay-room-peer/" + room.room_code + "/" + peer.device_id;
+						currentPeerTitles[peerTitle] = true;
+						peerTitles.push(peerTitle);
+						$tw.wiki.addTiddler(new $tw.Tiddler({
+							title: peerTitle,
+							device_name: peer.device_name,
+							device_id: peer.device_id,
+							room_code: room.room_code
+						}));
+					});
+				}
+				$tw.wiki.addTiddler(new $tw.Tiddler({
+					title: roomTitle,
+					room_name: room.name,
+					room_code: room.room_code,
+					auto_connect: room.auto_connect ? "yes" : "no",
+					connected: room.connected ? "yes" : "no",
+					peer_count: String(room.connected_peers ? room.connected_peers.length : 0),
+					peer_list: peerTitles.join(" ")
+				}));
+				// Keep password and details tiddlers in sync
+				if (room.password) {
+					var detailsTiddler = "$:/temp/tiddlydesktop-rs/relay-room-details/" + room.room_code;
+					$tw.wiki.addTiddler(new $tw.Tiddler({
+						title: detailsTiddler,
+						password: room.password,
+						room_code: room.room_code,
+						room_name: room.name
+					}));
+					$tw.wiki.setText("$:/temp/tiddlydesktop-rs/relay-room-password/" + room.room_code, "text", null, room.password);
 				}
 			});
-
-			// Add or update tiddlers for current peers
-			if (peers && peers.length > 0) {
-				peers.forEach(function(peer) {
-					var tiddlerTitle = "$:/temp/tiddlydesktop-rs/discovered-peers/" + peer.device_id;
-					$tw.wiki.addTiddler(new $tw.Tiddler({
-						title: tiddlerTitle,
-						device_id: peer.device_id,
-						device_name: peer.device_name,
-						addr: peer.addr,
-						port: String(peer.port)
-					}));
-				});
+		}
+		// Remove only stale room and peer tiddlers (ones no longer in the list)
+		$tw.wiki.each(function(tiddler, title) {
+			if (title.indexOf("$:/temp/tiddlydesktop-rs/relay-room/") === 0 && !currentRoomTitles[title]) {
+				$tw.wiki.deleteTiddler(title);
+			} else if (title.indexOf("$:/temp/tiddlydesktop-rs/relay-room-peer/") === 0 && !currentPeerTitles[title]) {
+				$tw.wiki.deleteTiddler(title);
 			}
-		}).catch(function() {});
+		});
+		$tw.wiki.setText("$:/temp/tiddlydesktop-rs/relay-room-list", "text", null, roomListTitles.join(" "));
 	}
 
 	function refreshRemoteWikis(wikis) {
@@ -1932,12 +2096,15 @@ exports.startup = function(callback) {
 			refreshSyncStatus();
 			// Send our wiki manifest to the newly connected peer
 			invoke("lan_sync_broadcast_manifest").catch(function() {});
+			// Also refresh available wikis after a short delay (manifest takes time to arrive)
+			setTimeout(function() {
+				invoke("lan_sync_get_available_wikis").then(function(wikis) {
+					refreshRemoteWikis(wikis);
+				}).catch(function() {});
+			}, 1500);
 		});
 		listen("lan-sync-peer-disconnected", function(event) {
 			refreshSyncStatus();
-		});
-		listen("lan-sync-discovered-peers-changed", function(event) {
-			refreshDiscoveredPeers();
 		});
 		listen("lan-sync-remote-wikis-updated", function(event) {
 			refreshRemoteWikis(event.payload);
@@ -1960,14 +2127,25 @@ exports.startup = function(callback) {
 				refreshRemoteWikis(wikis);
 			}).catch(function() {});
 		});
+		// Refresh UI when a relay room connects or disconnects
+		listen("relay-room-connected", function() {
+			refreshSyncStatus();
+			// Delayed re-check: session_init handshake may take a moment
+			setTimeout(refreshSyncStatus, 2000);
+			// Also refresh available wikis once peer manifests arrive
+			setTimeout(function() {
+				invoke("lan_sync_get_available_wikis").then(function(wikis) {
+					refreshRemoteWikis(wikis);
+				}).catch(function() {});
+			}, 3000);
+		});
+		listen("relay-room-disconnected", function() {
+			refreshSyncStatus();
+		});
 	}
 
 	// Initial status check
 	refreshSyncStatus();
-	refreshDiscoveredPeers();
-
-	// Periodically refresh discovered peers (mDNS events can be missed)
-	setInterval(refreshDiscoveredPeers, 5000);
 
 	callback();
 };

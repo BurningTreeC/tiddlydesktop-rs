@@ -76,28 +76,42 @@ CustomPaths/SelectFolder: フォルダを選択
 CustomPaths/Change: 変更
 CustomPaths/Clear: クリア
 
-LanSync/Title: LAN同期
-LanSync/Start: LAN同期を開始
-LanSync/Stop: LAN同期を停止
+LanSync/Title: 同期
 LanSync/DeviceName: このデバイス:
-LanSync/Pairing: デバイスペアリング
-LanSync/PinLabel: このPINを別のデバイスで入力してください:
-LanSync/ShowPin: 新しいデバイスをペアリング
-LanSync/HidePairingCode: 非表示
-LanSync/PairedDevices: ペアリング済みデバイス
-LanSync/NoPairedDevices: ペアリング済みデバイスがありません。「新しいデバイスをペアリング」をクリックして別のデバイスを接続してください。
-LanSync/Unpair: ペアリング解除
-LanSync/Connected: 接続中
-LanSync/Disconnected: オフライン
-LanSync/DiscoveredDevices: ネットワーク上のデバイス
-LanSync/PinPlaceholder: PIN
-LanSync/Pair: ペアリング
 LanSync/AvailableWikis: ピアから利用可能
 LanSync/NoRemoteWikis: 接続中のピアから利用可能な新しいWikiはありません。
 LanSync/From: 元:
 LanSync/GetWiki: Wikiを取得
 LanSync/LinkWiki: リンク
 
+RelaySync/Title: リレー同期
+RelaySync/AutoConnect: 自動接続
+RelaySync/Disconnect: 切断
+RelaySync/Peers: 台接続中
+Labels/LAN: LAN
+Labels/Relay: リレー
+Labels/Both: LAN + リレー
+Tooltips/RelayAutoConnectOn: リレー自動接続有効 - クリックで無効化
+Tooltips/RelayAutoConnectOff: リレー自動接続無効 - クリックで有効化
+LanSync/NoUnsyncedWikis: 未同期のWikiはありません
+
+RelaySync/ServerUrl: サーバーURL:
+RelaySync/SaveUrl: URL を保存
+RelaySync/Rooms: ルーム
+RelaySync/CreateRoom: ルームを作成
+RelaySync/JoinRoom: ルームに参加
+RelaySync/RemoveRoom: 削除
+RelaySync/RoomName: 名前:
+RelaySync/RoomCode: コード:
+RelaySync/RoomPassword: パスワード:
+RelaySync/Connect: 接続
+RelaySync/NoRooms: ルームが設定されていません。新しいルームを作成するか、既存のルームに参加してください。
+RelaySync/AssignRoom: ルーム:
+RelaySync/NoRoom: なし
+RelaySync/Save: 保存
+RelaySync/Cancel: キャンセル
+RelaySync/RoomDetails: 詳細
+Tooltips/SelectRelayRoom: このウィキをリレールームに割り当てる
 Buttons/Plugins: プラグイン
 PluginInstaller/Title: プラグインの管理
 PluginInstaller/For: 対象:

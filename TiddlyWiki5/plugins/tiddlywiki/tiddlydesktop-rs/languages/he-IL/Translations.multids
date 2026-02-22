@@ -76,28 +76,42 @@ CustomPaths/SelectFolder: בחר תיקייה
 CustomPaths/Change: שנה
 CustomPaths/Clear: נקה
 
-LanSync/Title: סנכרון רשת מקומית
-LanSync/Start: התחל סנכרון רשת מקומית
-LanSync/Stop: עצור סנכרון רשת מקומית
+LanSync/Title: סנכרון
 LanSync/DeviceName: מכשיר זה:
-LanSync/Pairing: שיוך מכשירים
-LanSync/PinLabel: הזן PIN זה במכשיר האחר:
-LanSync/ShowPin: שייך מכשיר חדש
-LanSync/HidePairingCode: הסתר
-LanSync/PairedDevices: מכשירים משויכים
-LanSync/NoPairedDevices: אין מכשירים משויכים. לחץ על "שייך מכשיר חדש" כדי לחבר מכשיר אחר.
-LanSync/Unpair: בטל שיוך
-LanSync/Connected: מחובר
-LanSync/Disconnected: לא מקוון
-LanSync/DiscoveredDevices: מכשירים ברשת
-LanSync/PinPlaceholder: PIN
-LanSync/Pair: צימוד
 LanSync/AvailableWikis: זמין ממכשירים
 LanSync/NoRemoteWikis: אין ויקי חדשים זמינים ממכשירים מחוברים.
 LanSync/From: מ
 LanSync/GetWiki: קבל ויקי
 LanSync/LinkWiki: קשר
 
+RelaySync/Title: סנכרון ממסר
+RelaySync/AutoConnect: חיבור אוטומטי
+RelaySync/Disconnect: נתק
+RelaySync/Peers: מכשירים
+Labels/LAN: רשת מקומית
+Labels/Relay: ממסר
+Labels/Both: רשת מקומית + ממסר
+Tooltips/RelayAutoConnectOn: חיבור אוטומטי ממסר מופעל - לחץ לכיבוי
+Tooltips/RelayAutoConnectOff: חיבור אוטומטי ממסר כבוי - לחץ להפעלה
+LanSync/NoUnsyncedWikis: אין ויקי לא מסונכרנים זמינים
+
+RelaySync/ServerUrl: כתובת שרת:
+RelaySync/SaveUrl: שמור כתובת
+RelaySync/Rooms: חדרים
+RelaySync/CreateRoom: צור חדר
+RelaySync/JoinRoom: הצטרף לחדר
+RelaySync/RemoveRoom: הסר
+RelaySync/RoomName: שם:
+RelaySync/RoomCode: קוד:
+RelaySync/RoomPassword: סיסמה:
+RelaySync/Connect: התחבר
+RelaySync/NoRooms: אין חדרים מוגדרים. צור חדר חדש או הצטרף לחדר קיים.
+RelaySync/AssignRoom: חדר:
+RelaySync/NoRoom: ללא
+RelaySync/Save: שמור
+RelaySync/Cancel: ביטול
+RelaySync/RoomDetails: פרטים
+Tooltips/SelectRelayRoom: שייך ויקי זה לחדר ממסר
 Buttons/Plugins: תוספים
 PluginInstaller/Title: ניהול תוספים
 PluginInstaller/For: עבור:

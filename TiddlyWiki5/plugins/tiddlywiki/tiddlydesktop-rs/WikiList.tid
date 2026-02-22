@@ -1,7 +1,7 @@
 title: $:/plugins/tiddlywiki/tiddlydesktop-rs/WikiList
 
 \define render-wiki-item()
-<$let path={{!!path}} displayPath={{!!display_path}} filename={{!!filename}} favicon={{!!favicon}} isFolder={{!!is_folder}} backupsEnabled={{!!backups_enabled}} backupDir={{!!backup_dir}} backupDirDisplay={{!!backup_dir_display}} backupCount={{!!backup_count}} wikiGroup={{!!group}} syncEnabled={{!!sync_enabled}} syncId={{!!sync_id}} needsReauth={{!!needs_reauth}}>
+<$let path={{!!path}} displayPath={{!!display_path}} filename={{!!filename}} favicon={{!!favicon}} isFolder={{!!is_folder}} backupsEnabled={{!!backups_enabled}} backupDir={{!!backup_dir}} backupDirDisplay={{!!backup_dir_display}} backupCount={{!!backup_count}} wikiGroup={{!!group}} syncEnabled={{!!sync_enabled}} syncId={{!!sync_id}} relayRoom={{!!relay_room}} needsReauth={{!!needs_reauth}}>
 <div class={{{ [<needsReauth>match[yes]then[td-wikilist-item td-needs-reauth]else[td-wikilist-item]] }}}>
 <div class="td-wikilist-thumbnail">
 <$button class="tc-btn-invisible">
@@ -119,8 +119,8 @@ title: $:/plugins/tiddlywiki/tiddlydesktop-rs/WikiList
 </div>
 </$reveal>
 </$let>
-<!-- LAN Sync toggle (only shown when LAN sync is running) -->
-<$list filter="[{$:/temp/tiddlydesktop-rs/lan-sync-running}match[yes]]" variable="ignore">
+<!-- LAN Sync toggle (shown when any sync transport is running) -->
+<$list filter="[{$:/temp/tiddlydesktop-rs/any-sync-running}match[yes]]" variable="ignore">
 <$list filter="[<syncEnabled>match[true]]" variable="ignore">
 <$button class="tc-btn-invisible td-button td-button-sync td-sync-on" tooltip=<<td-lingo Tooltips/SyncEnabled>>>
 <$action-sendmessage $message="tm-tiddlydesktop-rs-set-wiki-sync" path=<<path>> enabled="false"/>
@@ -132,6 +132,39 @@ title: $:/plugins/tiddlywiki/tiddlydesktop-rs/WikiList
 <$action-sendmessage $message="tm-tiddlydesktop-rs-set-wiki-sync" path=<<path>> enabled="true"/>
 {{$:/core/images/close-button}} <<td-lingo Buttons/Sync>>
 </$button>
+</$list>
+<!-- Per-wiki room picker (when sync is enabled and rooms exist) -->
+<$list filter="[{$:/temp/tiddlydesktop-rs/relay-room-list}!is[blank]]" variable="ignore">
+<$let relayRoomPopupState={{{ [<path>encodeuri[]addprefix[$:/state/relay-room-popup/]] }}}>
+<$button popup=<<relayRoomPopupState>> class="tc-btn-invisible td-button td-button-sync-peers" tooltip=<<td-lingo Tooltips/SelectRelayRoom>>>
+{{$:/core/images/globe}} <<td-lingo RelaySync/AssignRoom>>
+</$button>
+<$reveal state=<<relayRoomPopupState>> type="popup" position="below" animate="yes" class="tc-drop-down td-sync-peers-dropdown tc-popup-keep">
+<div class="td-sync-peers-dropdown-content">
+<div class="td-sync-peers-header"><<td-lingo RelaySync/AssignRoom>></div>
+<!-- None option -->
+<$button class="tc-btn-invisible td-sync-peer-option">
+<$action-sendmessage $message="tm-tiddlydesktop-rs-relay-set-wiki-room" path=<<path>> roomCode=""/>
+<span class={{{ [<relayRoom>is[blank]then[td-sync-peer-check td-sync-peer-checked]else[td-sync-peer-check td-sync-peer-unchecked]] }}}>
+<$list filter="[<relayRoom>is[blank]]" variable="ignore">{{$:/core/images/done-button}}</$list>
+</span>
+<span class="td-sync-peer-name"><<td-lingo RelaySync/NoRoom>></span>
+</$button>
+<!-- Room options -->
+<$list filter="[enlist{$:/temp/tiddlydesktop-rs/relay-room-list}]">
+<$let roomCode={{!!room_code}} roomName={{!!room_name}}>
+<$button class="tc-btn-invisible td-sync-peer-option">
+<$action-sendmessage $message="tm-tiddlydesktop-rs-relay-set-wiki-room" path=<<path>> roomCode=<<roomCode>>/>
+<span class={{{ [<relayRoom>match<roomCode>then[td-sync-peer-check td-sync-peer-checked]else[td-sync-peer-check td-sync-peer-unchecked]] }}}>
+<$list filter="[<relayRoom>match<roomCode>]" variable="ignore">{{$:/core/images/done-button}}</$list>
+</span>
+<span class="td-sync-peer-name"><$text text=<<roomName>>/></span>
+</$button>
+</$let>
+</$list>
+</div>
+</$reveal>
+</$let>
 </$list>
 </$list>
 </div>
@@ -523,25 +556,11 @@ title: $:/plugins/tiddlywiki/tiddlydesktop-rs/WikiList
 </div>
 </$list>
 
-<!-- ── LAN Sync Panel (persistent at bottom) ──────────────────────── -->
+<!-- ── Sync Panel (persistent at bottom) ───────────────────────────── -->
 <div class="td-sync-panel">
 
 <div class="td-sync-header">
 <h2><<td-lingo LanSync/Title>></h2>
-<div class="td-sync-toggle">
-<$list filter="[{$:/temp/tiddlydesktop-rs/lan-sync-running}match[yes]]" variable="ignore">
-<$button class="tc-btn-invisible td-button td-button-danger">
-<$action-sendmessage $message="tm-tiddlydesktop-rs-lan-sync-stop"/>
-<<td-lingo LanSync/Stop>>
-</$button>
-</$list>
-<$list filter="[{$:/temp/tiddlydesktop-rs/lan-sync-running}!match[yes]]" variable="ignore">
-<$button class="tc-btn-invisible td-button td-button-primary">
-<$action-sendmessage $message="tm-tiddlydesktop-rs-lan-sync-start"/>
-<<td-lingo LanSync/Start>>
-</$button>
-</$list>
-</div>
 </div>
 
 <!-- Device Identity -->
@@ -552,91 +571,162 @@ title: $:/plugins/tiddlywiki/tiddlydesktop-rs/WikiList
 </div>
 </div>
 
-<!-- Pairing & Devices (only when running) -->
-<$list filter="[{$:/temp/tiddlydesktop-rs/lan-sync-running}match[yes]]" variable="ignore">
-
-<!-- Pairing -->
+<!-- Server URL & Rooms -->
 <div class="td-sync-section">
-<h3><<td-lingo LanSync/Pairing>></h3>
-<$list filter="[{$:/temp/tiddlydesktop-rs/lan-sync-pin}!is[blank]]" variable="pin">
-<div class="td-sync-pin-display">
-<div class="td-sync-pin-label"><<td-lingo LanSync/PinLabel>></div>
-<div class="td-sync-pin-code"><$text text=<<pin>>/></div>
-<$button class="tc-btn-invisible td-button">
-<$action-sendmessage $message="tm-tiddlydesktop-rs-lan-sync-cancel-pairing"/>
-<<td-lingo LanSync/HidePairingCode>>
+<div class="td-relay-server-row">
+<span class="td-sync-label"><<td-lingo RelaySync/ServerUrl>></span>
+<div class="td-relay-server-input">
+<$edit-text tiddler="$:/temp/tiddlydesktop-rs/relay-sync-url-input" tag="input" placeholder="ws://host:port" class="td-relay-url-input"/>
+<$button class="tc-btn-invisible td-button td-button-small" tooltip=<<td-lingo RelaySync/SaveUrl>>>
+<$action-sendmessage $message="tm-tiddlydesktop-rs-relay-sync-set-url" url={{$:/temp/tiddlydesktop-rs/relay-sync-url-input}}/>
+{{$:/core/images/done-button}}
 </$button>
 </div>
-</$list>
-<$list filter="[{$:/temp/tiddlydesktop-rs/lan-sync-pin}is[blank]]" variable="ignore">
-<div class="td-sync-pairing-actions">
-<$button class="tc-btn-invisible td-button td-button-primary">
-<$action-sendmessage $message="tm-tiddlydesktop-rs-lan-sync-show-pin"/>
-<<td-lingo LanSync/ShowPin>>
-</$button>
 </div>
-</$list>
 
-<!-- Discovered devices on the LAN -->
-<$list filter="[prefix[$:/temp/tiddlydesktop-rs/discovered-peers/]limit[1]]" variable="ignore">
-<div class="td-sync-discovered">
-<h4><<td-lingo LanSync/DiscoveredDevices>></h4>
-<$list filter="[prefix[$:/temp/tiddlydesktop-rs/discovered-peers/]]">
-<$let discDeviceId={{!!device_id}} discDeviceName={{!!device_name}} pinInputTiddler={{{ [<currentTiddler>addprefix[$:/temp/pin-input/]] }}}>
-<div class="td-sync-discovered-device">
-<div class="td-sync-discovered-info">
-<span class="td-sync-discovered-name"><$text text=<<discDeviceName>>/> <span class="td-sync-fingerprint">(<$text text={{{ [<discDeviceId>split[]first[8]join[]] }}}/>)</span></span>
-</div>
-<div class="td-sync-discovered-pair">
-<$keyboard key="enter" actions="""<$action-sendmessage $message="tm-tiddlydesktop-rs-lan-sync-pair" deviceId=<<discDeviceId>> pin={{{ [<pinInputTiddler>get[text]] }}}/><$action-deletetiddler $tiddler=<<pinInputTiddler>>/>""">
-<$edit-text tiddler=<<pinInputTiddler>> tag="input" placeholder=<<td-lingo LanSync/PinPlaceholder>> class="td-sync-pin-input" inputMode="numeric"/>
-</$keyboard>
+<!-- Room list -->
+<div class="td-relay-room-list">
+<h4><<td-lingo RelaySync/Rooms>></h4>
+<$list filter="[enlist{$:/temp/tiddlydesktop-rs/relay-room-list}]" emptyMessage=<<td-lingo RelaySync/NoRooms>>>
+<$let roomCode={{!!room_code}} roomName={{!!room_name}} roomConnected={{!!connected}} roomAutoConnect={{!!auto_connect}} roomPeerCount={{!!peer_count}}>
+<div class="td-relay-room-item">
+<div class="td-relay-room-header">
+<span class="td-relay-room-name"><$text text=<<roomName>>/></span> <span class="td-sync-fingerprint">(<$text text=<<roomCode>>/>)</span>
+<$list filter="[<roomConnected>match[yes]]" variable="ignore">
+<span class="td-sync-status-dot td-sync-relay"></span>
+<span class="td-relay-peer-count"><$text text=<<roomPeerCount>>/> <<td-lingo RelaySync/Peers>></span>
+<$button class="tc-btn-invisible td-button td-button-danger td-button-small">
+<$action-sendmessage $message="tm-tiddlydesktop-rs-relay-disconnect-room" roomCode=<<roomCode>>/>
+<<td-lingo RelaySync/Disconnect>>
+</$button>
+</$list>
+<$list filter="[<roomConnected>!match[yes]]" variable="ignore">
+<span class="td-sync-status-dot td-sync-disconnected"></span>
 <$button class="tc-btn-invisible td-button td-button-primary td-button-small">
-<$action-sendmessage $message="tm-tiddlydesktop-rs-lan-sync-pair" deviceId=<<discDeviceId>> pin={{{ [<pinInputTiddler>get[text]] }}}/>
-<$action-deletetiddler $tiddler=<<pinInputTiddler>>/>
-<<td-lingo LanSync/Pair>>
+<$action-sendmessage $message="tm-tiddlydesktop-rs-relay-connect-room" roomCode=<<roomCode>>/>
+<<td-lingo RelaySync/Connect>>
+</$button>
+</$list>
+</div>
+<!-- Connected peers in this room -->
+<$list filter="[<roomConnected>match[yes]]" variable="ignore">
+<$list filter="[enlist{!!peer_list}]">
+<div class="td-relay-peer-item">
+<span class="td-sync-status-dot td-sync-relay td-sync-status-dot-small"></span>
+<span class="td-relay-peer-name"><$text text={{!!device_name}}/></span>
+</div>
+</$list>
+</$list>
+<!-- Room actions -->
+<div class="td-relay-room-actions">
+<$list filter="[<roomAutoConnect>match[yes]]" variable="ignore">
+<$button class="tc-btn-invisible td-button td-button-small td-relay-auto-on" tooltip=<<td-lingo Tooltips/RelayAutoConnectOn>>>
+<$action-sendmessage $message="tm-tiddlydesktop-rs-relay-set-room-auto-connect" roomCode=<<roomCode>> enabled="false"/>
+{{$:/core/images/done-button}} <<td-lingo RelaySync/AutoConnect>>
+</$button>
+</$list>
+<$list filter="[<roomAutoConnect>!match[yes]]" variable="ignore">
+<$button class="tc-btn-invisible td-button td-button-small td-relay-auto-off" tooltip=<<td-lingo Tooltips/RelayAutoConnectOff>>>
+<$action-sendmessage $message="tm-tiddlydesktop-rs-relay-set-room-auto-connect" roomCode=<<roomCode>> enabled="true"/>
+{{$:/core/images/close-button}} <<td-lingo RelaySync/AutoConnect>>
+</$button>
+</$list>
+<$let roomDetailsState={{{ [<roomCode>addprefix[$:/state/relay-room-details/]] }}}>
+<$button class="tc-btn-invisible td-button td-button-small" tooltip=<<td-lingo RelaySync/RoomDetails>>>
+<$reveal state=<<roomDetailsState>> type="match" text="yes" tag="span"><$action-setfield $tiddler=<<roomDetailsState>> text=""/>{{$:/core/images/up-arrow}} <<td-lingo RelaySync/RoomDetails>></$reveal>
+<$reveal state=<<roomDetailsState>> type="nomatch" text="yes" tag="span"><$action-sendmessage $message="tm-tiddlydesktop-rs-relay-load-room-details" roomCode=<<roomCode>>/><$action-setfield $tiddler=<<roomDetailsState>> text="yes"/>{{$:/core/images/down-arrow}} <<td-lingo RelaySync/RoomDetails>></$reveal>
+</$button>
+</$let>
+<$button class="tc-btn-invisible td-button td-button-danger td-button-small">
+<$action-sendmessage $message="tm-tiddlydesktop-rs-relay-remove-room" roomCode=<<roomCode>>/>
+<<td-lingo RelaySync/RemoveRoom>>
 </$button>
 </div>
+<!-- Room details (expandable) -->
+<$let roomDetailsState={{{ [<roomCode>addprefix[$:/state/relay-room-details/]] }}} roomDetailsTiddler={{{ [<roomCode>addprefix[$:/temp/tiddlydesktop-rs/relay-room-details/]] }}}>
+<$reveal state=<<roomDetailsState>> type="match" text="yes" animate="yes">
+<div class="td-relay-room-details">
+<div class="td-relay-pairing-code-row">
+<span class="td-relay-pairing-label"><<td-lingo RelaySync/RoomCode>></span>
+<span class="td-relay-pairing-code-value"><$text text=<<roomCode>>/></span>
+</div>
+<div class="td-relay-pairing-code-row">
+<span class="td-relay-pairing-label"><<td-lingo RelaySync/RoomPassword>></span>
+<$edit-text tiddler={{{ [<roomCode>addprefix[$:/temp/tiddlydesktop-rs/relay-room-password/]] }}} tag="input" class="td-relay-pairing-input" default={{{ [<roomDetailsTiddler>get[password]] }}}/>
+<$button class="tc-btn-invisible td-button td-button-small">
+<$action-sendmessage $message="tm-tiddlydesktop-rs-relay-set-room-password" roomCode=<<roomCode>> password={{{ [<roomCode>addprefix[$:/temp/tiddlydesktop-rs/relay-room-password/]get[text]] }}}/>
+<<td-lingo RelaySync/Save>>
+</$button>
+</div>
+<div class="td-relay-pairing-code-row">
+<span class="td-relay-pairing-label"><<td-lingo RelaySync/RoomName>></span>
+<$edit-text tiddler={{{ [<roomCode>addprefix[$:/temp/tiddlydesktop-rs/relay-room-name-edit/]] }}} tag="input" class="td-relay-pairing-input td-relay-room-name-input" default=<<roomName>>/>
+<$button class="tc-btn-invisible td-button td-button-small">
+<$action-sendmessage $message="tm-tiddlydesktop-rs-relay-set-room-name" roomCode=<<roomCode>> name={{{ [<roomCode>addprefix[$:/temp/tiddlydesktop-rs/relay-room-name-edit/]get[text]] }}}/>
+<<td-lingo RelaySync/Save>>
+</$button>
+</div>
+</div>
+</$reveal>
+</$let>
 </div>
 </$let>
 </$list>
 </div>
-</$list>
 
-</div>
-
-<!-- Paired Devices -->
-<div class="td-sync-section">
-<h3><<td-lingo LanSync/PairedDevices>></h3>
-<$list filter="[{$:/temp/tiddlydesktop-rs/lan-sync-paired-devices}match[yes]]" variable="ignore">
-<$list filter="[list[$:/temp/tiddlydesktop-rs/lan-sync-paired-devices-list]]">
-<div class={{{ [{!!is_connected}match[true]then[td-sync-device td-sync-device-connected]else[td-sync-device]] }}}>
-<div class="td-sync-device-info">
-<div class="td-sync-device-name"><$text text={{!!device_name}}/> <span class="td-sync-fingerprint">(<$text text={{{ [{!!device_id}split[]first[8]join[]] }}}/>)</span></div>
-<div class="td-sync-device-status">
-<$list filter="[{!!is_connected}match[true]]" variable="ignore">
-<span class="td-sync-status-dot td-sync-connected"></span> <<td-lingo LanSync/Connected>>
-</$list>
-<$list filter="[{!!is_connected}!match[true]]" variable="ignore">
-<span class="td-sync-status-dot td-sync-disconnected"></span> <<td-lingo LanSync/Disconnected>>
-</$list>
-</div>
-</div>
-<div class="td-sync-device-actions">
+<!-- Create Room / Join Room -->
+<$list filter="[{$:/temp/tiddlydesktop-rs/relay-adding-room}!match[create]!match[join]]" variable="ignore">
+<$button class="tc-btn-invisible td-button td-button-primary td-button-small">
+<$action-sendmessage $message="tm-tiddlydesktop-rs-relay-prepare-add-room"/>
+<$action-setfield $tiddler="$:/temp/tiddlydesktop-rs/relay-adding-room" text="create"/>
+<<td-lingo RelaySync/CreateRoom>>
+</$button>
 <$button class="tc-btn-invisible td-button td-button-small">
-<$action-sendmessage $message="tm-tiddlydesktop-rs-unpair-device" deviceId={{!!device_id}}/>
-<<td-lingo LanSync/Unpair>>
+<$action-setfield $tiddler="$:/temp/tiddlydesktop-rs/relay-adding-room" text="join"/>
+<$action-setfield $tiddler="$:/temp/tiddlydesktop-rs/relay-add-room-name" text=""/>
+<$action-setfield $tiddler="$:/temp/tiddlydesktop-rs/relay-add-room-code" text=""/>
+<$action-setfield $tiddler="$:/temp/tiddlydesktop-rs/relay-add-room-password" text=""/>
+<<td-lingo RelaySync/JoinRoom>>
+</$button>
+</$list>
+<$list filter="[{$:/temp/tiddlydesktop-rs/relay-adding-room}match[create]] [{$:/temp/tiddlydesktop-rs/relay-adding-room}match[join]]" variable="ignore">
+<div class="td-relay-add-room-form">
+<div class="td-relay-pairing-code-row">
+<span class="td-relay-pairing-label"><<td-lingo RelaySync/RoomName>></span>
+<$edit-text tiddler="$:/temp/tiddlydesktop-rs/relay-add-room-name" tag="input" placeholder="My Room" class="td-relay-pairing-input td-relay-room-name-input"/>
+</div>
+<div class="td-relay-pairing-code-row">
+<span class="td-relay-pairing-label"><<td-lingo RelaySync/RoomCode>></span>
+<$edit-text tiddler="$:/temp/tiddlydesktop-rs/relay-add-room-code" tag="input" class="td-relay-pairing-input"/>
+</div>
+<div class="td-relay-pairing-code-row">
+<span class="td-relay-pairing-label"><<td-lingo RelaySync/RoomPassword>></span>
+<$edit-text tiddler="$:/temp/tiddlydesktop-rs/relay-add-room-password" tag="input" class="td-relay-pairing-input"/>
+</div>
+<div class="td-relay-pairing-actions">
+<$button class="tc-btn-invisible td-button td-button-primary td-button-small">
+<$action-sendmessage $message="tm-tiddlydesktop-rs-relay-add-room" name={{$:/temp/tiddlydesktop-rs/relay-add-room-name}} roomCode={{$:/temp/tiddlydesktop-rs/relay-add-room-code}} password={{$:/temp/tiddlydesktop-rs/relay-add-room-password}}/>
+<$action-setfield $tiddler="$:/temp/tiddlydesktop-rs/relay-adding-room" text=""/>
+<$action-setfield $tiddler="$:/temp/tiddlydesktop-rs/relay-add-room-name" text=""/>
+<$action-setfield $tiddler="$:/temp/tiddlydesktop-rs/relay-add-room-code" text=""/>
+<$action-setfield $tiddler="$:/temp/tiddlydesktop-rs/relay-add-room-password" text=""/>
+<<td-lingo RelaySync/Save>>
+</$button>
+<$button class="tc-btn-invisible td-button td-button-small">
+<$action-setfield $tiddler="$:/temp/tiddlydesktop-rs/relay-adding-room" text=""/>
+<$action-setfield $tiddler="$:/temp/tiddlydesktop-rs/relay-add-room-name" text=""/>
+<$action-setfield $tiddler="$:/temp/tiddlydesktop-rs/relay-add-room-code" text=""/>
+<$action-setfield $tiddler="$:/temp/tiddlydesktop-rs/relay-add-room-password" text=""/>
+<<td-lingo RelaySync/Cancel>>
 </$button>
 </div>
 </div>
 </$list>
-</$list>
-<$list filter="[{$:/temp/tiddlydesktop-rs/lan-sync-paired-devices}!match[yes]]" variable="ignore">
-<div class="td-sync-empty"><<td-lingo LanSync/NoPairedDevices>></div>
-</$list>
+
 </div>
 
-<!-- Available Wikis from Peers -->
+<!-- Available Wikis from Peers (shown when any room is connected) -->
+<$list filter="[{$:/temp/tiddlydesktop-rs/any-sync-running}match[yes]]" variable="ignore">
 <div class="td-sync-section">
 <h3><<td-lingo LanSync/AvailableWikis>></h3>
 <$list filter="[prefix[$:/temp/tiddlydesktop-rs/remote-wikis/]limit[1]]" emptyMessage="""<div class="td-sync-empty"><<td-lingo LanSync/NoRemoteWikis>></div>""" variable="ignore">
@@ -663,9 +753,9 @@ title: $:/plugins/tiddlywiki/tiddlydesktop-rs/WikiList
 </$button>
 <$reveal state=<<linkPopupState>> type="popup" position="below" animate="yes" class="tc-drop-down td-link-wiki-dropdown tc-popup-keep">
 <div class="td-link-wiki-dropdown-content">
-<$list filter="[prefix[$:/temp/tiddlydesktop-rs/link-candidate/]sort[title]]" emptyMessage="<div class='td-link-wiki-empty'>No unsynced wikis available</div>">
+<$list filter="[prefix[$:/temp/tiddlydesktop-rs/link-candidate/]sort[title]]" emptyMessage="""<div class='td-link-wiki-empty'><<td-lingo LanSync/NoUnsyncedWikis>></div>""">
 <$button class="tc-btn-invisible td-link-wiki-option">
-<$action-sendmessage $message="tm-tiddlydesktop-rs-do-link-wiki" wikiId=<<remoteWikiId>> path={{!!candidate-path}}/>
+<$action-sendmessage $message="tm-tiddlydesktop-rs-do-link-wiki" wikiId=<<remoteWikiId>> path={{!!candidate-path}} fromDeviceId=<<remoteFromDeviceId>>/>
 <$action-deletetiddler $tiddler=<<linkPopupState>>/>
 <$text text={{!!text}}/>
 </$button>
@@ -679,7 +769,6 @@ title: $:/plugins/tiddlywiki/tiddlydesktop-rs/WikiList
 </$list>
 </$list>
 </div>
-
 </$list>
 
 </div>

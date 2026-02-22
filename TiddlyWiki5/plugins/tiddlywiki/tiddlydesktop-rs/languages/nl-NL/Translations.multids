@@ -76,28 +76,42 @@ CustomPaths/SelectFolder: Map selecteren
 CustomPaths/Change: Wijzigen
 CustomPaths/Clear: Wissen
 
-LanSync/Title: LAN-synchronisatie
-LanSync/Start: LAN-synchronisatie starten
-LanSync/Stop: LAN-synchronisatie stoppen
+LanSync/Title: Synchronisatie
 LanSync/DeviceName: Dit apparaat:
-LanSync/Pairing: Apparaatkoppeling
-LanSync/PinLabel: Voer deze PIN in op het andere apparaat:
-LanSync/ShowPin: Nieuw apparaat koppelen
-LanSync/HidePairingCode: Verbergen
-LanSync/PairedDevices: Gekoppelde apparaten
-LanSync/NoPairedDevices: Geen gekoppelde apparaten. Klik op "Nieuw apparaat koppelen" om een ander apparaat te verbinden.
-LanSync/Unpair: Ontkoppelen
-LanSync/Connected: Verbonden
-LanSync/Disconnected: Offline
-LanSync/DiscoveredDevices: Apparaten op uw netwerk
-LanSync/PinPlaceholder: PIN
-LanSync/Pair: Koppelen
 LanSync/AvailableWikis: Beschikbaar van apparaten
 LanSync/NoRemoteWikis: Geen nieuwe wiki's beschikbaar van verbonden apparaten.
 LanSync/From: van
 LanSync/GetWiki: Wiki ophalen
 LanSync/LinkWiki: Koppelen
 
+RelaySync/Title: Relay Sync
+RelaySync/AutoConnect: Automatisch verbinden
+RelaySync/Disconnect: Verbreken
+RelaySync/Peers: apparaten
+Labels/LAN: LAN
+Labels/Relay: Relay
+Labels/Both: LAN + Relay
+Tooltips/RelayAutoConnectOn: Relay automatisch verbinden ingeschakeld - klik om uit te schakelen
+Tooltips/RelayAutoConnectOff: Relay automatisch verbinden uitgeschakeld - klik om in te schakelen
+LanSync/NoUnsyncedWikis: Geen niet-gesynchroniseerde wiki's beschikbaar
+
+RelaySync/ServerUrl: Server-URL:
+RelaySync/SaveUrl: URL opslaan
+RelaySync/Rooms: Kamers
+RelaySync/CreateRoom: Kamer aanmaken
+RelaySync/JoinRoom: Kamer betreden
+RelaySync/RemoveRoom: Verwijderen
+RelaySync/RoomName: Naam:
+RelaySync/RoomCode: Code:
+RelaySync/RoomPassword: Wachtwoord:
+RelaySync/Connect: Verbinden
+RelaySync/NoRooms: Geen kamers geconfigureerd. Maak een nieuwe kamer aan of betreed een bestaande.
+RelaySync/AssignRoom: Kamer:
+RelaySync/NoRoom: Geen
+RelaySync/Save: Opslaan
+RelaySync/Cancel: Annuleren
+RelaySync/RoomDetails: Details
+Tooltips/SelectRelayRoom: Wijs deze wiki toe aan een relay-kamer
 Buttons/Plugins: plugins
 PluginInstaller/Title: Plugins beheren
 PluginInstaller/For: voor:

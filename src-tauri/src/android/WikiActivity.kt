@@ -2141,7 +2141,10 @@ class WikiActivity : AppCompatActivity() {
         @JavascriptInterface
         fun getSyncId(wikiPath: String): String {
             val port = bridgePort()
-            if (port <= 0) return ""
+            if (port <= 0) {
+                android.util.Log.i("TiddlyDesktopSync", "getSyncId: bridgePort=$port (not ready), returning empty")
+                return ""
+            }
             return try {
                 val url = java.net.URL("http://127.0.0.1:$port/_bridge/sync-id?path=${java.net.URLEncoder.encode(wikiPath, "UTF-8")}")
                 val conn = url.openConnection() as java.net.HttpURLConnection
@@ -2149,8 +2152,15 @@ class WikiActivity : AppCompatActivity() {
                 conn.readTimeout = 2000
                 val body = conn.inputStream.bufferedReader().readText()
                 conn.disconnect()
-                org.json.JSONObject(body).optString("sync_id", "")
-            } catch (_: Exception) { "" }
+                val syncId = org.json.JSONObject(body).optString("sync_id", "")
+                if (syncId.isNotEmpty()) {
+                    android.util.Log.i("TiddlyDesktopSync", "getSyncId: path=$wikiPath -> syncId=$syncId")
+                }
+                syncId
+            } catch (e: Exception) {
+                android.util.Log.e("TiddlyDesktopSync", "getSyncId error for path=$wikiPath port=$port: ${e.message}")
+                ""
+            }
         }
 
         @JavascriptInterface
@@ -3480,16 +3490,17 @@ class WikiActivity : AppCompatActivity() {
                 }
 
                 function _doRegisterPlugin() {
-                    // Capture dirty state - plugin registration should not mark wiki as modified
-                    var origNumChanges = ${'$'}tw.saverHandler ? ${'$'}tw.saverHandler.numChanges : 0;
-
                     // Build plugin content
                     var pluginContent = { tiddlers: {} };
                     Object.keys(pluginTiddlers).forEach(function(title) {
                         pluginContent.tiddlers[title] = pluginTiddlers[title];
                     });
 
-                    // Create/update the plugin tiddler
+                    // Suppress change events during plugin injection — no dirty state
+                    var origEnqueue = ${'$'}tw.wiki.enqueueTiddlerEvent;
+                    ${'$'}tw.wiki.enqueueTiddlerEvent = function() {};
+
+                    // Add plugin tiddler to the store (readPluginInfo reads from here)
                     ${'$'}tw.wiki.addTiddler(new ${'$'}tw.Tiddler({
                         title: PLUGIN_TITLE,
                         type: "application/json",
@@ -3500,31 +3511,21 @@ class WikiActivity : AppCompatActivity() {
                         text: JSON.stringify(pluginContent)
                     }));
 
-                    // Re-process plugins to unpack shadow tiddlers
-                    ${'$'}tw.wiki.readPluginInfo();
-                    ${'$'}tw.wiki.registerPluginTiddlers("plugin");
+                    // Process plugin
+                    ${'$'}tw.wiki.readPluginInfo([PLUGIN_TITLE]);
+                    ${'$'}tw.wiki.registerPluginTiddlers("plugin", [PLUGIN_TITLE]);
                     ${'$'}tw.wiki.unpackPluginTiddlers();
 
-                    // Mark as "in sync" so syncer won't save this plugin to disk
-                    if (${'$'}tw.syncer) {
-                        ${'$'}tw.syncer.tiddlerInfo[PLUGIN_TITLE] = {
-                            changeCount: ${'$'}tw.wiki.getChangeCount(PLUGIN_TITLE),
-                            revision: "0"
-                        };
-                    }
+                    // Remove from real store — must NEVER be saved
+                    ${'$'}tw.wiki.deleteTiddler(PLUGIN_TITLE);
+
+                    // Restore change events
+                    ${'$'}tw.wiki.enqueueTiddlerEvent = origEnqueue;
 
                     // Trigger UI refresh
                     ${'$'}tw.rootWidget.refresh({});
 
-                    // Restore dirty state after event loop completes
-                    setTimeout(function() {
-                        if (${'$'}tw.saverHandler) {
-                            ${'$'}tw.saverHandler.numChanges = origNumChanges;
-                            ${'$'}tw.saverHandler.updateDirtyStatus();
-                        }
-                    }, 0);
-
-                    console.log("[TiddlyDesktop] Plugin registered with " + Object.keys(pluginTiddlers).length + " shadow tiddlers");
+                    console.log("[TiddlyDesktop] Plugin registered with " + Object.keys(pluginTiddlers).length + " shadow tiddlers (no dirty state)");
                 }
 
                 function updatePlugin() {
@@ -4284,9 +4285,6 @@ class WikiActivity : AppCompatActivity() {
                 }
 
                 // Initialize - add UI tiddlers then register as plugin
-                // Capture dirty state before any modifications
-                var originalNumChanges = ${'$'}tw.saverHandler ? ${'$'}tw.saverHandler.numChanges : 0;
-
                 registerExtraMediaTypes();
                 // Refresh any tiddlers with newly-registered media types.
                 // Parsers were registered after TW's initial render (onPageFinished),
@@ -4463,16 +4461,6 @@ class WikiActivity : AppCompatActivity() {
                         }
                     }
                 };
-
-                // Restore dirty state after event loop completes - plugin injection should not mark wiki as modified
-                // Using setTimeout(0) ensures all synchronous change events have propagated
-                setTimeout(function() {
-                    if (${'$'}tw.saverHandler) {
-                        ${'$'}tw.saverHandler.numChanges = originalNumChanges;
-                        ${'$'}tw.saverHandler.updateDirtyStatus();
-                        console.log('[TiddlyDesktop] Dirty state restored after plugin injection');
-                    }
-                }, 0);
 
                 console.log('[TiddlyDesktop] External attachments handler installed');
             })();
@@ -6176,23 +6164,19 @@ class WikiActivity : AppCompatActivity() {
             // Now set up the ephemeral plugin (button UI)
             "try{" +
             "var p=JSON.parse(atob('$sharePluginBase64'));" +
+            // Suppress change events during plugin injection — no dirty state
+            "var oE=\$tw.wiki.enqueueTiddlerEvent;\$tw.wiki.enqueueTiddlerEvent=function(){};" +
             "\$tw.wiki.addTiddler(new \$tw.Tiddler(p));" +
+            "\$tw.wiki.readPluginInfo([p.title]);" +
             "\$tw.wiki.registerPluginTiddlers('plugin',[p.title]);" +
             "\$tw.wiki.unpackPluginTiddlers();" +
-            // Mark as "in sync" so syncer won't save this plugin
-            "if(\$tw.syncer){" +
-            "\$tw.syncer.tiddlerInfo[p.title]={changeCount:\$tw.wiki.getChangeCount(p.title),revision:'0'};" +
-            // Also ensure getSyncedTiddlers patch is installed (backup for saver script)
-            "if(!${'$'}tw.syncer.__tdPatched&&window.__tdIsInjected){" +
-            "\$tw.syncer.__tdPatched=true;" +
-            "var oGS=\$tw.syncer.getSyncedTiddlers.bind(\$tw.syncer);" +
-            "\$tw.syncer.getSyncedTiddlers=function(s){return oGS(s).filter(function(t){return !window.__tdIsInjected(t);});};" +
-            "console.log('[TiddlyDesktop] Syncer patched from share plugin');" +
-            "}" +
-            "}" +
-            // Trigger toolbar refresh
-            "if(\$tw.wiki.enqueueTiddlerEvent)\$tw.wiki.enqueueTiddlerEvent('\$:/plugins/tiddlydesktop-rs/android-share/button');" +
-            "console.log('[TiddlyDesktop] Share plugin injected');" +
+            // Remove from real store — must NEVER be saved
+            "\$tw.wiki.deleteTiddler(p.title);" +
+            // Restore change events
+            "\$tw.wiki.enqueueTiddlerEvent=oE;" +
+            // Trigger UI refresh so toolbar shows the share button
+            "\$tw.rootWidget.refresh({});" +
+            "console.log('[TiddlyDesktop] Share plugin injected (no dirty state)');" +
             "}catch(e){console.error('[TiddlyDesktop] Share plugin error:',e);}" +
             "})()"
 
@@ -6225,7 +6209,10 @@ class WikiActivity : AppCompatActivity() {
             "var sid=S.getSyncId(wp);" +
             "if(sid){activate(sid);}else{" +
             // Re-check every 500ms in case user enables sync from landing page
-            "var iv=setInterval(function(){var id=S.getSyncId(wp);if(id){clearInterval(iv);activate(id);}},500);" +
+            "console.log('[LAN Sync] No sync_id yet, polling for activation...');" +
+            "var iv=setInterval(function(){var id=S.getSyncId(wp);if(id){clearInterval(iv);console.log('[LAN Sync] Sync activated via polling: '+id);activate(id);}},500);" +
+            // Expose a check function for onResume — JS timers are throttled in background
+            "window.__tdCheckSyncActivation=function(){var id=S.getSyncId(wp);if(id){clearInterval(iv);console.log('[LAN Sync] Sync activated via onResume: '+id);activate(id);window.__tdCheckSyncActivation=null;}};" +
             "}" +
             "}" +
             // Serialize tiddler fields, converting Date objects to TW date strings
@@ -6234,6 +6221,7 @@ class WikiActivity : AppCompatActivity() {
             "function isDraft(t){if(t.indexOf(\"Draft of '\")==0)return true;" +
             "if(t.indexOf('Draft ')==0){var r=t.substring(6);var p=r.indexOf(\" of '\");if(p>0){var n=r.substring(0,p);if(/^\\d+\$/.test(n))return true;}}return false;}" +
             "function activate(syncId){" +
+            "var syncActive=true;" +
             "console.log('[LAN Sync] Activated for wiki: '+syncId);" +
             "S.wikiOpened(syncId);" +
             // Activate collab: set flag, flush queued outbound messages
@@ -6260,6 +6248,7 @@ class WikiActivity : AppCompatActivity() {
             "saveTimer=setTimeout(function(){saveTimer=null;\$tw.rootWidget.dispatchEvent({type:'tm-save-wiki'});},500);}" +
             // Outbound: detect local changes
             "\$tw.wiki.addEventListener('change',function(ch){" +
+            "if(!syncActive)return;" +
             "var keys=Object.keys(ch);" +
             "for(var i=0;i<keys.length;i++){" +
             "var t=keys[i];" +
@@ -6395,12 +6384,17 @@ class WikiActivity : AppCompatActivity() {
             // Poll loop — fast polling (20ms) for first 5s to speed up initial sync
             "var pollStart=Date.now();" +
             "function pollIv(){return(Date.now()-pollStart<5000)?20:100;}" +
-            "function poll(){try{var j=S.pollChanges(syncId);var c=JSON.parse(j);" +
-            "if(c&&c.length)for(var i=0;i<c.length;i++)queueChange(c[i]);" +
-            "}catch(e){}setTimeout(poll,pollIv());}" +
+            "function poll(){if(!syncActive)return;try{var j=S.pollChanges(syncId);var c=JSON.parse(j);" +
+            "if(c&&c.length){for(var i=0;i<c.length;i++){" +
+            "if(c[i].type==='sync-deactivate'){console.log('[LAN Sync] Deactivated by landing page');syncActive=false;_syncActive=false;" +
+            // After deactivation, poll for re-activation (user may re-enable sync)
+            "var reiv=setInterval(function(){var rid=S.getSyncId(wp);if(rid){clearInterval(reiv);console.log('[LAN Sync] Re-activated: '+rid);syncActive=true;_syncActive=true;pollStart=Date.now();setTimeout(poll,0);var rfps=cfps();S.broadcastFingerprints(rid,JSON.stringify(rfps));}},500);" +
+            "return;}" +
+            "queueChange(c[i]);}}}" +
+            "catch(e){}setTimeout(poll,pollIv());}" +
             "setTimeout(poll,0);" +
             // Periodic fingerprint re-broadcast (5s safety net for convergence)
-            "setInterval(function(){try{var fps2=cfps();S.broadcastFingerprints(syncId,JSON.stringify(fps2));}catch(e){}},5000);" +
+            "setInterval(function(){if(!syncActive)return;try{var fps2=cfps();S.broadcastFingerprints(syncId,JSON.stringify(fps2));}catch(e){}},5000);" +
             // Periodic tombstone cleanup (every 10 minutes)
             "setInterval(function(){try{var now2=Date.now();var tks=Object.keys(tomb);var rm=0;for(var ti=0;ti<tks.length;ti++){if(tomb[tks[ti]].time&&now2-tomb[tks[ti]].time>TOMB_MAX){delete tomb[tks[ti]];rm++;}}if(rm>0){console.log('[LAN Sync] Cleaned up '+rm+' expired tombstones');S.saveTombstones(syncId,JSON.stringify(tomb));}}catch(e){}},600000);" +
             "}" +
@@ -7145,6 +7139,14 @@ class WikiActivity : AppCompatActivity() {
                     if (r?.contains("ready") == true) importPendingCaptures()
                 }
             }
+        }
+
+        // Trigger sync activation check — JS setInterval is throttled while backgrounded,
+        // so on resume we explicitly check if sync was enabled while we were away
+        if (wasPaused && ::webView.isInitialized) {
+            webView.evaluateJavascript(
+                "(function(){if(window.__tdCheckSyncActivation)window.__tdCheckSyncActivation();})()"
+            , null)
         }
 
     }

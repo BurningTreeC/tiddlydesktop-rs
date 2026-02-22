@@ -70,8 +70,8 @@
     <string name="widget_capture_desc">زر التقاط سريع لـ TiddlyWiki</string>
 
     <!-- LanSyncService -->
-    <string name="sync_notif_channel_name">LAN Sync</string>
-    <string name="sync_notif_channel_desc">يحافظ على LAN Sync نشطًا لمزامنة الويكي في الوقت الفعلي</string>
-    <string name="sync_notif_title">LAN Sync نشط</string>
+    <string name="sync_notif_channel_name">Sync</string>
+    <string name="sync_notif_channel_desc">يحافظ على Sync نشطًا لمزامنة الويكي في الوقت الفعلي</string>
+    <string name="sync_notif_title">Sync نشط</string>
     <string name="sync_notif_text">مزامنة الويكي مع الأجهزة القريبة</string>
 </resources>

@@ -76,28 +76,42 @@ CustomPaths/SelectFolder: 选择文件夹
 CustomPaths/Change: 更改
 CustomPaths/Clear: 清除
 
-LanSync/Title: 局域网同步
-LanSync/Start: 开始局域网同步
-LanSync/Stop: 停止局域网同步
+LanSync/Title: 同步
 LanSync/DeviceName: 此设备：
-LanSync/Pairing: 设备配对
-LanSync/PinLabel: 在另一设备上输入此 PIN：
-LanSync/ShowPin: 配对新设备
-LanSync/HidePairingCode: 隐藏
-LanSync/PairedDevices: 已配对设备
-LanSync/NoPairedDevices: 没有已配对的设备。点击"配对新设备"以连接另一设备。
-LanSync/Unpair: 取消配对
-LanSync/Connected: 已连接
-LanSync/Disconnected: 离线
-LanSync/DiscoveredDevices: 网络上的设备
-LanSync/PinPlaceholder: PIN
-LanSync/Pair: 配对
 LanSync/AvailableWikis: 可从设备获取
 LanSync/NoRemoteWikis: 已连接的设备没有可用的新维基。
 LanSync/From: 来自
 LanSync/GetWiki: 获取维基
 LanSync/LinkWiki: 关联
 
+RelaySync/Title: 中继同步
+RelaySync/AutoConnect: 自动连接
+RelaySync/Disconnect: 断开连接
+RelaySync/Peers: 个设备
+Labels/LAN: 局域网
+Labels/Relay: 中继
+Labels/Both: 局域网 + 中继
+Tooltips/RelayAutoConnectOn: 中继自动连接已启用 - 点击禁用
+Tooltips/RelayAutoConnectOff: 中继自动连接已禁用 - 点击启用
+LanSync/NoUnsyncedWikis: 没有未同步的Wiki
+
+RelaySync/ServerUrl: 服务器 URL:
+RelaySync/SaveUrl: 保存 URL
+RelaySync/Rooms: 房间
+RelaySync/CreateRoom: 创建房间
+RelaySync/JoinRoom: 加入房间
+RelaySync/RemoveRoom: 移除
+RelaySync/RoomName: 名称:
+RelaySync/RoomCode: 代码:
+RelaySync/RoomPassword: 密码:
+RelaySync/Connect: 连接
+RelaySync/NoRooms: 未配置房间。创建新房间或加入现有房间。
+RelaySync/AssignRoom: 房间:
+RelaySync/NoRoom: 无
+RelaySync/Save: 保存
+RelaySync/Cancel: 取消
+RelaySync/RoomDetails: 详情
+Tooltips/SelectRelayRoom: 将此维基分配到中继房间
 Buttons/Plugins: 插件
 PluginInstaller/Title: 管理插件
 PluginInstaller/For: 适用于：

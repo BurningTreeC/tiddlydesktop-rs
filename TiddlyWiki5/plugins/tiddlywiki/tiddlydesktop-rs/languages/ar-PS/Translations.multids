@@ -76,28 +76,42 @@ CustomPaths/SelectFolder: اختر مجلدًا
 CustomPaths/Change: تغيير
 CustomPaths/Clear: مسح
 
-LanSync/Title: مزامنة الشبكة المحلية
-LanSync/Start: بدء مزامنة الشبكة المحلية
-LanSync/Stop: إيقاف مزامنة الشبكة المحلية
+LanSync/Title: مزامنة
 LanSync/DeviceName: هذا الجهاز:
-LanSync/Pairing: إقران الأجهزة
-LanSync/PinLabel: أدخل رمز PIN هذا على الجهاز الآخر:
-LanSync/ShowPin: إقران جهاز جديد
-LanSync/HidePairingCode: إخفاء
-LanSync/PairedDevices: الأجهزة المقترنة
-LanSync/NoPairedDevices: لا توجد أجهزة مقترنة. انقر على "إقران جهاز جديد" لتوصيل جهاز آخر.
-LanSync/Unpair: إلغاء الإقران
-LanSync/Connected: متصل
-LanSync/Disconnected: غير متصل
-LanSync/DiscoveredDevices: الأجهزة على شبكتك
-LanSync/PinPlaceholder: PIN
-LanSync/Pair: إقران
 LanSync/AvailableWikis: متاح من الأجهزة
 LanSync/NoRemoteWikis: لا توجد ويكي جديدة متاحة من الأجهزة المتصلة.
 LanSync/From: من
 LanSync/GetWiki: الحصول على ويكي
 LanSync/LinkWiki: ربط
 
+RelaySync/Title: مزامنة الترحيل
+RelaySync/AutoConnect: اتصال تلقائي
+RelaySync/Disconnect: قطع الاتصال
+RelaySync/Peers: أجهزة
+Labels/LAN: الشبكة المحلية
+Labels/Relay: الترحيل
+Labels/Both: الشبكة المحلية + الترحيل
+Tooltips/RelayAutoConnectOn: الاتصال التلقائي بالترحيل مفعّل - انقر للتعطيل
+Tooltips/RelayAutoConnectOff: الاتصال التلقائي بالترحيل معطّل - انقر للتفعيل
+LanSync/NoUnsyncedWikis: لا توجد ويكيات غير مزامنة متاحة
+
+RelaySync/ServerUrl: عنوان URL للخادم:
+RelaySync/SaveUrl: حفظ عنوان URL
+RelaySync/Rooms: الغرف
+RelaySync/CreateRoom: إنشاء غرفة
+RelaySync/JoinRoom: الانضمام إلى غرفة
+RelaySync/RemoveRoom: إزالة
+RelaySync/RoomName: الاسم:
+RelaySync/RoomCode: الرمز:
+RelaySync/RoomPassword: كلمة المرور:
+RelaySync/Connect: اتصال
+RelaySync/NoRooms: لا توجد غرف مُعدّة. أنشئ غرفة جديدة أو انضم إلى غرفة موجودة.
+RelaySync/AssignRoom: الغرفة:
+RelaySync/NoRoom: بدون
+RelaySync/Save: حفظ
+RelaySync/Cancel: إلغاء
+RelaySync/RoomDetails: تفاصيل
+Tooltips/SelectRelayRoom: تعيين هذا الويكي إلى غرفة ترحيل
 Buttons/Plugins: إضافات
 PluginInstaller/Title: إدارة الإضافات
 PluginInstaller/For: لـ:

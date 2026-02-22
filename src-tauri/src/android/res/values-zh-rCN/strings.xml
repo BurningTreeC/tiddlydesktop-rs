@@ -70,8 +70,8 @@
     <string name="widget_capture_desc">TiddlyWiki 快速捕获按钮</string>
 
     <!-- LanSyncService -->
-    <string name="sync_notif_channel_name">LAN Sync</string>
-    <string name="sync_notif_channel_desc">保持 LAN Sync 活跃，实现实时维基同步</string>
-    <string name="sync_notif_title">LAN Sync 活跃中</string>
+    <string name="sync_notif_channel_name">Sync</string>
+    <string name="sync_notif_channel_desc">保持 Sync 活跃，实现实时维基同步</string>
+    <string name="sync_notif_title">Sync 活跃中</string>
     <string name="sync_notif_text">正在与附近设备同步维基</string>
 </resources>

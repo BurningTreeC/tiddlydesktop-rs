@@ -76,28 +76,42 @@ CustomPaths/SelectFolder: Seleziona cartella
 CustomPaths/Change: Cambia
 CustomPaths/Clear: Cancella
 
-LanSync/Title: Sincronizzazione LAN
-LanSync/Start: Avvia sincronizzazione LAN
-LanSync/Stop: Interrompi sincronizzazione LAN
+LanSync/Title: Sincronizzazione
 LanSync/DeviceName: Questo dispositivo:
-LanSync/Pairing: Accoppiamento dispositivi
-LanSync/PinLabel: Inserisci questo PIN sull'altro dispositivo:
-LanSync/ShowPin: Accoppia nuovo dispositivo
-LanSync/HidePairingCode: Nascondi
-LanSync/PairedDevices: Dispositivi accoppiati
-LanSync/NoPairedDevices: Nessun dispositivo accoppiato. Clicca su "Accoppia nuovo dispositivo" per connettere un altro dispositivo.
-LanSync/Unpair: Disaccoppia
-LanSync/Connected: Connesso
-LanSync/Disconnected: Offline
-LanSync/DiscoveredDevices: Dispositivi sulla rete
-LanSync/PinPlaceholder: PIN
-LanSync/Pair: Associa
 LanSync/AvailableWikis: Disponibile dai dispositivi
 LanSync/NoRemoteWikis: Nessun nuovo wiki disponibile dai dispositivi collegati.
 LanSync/From: da
 LanSync/GetWiki: Ottieni wiki
 LanSync/LinkWiki: Collega
 
+RelaySync/Title: Sync Relay
+RelaySync/AutoConnect: Connessione automatica
+RelaySync/Disconnect: Disconnetti
+RelaySync/Peers: dispositivi
+Labels/LAN: LAN
+Labels/Relay: Relay
+Labels/Both: LAN + Relay
+Tooltips/RelayAutoConnectOn: Connessione automatica Relay attivata - clicca per disattivare
+Tooltips/RelayAutoConnectOff: Connessione automatica Relay disattivata - clicca per attivare
+LanSync/NoUnsyncedWikis: Nessun wiki non sincronizzato disponibile
+
+RelaySync/ServerUrl: URL del server:
+RelaySync/SaveUrl: Salva URL
+RelaySync/Rooms: Stanze
+RelaySync/CreateRoom: Crea stanza
+RelaySync/JoinRoom: Entra in una stanza
+RelaySync/RemoveRoom: Rimuovi
+RelaySync/RoomName: Nome:
+RelaySync/RoomCode: Codice:
+RelaySync/RoomPassword: Password:
+RelaySync/Connect: Connetti
+RelaySync/NoRooms: Nessuna stanza configurata. Crea una nuova stanza o entra in una esistente.
+RelaySync/AssignRoom: Stanza:
+RelaySync/NoRoom: Nessuna
+RelaySync/Save: Salva
+RelaySync/Cancel: Annulla
+RelaySync/RoomDetails: Dettagli
+Tooltips/SelectRelayRoom: Assegna questo wiki a una stanza relay
 Buttons/Plugins: plugin
 PluginInstaller/Title: Gestisci plugin
 PluginInstaller/For: per:

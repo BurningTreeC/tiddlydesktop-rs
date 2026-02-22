@@ -76,28 +76,42 @@ CustomPaths/SelectFolder: Izberi mapo
 CustomPaths/Change: Spremeni
 CustomPaths/Clear: Počisti
 
-LanSync/Title: Sinhronizacija LAN
-LanSync/Start: Začni sinhronizacijo LAN
-LanSync/Stop: Ustavi sinhronizacijo LAN
+LanSync/Title: Sinhronizacija
 LanSync/DeviceName: Ta naprava:
-LanSync/Pairing: Povezovanje naprav
-LanSync/PinLabel: Vnesite ta PIN na drugi napravi:
-LanSync/ShowPin: Poveži novo napravo
-LanSync/HidePairingCode: Skrij
-LanSync/PairedDevices: Povezane naprave
-LanSync/NoPairedDevices: Ni povezanih naprav. Kliknite "Poveži novo napravo" za povezavo druge naprave.
-LanSync/Unpair: Prekini povezavo
-LanSync/Connected: Povezano
-LanSync/Disconnected: Brez povezave
-LanSync/DiscoveredDevices: Naprave v omrežju
-LanSync/PinPlaceholder: PIN
-LanSync/Pair: Poveži
 LanSync/AvailableWikis: Na voljo iz naprav
 LanSync/NoRemoteWikis: Ni novih wikijev na voljo iz povezanih naprav.
 LanSync/From: iz
 LanSync/GetWiki: Pridobi wiki
 LanSync/LinkWiki: Poveži
 
+RelaySync/Title: Relay sinhronizacija
+RelaySync/AutoConnect: Samodejno povezovanje
+RelaySync/Disconnect: Prekini
+RelaySync/Peers: naprav
+Labels/LAN: LAN
+Labels/Relay: Relay
+Labels/Both: LAN + Relay
+Tooltips/RelayAutoConnectOn: Relay samodejno povezovanje omogočeno - klikni za onemogočenje
+Tooltips/RelayAutoConnectOff: Relay samodejno povezovanje onemogočeno - klikni za omogočenje
+LanSync/NoUnsyncedWikis: Ni nesinhroniziranih wikijev na voljo
+
+RelaySync/ServerUrl: URL strežnika:
+RelaySync/SaveUrl: Shrani URL
+RelaySync/Rooms: Sobe
+RelaySync/CreateRoom: Ustvari sobo
+RelaySync/JoinRoom: Pridruži se sobi
+RelaySync/RemoveRoom: Odstrani
+RelaySync/RoomName: Ime:
+RelaySync/RoomCode: Koda:
+RelaySync/RoomPassword: Geslo:
+RelaySync/Connect: Poveži
+RelaySync/NoRooms: Nobena soba ni nastavljena. Ustvarite novo sobo ali se pridružite obstoječi.
+RelaySync/AssignRoom: Soba:
+RelaySync/NoRoom: Nobena
+RelaySync/Save: Shrani
+RelaySync/Cancel: Prekliči
+RelaySync/RoomDetails: Podrobnosti
+Tooltips/SelectRelayRoom: Dodeli ta wiki prenosni sobi
 Buttons/Plugins: vtičniki
 PluginInstaller/Title: Upravljanje vtičnikov
 PluginInstaller/For: za:

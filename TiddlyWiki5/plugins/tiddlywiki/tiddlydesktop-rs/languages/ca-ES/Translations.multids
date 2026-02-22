@@ -76,28 +76,42 @@ CustomPaths/SelectFolder: Selecciona carpeta
 CustomPaths/Change: Canvia
 CustomPaths/Clear: Esborra
 
-LanSync/Title: Sincronització LAN
-LanSync/Start: Iniciar sincronització LAN
-LanSync/Stop: Aturar sincronització LAN
+LanSync/Title: Sincronització
 LanSync/DeviceName: Aquest dispositiu:
-LanSync/Pairing: Emparellament de dispositius
-LanSync/PinLabel: Introduïu aquest PIN a l'altre dispositiu:
-LanSync/ShowPin: Emparellar nou dispositiu
-LanSync/HidePairingCode: Amagar
-LanSync/PairedDevices: Dispositius emparellats
-LanSync/NoPairedDevices: No hi ha dispositius emparellats. Feu clic a "Emparellar nou dispositiu" per connectar un altre dispositiu.
-LanSync/Unpair: Desemparellar
-LanSync/Connected: Connectat
-LanSync/Disconnected: Fora de línia
-LanSync/DiscoveredDevices: Dispositius a la xarxa
-LanSync/PinPlaceholder: PIN
-LanSync/Pair: Aparellar
 LanSync/AvailableWikis: Disponible des de dispositius
 LanSync/NoRemoteWikis: No hi ha wikis nous disponibles des dels dispositius connectats.
 LanSync/From: de
 LanSync/GetWiki: Obtenir wiki
 LanSync/LinkWiki: Enllaçar
 
+RelaySync/Title: Sincronització Relay
+RelaySync/AutoConnect: Connexió automàtica
+RelaySync/Disconnect: Desconnectar
+RelaySync/Peers: dispositius
+Labels/LAN: LAN
+Labels/Relay: Relay
+Labels/Both: LAN + Relay
+Tooltips/RelayAutoConnectOn: Connexió automàtica Relay activada - feu clic per desactivar
+Tooltips/RelayAutoConnectOff: Connexió automàtica Relay desactivada - feu clic per activar
+LanSync/NoUnsyncedWikis: No hi ha wikis sense sincronitzar disponibles
+
+RelaySync/ServerUrl: URL del servidor:
+RelaySync/SaveUrl: Desa l'URL
+RelaySync/Rooms: Sales
+RelaySync/CreateRoom: Crear sala
+RelaySync/JoinRoom: Unir-se a una sala
+RelaySync/RemoveRoom: Eliminar
+RelaySync/RoomName: Nom:
+RelaySync/RoomCode: Codi:
+RelaySync/RoomPassword: Contrasenya:
+RelaySync/Connect: Connectar
+RelaySync/NoRooms: No hi ha sales configurades. Creeu una nova sala o uniu-vos a una existent.
+RelaySync/AssignRoom: Sala:
+RelaySync/NoRoom: Cap
+RelaySync/Save: Desar
+RelaySync/Cancel: Cancel·lar
+RelaySync/RoomDetails: Detalls
+Tooltips/SelectRelayRoom: Assignar aquest wiki a una sala de retransmissió
 Buttons/Plugins: connectors
 PluginInstaller/Title: Gestió de connectors
 PluginInstaller/For: per a:

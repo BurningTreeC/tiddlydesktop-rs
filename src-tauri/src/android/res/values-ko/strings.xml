@@ -70,8 +70,8 @@
     <string name="widget_capture_desc">TiddlyWiki용 빠른 캡처 버튼</string>
 
     <!-- LanSyncService -->
-    <string name="sync_notif_channel_name">LAN Sync</string>
-    <string name="sync_notif_channel_desc">LAN Sync을 활성 상태로 유지하여 실시간 위키 동기화</string>
-    <string name="sync_notif_title">LAN Sync 활성</string>
+    <string name="sync_notif_channel_name">Sync</string>
+    <string name="sync_notif_channel_desc">Sync을 활성 상태로 유지하여 실시간 위키 동기화</string>
+    <string name="sync_notif_title">Sync 활성</string>
     <string name="sync_notif_text">근처 기기와 위키 동기화 중</string>
 </resources>

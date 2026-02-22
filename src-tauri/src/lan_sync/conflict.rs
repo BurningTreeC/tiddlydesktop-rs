@@ -126,6 +126,16 @@ impl ConflictManager {
     }
 
     /// Record a local tiddler change and return the updated vector clock
+    /// Get the current vector clock for a tiddler without incrementing it.
+    /// Used when relay-routing a change that was already recorded by the bridge.
+    pub fn get_clock(&self, wiki_id: &str, title: &str) -> VectorClock {
+        let states = self.states.lock().unwrap();
+        states.get(wiki_id)
+            .and_then(|s| s.tiddler_clocks.get(title))
+            .cloned()
+            .unwrap_or_else(VectorClock::new)
+    }
+
     pub fn record_local_change(&self, wiki_id: &str, title: &str) -> VectorClock {
         let mut states = self.states.lock().unwrap();
         let state = states.entry(wiki_id.to_string()).or_default();

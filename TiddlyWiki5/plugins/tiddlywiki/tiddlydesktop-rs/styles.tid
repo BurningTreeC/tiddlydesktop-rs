@@ -1784,7 +1784,7 @@ body.td-is-android.td-main-wiki .td-wikilist {
 	font-size: 0.85em;
 }
 
-/* ── LAN Sync Panel ──────────────────────────────────────────────── */
+/* ── Sync Panel ──────────────────────────────────────────────────── */
 
 .td-sync-panel {
 	padding: 16px;
@@ -1832,59 +1832,11 @@ body.td-is-android.td-main-wiki .td-wikilist {
 	color: <<colour foreground>>;
 }
 
-/* PIN Display */
-.td-sync-pin-display {
-	text-align: center;
-	padding: 16px;
-}
-
-.td-sync-pin-label {
-	margin-bottom: 8px;
-	color: <<colour muted-foreground>>;
-}
-
-.td-sync-pin-code {
-	font-size: 2.5em;
-	font-weight: bold;
-	letter-spacing: 0.3em;
-	font-family: monospace;
-	padding: 12px;
-	background: <<colour page-background>>;
-	border-radius: 8px;
-	margin-bottom: 12px;
-	color: <<colour foreground>>;
-}
-
-/* Paired Device List */
-.td-sync-device {
-	display: flex;
-	align-items: center;
-	justify-content: space-between;
-	padding: 8px 12px;
-	border-bottom: 1px solid <<colour tiddler-border>>;
-}
-
-.td-sync-device:last-child {
-	border-bottom: none;
-}
-
-.td-sync-device-name {
-	font-weight: 500;
-}
-
 .td-sync-fingerprint {
 	font-size: 0.8em;
 	color: <<colour muted-foreground>>;
 	font-family: monospace;
 	font-weight: 400;
-}
-
-.td-sync-device-status {
-	font-size: 0.85em;
-	color: <<colour muted-foreground>>;
-	display: flex;
-	align-items: center;
-	gap: 4px;
 }
 
 .td-sync-status-dot {
@@ -1991,45 +1943,374 @@ body.td-is-android.td-main-wiki .td-wikilist {
 	color: <<colour muted-foreground>>;
 }
 
-/* Discovered devices (pairing) */
-.td-sync-discovered {
-	margin-top: 8px;
+/* Per-wiki sync room picker */
+.td-button-sync-peers {
+	background: <<colour tab-background>>;
+	border-color: <<colour tab-border>>;
+	color: <<colour foreground>>;
+	font-size: 12px;
+	padding: 4px 10px;
 }
 
-.td-sync-discovered h4 {
-	margin: 4px 0;
+.td-button-sync-peers:hover {
+	background: <<colour tab-background-selected>>;
+}
+
+.td-button-sync-peers svg {
+	width: 14px;
+	height: 14px;
+}
+
+.td-sync-peers-dropdown {
+	min-width: 200px;
+	max-width: 280px;
+}
+
+.td-sync-peers-dropdown-content {
+	padding: 4px 0;
+}
+
+.td-sync-peers-header {
+	padding: 6px 12px;
+	font-size: 12px;
+	font-weight: 600;
+	color: <<colour muted-foreground>>;
+	border-bottom: 1px solid <<colour tiddler-border>>;
+}
+
+.td-sync-peer-option {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	width: 100%;
+	padding: 8px 12px;
+	text-align: left;
+	background: none;
+	border: none;
+	cursor: pointer;
+	font-size: 13px;
+	color: <<colour foreground>>;
+	transition: background 0.1s;
+}
+
+.td-sync-peer-option:hover {
+	background: <<colour tab-background>>;
+}
+
+.td-sync-peer-check {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 18px;
+	height: 18px;
+	flex-shrink: 0;
+}
+
+.td-sync-peer-checked svg {
+	width: 16px;
+	height: 16px;
+	fill: <<colour primary>>;
+}
+
+.td-sync-peer-unchecked {
+	border: 2px solid <<colour muted-foreground>>;
+	border-radius: 3px;
+	width: 16px;
+	height: 16px;
+}
+
+.td-sync-peer-name {
+	flex: 1;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.td-sync-peer-option .td-sync-status-dot {
+	flex-shrink: 0;
+}
+
+/* Relay connection status dot */
+.td-sync-relay {
+	background: #2196f3;
+}
+
+/* Connection type badges */
+.td-conn-type-badge {
+	display: inline-block;
+	font-size: 0.7em;
+	padding: 1px 5px;
+	border-radius: 3px;
+	font-weight: 600;
+	letter-spacing: 0.3px;
+	margin-left: 4px;
+	vertical-align: middle;
+}
+
+.td-conn-lan {
+	background: #e8f5e9;
+	color: #2e7d32;
+}
+
+.td-conn-relay {
+	background: #e3f2fd;
+	color: #1565c0;
+}
+
+.td-conn-both {
+	background: #f3e5f5;
+	color: #7b1fa2;
+}
+
+/* Relay sync section */
+.td-sync-relay-status {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	margin-bottom: 8px;
+	font-size: 0.9em;
+}
+
+.td-sync-relay-actions {
+	display: flex;
+	gap: 8px;
+	flex-wrap: wrap;
+}
+
+.td-relay-auto-on {
+	background: #e8f0f8 !important;
+	border-color: #a0c0e0 !important;
+	color: #2d5a8a !important;
+}
+
+.td-relay-auto-on:hover {
+	background: #d8e8f0 !important;
+}
+
+.td-relay-auto-off {
+	background: <<colour tab-background>> !important;
+	border-color: <<colour tab-border>> !important;
+	color: <<colour muted-foreground>> !important;
+}
+
+.td-relay-auto-off:hover {
+	background: <<colour tab-background-selected>> !important;
+}
+
+/* Relay server URL row */
+.td-relay-server-row {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	margin-bottom: 8px;
+}
+
+.td-relay-server-input {
+	display: flex;
+	align-items: center;
+	gap: 4px;
+	flex: 1;
+	min-width: 0;
+}
+
+.td-relay-url-input {
+	flex: 1;
+	min-width: 0;
+	padding: 4px 8px;
+	border: 1px solid <<colour tiddler-border>>;
+	border-radius: 4px;
+	font-size: 0.85em;
+	font-family: monospace;
+	background: <<colour tiddler-background>>;
+	color: <<colour foreground>>;
+}
+
+.td-relay-url-input:focus {
+	outline: none;
+	border-color: <<colour primary>>;
+	box-shadow: 0 0 0 2px rgba(74, 144, 217, 0.2);
+}
+
+/* Relay peer count and list */
+.td-relay-peer-count {
+	font-size: 0.85em;
+	color: <<colour muted-foreground>>;
+}
+
+.td-relay-no-peers {
+	font-style: italic;
+}
+
+.td-relay-peer-item {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	padding: 2px 0 2px 16px;
+	font-size: 0.85em;
+	color: <<colour foreground>>;
+}
+
+.td-relay-peer-name {
+	color: <<colour foreground>>;
+}
+
+.td-sync-status-dot-small {
+	width: 6px;
+	height: 6px;
+}
+
+/* Relay Room List */
+.td-relay-room-list {
+	margin-bottom: 8px;
+}
+
+.td-relay-room-list h4 {
+	margin: 0 0 8px 0;
 	font-size: 0.9em;
 	color: <<colour muted-foreground>>;
 }
 
-.td-sync-discovered-device {
+.td-relay-room-item {
+	padding: 8px 12px;
+	border: 1px solid <<colour tiddler-border>>;
+	border-radius: 6px;
+	margin-bottom: 8px;
+	background: <<colour page-background>>;
+}
+
+.td-relay-room-header {
 	display: flex;
 	align-items: center;
-	justify-content: space-between;
-	padding: 6px 0;
-	border-bottom: 1px solid <<colour tab-border>>;
+	gap: 8px;
+	flex-wrap: wrap;
 }
 
-.td-sync-discovered-device:last-child {
-	border-bottom: none;
+.td-relay-room-name {
+	font-weight: 600;
+	font-size: 0.95em;
+	color: <<colour foreground>>;
 }
 
-.td-sync-discovered-name {
-	font-weight: 500;
-}
-
-.td-sync-discovered-pair {
+.td-relay-room-actions {
 	display: flex;
 	align-items: center;
 	gap: 6px;
+	margin-top: 6px;
+	flex-wrap: wrap;
 }
 
-.td-sync-pin-input {
-	width: 80px;
-	padding: 4px 8px;
-	border: 1px solid <<colour tab-border>>;
-	border-radius: 4px;
-	font-size: 1em;
-	text-align: center;
+.td-relay-add-room-form {
+	padding: 8px 12px;
+	border: 1px solid <<colour tiddler-border>>;
+	border-radius: 6px;
+	margin-top: 8px;
+	background: <<colour page-background>>;
+}
+
+.td-relay-room-name-input {
+	width: 160px;
+}
+
+.td-relay-room-details {
+	margin-top: 6px;
+	padding: 6px 8px;
+	border-top: 1px solid <<colour tiddler-border>>;
+	font-size: 0.9em;
+}
+
+.td-relay-room-details .td-relay-pairing-code-row {
+	margin-bottom: 4px;
+}
+
+.td-relay-room-details .td-relay-pairing-input {
+	width: 140px;
+}
+
+/* Relay Pairing */
+.td-relay-pairing {
+	margin-top: 12px;
+	padding-top: 8px;
+	border-top: 1px solid <<colour tab-border>>;
+}
+
+.td-relay-pairing h4 {
+	margin: 0 0 8px 0;
+	font-size: 0.9em;
+	color: <<colour muted-foreground>>;
+}
+
+.td-relay-pairing-actions {
+	display: flex;
+	gap: 8px;
+	margin-bottom: 8px;
+}
+
+.td-relay-pairing-display {
+	background: <<colour notification-background>>;
+	border: 1px solid <<colour notification-border>>;
+	border-radius: 6px;
+	padding: 12px;
+	margin-bottom: 8px;
+}
+
+.td-relay-pairing-share {
+	font-size: 0.85em;
+	color: <<colour muted-foreground>>;
+	margin-bottom: 8px;
+}
+
+.td-relay-pairing-codes {
+	margin-bottom: 8px;
+}
+
+.td-relay-pairing-code-row {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	margin-bottom: 4px;
+}
+
+.td-relay-pairing-label {
+	font-size: 0.85em;
+	color: <<colour muted-foreground>>;
+	min-width: 80px;
+}
+
+.td-relay-pairing-code-value {
+	font-family: monospace;
+	font-size: 1.2em;
+	font-weight: bold;
 	letter-spacing: 2px;
+	color: <<colour foreground>>;
+	background: <<colour tiddler-background>>;
+	padding: 4px 10px;
+	border-radius: 4px;
+	border: 1px solid <<colour tiddler-border>>;
+	user-select: all;
+}
+
+.td-relay-pairing-join-form {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	flex-wrap: wrap;
+	margin-bottom: 8px;
+}
+
+.td-relay-pairing-input {
+	padding: 4px 8px;
+	border: 1px solid <<colour tiddler-border>>;
+	border-radius: 4px;
+	font-size: 0.9em;
+	font-family: monospace;
+	background: <<colour tiddler-background>>;
+	color: <<colour foreground>>;
+	width: 120px;
+}
+
+.td-relay-pairing-input:focus {
+	outline: none;
+	border-color: <<colour primary>>;
+	box-shadow: 0 0 0 2px rgba(74, 144, 217, 0.2);
 }

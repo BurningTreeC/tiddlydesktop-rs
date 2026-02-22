@@ -70,8 +70,8 @@
     <string name="widget_capture_desc">Копче за брзо фаќање за TiddlyWiki</string>
 
     <!-- LanSyncService -->
-    <string name="sync_notif_channel_name">LAN Sync</string>
-    <string name="sync_notif_channel_desc">Ја одржува LAN Sync активна за синхронизација на вики во реално време</string>
-    <string name="sync_notif_title">LAN Sync активна</string>
+    <string name="sync_notif_channel_name">Sync</string>
+    <string name="sync_notif_channel_desc">Ја одржува Sync активна за синхронизација на вики во реално време</string>
+    <string name="sync_notif_title">Sync активна</string>
     <string name="sync_notif_text">Синхронизирање на викиња со блискু уреди</string>
 </resources>

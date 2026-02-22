@@ -1,86 +1,28 @@
-//! PIN-based device pairing via SPAKE2 password-authenticated key exchange.
+//! Device identity management for LAN sync.
 //!
-//! Flow:
-//! 1. Device A generates 6-digit PIN and displays it
-//! 2. User enters PIN on Device B
-//! 3. Both run SPAKE2 exchange over unencrypted WebSocket
-//! 4. Derive long-term shared secret via HKDF-SHA256
-//! 5. Store pairing in paired_devices.json
+//! Provides stable device identification across sessions and reinstalls.
+//! Uses MAC address on desktop, ANDROID_ID on Android.
 
-use hkdf::Hkdf;
-use hmac::{Hmac, Mac};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
-use sha2::Sha256;
-use spake2::{Ed25519Group, Identity, Password, Spake2};
 use std::path::PathBuf;
-use std::sync::Mutex;
 
-// SPAKE2 identity constants — MUST be the same in start_a and start_b.
-// id_a is always party A's identity, id_b is always party B's identity.
-const SPAKE2_ID_A: &[u8] = b"tiddlydesktop-pin-enterer";
-const SPAKE2_ID_B: &[u8] = b"tiddlydesktop-pin-displayer";
-
-type HmacSha256 = Hmac<Sha256>;
-
-/// A paired device record stored on disk
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PairedDevice {
-    pub device_id: String,
-    pub device_name: String,
-    /// SHA-256 hash of the long-term shared secret (for identification, not the secret itself)
-    pub shared_secret_hash: String,
-    /// The actual long-term shared secret (base64-encoded)
-    pub shared_secret: String,
-    /// When the pairing was established
-    pub paired_at: String,
-}
-
-/// Persistent paired devices file
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct PairedDevicesFile {
-    pub devices: Vec<PairedDevice>,
-}
-
-/// State for an in-progress SPAKE2 pairing
-pub struct PairingState {
-    pub pin: String,
-    pub spake2_state: Option<spake2::Spake2<Ed25519Group>>,
-    pub role: PairingRole,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum PairingRole {
-    /// This device generated the PIN and is waiting for another device to enter it
-    PinDisplayer,
-    /// This device entered the PIN and is initiating connection
-    PinEnterer,
-}
-
-/// Global pairing manager
+/// Device identity manager — provides device_id and device_name for sync.
 pub struct PairingManager {
     /// This device's unique ID
     device_id: String,
     /// This device's display name
     device_name: String,
-    /// Path to paired_devices.json
-    storage_path: PathBuf,
-    /// Currently paired devices (loaded from disk)
-    paired_devices: Mutex<Vec<PairedDevice>>,
-    /// In-progress pairing state (only one pairing at a time)
-    active_pairing: Mutex<Option<PairingState>>,
+    /// Path to data directory (for future use)
+    _data_dir: PathBuf,
 }
 
 impl PairingManager {
     pub fn new(device_id: String, device_name: String, data_dir: PathBuf) -> Self {
-        let storage_path = data_dir.join("paired_devices.json");
-        let paired_devices = Self::load_from_disk(&storage_path);
         Self {
             device_id,
             device_name,
-            storage_path,
-            paired_devices: Mutex::new(paired_devices),
-            active_pairing: Mutex::new(None),
+            _data_dir: data_dir,
         }
     }
 
@@ -93,241 +35,6 @@ impl PairingManager {
     pub fn device_name(&self) -> &str {
         &self.device_name
     }
-
-    /// Generate a 6-digit PIN and prepare SPAKE2 state for displaying
-    pub fn start_pairing_as_displayer(&self) -> String {
-        let pin: String = format!("{:06}", rand::rng().random_range(0..1_000_000u32));
-
-        let (spake2_state, _outbound_msg) = Spake2::<Ed25519Group>::start_b(
-            &Password::new(pin.as_bytes()),
-            &Identity::new(SPAKE2_ID_A),
-            &Identity::new(SPAKE2_ID_B),
-        );
-
-        let mut active = self.active_pairing.lock().unwrap();
-        *active = Some(PairingState {
-            pin: pin.clone(),
-            spake2_state: Some(spake2_state),
-            role: PairingRole::PinDisplayer,
-        });
-
-        pin
-    }
-
-    /// Start pairing as the device that entered the PIN
-    /// Returns the SPAKE2 outbound message to send to the displayer
-    pub fn start_pairing_as_enterer(&self, pin: &str) -> Vec<u8> {
-        let (spake2_state, outbound_msg) = Spake2::<Ed25519Group>::start_a(
-            &Password::new(pin.as_bytes()),
-            &Identity::new(SPAKE2_ID_A),
-            &Identity::new(SPAKE2_ID_B),
-        );
-
-        let mut active = self.active_pairing.lock().unwrap();
-        *active = Some(PairingState {
-            pin: pin.to_string(),
-            spake2_state: Some(spake2_state),
-            role: PairingRole::PinEnterer,
-        });
-
-        outbound_msg
-    }
-
-    /// Process the peer's SPAKE2 message and derive the shared secret
-    /// Returns (outbound_spake2_msg_if_displayer, long_term_key)
-    pub fn process_spake2_message(
-        &self,
-        peer_msg: &[u8],
-    ) -> Result<(Option<Vec<u8>>, Vec<u8>), String> {
-        let mut active = self.active_pairing.lock().unwrap();
-        let state = active
-            .as_mut()
-            .ok_or_else(|| "No active pairing".to_string())?;
-
-        let spake2_state = state
-            .spake2_state
-            .take()
-            .ok_or_else(|| "SPAKE2 state already consumed".to_string())?;
-
-        // If we're the displayer, we need to generate our outbound message now
-        let outbound_msg = if state.role == PairingRole::PinDisplayer {
-            let (new_state, msg) = Spake2::<Ed25519Group>::start_b(
-                &Password::new(state.pin.as_bytes()),
-                &Identity::new(SPAKE2_ID_A),
-                &Identity::new(SPAKE2_ID_B),
-            );
-            // We need to finish with the new state
-            let shared_secret = new_state
-                .finish(peer_msg)
-                .map_err(|e| format!("SPAKE2 finish failed: {:?}", e))?;
-
-            // Derive long-term key via HKDF
-            let long_term_key = derive_long_term_key(&shared_secret)?;
-
-            // Drop the old state (already consumed)
-            drop(spake2_state);
-
-            return Ok((Some(msg), long_term_key));
-        } else {
-            None
-        };
-
-        // Enterer: finish with the peer's message
-        let shared_secret = spake2_state
-            .finish(peer_msg)
-            .map_err(|e| format!("SPAKE2 finish failed: {:?}", e))?;
-
-        let long_term_key = derive_long_term_key(&shared_secret)?;
-        Ok((outbound_msg, long_term_key))
-    }
-
-    /// Generate confirmation HMAC from the long-term key
-    pub fn generate_confirmation(&self, long_term_key: &[u8]) -> Vec<u8> {
-        let mut mac =
-            HmacSha256::new_from_slice(long_term_key).expect("HMAC accepts any key length");
-        mac.update(b"tiddlydesktop-pairing-confirm");
-        mac.update(self.device_id.as_bytes());
-        mac.finalize().into_bytes().to_vec()
-    }
-
-    /// Verify peer's confirmation HMAC
-    pub fn verify_confirmation(
-        &self,
-        long_term_key: &[u8],
-        peer_device_id: &str,
-        confirmation: &[u8],
-    ) -> bool {
-        let mut mac =
-            HmacSha256::new_from_slice(long_term_key).expect("HMAC accepts any key length");
-        mac.update(b"tiddlydesktop-pairing-confirm");
-        mac.update(peer_device_id.as_bytes());
-        mac.verify_slice(confirmation).is_ok()
-    }
-
-    /// Complete pairing: store the paired device
-    pub fn complete_pairing(
-        &self,
-        peer_device_id: &str,
-        peer_device_name: &str,
-        long_term_key: &[u8],
-    ) -> Result<(), String> {
-        // Clear active pairing state
-        *self.active_pairing.lock().unwrap() = None;
-
-        let secret_b64 =
-            base64::Engine::encode(&base64::engine::general_purpose::STANDARD, long_term_key);
-        let secret_hash = format!("{:x}", md5::compute(long_term_key));
-
-        let device = PairedDevice {
-            device_id: peer_device_id.to_string(),
-            device_name: peer_device_name.to_string(),
-            shared_secret_hash: secret_hash,
-            shared_secret: secret_b64,
-            paired_at: chrono::Utc::now().to_rfc3339(),
-        };
-
-        let mut devices = self.paired_devices.lock().unwrap();
-        // Remove any existing pairing for this device ID
-        devices.retain(|d| d.device_id != peer_device_id);
-        devices.push(device);
-
-        self.save_to_disk(&devices)?;
-        Ok(())
-    }
-
-    /// Cancel any in-progress pairing
-    pub fn cancel_pairing(&self) {
-        *self.active_pairing.lock().unwrap() = None;
-    }
-
-    /// Get the current PIN being displayed (if any)
-    pub fn get_active_pin(&self) -> Option<String> {
-        self.active_pairing
-            .lock()
-            .unwrap()
-            .as_ref()
-            .filter(|s| s.role == PairingRole::PinDisplayer)
-            .map(|s| s.pin.clone())
-    }
-
-    /// Get the pairing role
-    pub fn get_pairing_role(&self) -> Option<PairingRole> {
-        self.active_pairing
-            .lock()
-            .unwrap()
-            .as_ref()
-            .map(|s| s.role.clone())
-    }
-
-    /// Get all paired devices
-    pub fn get_paired_devices(&self) -> Vec<PairedDevice> {
-        self.paired_devices.lock().unwrap().clone()
-    }
-
-    /// Look up a paired device by ID and return its shared secret
-    pub fn get_shared_secret(&self, device_id: &str) -> Option<Vec<u8>> {
-        let devices = self.paired_devices.lock().unwrap();
-        devices
-            .iter()
-            .find(|d| d.device_id == device_id)
-            .and_then(|d| {
-                base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &d.shared_secret)
-                    .ok()
-            })
-    }
-
-    /// Check if a device is paired
-    pub fn is_paired(&self, device_id: &str) -> bool {
-        self.paired_devices
-            .lock()
-            .unwrap()
-            .iter()
-            .any(|d| d.device_id == device_id)
-    }
-
-    /// Remove a paired device (unpair)
-    pub fn unpair_device(&self, device_id: &str) -> Result<(), String> {
-        let mut devices = self.paired_devices.lock().unwrap();
-        devices.retain(|d| d.device_id != device_id);
-        self.save_to_disk(&devices)
-    }
-
-    // ── Persistence ─────────────────────────────────────────────────────
-
-    fn load_from_disk(path: &PathBuf) -> Vec<PairedDevice> {
-        match std::fs::read_to_string(path) {
-            Ok(content) => {
-                serde_json::from_str::<PairedDevicesFile>(&content)
-                    .map(|f| f.devices)
-                    .unwrap_or_default()
-            }
-            Err(_) => Vec::new(),
-        }
-    }
-
-    fn save_to_disk(&self, devices: &[PairedDevice]) -> Result<(), String> {
-        let file = PairedDevicesFile {
-            devices: devices.to_vec(),
-        };
-        let json = serde_json::to_string_pretty(&file)
-            .map_err(|e| format!("Serialize failed: {}", e))?;
-        if let Some(parent) = self.storage_path.parent() {
-            std::fs::create_dir_all(parent)
-                .map_err(|e| format!("Create dir failed: {}", e))?;
-        }
-        std::fs::write(&self.storage_path, json)
-            .map_err(|e| format!("Write failed: {}", e))?;
-        Ok(())
-    }
-}
-
-/// Derive a 32-byte long-term key from the SPAKE2 shared secret
-fn derive_long_term_key(shared_secret: &[u8]) -> Result<Vec<u8>, String> {
-    let hk = Hkdf::<Sha256>::new(None, shared_secret);
-    let mut key = vec![0u8; 32];
-    hk.expand(b"tiddlydesktop-lan-sync-long-term-key", &mut key)
-        .map_err(|e| format!("HKDF expand failed: {}", e))?;
-    Ok(key)
 }
 
 /// Generate a random UUID v4 — used for wiki sync IDs and as device ID fallback
@@ -588,7 +295,7 @@ pub fn load_or_create_device_identity(data_dir: &std::path::Path) -> DeviceIdent
     // Create new random identity as last resort
     let identity = DeviceIdentity {
         device_id: generate_random_id(),
-        device_name: device_name,
+        device_name,
     };
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);

@@ -76,28 +76,42 @@ CustomPaths/SelectFolder: Vybrat složku
 CustomPaths/Change: Změnit
 CustomPaths/Clear: Vymazat
 
-LanSync/Title: Synchronizace LAN
-LanSync/Start: Spustit synchronizaci LAN
-LanSync/Stop: Zastavit synchronizaci LAN
+LanSync/Title: Synchronizace
 LanSync/DeviceName: Toto zařízení:
-LanSync/Pairing: Párování zařízení
-LanSync/PinLabel: Zadejte tento PIN na druhém zařízení:
-LanSync/ShowPin: Spárovat nové zařízení
-LanSync/HidePairingCode: Skrýt
-LanSync/PairedDevices: Spárovaná zařízení
-LanSync/NoPairedDevices: Žádná spárovaná zařízení. Klikněte na "Spárovat nové zařízení" pro připojení dalšího zařízení.
-LanSync/Unpair: Zrušit párování
-LanSync/Connected: Připojeno
-LanSync/Disconnected: Offline
-LanSync/DiscoveredDevices: Zařízení ve vaší síti
-LanSync/PinPlaceholder: PIN
-LanSync/Pair: Spárovat
 LanSync/AvailableWikis: Dostupné ze zařízení
 LanSync/NoRemoteWikis: Žádné nové wiki nejsou dostupné z připojených zařízení.
 LanSync/From: z
 LanSync/GetWiki: Získat wiki
 LanSync/LinkWiki: Propojit
 
+RelaySync/Title: Relay synchronizace
+RelaySync/AutoConnect: Automatické připojení
+RelaySync/Disconnect: Odpojit
+RelaySync/Peers: zařízení
+Labels/LAN: LAN
+Labels/Relay: Relay
+Labels/Both: LAN + Relay
+Tooltips/RelayAutoConnectOn: Automatické připojení Relay povoleno - klikněte pro zakázání
+Tooltips/RelayAutoConnectOff: Automatické připojení Relay zakázáno - klikněte pro povolení
+LanSync/NoUnsyncedWikis: Žádné nesynchronizované wiki nejsou k dispozici
+
+RelaySync/ServerUrl: URL serveru:
+RelaySync/SaveUrl: Uložit URL
+RelaySync/Rooms: Místnosti
+RelaySync/CreateRoom: Vytvořit místnost
+RelaySync/JoinRoom: Připojit se k místnosti
+RelaySync/RemoveRoom: Odstranit
+RelaySync/RoomName: Název:
+RelaySync/RoomCode: Kód:
+RelaySync/RoomPassword: Heslo:
+RelaySync/Connect: Připojit
+RelaySync/NoRooms: Žádné místnosti nejsou nakonfigurovány. Vytvořte novou místnost nebo se připojte k existující.
+RelaySync/AssignRoom: Místnost:
+RelaySync/NoRoom: Žádná
+RelaySync/Save: Uložit
+RelaySync/Cancel: Zrušit
+RelaySync/RoomDetails: Podrobnosti
+Tooltips/SelectRelayRoom: Přiřadit toto wiki k přenosové místnosti
 Buttons/Plugins: pluginy
 PluginInstaller/Title: Správa pluginů
 PluginInstaller/For: pro:

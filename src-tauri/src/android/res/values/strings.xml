@@ -71,9 +71,9 @@
     <string name="notif_text">Wiki is running in the background</string>
 
     <!-- LanSyncService -->
-    <string name="sync_notif_channel_name">LAN Sync</string>
-    <string name="sync_notif_channel_desc">Keeps LAN sync active for real-time wiki synchronization</string>
-    <string name="sync_notif_title">LAN Sync Active</string>
+    <string name="sync_notif_channel_name">Sync</string>
+    <string name="sync_notif_channel_desc">Keeps sync active for real-time wiki synchronization</string>
+    <string name="sync_notif_title">Sync Active</string>
     <string name="sync_notif_text">Syncing wikis with nearby devices</string>
 
     <!-- Widgets -->

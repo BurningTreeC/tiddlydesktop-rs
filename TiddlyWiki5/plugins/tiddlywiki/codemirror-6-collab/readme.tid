@@ -2,17 +2,17 @@ title: $:/plugins/tiddlywiki/codemirror-6-collab/readme
 
 ! CodeMirror 6 Collaborative Editing
 
-This plugin enables real-time collaborative editing when using CodeMirror 6 as your text editor and TiddlyDesktop's LAN Sync feature.
+This plugin enables real-time collaborative editing when using CodeMirror 6 as your text editor and TiddlyDesktop's Sync feature.
 
 !! Requirements
 
-* TiddlyDesktop-RS with LAN Sync enabled
+* TiddlyDesktop-RS with Sync enabled
 * CodeMirror 6 editor plugin installed
-* At least two paired devices on the same network
+* At least two devices in the same sync room
 
 !! How it works
 
-When two or more devices have the same wiki synced via LAN Sync and edit the same tiddler simultaneously, this plugin enables real-time collaborative editing using [[Yjs|https://yjs.dev/]] (a CRDT library). Changes are merged automatically without conflicts.
+When two or more devices have the same wiki synced via TiddlyDesktop Sync and edit the same tiddler simultaneously, this plugin enables real-time collaborative editing using [[Yjs|https://yjs.dev/]] (a CRDT library). Changes are merged automatically without conflicts.
 
 !! Features
 

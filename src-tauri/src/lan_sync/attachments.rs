@@ -200,11 +200,13 @@ impl AttachmentManager {
     /// Uses two passes to avoid loading the entire file into memory:
     /// 1. First pass: compute SHA-256 hash and file size
     /// 2. Second pass: stream chunks via bounded channel
+    /// If `peers` is Some, sends only to those peers; otherwise broadcasts to all.
     pub async fn prepare_outbound(
         &self,
         wiki_id: &str,
         relative_path: &str,
         server: &SyncServer,
+        peers: Option<&[String]>,
     ) -> Result<(), String> {
         use std::io::Read;
 
@@ -238,15 +240,18 @@ impl AttachmentManager {
             ((file_size as usize + ATTACHMENT_CHUNK_SIZE - 1) / ATTACHMENT_CHUNK_SIZE) as u32;
 
         // Send AttachmentChanged header
-        server
-            .broadcast(&SyncMessage::AttachmentChanged {
-                wiki_id: wiki_id.to_string(),
-                filename: relative_path.to_string(),
-                file_size,
-                sha256,
-                chunk_count,
-            })
-            .await;
+        let header_msg = SyncMessage::AttachmentChanged {
+            wiki_id: wiki_id.to_string(),
+            filename: relative_path.to_string(),
+            file_size,
+            sha256,
+            chunk_count,
+        };
+        if let Some(peer_ids) = peers {
+            server.send_to_peers(peer_ids, &header_msg).await;
+        } else {
+            server.broadcast(&header_msg).await;
+        }
 
         // Second pass: stream chunks via bounded channel (max ~8MB buffered)
         let (tx, mut rx) = tokio::sync::mpsc::channel::<String>(8);
@@ -272,16 +277,20 @@ impl AttachmentManager {
 
         let wid = wiki_id.to_string();
         let fname = relative_path.to_string();
+        let peers_owned: Option<Vec<String>> = peers.map(|p| p.to_vec());
         let mut idx = 0u32;
         while let Some(b64) = rx.recv().await {
-            server
-                .broadcast(&SyncMessage::AttachmentChunk {
-                    wiki_id: wid.clone(),
-                    filename: fname.clone(),
-                    chunk_index: idx,
-                    data_base64: b64,
-                })
-                .await;
+            let chunk_msg = SyncMessage::AttachmentChunk {
+                wiki_id: wid.clone(),
+                filename: fname.clone(),
+                chunk_index: idx,
+                data_base64: b64,
+            };
+            if let Some(ref peer_ids) = peers_owned {
+                server.send_to_peers(peer_ids, &chunk_msg).await;
+            } else {
+                server.broadcast(&chunk_msg).await;
+            }
             idx += 1;
         }
 

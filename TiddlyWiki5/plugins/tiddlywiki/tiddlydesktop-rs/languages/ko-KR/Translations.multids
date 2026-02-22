@@ -76,28 +76,42 @@ CustomPaths/SelectFolder: 폴더 선택
 CustomPaths/Change: 변경
 CustomPaths/Clear: 지우기
 
-LanSync/Title: LAN 동기화
-LanSync/Start: LAN 동기화 시작
-LanSync/Stop: LAN 동기화 중지
+LanSync/Title: 동기화
 LanSync/DeviceName: 이 기기:
-LanSync/Pairing: 기기 페어링
-LanSync/PinLabel: 다른 기기에서 이 PIN을 입력하세요:
-LanSync/ShowPin: 새 기기 페어링
-LanSync/HidePairingCode: 숨기기
-LanSync/PairedDevices: 페어링된 기기
-LanSync/NoPairedDevices: 페어링된 기기가 없습니다. "새 기기 페어링"을 클릭하여 다른 기기를 연결하세요.
-LanSync/Unpair: 페어링 해제
-LanSync/Connected: 연결됨
-LanSync/Disconnected: 오프라인
-LanSync/DiscoveredDevices: 네트워크의 기기
-LanSync/PinPlaceholder: PIN
-LanSync/Pair: 페어링
 LanSync/AvailableWikis: 피어에서 사용 가능
 LanSync/NoRemoteWikis: 연결된 피어에서 사용 가능한 새 위키가 없습니다.
 LanSync/From: 출처:
 LanSync/GetWiki: 위키 가져오기
 LanSync/LinkWiki: 연결
 
+RelaySync/Title: 릴레이 동기화
+RelaySync/AutoConnect: 자동 연결
+RelaySync/Disconnect: 연결 해제
+RelaySync/Peers: 기기
+Labels/LAN: LAN
+Labels/Relay: 릴레이
+Labels/Both: LAN + 릴레이
+Tooltips/RelayAutoConnectOn: 릴레이 자동 연결 활성화 - 클릭하여 비활성화
+Tooltips/RelayAutoConnectOff: 릴레이 자동 연결 비활성화 - 클릭하여 활성화
+LanSync/NoUnsyncedWikis: 동기화되지 않은 위키가 없습니다
+
+RelaySync/ServerUrl: 서버 URL:
+RelaySync/SaveUrl: URL 저장
+RelaySync/Rooms: 방
+RelaySync/CreateRoom: 방 만들기
+RelaySync/JoinRoom: 방 참가
+RelaySync/RemoveRoom: 제거
+RelaySync/RoomName: 이름:
+RelaySync/RoomCode: 코드:
+RelaySync/RoomPassword: 비밀번호:
+RelaySync/Connect: 연결
+RelaySync/NoRooms: 구성된 방이 없습니다. 새 방을 만들거나 기존 방에 참가하세요.
+RelaySync/AssignRoom: 방:
+RelaySync/NoRoom: 없음
+RelaySync/Save: 저장
+RelaySync/Cancel: 취소
+RelaySync/RoomDetails: 상세
+Tooltips/SelectRelayRoom: 이 위키를 릴레이 방에 할당
 Buttons/Plugins: 플러그인
 PluginInstaller/Title: 플러그인 관리
 PluginInstaller/For: 대상:

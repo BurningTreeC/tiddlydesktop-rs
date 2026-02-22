@@ -70,8 +70,8 @@
     <string name="widget_capture_desc">Knap til hurtig opsamling for TiddlyWiki</string>
 
     <!-- LanSyncService -->
-    <string name="sync_notif_channel_name">LAN Sync</string>
-    <string name="sync_notif_channel_desc">Holder LAN Sync aktivt til realtidswikisynchronisering</string>
-    <string name="sync_notif_title">LAN Sync aktivt</string>
+    <string name="sync_notif_channel_name">Sync</string>
+    <string name="sync_notif_channel_desc">Holder Sync aktivt til realtidswikisynchronisering</string>
+    <string name="sync_notif_title">Sync aktivt</string>
     <string name="sync_notif_text">Synkroniserer wikier med nahliggende enheder</string>
 </resources>

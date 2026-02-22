@@ -170,23 +170,45 @@
       }, 500);
     }
 
-    // Desktop: listen for sync being enabled/disabled at runtime via Tauri events
-    if (hasTauri && window.__TAURI__.event) {
-      window.__TAURI__.event.listen('lan-sync-activate', function(event) {
-        var data = event.payload;
-        if (data.wiki_path === wikiPath && data.sync_id) {
-          rsLog('[LAN Sync] Activated via event: ' + data.sync_id);
-          activateSync(data.sync_id);
-        }
-      });
-
-      window.__TAURI__.event.listen('lan-sync-deactivate', function(event) {
-        var data = event.payload;
-        if (data.wiki_path === wikiPath) {
-          rsLog('[LAN Sync] Deactivated via event');
-          deactivateSync();
-        }
-      });
+    // Desktop: poll IPC queue for sync activation messages.
+    // Tauri events (app.emit) do NOT cross process boundaries — each wiki
+    // window is a separate Tauri process. The main process sends activation
+    // messages via IPC (TCP), which the wiki process's listener thread pushes
+    // to IPC_SYNC_QUEUE. We poll that queue here.
+    if (hasTauri && !isAndroid) {
+      var preActivationPollActive = true;
+      function pollIpcForActivation() {
+        if (!preActivationPollActive) return;
+        window.__TAURI__.core.invoke('lan_sync_poll_ipc').then(function(messages) {
+          if (messages && messages.length) {
+            for (var i = 0; i < messages.length; i++) {
+              try {
+                var data = JSON.parse(messages[i]);
+                if (!data || !data.type) continue;
+                if (data.type === 'sync-activate' && data.wiki_path === wikiPath && data.sync_id) {
+                  rsLog('[LAN Sync] Activated via IPC: ' + data.sync_id);
+                  activateSync(data.sync_id);
+                  // Once activated, setupSyncHandlers starts its own IPC poll
+                  // that handles both sync data and activation messages
+                  preActivationPollActive = false;
+                  return;
+                }
+                if (data.type === 'sync-deactivate' && data.wiki_path === wikiPath) {
+                  rsLog('[LAN Sync] Deactivated via IPC');
+                  deactivateSync();
+                }
+              } catch (e) {}
+            }
+          }
+          if (preActivationPollActive) setTimeout(pollIpcForActivation, 500);
+        }).catch(function() {
+          if (preActivationPollActive) setTimeout(pollIpcForActivation, 2000);
+        });
+      }
+      // Only start pre-activation polling if sync isn't already active
+      if (!activeSyncState) {
+        setTimeout(pollIpcForActivation, 500);
+      }
     }
 
     // Wiki config change notifications (tiddlywiki.info updated via LAN sync)
@@ -609,6 +631,7 @@
         if (isSyncExcluded(title)) return;
         if (conflictTitles.has(title)) return;
 
+        _log('[LAN Sync] Outbound change: ' + title);
         if (changes[title].deleted) {
           // Record tombstone so peers learn about this deletion even if offline
           var delMod = $tw.utils.stringifyDate(new Date());
@@ -1017,6 +1040,13 @@
                 if (data.wiki_id && data.wiki_id !== wikiId) {
                   _log('[LAN Sync] IPC skip: wiki_id mismatch (' + data.wiki_id + ' vs ' + wikiId + ')');
                   continue;
+                }
+
+                // Handle sync deactivation via IPC (cross-process)
+                if (data.type === 'sync-deactivate' && data.wiki_path === wikiPath) {
+                  _log('[LAN Sync] Deactivated via IPC (in sync handler)');
+                  deactivateSync();
+                  return; // stop this poll iteration
                 }
 
                 switch (data.type) {

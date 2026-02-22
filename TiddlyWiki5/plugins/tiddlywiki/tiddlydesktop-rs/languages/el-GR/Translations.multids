@@ -76,28 +76,42 @@ CustomPaths/SelectFolder: Επιλογή φακέλου
 CustomPaths/Change: Αλλαγή
 CustomPaths/Clear: Εκκαθάριση
 
-LanSync/Title: Συγχρονισμός LAN
-LanSync/Start: Έναρξη συγχρονισμού LAN
-LanSync/Stop: Διακοπή συγχρονισμού LAN
+LanSync/Title: Συγχρονισμός
 LanSync/DeviceName: Αυτή η συσκευή:
-LanSync/Pairing: Σύζευξη συσκευών
-LanSync/PinLabel: Εισάγετε αυτό το PIN στην άλλη συσκευή:
-LanSync/ShowPin: Σύζευξη νέας συσκευής
-LanSync/HidePairingCode: Απόκρυψη
-LanSync/PairedDevices: Συζευγμένες συσκευές
-LanSync/NoPairedDevices: Δεν υπάρχουν συζευγμένες συσκευές. Κάντε κλικ στο "Σύζευξη νέας συσκευής" για να συνδέσετε μια άλλη συσκευή.
-LanSync/Unpair: Αποσύζευξη
-LanSync/Connected: Συνδεδεμένο
-LanSync/Disconnected: Εκτός σύνδεσης
-LanSync/DiscoveredDevices: Συσκευές στο δίκτυό σας
-LanSync/PinPlaceholder: PIN
-LanSync/Pair: Σύζευξη
 LanSync/AvailableWikis: Διαθέσιμα από συσκευές
 LanSync/NoRemoteWikis: Δεν υπάρχουν νέα wiki διαθέσιμα από τις συνδεδεμένες συσκευές.
 LanSync/From: από
 LanSync/GetWiki: Λήψη wiki
 LanSync/LinkWiki: Σύνδεση
 
+RelaySync/Title: Συγχρονισμός Relay
+RelaySync/AutoConnect: Αυτόματη σύνδεση
+RelaySync/Disconnect: Αποσύνδεση
+RelaySync/Peers: συσκευές
+Labels/LAN: LAN
+Labels/Relay: Relay
+Labels/Both: LAN + Relay
+Tooltips/RelayAutoConnectOn: Αυτόματη σύνδεση Relay ενεργοποιημένη - κάντε κλικ για απενεργοποίηση
+Tooltips/RelayAutoConnectOff: Αυτόματη σύνδεση Relay απενεργοποιημένη - κάντε κλικ για ενεργοποίηση
+LanSync/NoUnsyncedWikis: Δεν υπάρχουν μη συγχρονισμένα wiki
+
+RelaySync/ServerUrl: URL διακομιστή:
+RelaySync/SaveUrl: Αποθήκευση URL
+RelaySync/Rooms: Δωμάτια
+RelaySync/CreateRoom: Δημιουργία δωματίου
+RelaySync/JoinRoom: Είσοδος σε δωμάτιο
+RelaySync/RemoveRoom: Αφαίρεση
+RelaySync/RoomName: Όνομα:
+RelaySync/RoomCode: Κωδικός:
+RelaySync/RoomPassword: Κωδικός πρόσβασης:
+RelaySync/Connect: Σύνδεση
+RelaySync/NoRooms: Δεν υπάρχουν ρυθμισμένα δωμάτια. Δημιουργήστε ένα νέο δωμάτιο ή μπείτε σε ένα υπάρχον.
+RelaySync/AssignRoom: Δωμάτιο:
+RelaySync/NoRoom: Κανένα
+RelaySync/Save: Αποθήκευση
+RelaySync/Cancel: Ακύρωση
+RelaySync/RoomDetails: Λεπτομέρειες
+Tooltips/SelectRelayRoom: Αντιστοίχιση αυτού του wiki σε δωμάτιο αναμετάδοσης
 Buttons/Plugins: πρόσθετα
 PluginInstaller/Title: Διαχείριση προσθέτων
 PluginInstaller/For: για:

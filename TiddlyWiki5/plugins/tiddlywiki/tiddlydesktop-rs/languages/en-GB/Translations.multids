@@ -76,28 +76,42 @@ CustomPaths/SelectFolder: Select Folder
 CustomPaths/Change: Change
 CustomPaths/Clear: Clear
 
-LanSync/Title: LAN Sync
-LanSync/Start: Start LAN Sync
-LanSync/Stop: Stop LAN Sync
+LanSync/Title: Sync
 LanSync/DeviceName: This device:
-LanSync/Pairing: Device Pairing
-LanSync/PinLabel: Enter this PIN on the other device:
-LanSync/ShowPin: Pair New Device
-LanSync/HidePairingCode: Hide
-LanSync/PairedDevices: Paired Devices
-LanSync/NoPairedDevices: No paired devices. Click "Pair New Device" to connect another device.
-LanSync/Unpair: Unpair
-LanSync/Connected: Connected
-LanSync/Disconnected: Offline
-LanSync/DiscoveredDevices: Devices on your network
-LanSync/PinPlaceholder: PIN
-LanSync/Pair: Pair
 LanSync/AvailableWikis: Available from Peers
 LanSync/NoRemoteWikis: No new wikis available from connected peers.
 LanSync/From: from
 LanSync/GetWiki: Get Wiki
 LanSync/LinkWiki: Link
 
+RelaySync/Title: Relay Sync
+RelaySync/AutoConnect: Auto-connect
+RelaySync/Disconnect: Disconnect
+RelaySync/Peers: peers
+Labels/LAN: LAN
+Labels/Relay: Relay
+Labels/Both: LAN + Relay
+Tooltips/RelayAutoConnectOn: Relay auto-connect enabled - click to disable
+Tooltips/RelayAutoConnectOff: Relay auto-connect disabled - click to enable
+LanSync/NoUnsyncedWikis: No unsynced wikis available
+
+RelaySync/ServerUrl: Server URL:
+RelaySync/SaveUrl: Save URL
+RelaySync/Rooms: Rooms
+RelaySync/CreateRoom: Create Room
+RelaySync/JoinRoom: Join Room
+RelaySync/RemoveRoom: Remove
+RelaySync/RoomName: Name:
+RelaySync/RoomCode: Code:
+RelaySync/RoomPassword: Password:
+RelaySync/Connect: Connect
+RelaySync/NoRooms: No rooms configured. Create a new room or join an existing one.
+RelaySync/AssignRoom: Room:
+RelaySync/NoRoom: None
+RelaySync/Save: Save
+RelaySync/Cancel: Cancel
+RelaySync/RoomDetails: Details
+Tooltips/SelectRelayRoom: Assign this wiki to a relay room
 Buttons/Plugins: plugins
 PluginInstaller/Title: Manage Plugins
 PluginInstaller/For: for:
@@ -106,3 +120,4 @@ PluginInstaller/Install: Apply Changes
 PluginInstaller/Installing: Updating plugins...
 PluginInstaller/Installed: (installed)
 PluginInstaller/RestartNeeded: Restart the wiki to apply changes.
+

@@ -76,28 +76,42 @@ CustomPaths/SelectFolder: Избери папка
 CustomPaths/Change: Промени
 CustomPaths/Clear: Исчисти
 
-LanSync/Title: LAN синхронизација
-LanSync/Start: Започни LAN синхронизација
-LanSync/Stop: Запри LAN синхронизација
+LanSync/Title: Синхронизација
 LanSync/DeviceName: Овој уред:
-LanSync/Pairing: Спарување на уреди
-LanSync/PinLabel: Внесете го овој PIN на другиот уред:
-LanSync/ShowPin: Спарувај нов уред
-LanSync/HidePairingCode: Сокриј
-LanSync/PairedDevices: Спарувани уреди
-LanSync/NoPairedDevices: Нема спарувани уреди. Кликнете на "Спарувај нов уред" за да поврзете друг уред.
-LanSync/Unpair: Отспарувај
-LanSync/Connected: Поврзано
-LanSync/Disconnected: Офлајн
-LanSync/DiscoveredDevices: Уреди на вашата мрежа
-LanSync/PinPlaceholder: PIN
-LanSync/Pair: Поврзи
 LanSync/AvailableWikis: Достапно од уреди
 LanSync/NoRemoteWikis: Нема нови вики-а достапни од поврзаните уреди.
 LanSync/From: од
 LanSync/GetWiki: Преземи вики
 LanSync/LinkWiki: Поврзи
 
+RelaySync/Title: Relay синхронизација
+RelaySync/AutoConnect: Автоматско поврзување
+RelaySync/Disconnect: Исклучи
+RelaySync/Peers: уреди
+Labels/LAN: LAN
+Labels/Relay: Relay
+Labels/Both: LAN + Relay
+Tooltips/RelayAutoConnectOn: Relay автоматско поврзување вклучено - кликни за исклучување
+Tooltips/RelayAutoConnectOff: Relay автоматско поврзување исклучено - кликни за вклучување
+LanSync/NoUnsyncedWikis: Нема несинхронизирани викија
+
+RelaySync/ServerUrl: URL на серверот:
+RelaySync/SaveUrl: Зачувај URL
+RelaySync/Rooms: Соби
+RelaySync/CreateRoom: Создај соба
+RelaySync/JoinRoom: Приклучи се кон соба
+RelaySync/RemoveRoom: Отстрани
+RelaySync/RoomName: Име:
+RelaySync/RoomCode: Код:
+RelaySync/RoomPassword: Лозинка:
+RelaySync/Connect: Поврзи
+RelaySync/NoRooms: Нема конфигурирани соби. Создајте нова соба или приклучете се кон постоечка.
+RelaySync/AssignRoom: Соба:
+RelaySync/NoRoom: Нема
+RelaySync/Save: Зачувај
+RelaySync/Cancel: Откажи
+RelaySync/RoomDetails: Детали
+Tooltips/SelectRelayRoom: Додели го ова вики на соба за пренос
 Buttons/Plugins: додатоци
 PluginInstaller/Title: Управување со додатоци
 PluginInstaller/For: за:

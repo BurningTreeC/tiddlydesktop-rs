@@ -638,7 +638,7 @@ mod init_script;
 
 /// Core data types
 mod types;
-pub use types::{WikiEntry, ExternalAttachmentsConfig, AuthUrlEntry, SessionAuthConfig, WikiConfigs, EditionInfo, PluginInfo, FolderStatus, CommandResult};
+pub use types::{WikiEntry, ExternalAttachmentsConfig, AuthUrlEntry, SessionAuthConfig, WikiConfigs, EditionInfo, PluginInfo, FolderStatus};
 
 /// Clipboard operations
 mod clipboard;
@@ -676,6 +676,10 @@ mod pdf_renderer;
 /// LAN Sync: real-time tiddler synchronization across devices on the same network
 #[allow(dead_code)]
 mod lan_sync;
+
+/// Relay Sync: cloud relay transport for cross-network sync
+#[allow(dead_code)]
+mod relay_sync;
 
 /// Helper trait to conditionally add platform-specific plugins to the Tauri builder.
 /// On Android, this adds the Android FS plugin for SAF support.
@@ -793,8 +797,6 @@ struct AppState {
     next_port: Mutex<u16>,
     /// Path to the main wiki file (tiddlydesktop.html)
     main_wiki_path: PathBuf,
-    /// Wikis that have been approved for run_command (by normalized path)
-    run_command_allowed_wikis: Mutex<std::collections::HashSet<String>>,
     /// Mapping of cached folder wiki paths to original folder paths (Android)
     #[allow(dead_code)]
     folder_wiki_paths: Mutex<HashMap<String, String>>,
@@ -2647,350 +2649,6 @@ fn set_internal_drag_type(drag_type: String) {
     let _ = drag_type; // Suppress unused warning on non-Windows
 }
 
-/// Check if a command + args combination is potentially destructive
-/// Returns true if the command should ALWAYS require confirmation
-/// Covers dangerous commands on Linux, macOS, and Windows
-fn is_destructive_command(command: &str, args: &[String]) -> bool {
-    let cmd_basename = std::path::Path::new(command)
-        .file_name()
-        .and_then(|s| s.to_str())
-        .unwrap_or(command)
-        .to_lowercase();
-
-    let args_lower: Vec<String> = args.iter().map(|a| a.to_lowercase()).collect();
-    let args_joined = args_lower.join(" ");
-
-    // === UNIX (Linux/macOS): rm with recursive flag on dangerous paths ===
-    if cmd_basename == "rm" {
-        let has_recursive = args.iter().any(|a| {
-            let a = a.to_lowercase();
-            a == "-r" || a == "-rf" || a == "-fr" || a == "-r" ||
-            a.starts_with("-") && a.contains('r')
-        });
-        if has_recursive {
-            let dangerous = args.iter().any(|a| {
-                let a_clean = a.trim_matches(|c| c == '"' || c == '\'');
-                a_clean == "/" || a_clean == "/*" ||
-                a_clean == "~" || a_clean == "~/" || a_clean == "~/*" ||
-                a_clean == "$HOME" || a_clean == "$HOME/" ||
-                a_clean == ".." || a_clean == "../" ||
-                a_clean.starts_with("/") && a_clean.len() <= 5 && !a_clean.contains('.') // /usr, /var, /etc, /home, /root
-            });
-            if dangerous { return true; }
-        }
-    }
-
-    // === Windows: del/rd/rmdir with dangerous paths ===
-    if cmd_basename == "del" || cmd_basename == "del.exe" ||
-       cmd_basename == "rd" || cmd_basename == "rd.exe" ||
-       cmd_basename == "rmdir" || cmd_basename == "rmdir.exe" {
-        let has_recursive = args_joined.contains("/s") || args_joined.contains("/q");
-        let dangerous = args.iter().any(|a| {
-            let a_lower = a.to_lowercase();
-            a_lower == "c:\\" || a_lower == "c:/" || a_lower == "c:\\*" ||
-            a_lower.contains("%userprofile%") || a_lower.contains("%homepath%") ||
-            a_lower.contains("%systemroot%") || a_lower.contains("%windir%") ||
-            a_lower == "\\" || a_lower == "/" ||
-            (a_lower.len() == 3 && a_lower.ends_with(":\\")) // Any drive root
-        });
-        if has_recursive || dangerous { return true; }
-    }
-
-    // === Windows: format command ===
-    if cmd_basename == "format" || cmd_basename == "format.com" || cmd_basename == "format.exe" {
-        return true;
-    }
-
-    // === Unix: disk/filesystem commands ===
-    if cmd_basename == "dd" {
-        // dd writing to disk devices
-        if args.iter().any(|a| {
-            let a_lower = a.to_lowercase();
-            a_lower.starts_with("of=/dev/sd") || a_lower.starts_with("of=/dev/nvme") ||
-            a_lower.starts_with("of=/dev/hd") || a_lower.starts_with("of=/dev/disk")
-        }) {
-            return true;
-        }
-    }
-
-    if cmd_basename.starts_with("mkfs") || cmd_basename == "fdisk" ||
-       cmd_basename == "gdisk" || cmd_basename == "parted" || cmd_basename == "diskutil" {
-        return true;
-    }
-
-    // === System control commands (all platforms) ===
-    if ["shutdown", "shutdown.exe", "reboot", "poweroff", "halt", "init"].contains(&cmd_basename.as_str()) {
-        return true;
-    }
-
-    // === macOS specific ===
-    if cmd_basename == "diskutil" || cmd_basename == "hdiutil" {
-        // Block destructive diskutil operations
-        if args_joined.contains("erasedisk") || args_joined.contains("erasevolume") ||
-           args_joined.contains("partitiondisk") || args_joined.contains("secureErase") {
-            return true;
-        }
-    }
-    if cmd_basename == "srm" { // Secure remove - recursive by default
-        return true;
-    }
-
-    // === Permission changes that could break system ===
-    if cmd_basename == "chmod" || cmd_basename == "chown" || cmd_basename == "icacls" || cmd_basename == "cacls" {
-        // Block recursive permission changes on root paths
-        let has_recursive = args_joined.contains("-r") || args_joined.contains("/t") || args_joined.contains("/s");
-        let targets_root = args.iter().any(|a| {
-            let a_clean = a.trim_matches(|c| c == '"' || c == '\'').to_lowercase();
-            a_clean == "/" || a_clean == "c:\\" || a_clean == "~" ||
-            (a_clean.len() <= 4 && a_clean.starts_with('/'))
-        });
-        if has_recursive && targets_root { return true; }
-    }
-
-    // === Registry destruction (Windows) ===
-    if cmd_basename == "reg" || cmd_basename == "reg.exe" {
-        if args_joined.contains("delete") &&
-           (args_joined.contains("hklm") || args_joined.contains("hkey_local_machine") ||
-            args_joined.contains("hkcu") || args_joined.contains("hkey_current_user")) {
-            return true;
-        }
-    }
-
-    // === Fork bombs and resource exhaustion ===
-    if args_joined.contains(":(){ :|:& };:") || // bash fork bomb
-       args_joined.contains("%0|%0") { // Windows fork bomb
-        return true;
-    }
-
-    false
-}
-
-/// Run a command with optional confirmation dialog
-/// Security: Requires the wiki to have been explicitly approved for command execution.
-/// The wiki must have $:/config/TiddlyDesktop/AllowRunCommand and the user must have
-/// approved it via the request_run_command_permission dialog.
-/// Security: Destructive commands ALWAYS require confirmation regardless of confirm flag.
-#[cfg(not(target_os = "android"))]
-#[tauri::command]
-async fn run_command(
-    app: tauri::AppHandle,
-    window: tauri::WebviewWindow,
-    command: String,
-    args: Option<Vec<String>>,
-    working_dir: Option<String>,
-    wait: Option<bool>,
-    confirm: Option<bool>,
-) -> Result<Option<CommandResult>, String> {
-    use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
-
-    // Security: Get the wiki path for this window and check if it's allowed
-    let wiki_path = {
-        let state = app.state::<AppState>();
-        let open_wikis = state.open_wikis.lock().unwrap();
-        open_wikis.get(window.label()).cloned()
-    };
-
-    let wiki_path = wiki_path.ok_or_else(|| "Cannot determine wiki path for this window".to_string())?;
-
-    // Security: Check if this wiki has been approved for run_command
-    {
-        let state = app.state::<AppState>();
-        let allowed = state.run_command_allowed_wikis.lock().unwrap();
-        if !allowed.contains(&wiki_path) {
-            return Err("This wiki has not been approved for command execution. \
-                       Install the tiddlydesktop-rs-commands plugin and approve the permission request.".to_string());
-        }
-    }
-
-    // Security: Reject empty commands
-    if command.trim().is_empty() {
-        return Err("Command cannot be empty".to_string());
-    }
-
-    let should_wait = wait.unwrap_or(false);
-    let args_vec = args.unwrap_or_default();
-
-    // Security: Force confirmation for destructive commands, regardless of confirm flag
-    let is_destructive = is_destructive_command(&command, &args_vec);
-    let should_confirm = confirm.unwrap_or(true) || is_destructive;
-
-    // Build the command string for display
-    let display_cmd = if args_vec.is_empty() {
-        command.clone()
-    } else {
-        format!("{} {}", command, args_vec.join(" "))
-    };
-
-    // Show confirmation dialog if required
-    if should_confirm {
-        let message = format!(
-            "A wiki wants to run the following command:\n\n{}\n\nDo you want to allow this?",
-            display_cmd
-        );
-
-        let confirmed = app.dialog()
-            .message(message)
-            .kind(MessageDialogKind::Warning)
-            .title("Execute Command")
-            .buttons(MessageDialogButtons::OkCancel)
-            .blocking_show();
-
-        if !confirmed {
-            return Err("Command execution cancelled by user".to_string());
-        }
-    }
-
-    // Build the command
-    let mut cmd = std::process::Command::new(&command);
-
-    if !args_vec.is_empty() {
-        cmd.args(&args_vec);
-    }
-
-    if let Some(dir) = working_dir {
-        // Security: Validate the working directory is user-accessible
-        let validated_dir = drag_drop::sanitize::validate_user_directory_path(&dir)
-            .map_err(|e| format!("Invalid working directory: {}", e))?;
-        cmd.current_dir(validated_dir);
-    }
-
-    // On Windows, hide the console window
-    #[cfg(target_os = "windows")]
-    {
-        use std::os::windows::process::CommandExt;
-        const CREATE_NO_WINDOW: u32 = 0x08000000;
-        cmd.creation_flags(CREATE_NO_WINDOW);
-    }
-
-    if should_wait {
-        // Run and wait for output
-        let output = cmd.output()
-            .map_err(|e| format!("Failed to execute command: {}", e))?;
-
-        Ok(Some(CommandResult {
-            success: output.status.success(),
-            exit_code: output.status.code(),
-            stdout: String::from_utf8_lossy(&output.stdout).to_string(),
-            stderr: String::from_utf8_lossy(&output.stderr).to_string(),
-        }))
-    } else {
-        // Fire and forget
-        #[allow(unused_variables)]
-        let child = cmd.spawn()
-            .map_err(|e| format!("Failed to spawn command: {}", e))?;
-
-        // Windows: Assign to job object so it gets killed when parent exits
-        #[cfg(target_os = "windows")]
-        drag_drop::windows_job::assign_process_to_job(child.id());
-
-        Ok(None)
-    }
-}
-
-/// Request permission for a wiki to use run_command
-/// Shows a dialog to the user asking if they want to allow this wiki to execute commands.
-/// If approved, the wiki path is added to the allowed list and persisted.
-#[tauri::command]
-async fn request_run_command_permission(
-    app: tauri::AppHandle,
-    window: tauri::WebviewWindow,
-) -> Result<bool, String> {
-    use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
-
-    // Get the wiki path for this window
-    let wiki_path = {
-        let state = app.state::<AppState>();
-        let open_wikis = state.open_wikis.lock().unwrap();
-        open_wikis.get(window.label()).cloned()
-    };
-
-    let wiki_path = wiki_path.ok_or_else(|| "Cannot determine wiki path for this window".to_string())?;
-
-    // Check if already allowed
-    {
-        let state = app.state::<AppState>();
-        let allowed = state.run_command_allowed_wikis.lock().unwrap();
-        if allowed.contains(&wiki_path) {
-            return Ok(true); // Already approved
-        }
-    }
-
-    // Show confirmation dialog
-    let message = format!(
-        "The wiki at:\n\n{}\n\nwants to enable command execution.\n\n\
-         This allows the wiki to run system commands on your computer.\n\n\
-         Only approve this if you trust the wiki and understand the security implications.\n\n\
-         Do you want to allow command execution for this wiki?",
-        wiki_path
-    );
-
-    let confirmed = app.dialog()
-        .message(message)
-        .kind(MessageDialogKind::Warning)
-        .title("Enable Command Execution")
-        .buttons(MessageDialogButtons::OkCancel)
-        .blocking_show();
-
-    if confirmed {
-        // Add to allowed list (both in-memory and persisted)
-        {
-            let state = app.state::<AppState>();
-            let mut allowed = state.run_command_allowed_wikis.lock().unwrap();
-            allowed.insert(wiki_path.clone());
-        }
-
-        // Persist to disk
-        let allowed = {
-            let state = app.state::<AppState>();
-            let guard = state.run_command_allowed_wikis.lock().unwrap();
-            guard.clone()
-        };
-        if let Err(e) = wiki_storage::save_run_command_allowed(&app, &allowed) {
-            eprintln!("[TiddlyDesktop] Warning: Failed to persist run_command allowed list: {}", e);
-        }
-
-        Ok(true)
-    } else {
-        Ok(false)
-    }
-}
-
-/// Android stub for run_command
-#[cfg(target_os = "android")]
-#[tauri::command]
-async fn run_command(
-    _app: tauri::AppHandle,
-    _window: tauri::WebviewWindow,
-    _command: String,
-    _args: Option<Vec<String>>,
-    _working_dir: Option<String>,
-    _wait: Option<bool>,
-    _confirm: Option<bool>,
-) -> Result<Option<CommandResult>, String> {
-    Err("Command execution is not available on Android".to_string())
-}
-
-/// Check if a wiki has permission to use run_command (without prompting)
-#[tauri::command]
-fn check_run_command_permission(
-    app: tauri::AppHandle,
-    window: tauri::WebviewWindow,
-) -> Result<bool, String> {
-    // Get the wiki path for this window
-    let wiki_path = {
-        let state = app.state::<AppState>();
-        let open_wikis = state.open_wikis.lock().unwrap();
-        open_wikis.get(window.label()).cloned()
-    };
-
-    let wiki_path = wiki_path.ok_or_else(|| "Cannot determine wiki path for this window".to_string())?;
-
-    // Check if allowed
-    let state = app.state::<AppState>();
-    let allowed = state.run_command_allowed_wikis.lock().unwrap();
-    Ok(allowed.contains(&wiki_path))
-}
-
 /// Check if a file is a valid TiddlyWiki HTML file
 /// Returns Ok(()) if valid, Err with reason if not
 fn validate_tiddlywiki_file(path: &std::path::Path) -> Result<(), String> {
@@ -3438,6 +3096,8 @@ async fn open_wiki_folder(app: tauri::AppHandle, path: String, _tiddler_title: O
                 group: None,
                 sync_enabled: false,
                 sync_id: None,
+                sync_peers: vec![],
+        relay_room: None,
             });
         }
     }
@@ -3563,6 +3223,8 @@ async fn open_wiki_folder(app: tauri::AppHandle, path: String, _tiddler_title: O
         group: None,
         sync_enabled: false,
         sync_id: None,
+        sync_peers: vec![],
+        relay_room: None,
     };
 
     // Add to recent files list
@@ -3674,6 +3336,8 @@ fn open_wiki_folder_blocking(app: tauri::AppHandle, path: String) -> Result<Wiki
         group: None,
         sync_enabled: false,
         sync_id: None,
+        sync_peers: vec![],
+        relay_room: None,
         is_folder: true,
     };
 
@@ -4760,6 +4424,8 @@ async fn init_wiki_folder(app: tauri::AppHandle, path: String, edition: String, 
         group: None,
         sync_enabled: false,
         sync_id: None,
+        sync_peers: vec![],
+        relay_room: None,
         is_folder: true,
     };
 
@@ -5936,6 +5602,8 @@ async fn open_wiki_window(
                 group: None,
                 sync_enabled: false,
                 sync_id: None,
+                sync_peers: vec![],
+        relay_room: None,
             });
         }
     }
@@ -6052,6 +5720,8 @@ async fn open_wiki_window(
         group: None,
         sync_enabled: false,
         sync_id: None,
+        sync_peers: vec![],
+        relay_room: None,
     };
 
     // Add to recent files list
@@ -6166,6 +5836,8 @@ fn open_wiki_window_blocking(
         group: None,
         sync_enabled: false,
         sync_id: None,
+        sync_peers: vec![],
+        relay_room: None,
     };
 
     // Add to recent files
@@ -6593,7 +6265,7 @@ async fn check_for_updates() -> Result<UpdateCheckResult, String> {
 
 /// Android version - separate from desktop versioning (must match build.gradle.kts versionName)
 #[cfg(target_os = "android")]
-const ANDROID_VERSION: &str = "0.0.21";
+const ANDROID_VERSION: &str = "0.0.22";
 
 /// Check for updates on Android via version file on GitHub, linking to Play Store
 #[cfg(target_os = "android")]
@@ -8364,8 +8036,7 @@ fn run_wiki_mode(args: WikiModeArgs) {
             }
 
             // Also need minimal AppState for commands that expect it
-            // Load run_command allowed wikis from disk
-            let run_command_allowed = wiki_storage::load_run_command_allowed(&app.handle());
+
 
             app.manage(AppState {
                 wiki_paths: Mutex::new({
@@ -8382,7 +8053,7 @@ fn run_wiki_mode(args: WikiModeArgs) {
                 wiki_processes: Mutex::new(HashMap::new()), // Not used in wiki mode
                 next_port: Mutex::new(8080),
                 main_wiki_path: wiki_path_clone.clone(), // Use wiki path as "main" for this process
-                run_command_allowed_wikis: Mutex::new(run_command_allowed),
+
                 folder_wiki_paths: Mutex::new(HashMap::new()),
                 saf_wiki_mappings: Mutex::new(HashMap::new()),
             });
@@ -8612,9 +8283,7 @@ fn run_wiki_mode(args: WikiModeArgs) {
             wiki_storage::js_log,
             clipboard::get_clipboard_content,
             clipboard::set_clipboard_content,
-            run_command,
-            request_run_command_permission,
-            check_run_command_permission,
+
             // Drag-drop commands
             start_native_drag,
             prepare_native_drag,
@@ -8678,6 +8347,22 @@ fn run_wiki_mode(args: WikiModeArgs) {
             lan_sync::lan_sync_collab_awareness,
             lan_sync::lan_sync_get_remote_editors,
             lan_sync::lan_sync_get_collab_port,
+            // Relay sync commands
+            lan_sync::relay_sync_get_status,
+            lan_sync::relay_sync_add_room,
+            lan_sync::relay_sync_remove_room,
+            lan_sync::relay_sync_connect_room,
+            lan_sync::relay_sync_disconnect_room,
+            lan_sync::relay_sync_set_room_auto_connect,
+            lan_sync::relay_sync_set_room_password,
+            lan_sync::relay_sync_set_room_name,
+            lan_sync::relay_sync_get_room_credentials,
+            lan_sync::relay_sync_set_url,
+            lan_sync::relay_sync_generate_credentials,
+            // Per-wiki relay room assignment
+            wiki_storage::set_wiki_relay_room,
+            get_wiki_installed_plugins,
+            install_plugins_to_wiki
         ])
         .build(tauri::generate_context!())
         .expect("error while building wiki-mode application")
@@ -8915,8 +8600,7 @@ fn run_wiki_folder_mode(args: WikiFolderModeArgs) {
             }
 
             // Minimal app state for this process
-            // Load run_command allowed wikis from disk
-            let run_command_allowed = wiki_storage::load_run_command_allowed(&app.handle());
+
 
             app.manage(AppState {
                 wiki_paths: Mutex::new(HashMap::new()),
@@ -8924,7 +8608,7 @@ fn run_wiki_folder_mode(args: WikiFolderModeArgs) {
                 wiki_processes: Mutex::new(HashMap::new()),
                 next_port: Mutex::new(port + 1),
                 main_wiki_path: folder_path_for_state.clone(),
-                run_command_allowed_wikis: Mutex::new(run_command_allowed),
+
                 folder_wiki_paths: Mutex::new(HashMap::new()),
                 saf_wiki_mappings: Mutex::new(HashMap::new()),
             });
@@ -9054,9 +8738,7 @@ fn run_wiki_folder_mode(args: WikiFolderModeArgs) {
             pdf_selection_rects,
             pdf_get_text,
             pdf_char_count,
-            run_command,
-            request_run_command_permission,
-            check_run_command_permission,
+
             // Drag-drop commands
             start_native_drag,
             prepare_native_drag,
@@ -9088,6 +8770,22 @@ fn run_wiki_folder_mode(args: WikiFolderModeArgs) {
             lan_sync::lan_sync_collab_awareness,
             lan_sync::lan_sync_get_remote_editors,
             lan_sync::lan_sync_get_collab_port,
+            // Relay sync commands
+            lan_sync::relay_sync_get_status,
+            lan_sync::relay_sync_add_room,
+            lan_sync::relay_sync_remove_room,
+            lan_sync::relay_sync_connect_room,
+            lan_sync::relay_sync_disconnect_room,
+            lan_sync::relay_sync_set_room_auto_connect,
+            lan_sync::relay_sync_set_room_password,
+            lan_sync::relay_sync_set_room_name,
+            lan_sync::relay_sync_get_room_credentials,
+            lan_sync::relay_sync_set_url,
+            lan_sync::relay_sync_generate_credentials,
+            // Per-wiki relay room assignment
+            wiki_storage::set_wiki_relay_room,
+            get_wiki_installed_plugins,
+            install_plugins_to_wiki
         ])
         .build(tauri::generate_context!())
         .expect("error while building wiki-folder-mode application")
@@ -9402,8 +9100,7 @@ pub fn run() {
             println!("Main wiki path: {:?}", main_wiki_path);
 
             // Initialize app state
-            // Load run_command allowed wikis from disk
-            let run_command_allowed = wiki_storage::load_run_command_allowed(&app.handle());
+
 
             app.manage(AppState {
                 wiki_paths: Mutex::new(HashMap::new()),
@@ -9411,7 +9108,7 @@ pub fn run() {
                 wiki_processes: Mutex::new(HashMap::new()),
                 next_port: Mutex::new(8080),
                 main_wiki_path: main_wiki_path.clone(),
-                run_command_allowed_wikis: Mutex::new(run_command_allowed),
+
                 folder_wiki_paths: Mutex::new(HashMap::new()),
                 saf_wiki_mappings: Mutex::new(HashMap::new()),
             });
@@ -9439,6 +9136,15 @@ pub fn run() {
                 // The actual server starts when the user enables LAN sync from the UI
                 let _sync_manager = lan_sync::SyncManager::init(&sync_data_dir);
                 eprintln!("[TiddlyDesktop] LAN Sync manager initialized");
+
+                // Start background event loop and auto-connect relay rooms
+                // (independent of LAN sync — relay rooms can run without LAN sync)
+                tauri::async_runtime::spawn(async {
+                    if let Some(mgr) = lan_sync::get_sync_manager() {
+                        mgr.start_background().await;
+                    }
+                });
+
             }
 
             // Create a unique key for the main wiki path
@@ -9662,9 +9368,7 @@ pub fn run() {
             wiki_storage::set_custom_edition_path,
             open_auth_window,
             clear_wiki_session,
-            run_command,
-            request_run_command_permission,
-            check_run_command_permission,
+
             show_find_in_page,
             toggle_fullscreen,
             print_page,
@@ -9715,17 +9419,11 @@ pub fn run() {
             lan_sync::lan_sync_start,
             lan_sync::lan_sync_stop,
             lan_sync::lan_sync_get_status,
-            lan_sync::lan_sync_start_pairing,
-            lan_sync::lan_sync_cancel_pairing,
-            lan_sync::lan_sync_enter_pin,
-            lan_sync::lan_sync_unpair_device,
             lan_sync::lan_sync_tiddler_changed,
             lan_sync::lan_sync_tiddler_deleted,
             lan_sync::lan_sync_wiki_opened,
             lan_sync::lan_sync_get_available_wikis,
             lan_sync::lan_sync_request_wiki,
-            lan_sync::lan_sync_get_discovered_peers,
-            lan_sync::lan_sync_pair_with_device,
             lan_sync::lan_sync_send_full_sync,
             lan_sync::lan_sync_send_fingerprints,
             lan_sync::lan_sync_broadcast_fingerprints,
@@ -9739,6 +9437,20 @@ pub fn run() {
             lan_sync::lan_sync_collab_awareness,
             lan_sync::lan_sync_get_remote_editors,
             lan_sync::lan_sync_get_collab_port,
+            // Relay sync commands
+            lan_sync::relay_sync_get_status,
+            lan_sync::relay_sync_add_room,
+            lan_sync::relay_sync_remove_room,
+            lan_sync::relay_sync_connect_room,
+            lan_sync::relay_sync_disconnect_room,
+            lan_sync::relay_sync_set_room_auto_connect,
+            lan_sync::relay_sync_set_room_password,
+            lan_sync::relay_sync_set_room_name,
+            lan_sync::relay_sync_get_room_credentials,
+            lan_sync::relay_sync_set_url,
+            lan_sync::relay_sync_generate_credentials,
+            // Per-wiki relay room assignment
+            wiki_storage::set_wiki_relay_room,
             get_wiki_installed_plugins,
             install_plugins_to_wiki
         ])

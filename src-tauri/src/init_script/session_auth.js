@@ -126,16 +126,18 @@
         }
 
         function _doRegisterPlugin() {
-            // Capture dirty state - plugin registration should not mark wiki as modified
-            var origNumChanges = $tw.saverHandler ? $tw.saverHandler.numChanges : 0;
-
             // Build plugin content
             var pluginContent = { tiddlers: {} };
             Object.keys(TD.pluginTiddlers).forEach(function(title) {
                 pluginContent.tiddlers[title] = TD.pluginTiddlers[title];
             });
 
-            // Create/update the plugin tiddler
+            // Suppress change events during plugin injection so saver handler
+            // never sees these changes (zero dirty state, no numChanges hacks)
+            var origEnqueue = $tw.wiki.enqueueTiddlerEvent;
+            $tw.wiki.enqueueTiddlerEvent = function() {};
+
+            // Add plugin tiddler to the store (readPluginInfo reads from here)
             $tw.wiki.addTiddler(new $tw.Tiddler({
                 title: PLUGIN_TITLE,
                 type: "application/json",
@@ -146,31 +148,23 @@
                 text: JSON.stringify(pluginContent)
             }));
 
-            // Re-process plugins to unpack shadow tiddlers
-            $tw.wiki.readPluginInfo();
-            $tw.wiki.registerPluginTiddlers("plugin");
+            // Process plugin: read info, register, unpack constituent shadow tiddlers
+            $tw.wiki.readPluginInfo([PLUGIN_TITLE]);
+            $tw.wiki.registerPluginTiddlers("plugin", [PLUGIN_TITLE]);
             $tw.wiki.unpackPluginTiddlers();
 
-            // Mark as "in sync" so syncer won't save this plugin to disk
-            if ($tw.syncer) {
-                $tw.syncer.tiddlerInfo[PLUGIN_TITLE] = {
-                    changeCount: $tw.wiki.getChangeCount(PLUGIN_TITLE),
-                    revision: "0"
-                };
-            }
+            // Remove plugin tiddler from the real store — it must NEVER be saved.
+            // Constituent tiddlers remain as shadow tiddlers (also never saved).
+            // The plugin system retains its reference in pluginTiddlers[] and pluginInfo[].
+            $tw.wiki.deleteTiddler(PLUGIN_TITLE);
 
-            // Trigger UI refresh
+            // Restore change events
+            $tw.wiki.enqueueTiddlerEvent = origEnqueue;
+
+            // Trigger UI refresh (shadow tiddlers are now available)
             $tw.rootWidget.refresh({});
 
-            // Restore dirty state after event loop completes - plugin injection should not mark wiki as modified
-            setTimeout(function() {
-                if ($tw.saverHandler) {
-                    $tw.saverHandler.numChanges = origNumChanges;
-                    $tw.saverHandler.updateDirtyStatus();
-                }
-            }, 0);
-
-            console.log("[TiddlyDesktop] Plugin registered with " + Object.keys(TD.pluginTiddlers).length + " shadow tiddlers");
+            console.log("[TiddlyDesktop] Plugin registered with " + Object.keys(TD.pluginTiddlers).length + " shadow tiddlers (no dirty state)");
         }
 
         // Export for other modules

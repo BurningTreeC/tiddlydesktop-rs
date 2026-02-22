@@ -125,10 +125,11 @@ class LanSyncService : Service() {
         fun setMainActivityAlive(alive: Boolean, context: Context? = null) {
             mainActivityAlive = alive
             Log.d(TAG, "mainActivityAlive=$alive, wikiCount=$wikiCount")
-            if (!alive && isRunning && context != null) {
-                // Always stop — LAN sync runs in the main Tauri process and
-                // can't survive without MainActivity's runtime
-                Log.d(TAG, "MainActivity closed — stopping LAN sync service")
+            if (!alive && isRunning && context != null && wikiCount <= 0) {
+                // Only stop if no wiki activities are open. When wikis are open,
+                // keep the service alive — the wiki process watchdog will restart
+                // MainActivity if needed, and sync continues running.
+                Log.d(TAG, "MainActivity closed with no wikis — stopping LAN sync service")
                 stopService(context)
             }
         }

@@ -70,8 +70,8 @@
     <string name="widget_capture_desc">Tlačidlo rýchleho zachytenia pre TiddlyWiki</string>
 
     <!-- LanSyncService -->
-    <string name="sync_notif_channel_name">LAN Sync</string>
-    <string name="sync_notif_channel_desc">Udržiava LAN Sync aktívny pre synchronizáciu wiki v reálnom čase</string>
-    <string name="sync_notif_title">LAN Sync aktívny</string>
+    <string name="sync_notif_channel_name">Sync</string>
+    <string name="sync_notif_channel_desc">Udržiava Sync aktívny pre synchronizáciu wiki v reálnom čase</string>
+    <string name="sync_notif_title">Sync aktívny</string>
     <string name="sync_notif_text">Synchronizácia wiki s neďalekými zariadeniami</string>
 </resources>

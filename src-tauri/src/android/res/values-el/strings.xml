@@ -70,8 +70,8 @@
     <string name="widget_capture_desc">Κουμπί γρήγορης σύλληψης για TiddlyWiki</string>
 
     <!-- LanSyncService -->
-    <string name="sync_notif_channel_name">LAN Sync</string>
-    <string name="sync_notif_channel_desc">Διατηρεί το LAN Sync ενεργό για συγχρονισμό wiki σε πραγματικό χρόνο</string>
-    <string name="sync_notif_title">LAN Sync Ενεργό</string>
+    <string name="sync_notif_channel_name">Sync</string>
+    <string name="sync_notif_channel_desc">Διατηρεί το Sync ενεργό για συγχρονισμό wiki σε πραγματικό χρόνο</string>
+    <string name="sync_notif_title">Sync Ενεργό</string>
     <string name="sync_notif_text">Συγχρονισμός wikis με κοντινές συσκευές</string>
 </resources>

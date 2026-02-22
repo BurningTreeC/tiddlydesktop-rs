@@ -31,6 +31,10 @@ pub struct WikiEntry {
     pub sync_enabled: bool, // whether LAN sync is enabled for this wiki
     #[serde(default)]
     pub sync_id: Option<String>, // unique sync ID (UUID) for matching across devices
+    #[serde(default)]
+    pub sync_peers: Vec<String>, // deprecated: kept for deserialization compat with old configs
+    #[serde(default)]
+    pub relay_room: Option<String>, // relay room code this wiki is assigned to (None = no relay sync)
 }
 
 fn default_backups_enabled() -> bool {
@@ -167,12 +171,4 @@ pub struct FolderStatus {
     pub name: String,
 }
 
-/// Result from running a command
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct CommandResult {
-    pub success: bool,
-    pub exit_code: Option<i32>,
-    pub stdout: String,
-    pub stderr: String,
-}
 

@@ -76,28 +76,42 @@ CustomPaths/SelectFolder: Sélectionner un dossier
 CustomPaths/Change: Modifier
 CustomPaths/Clear: Effacer
 
-LanSync/Title: Sync LAN
-LanSync/Start: Démarrer la sync LAN
-LanSync/Stop: Arrêter la sync LAN
+LanSync/Title: Sync
 LanSync/DeviceName: Cet appareil:
-LanSync/Pairing: Appairage d'appareils
-LanSync/PinLabel: Entrez ce code PIN sur l'autre appareil:
-LanSync/ShowPin: Appairer un nouvel appareil
-LanSync/HidePairingCode: Masquer
-LanSync/PairedDevices: Appareils appairés
-LanSync/NoPairedDevices: Aucun appareil appairé. Cliquez sur "Appairer un nouvel appareil" pour connecter un autre appareil.
-LanSync/Unpair: Désappairer
-LanSync/Connected: Connecté
-LanSync/Disconnected: Hors ligne
-LanSync/DiscoveredDevices: Appareils sur votre réseau
-LanSync/PinPlaceholder: PIN
-LanSync/Pair: Appairer
 LanSync/AvailableWikis: Disponible depuis les pairs
 LanSync/NoRemoteWikis: Aucun nouveau wiki disponible depuis les pairs connectés.
 LanSync/From: de
 LanSync/GetWiki: Obtenir le wiki
 LanSync/LinkWiki: Lier
 
+RelaySync/Title: Sync Relais
+RelaySync/AutoConnect: Connexion automatique
+RelaySync/Disconnect: Déconnecter
+RelaySync/Peers: appareils
+Labels/LAN: LAN
+Labels/Relay: Relais
+Labels/Both: LAN + Relais
+Tooltips/RelayAutoConnectOn: Connexion automatique Relais activée - cliquez pour désactiver
+Tooltips/RelayAutoConnectOff: Connexion automatique Relais désactivée - cliquez pour activer
+LanSync/NoUnsyncedWikis: Aucun wiki non synchronisé disponible
+
+RelaySync/ServerUrl: URL du serveur :
+RelaySync/SaveUrl: Enregistrer l'URL
+RelaySync/Rooms: Salles
+RelaySync/CreateRoom: Créer une salle
+RelaySync/JoinRoom: Rejoindre une salle
+RelaySync/RemoveRoom: Supprimer
+RelaySync/RoomName: Nom :
+RelaySync/RoomCode: Code :
+RelaySync/RoomPassword: Mot de passe :
+RelaySync/Connect: Connecter
+RelaySync/NoRooms: Aucune salle configurée. Créez une nouvelle salle ou rejoignez-en une existante.
+RelaySync/AssignRoom: Salle :
+RelaySync/NoRoom: Aucune
+RelaySync/Save: Enregistrer
+RelaySync/Cancel: Annuler
+RelaySync/RoomDetails: Détails
+Tooltips/SelectRelayRoom: Assigner ce wiki à une salle relais
 Buttons/Plugins: plugins
 PluginInstaller/Title: Gérer les plugins
 PluginInstaller/For: pour :

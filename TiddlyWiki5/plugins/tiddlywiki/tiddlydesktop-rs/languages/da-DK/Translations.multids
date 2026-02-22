@@ -76,28 +76,42 @@ CustomPaths/SelectFolder: Vælg mappe
 CustomPaths/Change: Ændre
 CustomPaths/Clear: Ryd
 
-LanSync/Title: LAN-synkronisering
-LanSync/Start: Start LAN-synkronisering
-LanSync/Stop: Stop LAN-synkronisering
+LanSync/Title: Synkronisering
 LanSync/DeviceName: Denne enhed:
-LanSync/Pairing: Enhedsparring
-LanSync/PinLabel: Indtast denne PIN på den anden enhed:
-LanSync/ShowPin: Par ny enhed
-LanSync/HidePairingCode: Skjul
-LanSync/PairedDevices: Parrede enheder
-LanSync/NoPairedDevices: Ingen parrede enheder. Klik på "Par ny enhed" for at forbinde en anden enhed.
-LanSync/Unpair: Afpar
-LanSync/Connected: Forbundet
-LanSync/Disconnected: Offline
-LanSync/DiscoveredDevices: Enheder på dit netværk
-LanSync/PinPlaceholder: PIN
-LanSync/Pair: Par
 LanSync/AvailableWikis: Tilgængelig fra enheder
 LanSync/NoRemoteWikis: Ingen nye wikier tilgængelige fra tilsluttede enheder.
 LanSync/From: fra
 LanSync/GetWiki: Hent wiki
 LanSync/LinkWiki: Kobl
 
+RelaySync/Title: Relay-synkronisering
+RelaySync/AutoConnect: Automatisk tilslutning
+RelaySync/Disconnect: Afbryd
+RelaySync/Peers: enheder
+Labels/LAN: LAN
+Labels/Relay: Relay
+Labels/Both: LAN + Relay
+Tooltips/RelayAutoConnectOn: Relay auto-tilslutning aktiveret - klik for at deaktivere
+Tooltips/RelayAutoConnectOff: Relay auto-tilslutning deaktiveret - klik for at aktivere
+LanSync/NoUnsyncedWikis: Ingen ikke-synkroniserede wikier tilgængelige
+
+RelaySync/ServerUrl: Server-URL:
+RelaySync/SaveUrl: Gem URL
+RelaySync/Rooms: Rum
+RelaySync/CreateRoom: Opret rum
+RelaySync/JoinRoom: Deltag i rum
+RelaySync/RemoveRoom: Fjern
+RelaySync/RoomName: Navn:
+RelaySync/RoomCode: Kode:
+RelaySync/RoomPassword: Adgangskode:
+RelaySync/Connect: Forbind
+RelaySync/NoRooms: Ingen rum konfigureret. Opret et nyt rum eller deltag i et eksisterende.
+RelaySync/AssignRoom: Rum:
+RelaySync/NoRoom: Ingen
+RelaySync/Save: Gem
+RelaySync/Cancel: Annuller
+RelaySync/RoomDetails: Detaljer
+Tooltips/SelectRelayRoom: Tildel denne wiki til et relay-rum
 Buttons/Plugins: plugins
 PluginInstaller/Title: Administrer plugins
 PluginInstaller/For: for:

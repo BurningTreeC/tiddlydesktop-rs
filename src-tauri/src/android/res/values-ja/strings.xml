@@ -70,8 +70,8 @@
     <string name="widget_capture_desc">TiddlyWiki用クイックキャプチャボタン</string>
 
     <!-- LanSyncService -->
-    <string name="sync_notif_channel_name">LAN Sync</string>
-    <string name="sync_notif_channel_desc">LAN Syncをアクティブに保ち、リアルタイムでwikiを同期します</string>
-    <string name="sync_notif_title">LAN Sync アクティブ</string>
+    <string name="sync_notif_channel_name">Sync</string>
+    <string name="sync_notif_channel_desc">Syncをアクティブに保ち、リアルタイムでwikiを同期します</string>
+    <string name="sync_notif_title">Sync アクティブ</string>
     <string name="sync_notif_text">近くのデバイスとwikiを同期中</string>
 </resources>

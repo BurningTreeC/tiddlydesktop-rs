@@ -70,8 +70,8 @@
     <string name="widget_capture_desc">TiddlyWiki के लिए त्वरित कैप्चर बटन</string>
 
     <!-- LanSyncService -->
-    <string name="sync_notif_channel_name">LAN Sync</string>
-    <string name="sync_notif_channel_desc">रीयल-टाइम विकी सिंक्रोनाइजेशन के लिए LAN Sync को सक्रिय रखता है</string>
-    <string name="sync_notif_title">LAN Sync सक्रिय है</string>
+    <string name="sync_notif_channel_name">Sync</string>
+    <string name="sync_notif_channel_desc">रीयल-टाइम विकी सिंक्रोनाइजेशन के लिए Sync को सक्रिय रखता है</string>
+    <string name="sync_notif_title">Sync सक्रिय है</string>
     <string name="sync_notif_text">पास की डिवाइसों के साथ विकी को सिंक्रोनाइज़ कर रहे हैं</string>
 </resources>

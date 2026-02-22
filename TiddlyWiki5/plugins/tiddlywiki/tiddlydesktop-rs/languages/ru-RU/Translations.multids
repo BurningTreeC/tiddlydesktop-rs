@@ -76,28 +76,42 @@ CustomPaths/SelectFolder: Выбрать папку
 CustomPaths/Change: Изменить
 CustomPaths/Clear: Очистить
 
-LanSync/Title: Синхронизация по LAN
-LanSync/Start: Начать синхронизацию по LAN
-LanSync/Stop: Остановить синхронизацию по LAN
+LanSync/Title: Синхронизация
 LanSync/DeviceName: Это устройство:
-LanSync/Pairing: Сопряжение устройств
-LanSync/PinLabel: Введите этот PIN на другом устройстве:
-LanSync/ShowPin: Сопрячь новое устройство
-LanSync/HidePairingCode: Скрыть
-LanSync/PairedDevices: Сопряжённые устройства
-LanSync/NoPairedDevices: Нет сопряжённых устройств. Нажмите "Сопрячь новое устройство", чтобы подключить другое устройство.
-LanSync/Unpair: Отменить сопряжение
-LanSync/Connected: Подключено
-LanSync/Disconnected: Не в сети
-LanSync/DiscoveredDevices: Устройства в сети
-LanSync/PinPlaceholder: PIN
-LanSync/Pair: Связать
 LanSync/AvailableWikis: Доступно с устройств
 LanSync/NoRemoteWikis: Нет новых вики, доступных с подключённых устройств.
 LanSync/From: с
 LanSync/GetWiki: Получить вики
 LanSync/LinkWiki: Связать
 
+RelaySync/Title: Relay-синхронизация
+RelaySync/AutoConnect: Автоподключение
+RelaySync/Disconnect: Отключить
+RelaySync/Peers: устройств
+Labels/LAN: LAN
+Labels/Relay: Relay
+Labels/Both: LAN + Relay
+Tooltips/RelayAutoConnectOn: Автоподключение Relay включено - нажмите для отключения
+Tooltips/RelayAutoConnectOff: Автоподключение Relay отключено - нажмите для включения
+LanSync/NoUnsyncedWikis: Нет несинхронизированных вики
+
+RelaySync/ServerUrl: URL сервера:
+RelaySync/SaveUrl: Сохранить URL
+RelaySync/Rooms: Комнаты
+RelaySync/CreateRoom: Создать комнату
+RelaySync/JoinRoom: Присоединиться к комнате
+RelaySync/RemoveRoom: Удалить
+RelaySync/RoomName: Название:
+RelaySync/RoomCode: Код:
+RelaySync/RoomPassword: Пароль:
+RelaySync/Connect: Подключить
+RelaySync/NoRooms: Комнаты не настроены. Создайте новую комнату или присоединитесь к существующей.
+RelaySync/AssignRoom: Комната:
+RelaySync/NoRoom: Нет
+RelaySync/Save: Сохранить
+RelaySync/Cancel: Отмена
+RelaySync/RoomDetails: Подробности
+Tooltips/SelectRelayRoom: Назначить эту вики комнате ретрансляции
 Buttons/Plugins: плагины
 PluginInstaller/Title: Управление плагинами
 PluginInstaller/For: для:

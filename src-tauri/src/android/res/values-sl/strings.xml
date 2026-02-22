@@ -70,8 +70,8 @@
     <string name="widget_capture_desc">Gumb za hitro zajemanje za TiddlyWiki</string>
 
     <!-- LanSyncService -->
-    <string name="sync_notif_channel_name">LAN Sync</string>
-    <string name="sync_notif_channel_desc">Ohranja LAN Sync aktivnega za sinhronizacijo wikija v realnem času</string>
-    <string name="sync_notif_title">LAN Sync je aktiven</string>
+    <string name="sync_notif_channel_name">Sync</string>
+    <string name="sync_notif_channel_desc">Ohranja Sync aktivnega za sinhronizacijo wikija v realnem času</string>
+    <string name="sync_notif_title">Sync je aktiven</string>
     <string name="sync_notif_text">Sinhronizacija wikija z bližnjimi napravami</string>
 </resources>

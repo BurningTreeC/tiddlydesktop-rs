@@ -55,44 +55,6 @@ pub fn save_app_settings(app: &tauri::AppHandle, settings: &AppSettings) -> Resu
         .map_err(|e| format!("Failed to write app settings: {}", e))
 }
 
-/// Get the path to the run_command allowed wikis JSON
-pub fn get_run_command_allowed_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
-    let data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
-    Ok(data_dir.join("run_command_allowed.json"))
-}
-
-/// Load the list of wikis allowed to use run_command
-pub fn load_run_command_allowed(app: &tauri::AppHandle) -> std::collections::HashSet<String> {
-    let path = match get_run_command_allowed_path(app) {
-        Ok(p) => p,
-        Err(_) => return std::collections::HashSet::new(),
-    };
-
-    if !path.exists() {
-        return std::collections::HashSet::new();
-    }
-
-    match std::fs::read_to_string(&path) {
-        Ok(content) => serde_json::from_str(&content).unwrap_or_default(),
-        Err(_) => std::collections::HashSet::new(),
-    }
-}
-
-/// Save the list of wikis allowed to use run_command
-pub fn save_run_command_allowed(app: &tauri::AppHandle, allowed: &std::collections::HashSet<String>) -> Result<(), String> {
-    let path = get_run_command_allowed_path(app)?;
-
-    // Ensure parent directory exists
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| format!("Failed to create config directory: {}", e))?;
-    }
-
-    let content = serde_json::to_string_pretty(allowed)
-        .map_err(|e| format!("Failed to serialize run_command allowed list: {}", e))?;
-    std::fs::write(&path, content)
-        .map_err(|e| format!("Failed to write run_command allowed list: {}", e))
-}
-
 /// Detect system locale and return a language code
 pub fn detect_system_language() -> String {
     use sys_locale::get_locale;
@@ -186,6 +148,10 @@ pub fn add_to_recent_files(app: &tauri::AppHandle, mut entry: WikiEntry) -> Resu
         }
         if entry.sync_id.is_none() && existing.sync_id.is_some() {
             entry.sync_id = existing.sync_id.clone();
+        }
+        // Preserve relay room assignment
+        if entry.relay_room.is_none() && existing.relay_room.is_some() {
+            entry.relay_room = existing.relay_room.clone();
         }
     }
 
@@ -294,12 +260,20 @@ pub fn remove_recent_file(app: tauri::AppHandle, path: String) -> Result<(), Str
         }
     }
 
-    // Clean up sync state if the wiki had a sync_id
+    // Clean up sync data if the wiki had a sync_id
     if let Some(ref entry) = removed_entry {
         if let Some(ref sync_id) = entry.sync_id {
             let data_dir = app.path().app_data_dir().unwrap_or_default();
+            // Clean up sync_state
             let state_path = data_dir.join("sync_state").join(format!("{}.json", sync_id));
             let _ = std::fs::remove_file(state_path);
+            // Clean up tombstones
+            let tombstone_path = data_dir.join("lan_sync_tombstones").join(format!("{}.json", sync_id));
+            let _ = std::fs::remove_file(tombstone_path);
+            // Clean up fingerprint cache entry
+            if let Some(mgr) = crate::lan_sync::get_sync_manager() {
+                mgr.remove_fingerprint_cache(sync_id);
+            }
         }
     }
 
@@ -482,13 +456,14 @@ pub fn set_wiki_sync(app: tauri::AppHandle, path: String, enabled: bool) -> Resu
     for entry in entries.iter_mut() {
         if utils::paths_equal(&entry.path, &path) {
             entry.sync_enabled = enabled;
-            if enabled {
-                // Always generate a fresh sync_id when enabling
+            if enabled && entry.sync_id.is_none() {
+                // Only generate a sync_id if one doesn't exist yet.
+                // Preserving existing sync_ids is critical — they're how
+                // wikis are matched across devices in the manifest exchange.
                 entry.sync_id = Some(crate::lan_sync::pairing::generate_random_id());
-            } else {
-                // Clear the sync_id when disabling so re-enabling gets a new one
-                entry.sync_id = None;
             }
+            // Note: we do NOT clear sync_id on disable. This allows
+            // re-enabling to keep the same ID, maintaining cross-device matching.
             sync_id = entry.sync_id.clone().unwrap_or_default();
             break;
         }
@@ -496,7 +471,10 @@ pub fn set_wiki_sync(app: tauri::AppHandle, path: String, enabled: bool) -> Resu
 
     save_recent_files_to_disk(&app, &entries)?;
 
-    // Notify open wiki windows to start or stop syncing
+    // Notify open wiki windows to start or stop syncing.
+    // Tauri app.emit() only reaches windows in the SAME Tauri app, but wiki
+    // windows are separate processes (separate tauri::Builder). So we also
+    // send via IPC (TCP) which DOES cross process boundaries.
     if enabled {
         let _ = app.emit("lan-sync-activate", serde_json::json!({
             "wiki_path": path,
@@ -508,6 +486,34 @@ pub fn set_wiki_sync(app: tauri::AppHandle, path: String, enabled: bool) -> Resu
             "wiki_path": path,
         }));
         eprintln!("[LAN Sync] Sync disabled for wiki: {}", path);
+    }
+
+    // Also notify via IPC (cross-process to wiki windows)
+    #[cfg(not(target_os = "android"))]
+    {
+        if let Some(server) = crate::GLOBAL_IPC_SERVER.get() {
+            let payload = if enabled {
+                serde_json::json!({
+                    "type": "sync-activate",
+                    "wiki_path": path,
+                    "sync_id": sync_id,
+                }).to_string()
+            } else {
+                serde_json::json!({
+                    "type": "sync-deactivate",
+                    "wiki_path": path,
+                }).to_string()
+            };
+            server.send_lan_sync_to_all("*", &payload);
+        }
+    }
+
+    // On Android, notify wiki windows via bridge (they poll for changes)
+    #[cfg(target_os = "android")]
+    {
+        if !enabled && !sync_id.is_empty() {
+            crate::lan_sync::queue_bridge_deactivate(&sync_id, &path);
+        }
     }
 
     // Broadcast updated wiki manifest to connected peers
@@ -524,34 +530,41 @@ pub fn set_wiki_sync(app: tauri::AppHandle, path: String, enabled: bool) -> Resu
 /// Get the sync_id for a wiki (empty string if sync not enabled)
 #[tauri::command]
 pub fn get_wiki_sync_id(app: tauri::AppHandle, path: String) -> String {
-    eprintln!("[get_wiki_sync_id] Looking up sync_id for path: {}", path);
     let entries = load_recent_files_from_disk(&app);
     for entry in &entries {
         if utils::paths_equal(&entry.path, &path) {
             if entry.sync_enabled {
-                let id = entry.sync_id.clone().unwrap_or_default();
-                eprintln!("[get_wiki_sync_id] Found sync_id: {}", id);
-                return id;
+                return entry.sync_id.clone().unwrap_or_default();
             }
-            eprintln!("[get_wiki_sync_id] sync not enabled for this wiki");
             return String::new();
         }
     }
-    eprintln!("[get_wiki_sync_id] path not found in recent_wikis ({} entries checked)", entries.len());
     String::new()
 }
 
 /// Link a local wiki to a remote wiki's sync_id (peer-assisted matching after reinstall).
 /// The user selects which local wiki corresponds to a remote wiki from the peer's manifest.
+/// Also auto-assigns the wiki to the peer's room so sync permission checks pass.
 #[tauri::command]
-pub fn lan_sync_link_wiki(app: tauri::AppHandle, path: String, sync_id: String) -> Result<(), String> {
+pub async fn lan_sync_link_wiki(app: tauri::AppHandle, path: String, sync_id: String, from_device_id: Option<String>) -> Result<(), String> {
     let mut entries = load_recent_files_from_disk(&app);
     let mut found = false;
+
+    // Determine the room from the peer's connection (if provided)
+    let room_code = if let Some(ref device_id) = from_device_id {
+        crate::lan_sync::find_peer_room(device_id).await
+    } else {
+        None
+    };
 
     for entry in entries.iter_mut() {
         if utils::paths_equal(&entry.path, &path) {
             entry.sync_enabled = true;
             entry.sync_id = Some(sync_id.clone());
+            // Auto-assign room from the peer we're linking with
+            if room_code.is_some() && entry.relay_room.is_none() {
+                entry.relay_room = room_code.clone();
+            }
             found = true;
             break;
         }
@@ -563,13 +576,28 @@ pub fn lan_sync_link_wiki(app: tauri::AppHandle, path: String, sync_id: String) 
 
     save_recent_files_to_disk(&app, &entries)?;
 
-    // Tell the wiki window (if open) to activate sync
+    // Tell the wiki window (if open) to activate sync.
+    // Tauri app.emit() only reaches windows in the SAME Tauri app, but wiki
+    // windows are separate processes. IPC (TCP) crosses process boundaries.
     let _ = app.emit("lan-sync-activate", serde_json::json!({
         "wiki_path": path,
         "sync_id": sync_id,
     }));
 
-    eprintln!("[LAN Sync] Linked wiki for sync: {} -> {}", path, sync_id);
+    // Also notify via IPC (cross-process to wiki windows)
+    #[cfg(not(target_os = "android"))]
+    {
+        if let Some(server) = crate::GLOBAL_IPC_SERVER.get() {
+            let payload = serde_json::json!({
+                "type": "sync-activate",
+                "wiki_path": path,
+                "sync_id": sync_id,
+            }).to_string();
+            server.send_lan_sync_to_all("*", &payload);
+        }
+    }
+
+    eprintln!("[LAN Sync] Linked wiki for sync: {} -> {} (room: {:?})", path, sync_id, room_code);
     Ok(())
 }
 
@@ -599,6 +627,104 @@ pub fn has_wiki_with_sync_id(app: &tauri::AppHandle, sync_id: &str) -> bool {
     entries
         .iter()
         .any(|e| e.sync_id.as_deref() == Some(sync_id))
+}
+
+/// Set the relay room for a wiki (None to unassign)
+#[tauri::command]
+pub fn set_wiki_relay_room(app: tauri::AppHandle, path: String, room_code: Option<String>) -> Result<(), String> {
+    let mut entries = load_recent_files_from_disk(&app);
+
+    for entry in entries.iter_mut() {
+        if crate::utils::paths_equal(&entry.path, &path) {
+            entry.relay_room = room_code.clone();
+            // Assigning a room implicitly enables sync and ensures a sync_id exists
+            if room_code.is_some() {
+                entry.sync_enabled = true;
+                if entry.sync_id.is_none() {
+                    use rand::Rng;
+                    let mut rng = rand::rng();
+                    let id = format!("{:08x}-{:04x}-{:04x}-{:04x}-{:012x}",
+                        rng.random::<u32>(), rng.random::<u16>(), rng.random::<u16>(),
+                        rng.random::<u16>(), rng.random::<u64>() & 0xFFFFFFFFFFFF);
+                    eprintln!("[wiki_storage] Generated sync_id for wiki: {}", id);
+                    entry.sync_id = Some(id);
+                }
+            }
+            break;
+        }
+    }
+
+    // Find the sync_id for the wiki (after potential generation above)
+    let sync_id_for_event = entries.iter()
+        .find(|e| crate::utils::paths_equal(&e.path, &path))
+        .and_then(|e| e.sync_id.clone());
+
+    save_recent_files_to_disk(&app, &entries)?;
+
+    // Notify already-open wiki windows to activate sync.
+    // Tauri app.emit() only reaches windows in the SAME Tauri app, but wiki
+    // windows are separate processes. IPC (TCP) crosses process boundaries.
+    if room_code.is_some() {
+        if let Some(ref sid) = sync_id_for_event {
+            let _ = app.emit("lan-sync-activate", serde_json::json!({
+                "wiki_path": path,
+                "sync_id": sid,
+            }));
+
+            // Also notify via IPC (cross-process to wiki windows)
+            #[cfg(not(target_os = "android"))]
+            {
+                if let Some(server) = crate::GLOBAL_IPC_SERVER.get() {
+                    let payload = serde_json::json!({
+                        "type": "sync-activate",
+                        "wiki_path": path,
+                        "sync_id": sid,
+                    }).to_string();
+                    server.send_lan_sync_to_all("*", &payload);
+                }
+            }
+        }
+    }
+
+    // Broadcast updated wiki manifest so relay peers see the change
+    if let Some(mgr) = crate::lan_sync::get_sync_manager() {
+        let mgr = mgr.clone();
+        tauri::async_runtime::spawn(async move {
+            mgr.broadcast_wiki_manifest().await;
+        });
+    }
+
+    Ok(())
+}
+
+/// Get all sync-enabled wikis assigned to a specific relay room
+pub fn get_sync_wikis_for_room(app: &tauri::AppHandle, room_code: &str) -> Vec<(String, String, bool)> {
+    // Returns vec of (sync_id, filename, is_folder)
+    let entries = load_recent_files_from_disk(app);
+    entries
+        .into_iter()
+        .filter(|e| e.sync_enabled && e.sync_id.is_some()
+            && e.relay_room.as_deref() == Some(room_code))
+        .map(|e| (e.sync_id.unwrap(), e.filename, e.is_folder))
+        .collect()
+}
+
+/// Get the relay room assigned to a wiki (by path)
+pub fn get_wiki_relay_room(app: &tauri::AppHandle, path: &str) -> Option<String> {
+    let entries = load_recent_files_from_disk(app);
+    entries
+        .into_iter()
+        .find(|e| crate::utils::paths_equal(&e.path, path))
+        .and_then(|e| e.relay_room)
+}
+
+/// Get the relay room assigned to a wiki (by sync_id)
+pub fn get_wiki_relay_room_by_sync_id(app: &tauri::AppHandle, sync_id: &str) -> Option<String> {
+    let entries = load_recent_files_from_disk(app);
+    entries
+        .into_iter()
+        .find(|e| e.sync_id.as_deref() == Some(sync_id))
+        .and_then(|e| e.relay_room)
 }
 
 /// Set group for a wiki (None to move to "Ungrouped")

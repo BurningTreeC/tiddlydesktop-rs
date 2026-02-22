@@ -56,11 +56,18 @@ impl AndroidBridge {
 
         // Write port to file so WikiActivity in :wiki process can read it
         if let Some(app) = GLOBAL_APP_HANDLE.get() {
-            if let Ok(data_dir) = app.path().app_data_dir() {
-                let port_file = data_dir.join("sync_bridge_port");
-                let _ = std::fs::write(&port_file, port.to_string());
-                eprintln!("[Android Bridge] Wrote port {} to {:?}", port, port_file);
+            match app.path().app_data_dir() {
+                Ok(data_dir) => {
+                    let port_file = data_dir.join("sync_bridge_port");
+                    match std::fs::write(&port_file, port.to_string()) {
+                        Ok(_) => eprintln!("[Android Bridge] Wrote port {} to {:?}", port, port_file),
+                        Err(e) => eprintln!("[Android Bridge] Failed to write port file {:?}: {}", port_file, e),
+                    }
+                }
+                Err(e) => eprintln!("[Android Bridge] Failed to get app_data_dir: {}", e),
             }
+        } else {
+            eprintln!("[Android Bridge] GLOBAL_APP_HANDLE not set, can't write port file!");
         }
 
         // Spawn the request handler thread — server is moved into the thread
@@ -102,12 +109,18 @@ impl AndroidBridge {
         self.shutdown.store(true, Ordering::Relaxed);
         // Send a dummy request to unblock recv_timeout faster
         let _ = std::net::TcpStream::connect(format!("127.0.0.1:{}", self.port));
-        eprintln!("[Android Bridge] Stopped");
+        eprintln!("[Android Bridge] Stopped (port {})", self.port);
 
-        // Remove port file
+        // Remove port file only if it still points to our port
+        // (another bridge instance may have overwritten it)
         if let Some(app) = GLOBAL_APP_HANDLE.get() {
             if let Ok(data_dir) = app.path().app_data_dir() {
-                let _ = std::fs::remove_file(data_dir.join("sync_bridge_port"));
+                let port_file = data_dir.join("sync_bridge_port");
+                if let Ok(contents) = std::fs::read_to_string(&port_file) {
+                    if contents.trim() == self.port.to_string() {
+                        let _ = std::fs::remove_file(&port_file);
+                    }
+                }
             }
         }
     }
@@ -407,8 +420,13 @@ fn run_bridge_server(
                     .to_string();
 
                 let sync_id = if let Some(app) = GLOBAL_APP_HANDLE.get() {
-                    crate::wiki_storage::get_wiki_sync_id(app.clone(), path)
+                    let id = crate::wiki_storage::get_wiki_sync_id(app.clone(), path.clone());
+                    if !id.is_empty() {
+                        eprintln!("[Bridge] sync-id query: path={} -> sync_id={}", path, id);
+                    }
+                    id
                 } else {
+                    eprintln!("[Bridge] sync-id query: GLOBAL_APP_HANDLE not set");
                     String::new()
                 };
 
@@ -437,6 +455,10 @@ fn run_bridge_server(
                     vec![]
                 };
 
+                if !changes.is_empty() {
+                    let types: Vec<&str> = changes.iter().map(|c| c["type"].as_str().unwrap_or("?")).collect();
+                    eprintln!("[Bridge] poll: wiki_id={}, returning {} changes: {:?}", wiki_id, changes.len(), types);
+                }
                 let resp =
                     serde_json::to_string(&changes).unwrap_or_else(|_| "[]".to_string());
                 let _ = request.respond(cors_response(&resp, 200));

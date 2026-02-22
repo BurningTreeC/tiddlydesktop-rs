@@ -76,28 +76,42 @@ CustomPaths/SelectFolder: फ़ोल्डर चुनें
 CustomPaths/Change: बदलें
 CustomPaths/Clear: साफ़ करें
 
-LanSync/Title: LAN सिंक
-LanSync/Start: LAN सिंक शुरू करें
-LanSync/Stop: LAN सिंक बंद करें
+LanSync/Title: सिंक
 LanSync/DeviceName: यह उपकरण:
-LanSync/Pairing: उपकरण पेयरिंग
-LanSync/PinLabel: इस PIN को दूसरे उपकरण पर दर्ज करें:
-LanSync/ShowPin: नया उपकरण पेयर करें
-LanSync/HidePairingCode: छुपाएं
-LanSync/PairedDevices: पेयर किए गए उपकरण
-LanSync/NoPairedDevices: कोई पेयर किया गया उपकरण नहीं। किसी अन्य उपकरण को जोड़ने के लिए "नया उपकरण पेयर करें" पर क्लिक करें।
-LanSync/Unpair: अनपेयर करें
-LanSync/Connected: जुड़ा हुआ
-LanSync/Disconnected: ऑफ़लाइन
-LanSync/DiscoveredDevices: नेटवर्क पर डिवाइस
-LanSync/PinPlaceholder: PIN
-LanSync/Pair: जोड़ें
 LanSync/AvailableWikis: उपकरणों से उपलब्ध
 LanSync/NoRemoteWikis: जुड़े उपकरणों से कोई नई विकी उपलब्ध नहीं।
 LanSync/From: से
 LanSync/GetWiki: विकी प्राप्त करें
 LanSync/LinkWiki: लिंक
 
+RelaySync/Title: रिले सिंक
+RelaySync/AutoConnect: स्वतः-कनेक्ट
+RelaySync/Disconnect: डिस्कनेक्ट
+RelaySync/Peers: डिवाइस
+Labels/LAN: LAN
+Labels/Relay: रिले
+Labels/Both: LAN + रिले
+Tooltips/RelayAutoConnectOn: रिले स्वतः-कनेक्ट सक्षम - अक्षम करने के लिए क्लिक करें
+Tooltips/RelayAutoConnectOff: रिले स्वतः-कनेक्ट अक्षम - सक्षम करने के लिए क्लिक करें
+LanSync/NoUnsyncedWikis: कोई असिंक्रोनाइज़्ड विकी उपलब्ध नहीं
+
+RelaySync/ServerUrl: सर्वर URL:
+RelaySync/SaveUrl: URL सहेजें
+RelaySync/Rooms: कमरे
+RelaySync/CreateRoom: कमरा बनाएं
+RelaySync/JoinRoom: कमरे में शामिल हों
+RelaySync/RemoveRoom: हटाएं
+RelaySync/RoomName: नाम:
+RelaySync/RoomCode: कोड:
+RelaySync/RoomPassword: पासवर्ड:
+RelaySync/Connect: कनेक्ट करें
+RelaySync/NoRooms: कोई कमरा कॉन्फ़िगर नहीं किया गया। नया कमरा बनाएं या किसी मौजूदा कमरे में शामिल हों।
+RelaySync/AssignRoom: कमरा:
+RelaySync/NoRoom: कोई नहीं
+RelaySync/Save: सहेजें
+RelaySync/Cancel: रद्द करें
+RelaySync/RoomDetails: विवरण
+Tooltips/SelectRelayRoom: इस विकी को एक रिले कमरे में असाइन करें
 Buttons/Plugins: प्लगइन
 PluginInstaller/Title: प्लगइन प्रबंधित करें
 PluginInstaller/For: के लिए:

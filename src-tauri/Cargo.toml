@@ -50,7 +50,7 @@ pdfium-render = { version = "0.8", features = ["thread_safe", "image_025"] }
 image = { version = "0.25", default-features = false, features = ["png"] }
 
 # LAN Sync + Relay Sync: encrypted WebSocket communication
-tokio-tungstenite = "0.24"
+tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] }
 # HTTP types for WebSocket request building (relay sync)
 http = "1"
 futures-util = "0.3"

@@ -5,6 +5,8 @@
 //! reliable than mDNS — works without MulticastLock on Android and without
 //! Avahi on Linux.
 
+use hmac::{Hmac, Mac};
+use sha2::Sha256;
 use socket2::{Domain, Protocol, Socket, Type};
 use std::collections::{HashMap, HashSet};
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
@@ -31,8 +33,10 @@ pub enum DiscoveryEvent {
         device_name: String,
         addr: String,
         port: u16,
-        /// Room codes the peer is currently in
+        /// Room codes the peer is currently in (cleartext, for backward compat)
         rooms: Vec<String>,
+        /// HMAC-SHA256 hashes of room codes (preferred for matching)
+        room_hashes: Vec<String>,
     },
     /// A TiddlyDesktop instance went away
     PeerLost { device_id: String },
@@ -49,9 +53,27 @@ struct Beacon {
     name: String,
     /// WebSocket sync server port
     port: u16,
-    /// Room codes this device is currently in (for room-based auto-connect)
+    /// Room codes this device is currently in (cleartext, for backward compat with old clients)
     #[serde(default)]
     rooms: Vec<String>,
+    /// HMAC-SHA256 hashes of room codes (preferred for matching — doesn't reveal codes to observers)
+    #[serde(default)]
+    room_hashes: Vec<String>,
+}
+
+/// Hash a room code for use in discovery beacons.
+/// Uses HMAC-SHA256 with a fixed label, truncated to first 8 bytes (16 hex chars).
+/// This prevents passive LAN observers from learning room codes while still
+/// allowing peers to match rooms by hashing their own codes and comparing.
+pub fn hash_room_code(room_code: &str) -> String {
+    let mut mac = Hmac::<Sha256>::new_from_slice(b"tiddlydesktop-discovery-room-hash")
+        .expect("HMAC can take key of any size");
+    mac.update(room_code.as_bytes());
+    let result = mac.finalize().into_bytes();
+    result[..8]
+        .iter()
+        .map(|b| format!("{:02x}", b))
+        .collect()
 }
 
 /// The UDP broadcast discovery manager
@@ -124,17 +146,19 @@ impl DiscoveryManager {
             let mut last_emitted: HashMap<String, Instant> = HashMap::new();
             let mut buf = [0u8; 2048]; // Larger buffer for room codes
 
-            // Helper to serialize the beacon with current room codes
+            // Helper to serialize the beacon with current room codes + hashes
             let make_beacon_data = |td: u8| -> Vec<u8> {
                 let rooms = active_room_codes.read()
                     .unwrap_or_else(|e| e.into_inner())
                     .clone();
+                let room_hashes = rooms.iter().map(|r| hash_room_code(r)).collect();
                 let beacon = Beacon {
                     td,
                     id: our_id.clone(),
                     name: our_name.clone(),
                     port: our_port,
                     rooms,
+                    room_hashes,
                 };
                 serde_json::to_vec(&beacon).unwrap_or_default()
             };
@@ -254,6 +278,7 @@ impl DiscoveryManager {
                                     addr,
                                     port: beacon.port,
                                     rooms: beacon.rooms,
+                                    room_hashes: beacon.room_hashes,
                                 });
                             }
                         }

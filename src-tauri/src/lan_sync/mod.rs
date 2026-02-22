@@ -127,8 +127,10 @@ pub struct SyncManager {
     room_keys: Arc<RwLock<HashMap<String, [u8; 32]>>>,
     /// Active room codes we're in (shared with discovery for beacon broadcast)
     active_room_codes: Arc<std::sync::RwLock<Vec<String>>>,
-    /// Peer device_id → room codes from their discovery beacons
+    /// Peer device_id → room codes from their discovery beacons (cleartext, for old peers)
     peer_rooms: Arc<RwLock<HashMap<String, Vec<String>>>>,
+    /// Peer device_id → room code hashes from their discovery beacons (preferred for matching)
+    peer_room_hashes: Arc<RwLock<HashMap<String, Vec<String>>>>,
     /// Remote wikis available from connected peers (device_id → wiki list)
     remote_wikis: RwLock<HashMap<String, Vec<protocol::WikiInfo>>>,
     /// Attachment directory watcher (desktop only)
@@ -275,6 +277,7 @@ impl SyncManager {
             room_keys: Arc::new(RwLock::new(HashMap::new())),
             active_room_codes: Arc::new(std::sync::RwLock::new(Vec::new())),
             peer_rooms: Arc::new(RwLock::new(HashMap::new())),
+            peer_room_hashes: Arc::new(RwLock::new(HashMap::new())),
             remote_wikis: RwLock::new(HashMap::new()),
             #[cfg(not(target_os = "android"))]
             attachment_watcher: RwLock::new(None),
@@ -558,6 +561,7 @@ impl SyncManager {
                 let our_device_name = self.pairing_manager.device_name().to_string();
                 let event_tx_for_discovery = self.event_tx.clone();
                 let peer_rooms_ref = get_sync_manager().map(|m| Arc::clone(&m.peer_rooms));
+                let peer_room_hashes_ref = get_sync_manager().map(|m| Arc::clone(&m.peer_room_hashes));
                 let room_keys_ref = get_sync_manager().map(|m| Arc::clone(&m.room_keys));
                 tokio::spawn(async move {
                     // Track when we first saw a room-sharing peer without being connected,
@@ -573,6 +577,7 @@ impl SyncManager {
                                 addr,
                                 port,
                                 rooms: peer_room_codes,
+                                room_hashes: peer_room_hashes,
                             } => {
                                 // Track last-known address for reconnection
                                 if let Some(mgr) = get_sync_manager() {
@@ -580,9 +585,12 @@ impl SyncManager {
                                         .insert(device_id.clone(), (addr.clone(), port));
                                 }
 
-                                // Store peer's room codes
+                                // Store peer's room codes and hashes
                                 if let Some(ref pr) = peer_rooms_ref {
                                     pr.write().await.insert(device_id.clone(), peer_room_codes.clone());
+                                }
+                                if let Some(ref prh) = peer_room_hashes_ref {
+                                    prh.write().await.insert(device_id.clone(), peer_room_hashes.clone());
                                 }
 
                                 // Find a shared room between us and this peer
@@ -593,7 +601,13 @@ impl SyncManager {
                                 } else {
                                     vec![]
                                 };
-                                let shared_room = protocol::select_shared_room(&our_rooms, &peer_room_codes);
+                                // Prefer hash-based matching (doesn't expose room codes in beacons)
+                                // Fall back to cleartext matching for old peers that don't send hashes
+                                let shared_room = if !peer_room_hashes.is_empty() {
+                                    protocol::select_shared_room_by_hash(&our_rooms, &peer_room_hashes)
+                                } else {
+                                    protocol::select_shared_room(&our_rooms, &peer_room_codes)
+                                };
 
                                 if let Some(room_code) = shared_room {
                                     // We share a room — auto-connect via LAN
@@ -685,6 +699,9 @@ impl SyncManager {
                                 eprintln!("[LAN Sync] Peer lost: {}", device_id);
                                 if let Some(ref pr) = peer_rooms_ref {
                                     pr.write().await.remove(&device_id);
+                                }
+                                if let Some(ref prh) = peer_room_hashes_ref {
+                                    prh.write().await.remove(&device_id);
                                 }
                             }
                         }
@@ -2411,13 +2428,22 @@ impl SyncManager {
                 // Only the device with the smaller device ID initiates reconnection.
                 // Look up the room this peer was connected via.
                 let peer_room_code = {
-                    // Check peer_rooms from discovery beacons
+                    // Prefer hash-based matching, fall back to cleartext for old peers
                     let our_rooms = self.active_room_codes.read()
                         .unwrap_or_else(|e| e.into_inner())
                         .clone();
-                    let peer_rooms_guard = self.peer_rooms.read().await;
-                    peer_rooms_guard.get(&device_id)
-                        .and_then(|pr| protocol::select_shared_room(&our_rooms, pr))
+                    let peer_hashes_guard = self.peer_room_hashes.read().await;
+                    let hash_match = peer_hashes_guard.get(&device_id)
+                        .filter(|h| !h.is_empty())
+                        .and_then(|h| protocol::select_shared_room_by_hash(&our_rooms, h));
+                    drop(peer_hashes_guard);
+                    if hash_match.is_some() {
+                        hash_match
+                    } else {
+                        let peer_rooms_guard = self.peer_rooms.read().await;
+                        peer_rooms_guard.get(&device_id)
+                            .and_then(|pr| protocol::select_shared_room(&our_rooms, pr))
+                    }
                 };
                 if let Some(room_code) = peer_room_code {
                     if self.server.read().await.is_some() {

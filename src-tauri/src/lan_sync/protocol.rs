@@ -55,6 +55,21 @@ pub fn select_shared_room(our_rooms: &[String], peer_rooms: &[String]) -> Option
     shared.first().map(|s| (*s).clone())
 }
 
+/// Find a shared room by comparing our room code hashes against a peer's hashes.
+/// Hashes each of our room codes and checks if any match the peer's advertised hashes.
+/// Returns the first alphabetically-sorted matching room code (ours, not the hash).
+pub fn select_shared_room_by_hash(our_rooms: &[String], peer_room_hashes: &[String]) -> Option<String> {
+    use crate::lan_sync::discovery::hash_room_code;
+    let mut shared: Vec<&String> = our_rooms.iter()
+        .filter(|r| {
+            let our_hash = hash_room_code(r);
+            peer_room_hashes.contains(&our_hash)
+        })
+        .collect();
+    shared.sort();
+    shared.first().map(|s| (*s).clone())
+}
+
 // ── Sync Phase Messages (encrypted after room auth) ──────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

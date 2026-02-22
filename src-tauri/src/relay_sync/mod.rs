@@ -32,8 +32,11 @@ use std::sync::Arc;
 use tauri::Emitter;
 use tokio::sync::{mpsc, RwLock};
 
-/// Relay server URL (hardcoded — the relay IP)
-const DEFAULT_RELAY_URL: &str = "ws://164.92.180.226:8443";
+/// Relay server URL (TLS via rustls + WebPKI roots)
+const DEFAULT_RELAY_URL: &str = "wss://relay.tiddlydesktop-rs.com:8443";
+
+/// Old relay URL (plain WebSocket, pre-TLS) — auto-migrated on config load
+const OLD_RELAY_URL: &str = "ws://164.92.180.226:8443";
 
 /// App token for relay server authentication
 const RELAY_APP_TOKEN: &str = "tdr1-9f8b2c4a7e6d";
@@ -350,8 +353,15 @@ impl RelaySyncManager {
             RelayConfig::default()
         };
 
-        // Decrypt passwords from encrypted_password, or migrate plain-text passwords
+        // Migrate old ws:// relay URL to wss://
         let mut needs_save = false;
+        if config.relay_url == OLD_RELAY_URL {
+            eprintln!("[Relay] Migrating relay URL from ws:// to wss://");
+            config.relay_url = DEFAULT_RELAY_URL.to_string();
+            needs_save = true;
+        }
+
+        // Decrypt passwords from encrypted_password, or migrate plain-text passwords
         for room in &mut config.rooms {
             if let Some(ref enc) = room.encrypted_password {
                 // Decrypt into in-memory password field

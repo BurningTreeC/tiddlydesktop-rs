@@ -11,19 +11,19 @@ use crate::utils;
 
 /// Get the path to the recent files JSON
 pub fn get_recent_files_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
-    let data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let data_dir = crate::get_data_dir(app)?;
     Ok(data_dir.join("recent_wikis.json"))
 }
 
 /// Get the path to the wiki configs JSON
 pub fn get_wiki_configs_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
-    let data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let data_dir = crate::get_data_dir(app)?;
     Ok(data_dir.join("wiki_configs.json"))
 }
 
 /// Get the path to the app settings JSON
 pub fn get_app_settings_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
-    let data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let data_dir = crate::get_data_dir(app)?;
     Ok(data_dir.join("app_settings.json"))
 }
 
@@ -263,7 +263,7 @@ pub fn remove_recent_file(app: tauri::AppHandle, path: String) -> Result<(), Str
     // Clean up sync data if the wiki had a sync_id
     if let Some(ref entry) = removed_entry {
         if let Some(ref sync_id) = entry.sync_id {
-            let data_dir = app.path().app_data_dir().unwrap_or_default();
+            let data_dir = crate::get_data_dir(&app).unwrap_or_default();
             // Clean up sync_state
             let state_path = data_dir.join("sync_state").join(format!("{}.json", sync_id));
             let _ = std::fs::remove_file(state_path);

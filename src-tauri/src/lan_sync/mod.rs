@@ -5892,7 +5892,7 @@ pub async fn lan_sync_load_tombstones(
     app: tauri::AppHandle,
     wiki_id: String,
 ) -> Result<String, String> {
-    let data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let data_dir = crate::get_data_dir(&app)?;
     let tombstone_dir = data_dir.join("lan_sync_tombstones");
     let safe_name = wiki_id.replace(|c: char| !c.is_alphanumeric() && c != '-' && c != '_', "_");
     let file_path = tombstone_dir.join(format!("{}.json", safe_name));
@@ -5909,7 +5909,7 @@ pub async fn lan_sync_save_tombstones(
     wiki_id: String,
     tombstones_json: String,
 ) -> Result<(), String> {
-    let data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let data_dir = crate::get_data_dir(&app)?;
     let tombstone_dir = data_dir.join("lan_sync_tombstones");
     tokio::fs::create_dir_all(&tombstone_dir).await.map_err(|e| e.to_string())?;
     let safe_name = wiki_id.replace(|c: char| !c.is_alphanumeric() && c != '-' && c != '_', "_");

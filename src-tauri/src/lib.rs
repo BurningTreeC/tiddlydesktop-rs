@@ -8,6 +8,43 @@ use std::os::windows::process::CommandExt;
 /// Global AppHandle for IPC callbacks that need Tauri access
 static GLOBAL_APP_HANDLE: OnceLock<tauri::AppHandle> = OnceLock::new();
 
+/// Resolved data directory — respects portable mode.
+/// Set once at startup; used by wiki_storage, lan_sync, etc. instead of
+/// `app.path().app_data_dir()` which always returns the system location.
+static DATA_DIR: OnceLock<PathBuf> = OnceLock::new();
+
+/// Get the resolved data directory (portable or system).
+/// Falls back to the provided `app` handle if not yet initialized.
+pub fn get_data_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    if let Some(dir) = DATA_DIR.get() {
+        return Ok(dir.clone());
+    }
+    // Fallback: not yet initialized, resolve now
+    let dir = resolve_data_dir(app)?;
+    let _ = DATA_DIR.set(dir.clone());
+    Ok(dir)
+}
+
+/// Resolve the data directory, checking for portable mode.
+/// Portable mode: `portable` or `portable.txt` marker next to the executable,
+/// or `tiddlydesktop.html` already exists next to the executable.
+fn resolve_data_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    #[cfg(not(target_os = "android"))]
+    {
+        if let Ok(exe_path) = std::env::current_exe() {
+            if let Some(exe_dir) = exe_path.parent() {
+                if exe_dir.join("portable").exists()
+                    || exe_dir.join("portable.txt").exists()
+                    || exe_dir.join("tiddlydesktop.html").exists()
+                {
+                    return Ok(exe_dir.to_path_buf());
+                }
+            }
+        }
+    }
+    app.path().app_data_dir().map_err(|e| e.to_string())
+}
+
 /// Get the global AppHandle (for use by drag_drop module to emit events)
 pub fn get_global_app_handle() -> Option<tauri::AppHandle> {
     GLOBAL_APP_HANDLE.get().cloned()
@@ -743,37 +780,19 @@ impl<'a> DesktopWindowExt<'a> for WebviewWindowBuilder<'a, tauri::Wry, tauri::Ap
     }
 }
 
-/// Determine storage mode for macOS/Linux
-/// Always uses the app data directory (portable mode only available on Windows)
-#[cfg(not(target_os = "windows"))]
+/// Determine storage mode — delegates to resolve_data_dir and caches in DATA_DIR.
+/// Supports portable mode on all desktop platforms (Windows, Linux, macOS):
+/// place a `portable` or `portable.txt` marker file next to the executable.
 fn determine_storage_mode(app: &tauri::App) -> Result<PathBuf, String> {
-    app.path().app_data_dir().map_err(|e| e.to_string())
-}
-
-/// Windows: determine storage mode based on marker file
-#[cfg(target_os = "windows")]
-fn determine_storage_mode(app: &tauri::App) -> Result<PathBuf, String> {
-    let exe_path = std::env::current_exe().map_err(|e| e.to_string())?;
-    let exe_dir = exe_path.parent().ok_or("No exe directory")?;
-
-    // Check for portable marker
-    if exe_dir.join("portable").exists() || exe_dir.join("portable.txt").exists() {
-        return Ok(exe_dir.to_path_buf());
-    }
-
-    // Check if portable data file already exists (user chose portable mode previously)
-    if exe_dir.join("tiddlydesktop.html").exists() {
-        return Ok(exe_dir.to_path_buf());
-    }
-
-    // Installed mode: app data directory
-    app.path().app_data_dir().map_err(|e| e.to_string())
+    let dir = resolve_data_dir(app.handle())?;
+    let _ = DATA_DIR.set(dir.clone());
+    Ok(dir)
 }
 
 /// Get the user editions directory path
-/// Location: ~/.local/share/tiddlydesktop-rs/editions/ (Linux) or equivalent on other platforms
+/// Respects portable mode — editions stored next to exe in portable installs
 fn get_user_editions_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
-    let data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let data_dir = get_data_dir(app)?;
     Ok(data_dir.join("editions"))
 }
 
@@ -1965,7 +1984,7 @@ async fn extract_video_poster(app: tauri::AppHandle, path: String) -> Result<Opt
     }
 
     // Cache directory
-    let data_dir = get_data_dir(&app).ok_or("No data directory")?;
+    let data_dir = get_data_dir(&app)?;
     let cache_dir = data_dir.join("poster_cache");
     let _ = std::fs::create_dir_all(&cache_dir);
 
@@ -3154,7 +3173,7 @@ async fn open_wiki_folder(app: tauri::AppHandle, path: String, _tiddler_title: O
 
     // Set TIDDLYWIKI_PLUGIN_PATH so Node.js can find user-installed plugins from {app_data}/plugins/.
     // Bundled plugins live in tiddlywiki/plugins/ and are found automatically by TiddlyWiki.
-    if let Ok(data_dir) = app.path().app_data_dir() {
+    if let Ok(data_dir) = get_data_dir(&app) {
         let plugins_dir = data_dir.join("plugins");
         let _ = std::fs::create_dir_all(&plugins_dir);
         let sep = if cfg!(windows) { ";" } else { ":" };
@@ -3170,8 +3189,8 @@ async fn open_wiki_folder(app: tauri::AppHandle, path: String, _tiddler_title: O
     }
 
     // Set TIDDLYWIKI_EDITION_PATH so TiddlyWiki can find user editions.
-    // Include our {app_data}/editions dir and any existing global TIDDLYWIKI_EDITION_PATH.
-    if let Ok(data_dir) = app.path().app_data_dir() {
+    // Include our {data_dir}/editions dir and any existing global TIDDLYWIKI_EDITION_PATH.
+    if let Ok(data_dir) = get_data_dir(&app) {
         let editions_dir = data_dir.join("editions");
         let _ = std::fs::create_dir_all(&editions_dir);
         let sep = if cfg!(windows) { ";" } else { ":" };
@@ -3589,9 +3608,9 @@ async fn get_available_plugins(app: tauri::AppHandle) -> Result<Vec<PluginInfo>,
         }
     }
 
-    // Scan user-installed plugins from {app_data}/plugins/ (two-level: {author}/{name}/plugin.info)
+    // Scan user-installed plugins from {data_dir}/plugins/ (two-level: {author}/{name}/plugin.info)
     {
-        if let Ok(data_dir) = app.path().app_data_dir() {
+        if let Ok(data_dir) = get_data_dir(&app) {
             let user_plugins_dir = data_dir.join("plugins");
             let existing_ids: std::collections::HashSet<String> = plugins.iter().map(|p| p.id.clone()).collect();
             if user_plugins_dir.exists() {
@@ -4065,7 +4084,7 @@ async fn install_plugins_to_wiki(app: tauri::AppHandle, path: String, is_folder:
                 .current_dir(tw_dir);
 
             // Set TIDDLYWIKI_PLUGIN_PATH for user-installed plugins
-            if let Ok(data_dir) = app.path().app_data_dir() {
+            if let Ok(data_dir) = get_data_dir(&app) {
                 let sep = if cfg!(windows) { ";" } else { ":" };
                 let plugins_dir = data_dir.join("plugins");
                 let _ = std::fs::create_dir_all(&plugins_dir);
@@ -4171,7 +4190,7 @@ async fn init_wiki_folder(app: tauri::AppHandle, path: String, edition: String, 
         cmd.env("TIDDLYWIKI_EDITION_PATH", &edition_path);
     }
     // Set TIDDLYWIKI_PLUGIN_PATH for user-installed plugins
-    if let Ok(data_dir) = app.path().app_data_dir() {
+    if let Ok(data_dir) = get_data_dir(&app) {
         let plugins_dir = data_dir.join("plugins");
         let _ = std::fs::create_dir_all(&plugins_dir);
         let sep = if cfg!(windows) { ";" } else { ":" };
@@ -4687,7 +4706,7 @@ async fn create_wiki_file(app: tauri::AppHandle, path: String, edition: String, 
         .arg("text/plain")
         .current_dir(tw_dir);
     // Set TIDDLYWIKI_PLUGIN_PATH and TIDDLYWIKI_EDITION_PATH for the build step
-    if let Ok(data_dir) = app.path().app_data_dir() {
+    if let Ok(data_dir) = get_data_dir(&app) {
         let sep = if cfg!(windows) { ";" } else { ":" };
         let plugins_dir = data_dir.join("plugins");
         let _ = std::fs::create_dir_all(&plugins_dir);
@@ -6533,26 +6552,8 @@ fn get_resource_dir_path(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
     app.path().app_data_dir().ok()
 }
 
-/// Get the base data directory, respecting portable mode
-/// Checks for portable marker files in exe directory on all platforms
-/// Falls back to app_data_dir for installed mode
-fn get_data_dir(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
-    if let Ok(exe_path) = std::env::current_exe() {
-        if let Some(exe_dir) = exe_path.parent() {
-            // Check for portable marker files
-            if exe_dir.join("portable").exists() || exe_dir.join("portable.txt").exists() {
-                return Some(exe_dir.to_path_buf());
-            }
-            // Check if portable data file already exists (user chose portable mode previously)
-            if exe_dir.join("tiddlydesktop.html").exists() {
-                return Some(exe_dir.to_path_buf());
-            }
-        }
-    }
-
-    // Default: use app data directory (installed mode)
-    app.path().app_data_dir().ok()
-}
+// get_data_dir is now a pub fn at the top of lib.rs that caches in DATA_DIR.
+// It supports portable mode on all desktop platforms.
 
 /// Get an isolated session data directory for a wiki
 /// Each wiki gets its own session storage (cookies, localStorage, etc.)
@@ -6567,7 +6568,7 @@ fn get_wiki_session_dir(app: &tauri::AppHandle, wiki_path: &str) -> Option<std::
     let hash = hasher.finish();
 
     // Get data directory (respects portable mode)
-    if let Some(data_dir) = get_data_dir(app) {
+    if let Ok(data_dir) = get_data_dir(app) {
         let session_dir = data_dir.join("wiki_sessions").join(format!("{:016x}", hash));
         // Create the directory if it doesn't exist
         if let Err(e) = std::fs::create_dir_all(&session_dir) {
@@ -8027,6 +8028,9 @@ fn run_wiki_mode(args: WikiModeArgs) {
         .plugin(drag_drop::init_plugin())
         .plugin(permissions::init_plugin());
     let builder = builder.setup(move |app| {
+            // Resolve data directory (portable mode check) for wiki process
+            let _ = resolve_data_dir(app.handle()).map(|dir| DATA_DIR.set(dir));
+
             // Initialize PDFium for native PDF rendering
             init_pdfium_from_resources(&app.handle());
 
@@ -8541,6 +8545,9 @@ fn run_wiki_folder_mode(args: WikiFolderModeArgs) {
         .with_platform_plugins()
         .plugin(drag_drop::init_plugin())
         .setup(move |app| {
+            // Resolve data directory (portable mode check) for wiki-folder process
+            let _ = resolve_data_dir(app.handle()).map(|dir| DATA_DIR.set(dir));
+
             // Initialize PDFium for native PDF rendering
             init_pdfium_from_resources(&app.handle());
 
@@ -9155,7 +9162,7 @@ pub fn run() {
 
             // Initialize LAN Sync manager
             {
-                let data_dir = app.path().app_data_dir()
+                let data_dir = get_data_dir(app.handle())
                     .unwrap_or_else(|_| PathBuf::from("."));
                 let sync_data_dir = data_dir.join("lan_sync");
                 let _ = std::fs::create_dir_all(&sync_data_dir);

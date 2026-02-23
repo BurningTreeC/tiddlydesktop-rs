@@ -1602,8 +1602,8 @@ impl SyncManager {
                     buffered.len(), wiki_id
                 );
                 if let Some(server) = crate::GLOBAL_IPC_SERVER.get() {
-                    for msg in buffered {
-                        server.send_lan_sync_to_all(wiki_id, &msg);
+                    for msg in &buffered {
+                        server.send_lan_sync_to_all(wiki_id, msg);
                     }
                 }
             }
@@ -2292,7 +2292,9 @@ impl SyncManager {
                 0
             };
 
-            // Buffer if no IPC clients received the message
+            // Buffer if no IPC clients received the message (wiki not yet open,
+            // or same-process on Linux/macOS — send_lan_sync_to_all already
+            // pushed to IPC_SYNC_QUEUE as fallback)
             if sent_count == 0 {
                 if let Some(mgr) = get_sync_manager() {
                     let mut buffered = false;

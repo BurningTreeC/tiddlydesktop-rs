@@ -13,7 +13,14 @@
   // Only run in wiki windows (not landing page)
   if (window.__IS_MAIN_WIKI__) return;
 
-  console.warn('[LAN Sync] IIFE started');
+  // Early diagnostic logging — uses js_log if available, so it appears in stderr
+  function _earlyLog(msg) {
+    if (window.__TAURI__ && window.__TAURI__.core && window.__TAURI__.core.invoke) {
+      window.__TAURI__.core.invoke('js_log', { message: msg }).catch(function() {});
+    }
+    console.warn(msg);
+  }
+  _earlyLog('[LAN Sync] IIFE started, __IS_MAIN_WIKI__=' + !!window.__IS_MAIN_WIKI__ + ', __WIKI_PATH__=' + (window.__WIKI_PATH__ || '(none)'));
 
   // Transport variables — determined lazily once $tw is ready
   // (window.__TAURI__ may not be available yet during initial script parse)
@@ -110,14 +117,14 @@
     if (!isAndroid && !hasTauri) {
       // Log once at 2s to help diagnose Windows transport issues
       if (_initCheckCount === 20) {
-        console.warn('[LAN Sync] Transport not ready after 2s (__TAURI__=' + !!window.__TAURI__ + ')');
+        _earlyLog('[LAN Sync] Transport not ready after 2s (__TAURI__=' + !!window.__TAURI__ + ')');
       }
       return; // transport not ready yet
     }
 
     if (!_tauriLoggedOnce) {
       _tauriLoggedOnce = true;
-      console.warn('[LAN Sync] hasTauri became true (tick ' + _initCheckCount + ')');
+      _earlyLog('[LAN Sync] hasTauri became true (tick ' + _initCheckCount + ')');
     }
 
     // On Android, check that bridge is running
@@ -129,11 +136,16 @@
     if (typeof $tw !== 'undefined' && $tw.wiki && $tw.wiki.addEventListener && $tw.rootWidget) {
       if (!_rootWidgetLoggedOnce) {
         _rootWidgetLoggedOnce = true;
-        console.warn('[LAN Sync] $tw.rootWidget ready (tick ' + _initCheckCount + ')');
+        _earlyLog('[LAN Sync] $tw.rootWidget ready (tick ' + _initCheckCount + ')');
       }
       clearInterval(checkInterval);
       initLanSync();
       return;
+    }
+
+    // Log once at 5s if $tw isn't ready yet (transport IS ready)
+    if (_initCheckCount === 50 && !_rootWidgetLoggedOnce) {
+      _earlyLog('[LAN Sync] $tw not ready after 5s: $tw=' + (typeof $tw !== 'undefined') + ', wiki=' + !!(typeof $tw !== 'undefined' && $tw.wiki) + ', addEventListener=' + !!(typeof $tw !== 'undefined' && $tw.wiki && $tw.wiki.addEventListener) + ', rootWidget=' + !!(typeof $tw !== 'undefined' && $tw.rootWidget));
     }
 
     // After 60s (600 ticks), back off to 1s polling instead of giving up
@@ -149,6 +161,11 @@
 
   // Track active sync state so we can deactivate cleanly
   var activeSyncState = null;
+
+  // Buffer for non-activation messages drained from the IPC queue by
+  // pollIpcForActivation before the main pollIpc handler starts.
+  // Module-scoped so both initLanSync and setupSyncHandlers can access it.
+  var _preActivationOverflow = [];
 
   // Logging helper at module scope — rsLog inside initLanSync is only available
   // there; setupSyncHandlers needs its own access.
@@ -208,23 +225,38 @@
         if (!preActivationPollActive) return;
         window.__TAURI__.core.invoke('lan_sync_poll_ipc').then(function(messages) {
           if (messages && messages.length) {
+            rsLog('[LAN Sync] pollIpcForActivation: ' + messages.length + ' messages');
+            var activated = false;
             for (var i = 0; i < messages.length; i++) {
               try {
                 var data = JSON.parse(messages[i]);
                 if (!data || !data.type) continue;
-                if (data.type === 'sync-activate' && data.wiki_path === wikiPath && data.sync_id) {
+                if (!activated && data.type === 'sync-activate' && data.wiki_path === wikiPath && data.sync_id) {
                   rsLog('[LAN Sync] Activated via IPC: ' + data.sync_id);
-                  activateSync(data.sync_id);
-                  // Once activated, setupSyncHandlers starts its own IPC poll
-                  // that handles both sync data and activation messages
+                  activated = true;
                   preActivationPollActive = false;
-                  return;
+                  // Don't call activateSync yet — collect remaining messages first
+                  continue;
                 }
                 if (data.type === 'sync-deactivate' && data.wiki_path === wikiPath) {
                   rsLog('[LAN Sync] Deactivated via IPC');
                   deactivateSync();
+                  continue;
                 }
+                // Buffer ALL non-activation messages so they aren't lost.
+                // Messages can arrive before the sync-activate in the same
+                // batch (or in earlier polls if sync was already pending).
+                _preActivationOverflow.push(messages[i]);
               } catch (e) {}
+            }
+            if (activated) {
+              // Now activate — setupSyncHandlers will start pollIpc which
+              // checks _preActivationOverflow on its first iteration
+              var syncData = JSON.parse(messages.find(function(m) {
+                try { var d = JSON.parse(m); return d.type === 'sync-activate' && d.wiki_path === wikiPath; } catch(e) { return false; }
+              }));
+              activateSync(syncData.sync_id);
+              return;
             }
           }
           if (preActivationPollActive) setTimeout(pollIpcForActivation, 500);
@@ -1085,8 +1117,28 @@
       // from IPC listener threads to JS on Linux/WebKitGTK, so we poll instead.
       _log('[LAN Sync] Starting IPC poll (desktop)');
       var ipcPollActive = true;
+      var _overflowDrained = false;
       function pollIpc() {
         if (!ipcPollActive) return;
+        // On first call, process any messages buffered by pollIpcForActivation
+        if (!_overflowDrained && _preActivationOverflow.length > 0) {
+          _overflowDrained = true;
+          var overflow = _preActivationOverflow;
+          _preActivationOverflow = [];
+          _log('[LAN Sync] Processing ' + overflow.length + ' pre-activation overflow messages');
+          for (var oi = 0; oi < overflow.length; oi++) {
+            try {
+              var oData = JSON.parse(overflow[oi]);
+              if (!oData || !oData.type) continue;
+              if (oData.wiki_id && oData.wiki_id !== wikiId) continue;
+              queueInboundChange(oData);
+            } catch (e) {
+              _log('[LAN Sync] Overflow parse error: ' + e);
+            }
+          }
+        } else {
+          _overflowDrained = true;
+        }
         window.__TAURI__.core.invoke('lan_sync_poll_ipc').then(function(messages) {
           if (messages && messages.length) {
             _log('[LAN Sync] IPC poll: ' + messages.length + ' messages');

@@ -300,7 +300,16 @@ impl IpcServer {
                 }
                 eprintln!("[IPC] Cleaned up {} broken client(s)", broken_pids.len());
             }
-            return client_count - broken_pids.len();
+            let delivered = client_count - broken_pids.len();
+
+            // Same-process fallback: On Linux/macOS, wiki windows run inside
+            // the main process and never connect as TCP IPC clients. Push to
+            // IPC_SYNC_QUEUE so JS can poll via lan_sync_poll_ipc.
+            if delivered == 0 {
+                crate::lan_sync::queue_lan_sync_ipc(payload_json.to_string());
+            }
+
+            return delivered;
         }
         0
     }

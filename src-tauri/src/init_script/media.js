@@ -315,19 +315,79 @@
         if (el.__tdPdfDone) return;
         if (!getPdfBackend()) return;
 
-        // Wait for filesystem.js to convert relative src to tdasset://
-        if (hasPendingSrcTransform(el)) {
-            if (!el.__tdPdfRetry) el.__tdPdfRetry = 0;
-            el.__tdPdfRetry++;
-            if (el.__tdPdfRetry < 100) { // Up to 10s
-                setTimeout(function() { replacePdfElement(el); }, 100);
+        // On first encounter, save original src and immediately blank the element
+        // to prevent native PDF loading. On Windows, WebView2's built-in PDF viewer
+        // would otherwise render the PDF inside the iframe before our PDFium renderer
+        // can take over, causing visual conflicts and wasted resources.
+        if (!el.__tdPdfOrigSrc) {
+            var detectedSrc = getPdfSrc(el);
+            if (!detectedSrc) return;
+            el.__tdPdfOrigSrc = detectedSrc;
+            // Blank element to prevent native loading.
+            // Remove attributes rather than setting to about:blank, so filesystem.js's
+            // observer skips the element (it checks !src and returns early).
+            var tag = el.tagName.toLowerCase();
+            if (tag === 'iframe' || tag === 'embed') { el.removeAttribute('src'); el.removeAttribute('type'); }
+            else if (tag === 'object') el.removeAttribute('data');
+            // Immediately hide to prevent any flash of native viewer
+            el.style.display = 'none';
+        }
+
+        var src = el.__tdPdfOrigSrc;
+
+        // Resolve raw filesystem paths to tdasset:// URLs (inline, without modifying element)
+        if (!/^(data:|tdasset:|https?:|blob:|tdlib:)/.test(src)) {
+            if (el.__tdMediaPending) {
+                // Async media server registration in progress — retry
+                if (!el.__tdPdfRetry) el.__tdPdfRetry = 0;
+                el.__tdPdfRetry++;
+                if (el.__tdPdfRetry < 100) {
+                    setTimeout(function() { replacePdfElement(el); }, 100);
+                }
+                return;
             }
-            return;
+            var TD = window.TiddlyDesktop;
+            if (TD && TD.resolveFilesystemPath) {
+                var rawPath = src;
+                if (src.startsWith('wikifile://')) {
+                    rawPath = src.replace(/^wikifile:\/\/localhost\//, '');
+                }
+                var resolved = rawPath ? TD.resolveFilesystemPath(rawPath) : null;
+                if (resolved) {
+                    if (window.__TD_FOLDER_WIKI__ && window.__TD_MEDIA_SERVER__ &&
+                        window.__TAURI__ && window.__TAURI__.core) {
+                        // Folder wiki: register with media server for HTTP URL
+                        el.__tdMediaPending = true;
+                        window.__TAURI__.core.invoke('register_media_url', { path: resolved })
+                            .then(function(httpUrl) {
+                                TD.mediaTokenPaths = TD.mediaTokenPaths || {};
+                                TD.mediaTokenPaths[httpUrl] = resolved;
+                                el.__tdPdfOrigSrc = httpUrl;
+                                el.__tdMediaPending = false;
+                                replacePdfElement(el);
+                            }).catch(function() {
+                                el.__tdMediaPending = false;
+                                // Fall through with tdasset:// URL
+                                el.__tdPdfOrigSrc = 'tdasset://localhost/' + encodeURIComponent(resolved);
+                                replacePdfElement(el);
+                            });
+                        return;
+                    }
+                    src = 'tdasset://localhost/' + encodeURIComponent(resolved);
+                }
+                // If resolution fails, proceed with raw src — fetchPdfBytes will handle it
+            } else {
+                // Resolver not ready — retry
+                if (!el.__tdPdfRetry) el.__tdPdfRetry = 0;
+                el.__tdPdfRetry++;
+                if (el.__tdPdfRetry < 100) {
+                    setTimeout(function() { replacePdfElement(el); }, 100);
+                }
+                return;
+            }
         }
 
         el.__tdPdfDone = true;
-        var src = getPdfSrc(el);
-        if (!src) return;
 
         var container = document.createElement('div');
         container.className = 'td-pdf-container';
@@ -367,10 +427,10 @@
         pagesWrap.style.cssText = 'max-height:80vh;overflow-y:auto;-webkit-overflow-scrolling:touch;';
         container.appendChild(pagesWrap);
 
-        // Hide original element instead of replacing — TiddlyWiki's virtual DOM
-        // expects the embed/object to stay in the DOM tree. Replacing it causes TW
-        // to re-create it on the next refresh cycle, triggering an infinite loop.
-        el.style.display = 'none';
+        // Keep original element in DOM (hidden) — TiddlyWiki's virtual DOM
+        // expects it to stay. Replacing it causes TW to re-create it on the next
+        // refresh cycle, triggering an infinite loop. display:none was set earlier
+        // when we first detected the PDF to prevent native viewer loading.
         el.parentNode.insertBefore(container, el.nextSibling);
 
         var pdfHandle = null;

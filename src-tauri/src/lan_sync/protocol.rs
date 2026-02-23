@@ -70,6 +70,7 @@ pub fn select_shared_room_by_hash(our_rooms: &[String], peer_room_hashes: &[Stri
     shared.first().map(|s| (*s).clone())
 }
 
+
 // ── Sync Phase Messages (encrypted after room auth) ──────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

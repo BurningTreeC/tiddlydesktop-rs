@@ -2474,7 +2474,7 @@ class WikiActivity : AppCompatActivity() {
             val statusColor = parseCssColor(statusBarColorHex)
             val navColor = parseCssColor(navBarColorHex)
 
-            // Android 15+: system bars are transparent, color them via background views
+            // Set background colors
             if (Build.VERSION.SDK_INT >= 35) {
                 statusBarBgView?.setBackgroundColor(statusColor)
                 navBarBgView?.setBackgroundColor(navColor)
@@ -2483,25 +2483,20 @@ class WikiActivity : AppCompatActivity() {
                 window.navigationBarColor = navColor
             }
 
-            // Determine icon colors based on BACKGROUND luminance to ensure contrast
-            // Light background (luminance > 0.5) = dark icons for visibility
-            // Dark background (luminance <= 0.5) = light icons for visibility
+            // Determine icon mode based on background luminance (separately for each bar)
+            // Light background → dark icons, dark background → light icons
             val statusBarLuminance = calculateLuminance(statusColor)
             val navBarLuminance = calculateLuminance(navColor)
-
-            // Use dark icons on status bar if background is light
             val useDarkStatusIcons = statusBarLuminance > 0.5
-            // Use dark icons on nav bar if background is light
             val useDarkNavIcons = navBarLuminance > 0.5
 
             Log.d(TAG, "Status bar luminance: $statusBarLuminance, dark icons: $useDarkStatusIcons")
             Log.d(TAG, "Nav bar luminance: $navBarLuminance, dark icons: $useDarkNavIcons")
 
-            // Update icon colors - dark icons on light background, light icons on dark background
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                // API 31+ (Android 12+): Use WindowInsetsController
                 val insetsController = window.insetsController
                 if (insetsController != null) {
-                    // APPEARANCE_LIGHT_STATUS_BARS means dark icons (for light backgrounds)
                     var appearance = 0
                     if (useDarkStatusIcons) {
                         appearance = appearance or WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS
@@ -2515,15 +2510,17 @@ class WikiActivity : AppCompatActivity() {
                     )
                 }
             } else {
-                @Suppress("DEPRECATION")
+                // API < 31: Use deprecated systemUiVisibility flags
                 var newFlags = window.decorView.systemUiVisibility
 
+                // SYSTEM_UI_FLAG_LIGHT_STATUS_BAR = dark icons on status bar (API 23+)
                 newFlags = if (useDarkStatusIcons) {
                     newFlags or View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR
                 } else {
                     newFlags and View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR.inv()
                 }
 
+                // SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR = dark icons on nav bar (API 26+)
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                     newFlags = if (useDarkNavIcons) {
                         newFlags or View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR
@@ -2532,7 +2529,6 @@ class WikiActivity : AppCompatActivity() {
                     }
                 }
 
-                @Suppress("DEPRECATION")
                 window.decorView.systemUiVisibility = newFlags
             }
 

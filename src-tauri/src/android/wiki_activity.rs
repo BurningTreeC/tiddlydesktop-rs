@@ -585,28 +585,27 @@ fn is_light_color(color: &str) -> bool {
 /// * `status_bar_color` - Hex color for the status bar (e.g., "#FFFFFF")
 /// * `nav_bar_color` - Hex color for the navigation bar (e.g., "#FFFFFF")
 /// * `foreground_color` - Optional foreground color to determine icon contrast
-pub fn set_system_bar_colors(status_bar_color: &str, nav_bar_color: &str, foreground_color: Option<&str>) -> Result<(), String> {
-    eprintln!("[WikiActivity] set_system_bar_colors: status={}, nav={}, fg={:?}", status_bar_color, nav_bar_color, foreground_color);
+pub fn set_system_bar_colors(status_bar_color: &str, nav_bar_color: &str, _foreground_color: Option<&str>) -> Result<(), String> {
+    eprintln!("[WikiActivity] set_system_bar_colors: status={}, nav={}", status_bar_color, nav_bar_color);
 
     let status_color_int = parse_color_to_int(status_bar_color)?;
     let nav_color_int = parse_color_to_int(nav_bar_color)?;
 
-    // Use foreground color to determine if icons should be dark (foreground is dark) or light (foreground is light)
-    // If foreground is dark (#333), we want dark icons → set LIGHT_STATUS_BARS
-    // If foreground is light (#fff), we want light icons → don't set LIGHT_STATUS_BARS
-    let (status_is_light, nav_is_light) = if let Some(fg) = foreground_color {
-        // Use foreground color to determine icon style
-        // Dark foreground = light background = use dark icons (set LIGHT flag)
-        let fg_is_dark = !is_light_color(fg);
-        (fg_is_dark, fg_is_dark)
-    } else {
-        // Fallback to background luminance calculation
-        (is_light_color(status_bar_color), is_light_color(nav_bar_color))
-    };
+    // Determine icon mode from BACKGROUND luminance (separately for each bar)
+    // Light background → dark icons (set LIGHT flag), dark background → light icons
+    let use_dark_status_icons = is_light_color(status_bar_color);
+    let use_dark_nav_icons = is_light_color(nav_bar_color);
 
     let vm = get_java_vm()?;
     let mut env = vm.attach_current_thread()
         .map_err(|e| format!("Failed to attach thread: {}", e))?;
+
+    // Get API level: Build.VERSION.SDK_INT
+    let build_version_cls = env.find_class("android/os/Build$VERSION")
+        .map_err(|e| format!("Failed to find Build.VERSION: {}", e))?;
+    let api_level = env.get_static_field(&build_version_cls, "SDK_INT", "I")
+        .map_err(|e| format!("Failed to get SDK_INT: {}", e))?
+        .i().map_err(|e| format!("Failed to convert SDK_INT: {}", e))?;
 
     // Get the current activity
     let activity = get_current_activity(&mut env)?;
@@ -620,7 +619,7 @@ pub fn set_system_bar_colors(status_bar_color: &str, nav_bar_color: &str, foregr
     ).map_err(|e| format!("Failed to get window: {}", e))?
         .l().map_err(|e| format!("Failed to convert window: {}", e))?;
 
-    // Set status bar color (deprecated on API 35+ but still works on older)
+    // Set background colors
     env.call_method(
         &window,
         "setStatusBarColor",
@@ -628,7 +627,6 @@ pub fn set_system_bar_colors(status_bar_color: &str, nav_bar_color: &str, foregr
         &[jni::objects::JValue::Int(status_color_int)],
     ).map_err(|e| format!("Failed to set status bar color: {}", e))?;
 
-    // Set navigation bar color (deprecated on API 35+ but still works on older)
     env.call_method(
         &window,
         "setNavigationBarColor",
@@ -650,7 +648,48 @@ pub fn set_system_bar_colors(status_bar_color: &str, nav_bar_color: &str, foregr
         let _ = env.exception_clear();
     }
 
-    // Get the decor view for setting light/dark status bar
+    // Set icon appearance (dark or light)
+    if api_level >= 31 {
+        // API 31+ (Android 12+): Use WindowInsetsController
+        if let Ok(controller_value) = env.call_method(
+            &window,
+            "getInsetsController",
+            "()Landroid/view/WindowInsetsController;",
+            &[],
+        ) {
+            if let Ok(controller) = controller_value.l() {
+                if !controller.is_null() {
+                    // APPEARANCE_LIGHT_STATUS_BARS = 8
+                    // APPEARANCE_LIGHT_NAVIGATION_BARS = 16
+                    let mut appearance: i32 = 0;
+                    if use_dark_status_icons {
+                        appearance |= 8;
+                    }
+                    if use_dark_nav_icons {
+                        appearance |= 16;
+                    }
+                    let mask = 8 | 16;
+
+                    let _ = env.call_method(
+                        &controller,
+                        "setSystemBarsAppearance",
+                        "(II)V",
+                        &[
+                            jni::objects::JValue::Int(appearance),
+                            jni::objects::JValue::Int(mask),
+                        ],
+                    );
+
+                    eprintln!("[WikiActivity] Set icon appearance via InsetsController (API {})", api_level);
+                    return Ok(());
+                }
+            }
+        }
+        // If InsetsController failed, fall through to deprecated path
+        let _ = env.exception_clear();
+    }
+
+    // API < 31: Use deprecated systemUiVisibility flags
     let decor_view = env.call_method(
         &window,
         "getDecorView",
@@ -659,48 +698,6 @@ pub fn set_system_bar_colors(status_bar_color: &str, nav_bar_color: &str, foregr
     ).map_err(|e| format!("Failed to get decor view: {}", e))?
         .l().map_err(|e| format!("Failed to convert decor view: {}", e))?;
 
-    // Get WindowInsetsController (API 30+) or fall back to systemUiVisibility
-    // Try the modern API first
-    let insets_controller_result = env.call_method(
-        &window,
-        "getInsetsController",
-        "()Landroid/view/WindowInsetsController;",
-        &[],
-    );
-
-    if let Ok(controller_value) = insets_controller_result {
-        if let Ok(controller) = controller_value.l() {
-            if !controller.is_null() {
-                // Use WindowInsetsController (API 30+)
-                // APPEARANCE_LIGHT_STATUS_BARS = 8
-                // APPEARANCE_LIGHT_NAVIGATION_BARS = 16
-                let mut appearance: i32 = 0;
-                if status_is_light {
-                    appearance |= 8; // APPEARANCE_LIGHT_STATUS_BARS
-                }
-                if nav_is_light {
-                    appearance |= 16; // APPEARANCE_LIGHT_NAVIGATION_BARS
-                }
-
-                let mask = 8 | 16; // Both flags
-
-                let _ = env.call_method(
-                    &controller,
-                    "setSystemBarsAppearance",
-                    "(II)V",
-                    &[
-                        jni::objects::JValue::Int(appearance),
-                        jni::objects::JValue::Int(mask),
-                    ],
-                );
-
-                eprintln!("[WikiActivity] Set system bar colors via InsetsController");
-                return Ok(());
-            }
-        }
-    }
-
-    // Fall back to older API (deprecated but still works)
     let current_flags = env.call_method(
         &decor_view,
         "getSystemUiVisibility",
@@ -709,24 +706,20 @@ pub fn set_system_bar_colors(status_bar_color: &str, nav_bar_color: &str, foregr
     ).map_err(|e| format!("Failed to get systemUiVisibility: {}", e))?
         .i().map_err(|e| format!("Failed to convert flags: {}", e))?;
 
-    // SYSTEM_UI_FLAG_LIGHT_STATUS_BAR = 0x00002000 (8192)
-    // SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR = 0x00000010 (16) - actually it's 0x10 = 16 for nav bar light
-    // Wait, let me check the correct values:
-    // SYSTEM_UI_FLAG_LIGHT_STATUS_BAR = 8192 (0x2000)
-    // SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR = 16 (0x10)
-
+    // SYSTEM_UI_FLAG_LIGHT_STATUS_BAR = 0x2000 (dark icons on status bar, API 23+)
+    // SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR = 0x10 (dark icons on nav bar, API 26+)
     let light_status_flag: i32 = 0x2000;
     let light_nav_flag: i32 = 0x10;
 
     let mut new_flags = current_flags;
 
-    if status_is_light {
+    if use_dark_status_icons {
         new_flags |= light_status_flag;
     } else {
         new_flags &= !light_status_flag;
     }
 
-    if nav_is_light {
+    if use_dark_nav_icons {
         new_flags |= light_nav_flag;
     } else {
         new_flags &= !light_nav_flag;
@@ -739,6 +732,6 @@ pub fn set_system_bar_colors(status_bar_color: &str, nav_bar_color: &str, foregr
         &[jni::objects::JValue::Int(new_flags)],
     ).map_err(|e| format!("Failed to set systemUiVisibility: {}", e))?;
 
-    eprintln!("[WikiActivity] Set system bar colors via systemUiVisibility");
+    eprintln!("[WikiActivity] Set icon appearance via systemUiVisibility (API {})", api_level);
     Ok(())
 }

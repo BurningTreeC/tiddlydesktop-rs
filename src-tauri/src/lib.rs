@@ -5473,6 +5473,42 @@ async fn read_file_as_binary(path: String) -> Result<Vec<u8>, String> {
         .map_err(|e| format!("Failed to read file {}: {}", path, e))
 }
 
+/// Save base64-encoded binary data to a file on disk.
+/// Used for pasting clipboard images as external attachments.
+/// Returns the full path of the saved file.
+#[tauri::command]
+async fn save_binary_file(path: String, data_base64: String) -> Result<(), String> {
+    use base64::{engine::general_purpose::STANDARD, Engine};
+
+    // Validate path
+    let validated_path = drag_drop::sanitize::validate_user_file_path(&path)?;
+
+    // Create parent directories if needed
+    if let Some(parent) = validated_path.parent() {
+        tokio::fs::create_dir_all(parent)
+            .await
+            .map_err(|e| format!("Failed to create directory {}: {}", parent.display(), e))?;
+    }
+
+    // Decode base64
+    let bytes = STANDARD
+        .decode(&data_base64)
+        .map_err(|e| format!("Failed to decode base64: {}", e))?;
+
+    // Write file
+    tokio::fs::write(&validated_path, &bytes)
+        .await
+        .map_err(|e| format!("Failed to write file {}: {}", path, e))?;
+
+    eprintln!(
+        "[TiddlyDesktop] Saved binary file: {} ({} bytes)",
+        path,
+        bytes.len()
+    );
+
+    Ok(())
+}
+
 /// Open a file picker dialog for importing files
 /// Returns the selected file paths (empty if cancelled)
 /// Used to replace browser's file input with native dialog that exposes full paths
@@ -6303,7 +6339,7 @@ async fn check_for_updates() -> Result<UpdateCheckResult, String> {
 
 /// Android version - separate from desktop versioning (must match build.gradle.kts versionName)
 #[cfg(target_os = "android")]
-const ANDROID_VERSION: &str = "0.0.30";
+const ANDROID_VERSION: &str = "0.0.31";
 
 /// Check for updates on Android via version file on GitHub, linking to Play Store
 #[cfg(target_os = "android")]
@@ -8306,6 +8342,7 @@ fn run_wiki_mode(args: WikiModeArgs) {
             close_window,
             read_file_as_data_uri,
             read_file_as_binary,
+            save_binary_file,
             pick_files_for_import,
             wiki_storage::get_external_attachments_config,
             wiki_storage::set_external_attachments_config,
@@ -8466,6 +8503,20 @@ fn run_wiki_folder_mode(args: WikiFolderModeArgs) {
         Some(p) => p,
         None => {
             eprintln!("[TiddlyDesktop] Error: TiddlyWiki not found in resources");
+            if let Some(dir) = &exe_dir {
+                let candidates = [
+                    dir.join("resources").join("tiddlywiki").join("tiddlywiki.js"),
+                    dir.join("..").join("lib").join("tiddlydesktop-rs").join("resources").join("tiddlywiki").join("tiddlywiki.js"),
+                    dir.join("..").join("lib").join("tiddlydesktop-rs").join("tiddlywiki").join("tiddlywiki.js"),
+                    dir.join("..").join("Resources").join("tiddlywiki").join("tiddlywiki.js"),
+                ];
+                eprintln!("[TiddlyDesktop]   exe_dir: {:?}", dir);
+                for c in &candidates {
+                    eprintln!("[TiddlyDesktop]   tried: {:?} (exists={})", c, c.exists());
+                }
+            } else {
+                eprintln!("[TiddlyDesktop]   current_exe() failed");
+            }
             return;
         }
     };
@@ -8760,6 +8811,7 @@ fn run_wiki_folder_mode(args: WikiFolderModeArgs) {
             get_saved_window_state,
             read_file_as_data_uri,
             read_file_as_binary,
+            save_binary_file,
             pick_files_for_import,
             wiki_storage::get_external_attachments_config,
             wiki_storage::set_external_attachments_config,
@@ -9420,6 +9472,7 @@ pub fn run() {
             wiki_storage::delete_wiki_group,
             read_file_as_data_uri,
             read_file_as_binary,
+            save_binary_file,
             pick_files_for_import,
             wiki_storage::get_external_attachments_config,
             wiki_storage::set_external_attachments_config,

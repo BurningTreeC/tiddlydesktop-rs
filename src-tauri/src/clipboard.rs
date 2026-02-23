@@ -191,6 +191,27 @@ fn get_clipboard_content_linux() -> Result<ClipboardContentData, String> {
         };
     }
 
+    // Try clipboard image — handles screenshots, copied images from any app.
+    // Uses GTK's wait_for_image() which negotiates the best available image format.
+    // This covers cases where WebKitGTK's web clipboard API doesn't expose images
+    // (e.g., Xfce/Thunar, some screenshot tools).
+    if !types.iter().any(|t| t.starts_with("image/")) {
+        if let Some(pixbuf) = clipboard.wait_for_image() {
+            // Encode Pixbuf to PNG bytes
+            if let Ok(png_bytes) = pixbuf.save_to_bufferv("png", &[]) {
+                use base64::Engine;
+                let b64 = base64::engine::general_purpose::STANDARD.encode(&png_bytes);
+                let data_uri = format!("data:image/png;base64,{}", b64);
+                types.push("image/png".to_string());
+                data.insert("image/png".to_string(), data_uri);
+                eprintln!(
+                    "[TiddlyDesktop] Clipboard: Got image/png via wait_for_image ({} bytes)",
+                    png_bytes.len()
+                );
+            }
+        }
+    }
+
     // Fallback: try wait_for_text (simpler but may have encoding issues)
     if types.is_empty() {
         if let Some(text) = clipboard.wait_for_text() {

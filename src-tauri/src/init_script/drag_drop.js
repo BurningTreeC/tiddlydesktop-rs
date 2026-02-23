@@ -2149,14 +2149,92 @@
 
                 // No file URIs. Check cached file items (e.g., pasted screenshots)
                 if (cachedFiles.length > 0) {
-                    invoke("js_log", { message: "Paste: importing " + cachedFiles.length + " clipboard file item(s)" });
-                    cachedFiles.forEach(function(file) {
-                        $tw.wiki.readFile(file, { callback: pasteImportCallback });
-                    });
+                    var externalEnabledForFiles = $tw.wiki.getTiddlerText(CONFIG_ENABLE, "yes") === "yes";
+                    if (externalEnabledForFiles && wikiPath) {
+                        // Save clipboard files as external attachments
+                        invoke("js_log", { message: "Paste: saving " + cachedFiles.length + " clipboard file(s) as external attachments" });
+                        var wikiDirForFiles = isFolderWiki ? wikiPath : wikiPath.replace(/[/\\][^/\\]*$/, "");
+                        var allSavedTiddlers = [];
+                        var filesRemaining = cachedFiles.length;
+                        cachedFiles.forEach(function(file) {
+                            var reader = new FileReader();
+                            reader.onload = function() {
+                                var base64 = reader.result.split(",")[1];
+                                var ext = (file.type || "application/octet-stream").split("/").pop().replace("jpeg", "jpg");
+                                var ts = new Date().toISOString().replace(/[-:T]/g, "").replace(/\..+/, "");
+                                var fname = "paste-" + ts + "-" + Math.random().toString(36).substr(2, 4) + "." + ext;
+                                var savePath = wikiDirForFiles + "/files/" + fname;
+                                invoke("save_binary_file", { path: savePath, dataBase64: base64 }).then(function() {
+                                    invoke("js_log", { message: "Paste: saved clipboard file as external: " + savePath });
+                                    var useAbsDescF = $tw.wiki.getTiddlerText(CONFIG_ABS_DESC, "no") === "yes";
+                                    var useAbsNonDescF = $tw.wiki.getTiddlerText(CONFIG_ABS_NONDESC, "no") === "yes";
+                                    var rootForRelF = isFolderWiki ? wikiPath + "/index.html" : wikiPath;
+                                    var canonUri = makePathRelative(savePath, rootForRelF, {
+                                        useAbsoluteForDescendents: useAbsDescF,
+                                        useAbsoluteForNonDescendents: useAbsNonDescF
+                                    });
+                                    allSavedTiddlers.push({ title: $tw.wiki.generateNewTitle(fname), type: file.type || "application/octet-stream", "_canonical_uri": canonUri });
+                                    filesRemaining--;
+                                    if (filesRemaining <= 0) pasteImportCallback(allSavedTiddlers);
+                                }).catch(function() {
+                                    // Fallback: embed directly via TW
+                                    $tw.wiki.readFile(file, { callback: function(tiddlers) {
+                                        if (tiddlers) allSavedTiddlers.push.apply(allSavedTiddlers, tiddlers);
+                                        filesRemaining--;
+                                        if (filesRemaining <= 0) pasteImportCallback(allSavedTiddlers);
+                                    }});
+                                });
+                            };
+                            reader.readAsDataURL(file);
+                        });
+                    } else {
+                        invoke("js_log", { message: "Paste: importing " + cachedFiles.length + " clipboard file item(s) (embedded)" });
+                        cachedFiles.forEach(function(file) {
+                            $tw.wiki.readFile(file, { callback: pasteImportCallback });
+                        });
+                    }
                     return;
                 }
 
-                // No files at all — handle as text paste.
+                // Check for native clipboard image (data URI from Rust).
+                // This handles DEs/toolkits where WebKitGTK doesn't expose
+                // clipboard images through the web API (e.g., Xfce).
+                var nativeImage = content.data && content.data["image/png"];
+                if (nativeImage && nativeImage.indexOf("data:image/") === 0) {
+                    var externalEnabled = $tw.wiki.getTiddlerText(CONFIG_ENABLE, "yes") === "yes";
+                    if (externalEnabled && wikiPath) {
+                        // Save image as external file next to the wiki
+                        var timestamp = new Date().toISOString().replace(/[-:T]/g, "").replace(/\..+/, "");
+                        var filename = "paste-" + timestamp + ".png";
+                        var wikiDir = isFolderWiki ? wikiPath : wikiPath.replace(/[/\\][^/\\]*$/, "");
+                        var filePath = wikiDir + "/files/" + filename;
+                        // Strip "data:image/png;base64," prefix
+                        var base64Data = nativeImage.replace(/^data:[^;]+;base64,/, "");
+                        invoke("save_binary_file", { path: filePath, dataBase64: base64Data }).then(function() {
+                            invoke("js_log", { message: "Paste: saved clipboard image as external file: " + filePath });
+                            var useAbsDesc = $tw.wiki.getTiddlerText(CONFIG_ABS_DESC, "no") === "yes";
+                            var useAbsNonDesc = $tw.wiki.getTiddlerText(CONFIG_ABS_NONDESC, "no") === "yes";
+                            var rootForRelative = isFolderWiki ? wikiPath + "/index.html" : wikiPath;
+                            var canonicalUri = makePathRelative(filePath, rootForRelative, {
+                                useAbsoluteForDescendents: useAbsDesc,
+                                useAbsoluteForNonDescendents: useAbsNonDesc
+                            });
+                            var title = $tw.wiki.generateNewTitle(filename);
+                            pasteImportCallback([{ title: title, type: "image/png", "_canonical_uri": canonicalUri }]);
+                        }).catch(function(err) {
+                            invoke("js_log", { message: "Paste: failed to save external image, embedding instead: " + err });
+                            var title = $tw.wiki.generateNewTitle("Untitled image");
+                            pasteImportCallback([{ title: title, text: nativeImage, type: "image/png" }]);
+                        });
+                    } else {
+                        invoke("js_log", { message: "Paste: importing native clipboard image (embedded)" });
+                        var title = $tw.wiki.generateNewTitle("Untitled image");
+                        pasteImportCallback([{ title: title, text: nativeImage, type: "image/png" }]);
+                    }
+                    return;
+                }
+
+                // No files or images — handle as text paste.
                 // Use native clipboard data (web API data is stale by now).
                 var textHtml = content.data && content.data["text/html"];
                 var textPlain = content.data && content.data["text/plain"];

@@ -172,6 +172,18 @@ impl AttachmentManager {
                 if uri.len() >= 3 && uri.as_bytes().get(1) == Some(&b':') {
                     return None;
                 }
+                // Reject path traversal sequences
+                if uri.contains("..") {
+                    eprintln!("[LAN Sync] Security: Rejected _canonical_uri with path traversal: {}", uri);
+                    return None;
+                }
+                // Also check percent-encoded traversal (%2e%2e, %2E%2E, etc.)
+                if let Ok(decoded) = urlencoding::decode(uri) {
+                    if decoded.contains("..") {
+                        eprintln!("[LAN Sync] Security: Rejected _canonical_uri with encoded path traversal: {}", uri);
+                        return None;
+                    }
+                }
                 eprintln!("[LAN Sync] Found _canonical_uri in tiddler: {}", uri);
                 return Some(uri.to_string());
             }
@@ -179,13 +191,43 @@ impl AttachmentManager {
         None
     }
 
-    /// Get the full path for an attachment file
+    /// Get the full path for an attachment file.
+    /// Validates that the resolved path stays within the wiki's base directory
+    /// to prevent path traversal attacks from malicious sync peers.
     fn resolve_path(&self, wiki_id: &str, relative_path: &str) -> Option<PathBuf> {
         let paths = self.wiki_paths.lock().unwrap();
-        paths.get(wiki_id).map(|base| {
-            let clean_path = relative_path.strip_prefix("./").unwrap_or(relative_path);
-            base.join(clean_path)
-        })
+        let base = paths.get(wiki_id)?;
+        let clean_path = relative_path.strip_prefix("./").unwrap_or(relative_path);
+
+        // Reject obvious traversal before even joining
+        if clean_path.contains("..") {
+            eprintln!("[LAN Sync] Security: Rejected attachment path with traversal: {}", relative_path);
+            return None;
+        }
+
+        let joined = base.join(clean_path);
+
+        // Canonicalize and verify containment (catches symlink escapes)
+        // For new files the parent must exist and be within base
+        let canonical_base = dunce::canonicalize(base).unwrap_or_else(|_| base.clone());
+        if let Ok(canonical) = dunce::canonicalize(&joined) {
+            if !canonical.starts_with(&canonical_base) {
+                eprintln!("[LAN Sync] Security: Attachment path escapes wiki dir: {} -> {}", relative_path, canonical.display());
+                return None;
+            }
+            Some(canonical)
+        } else if let Some(parent) = joined.parent() {
+            // File doesn't exist yet — canonicalize parent and check
+            if let Ok(canonical_parent) = dunce::canonicalize(parent) {
+                if !canonical_parent.starts_with(&canonical_base) {
+                    eprintln!("[LAN Sync] Security: Attachment parent escapes wiki dir: {} -> {}", relative_path, canonical_parent.display());
+                    return None;
+                }
+            }
+            Some(joined)
+        } else {
+            Some(joined)
+        }
     }
 
     /// Compute SHA-256 hash of a file

@@ -236,6 +236,8 @@ pub struct IpcServer {
     open_tiddler_callback: Arc<Mutex<Option<Box<dyn Fn(String, String, Option<String>) + Send + 'static>>>>,
     /// Callback for updating wiki favicon
     update_favicon_callback: Arc<Mutex<Option<Box<dyn Fn(String, Option<String>) + Send + 'static>>>>,
+    /// Callback for when a new wiki client registers (after authentication)
+    register_callback: Arc<Mutex<Option<Box<dyn Fn(String) + Send + 'static>>>>,
     /// Authentication token for validating clients
     auth_token: String,
 }
@@ -250,6 +252,7 @@ impl IpcServer {
             open_wiki_callback: Arc::new(Mutex::new(None)),
             open_tiddler_callback: Arc::new(Mutex::new(None)),
             update_favicon_callback: Arc::new(Mutex::new(None)),
+            register_callback: Arc::new(Mutex::new(None)),
             auth_token: token,
         }
     }
@@ -331,6 +334,14 @@ impl IpcServer {
         *self.update_favicon_callback.lock().unwrap() = Some(Box::new(callback));
     }
 
+    /// Set callback for when a new wiki client registers (after authentication)
+    pub fn on_client_registered<F>(&self, callback: F)
+    where
+        F: Fn(String) + Send + 'static,
+    {
+        *self.register_callback.lock().unwrap() = Some(Box::new(callback));
+    }
+
     /// Start the IPC server (blocks, run in separate thread)
     pub fn start(&self) -> std::io::Result<()> {
         let listener = TcpListener::bind(format!("127.0.0.1:{}", IPC_PORT))?;
@@ -361,6 +372,7 @@ impl IpcServer {
                     let open_wiki_cb = self.open_wiki_callback.clone();
                     let open_tiddler_cb = self.open_tiddler_callback.clone();
                     let update_favicon_cb = self.update_favicon_callback.clone();
+                    let register_cb = self.register_callback.clone();
                     let auth_token = self.auth_token.clone();
 
                     thread::spawn(move || {
@@ -371,6 +383,7 @@ impl IpcServer {
                             open_wiki_cb,
                             open_tiddler_cb,
                             update_favicon_cb,
+                            register_cb,
                             auth_token,
                         );
                         // Always decrement connection counter when done
@@ -413,6 +426,7 @@ fn handle_client(
     open_wiki_cb: Arc<Mutex<Option<Box<dyn Fn(String) + Send + 'static>>>>,
     open_tiddler_cb: Arc<Mutex<Option<Box<dyn Fn(String, String, Option<String>) + Send + 'static>>>>,
     update_favicon_cb: Arc<Mutex<Option<Box<dyn Fn(String, Option<String>) + Send + 'static>>>>,
+    register_cb: Arc<Mutex<Option<Box<dyn Fn(String) + Send + 'static>>>>,
     expected_auth_token: String,
 ) -> std::io::Result<()> {
     let peer_addr = stream.peer_addr()?;
@@ -483,6 +497,11 @@ fn handle_client(
                                 // Send ack
                                 let ack = IpcMessage::Ack { success: true, message: None };
                                 let _ = writeln!(write_stream, "{}", serde_json::to_string(&ack)?);
+
+                                // Notify callback that a new client registered
+                                if let Some(ref cb) = *register_cb.lock().unwrap() {
+                                    cb(wiki_path.clone());
+                                }
                             }
 
                             IpcMessage::Unregister { wiki_path, pid } => {

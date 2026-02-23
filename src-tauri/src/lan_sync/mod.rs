@@ -1360,15 +1360,21 @@ impl SyncManager {
         is_last_batch: bool,
     ) -> Result<(), String> {
         // Attach vector clocks from our conflict manager.
-        // Increment each tiddler's clock before sending — this ensures the
-        // receiver sees a strictly newer clock and accepts the update.
-        // Without this, tiddlers changed while sync was inactive would have
-        // stale clocks that the receiver sees as Equal/LocalNewer and skips.
+        // Only increment the clock for tiddlers not yet tracked (never synced before).
+        // Already-tracked tiddlers use their existing clock — this prevents an
+        // infinite loop where each send increments the clock, causing the peer
+        // to see a newer version and re-send back, ad infinitum.
         let sync_tiddlers: Vec<protocol::SyncTiddler> = tiddlers
             .into_iter()
             .filter(|t| conflict::ConflictManager::should_sync_tiddler(&t.title))
             .map(|t| {
-                let clock = self.conflict_manager.record_local_change(wiki_id, &t.title);
+                let existing = self.conflict_manager.get_clock(wiki_id, &t.title);
+                let clock = if existing.clocks.is_empty() {
+                    // Never tracked — increment once to establish authorship
+                    self.conflict_manager.record_local_change(wiki_id, &t.title)
+                } else {
+                    existing
+                };
                 protocol::SyncTiddler {
                     title: t.title,
                     tiddler_json: t.tiddler_json,
@@ -5681,6 +5687,19 @@ pub async fn lan_sync_start(_app: tauri::AppHandle) -> Result<(), String> {
                         "wiki_path": entry.path,
                         "sync_id": sync_id,
                     }));
+                    // Also send via IPC for wiki processes in separate OS processes
+                    // (app.emit() only reaches webviews in the same process)
+                    #[cfg(not(target_os = "android"))]
+                    {
+                        if let Some(server) = crate::GLOBAL_IPC_SERVER.get() {
+                            let payload = serde_json::json!({
+                                "type": "sync-activate",
+                                "wiki_path": entry.path,
+                                "sync_id": sync_id,
+                            }).to_string();
+                            server.send_lan_sync_to_all("*", &payload);
+                        }
+                    }
                     eprintln!("[LAN Sync] Global start: activating sync for wiki: {} (sync_id: {})", entry.path, sync_id);
                 }
             }

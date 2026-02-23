@@ -9043,6 +9043,33 @@ pub fn run() {
                 }
             });
 
+            // When a new wiki client registers, send sync-activate if sync is enabled
+            // This ensures wiki processes in separate OS processes receive activation
+            // (app.emit() only reaches webviews in the same process)
+            server.on_client_registered(|wiki_path| {
+                if let Some(app) = GLOBAL_APP_HANDLE.get() {
+                    let entries = wiki_storage::load_recent_files_from_disk(app);
+                    for entry in &entries {
+                        if entry.path == wiki_path && entry.sync_enabled {
+                            if let Some(ref sync_id) = entry.sync_id {
+                                if !sync_id.is_empty() {
+                                    if let Some(server) = GLOBAL_IPC_SERVER.get() {
+                                        let payload = serde_json::json!({
+                                            "type": "sync-activate",
+                                            "wiki_path": wiki_path,
+                                            "sync_id": sync_id,
+                                        }).to_string();
+                                        server.send_lan_sync_to_all("*", &payload);
+                                        eprintln!("[IPC] Sent sync-activate to new client: wiki={}, sync_id={}", wiki_path, sync_id);
+                                    }
+                                }
+                            }
+                            break;
+                        }
+                    }
+                }
+            });
+
             if let Err(e) = server.start() {
                 eprintln!("[TiddlyDesktop] IPC server error: {}", e);
             }

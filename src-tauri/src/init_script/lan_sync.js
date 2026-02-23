@@ -10,8 +10,19 @@
 (function() {
   'use strict';
 
+  // Pre-guard diagnostic — uses same pattern as internal_drag.js which is proven to work
+  if (window.__TAURI__ && window.__TAURI__.core && window.__TAURI__.core.invoke) {
+    window.__TAURI__.core.invoke('js_log', {
+      message: '[LAN Sync] IIFE entered: __IS_MAIN_WIKI__=' + window.__IS_MAIN_WIKI__ +
+        ', __WINDOW_LABEL__=' + (window.__WINDOW_LABEL__ || '(none)') +
+        ', __WIKI_PATH__=' + (window.__WIKI_PATH__ || '(none)')
+    }).catch(function() {});
+  }
+
   // Only run in wiki windows (not landing page)
-  if (window.__IS_MAIN_WIKI__) return;
+  // Use __WINDOW_LABEL__ check — same pattern as internal_drag.js which works on all platforms.
+  // Previously used __IS_MAIN_WIKI__ but that guard failed silently on Windows (unknown cause).
+  if (window.__WINDOW_LABEL__ === 'main') return;
 
   // Early diagnostic logging — uses js_log if available, so it appears in stderr
   function _earlyLog(msg) {
@@ -143,15 +154,15 @@
       return;
     }
 
-    // Log once at 5s if $tw isn't ready yet (transport IS ready)
-    if (_initCheckCount === 50 && !_rootWidgetLoggedOnce) {
-      _earlyLog('[LAN Sync] $tw not ready after 5s: $tw=' + (typeof $tw !== 'undefined') + ', wiki=' + !!(typeof $tw !== 'undefined' && $tw.wiki) + ', addEventListener=' + !!(typeof $tw !== 'undefined' && $tw.wiki && $tw.wiki.addEventListener) + ', rootWidget=' + !!(typeof $tw !== 'undefined' && $tw.rootWidget));
+    // Log progress at 5s and 15s if $tw isn't ready yet (transport IS ready)
+    if ((_initCheckCount === 50 || _initCheckCount === 150) && !_rootWidgetLoggedOnce) {
+      _earlyLog('[LAN Sync] $tw not ready after ' + (_initCheckCount / 10) + 's: $tw=' + (typeof $tw !== 'undefined') + ', wiki=' + !!(typeof $tw !== 'undefined' && $tw.wiki) + ', addEventListener=' + !!(typeof $tw !== 'undefined' && $tw.wiki && $tw.wiki.addEventListener) + ', rootWidget=' + !!(typeof $tw !== 'undefined' && $tw.rootWidget));
     }
 
     // After 60s (600 ticks), back off to 1s polling instead of giving up
     if (_initCheckCount === 600) {
       clearInterval(checkInterval);
-      console.warn('[LAN Sync] Switching to 1s polling after 60s');
+      _earlyLog('[LAN Sync] Switching to 1s polling after 60s');
       checkInterval = setInterval(_checkReady, 1000);
     }
   }

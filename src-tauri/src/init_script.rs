@@ -23,33 +23,38 @@
 /// CSS from custom URI schemes like tdlib:// via <link> tags)
 const MEDIA_CONTROLS_CSS: &str = include_str!("../resources/tdlib/media-controls.css");
 
-/// Combined initialization script from all modules (concatenated at compile time)
+/// Combined initialization script from all modules (concatenated at compile time).
+/// Each module is wrapped in try-catch so one failing script can't prevent subsequent
+/// scripts from executing (critical for LAN sync which loads near the end).
 const COMBINED_INIT_SCRIPT: &str = concat!(
-    include_str!("init_script/main.js"),
-    "\n",
-    include_str!("init_script/core.js"),
-    "\n",
-    include_str!("init_script/window.js"),
-    "\n",
-    include_str!("init_script/filesystem.js"),
-    "\n",
-    include_str!("init_script/drag_drop.js"),
-    "\n",
-    include_str!("init_script/session_auth.js"),
-    "\n",
-    include_str!("init_script/internal_drag.js"),
-    "\n",
-    include_str!("init_script/sync.js"),
-    "\n",
-    include_str!("init_script/media.js"),
-    "\n",
-    include_str!("init_script/title_sync.js"),
-    "\n",
-    include_str!("init_script/favicon_sync.js"),
-    "\n",
-    include_str!("init_script/lan_sync.js"),
-    "\n",
-    include_str!("init_script/conflict_ui.js"),
+    // Error reporter — logs to Rust stderr via js_log when available
+    "window.__tdInitErr=function(n,e){var m='[TD init] '+n+' error: '+(e&&e.message||e);if(window.__TAURI__&&window.__TAURI__.core&&window.__TAURI__.core.invoke){window.__TAURI__.core.invoke('js_log',{message:m}).catch(function(){})}console.error(m)};\n",
+    "try{\n", include_str!("init_script/main.js"),
+    "\n}catch(_e){window.__tdInitErr('main.js',_e)}\n",
+    "try{\n", include_str!("init_script/core.js"),
+    "\n}catch(_e){window.__tdInitErr('core.js',_e)}\n",
+    "try{\n", include_str!("init_script/window.js"),
+    "\n}catch(_e){window.__tdInitErr('window.js',_e)}\n",
+    "try{\n", include_str!("init_script/filesystem.js"),
+    "\n}catch(_e){window.__tdInitErr('filesystem.js',_e)}\n",
+    "try{\n", include_str!("init_script/drag_drop.js"),
+    "\n}catch(_e){window.__tdInitErr('drag_drop.js',_e)}\n",
+    "try{\n", include_str!("init_script/session_auth.js"),
+    "\n}catch(_e){window.__tdInitErr('session_auth.js',_e)}\n",
+    "try{\n", include_str!("init_script/internal_drag.js"),
+    "\n}catch(_e){window.__tdInitErr('internal_drag.js',_e)}\n",
+    "try{\n", include_str!("init_script/sync.js"),
+    "\n}catch(_e){window.__tdInitErr('sync.js',_e)}\n",
+    "try{\n", include_str!("init_script/media.js"),
+    "\n}catch(_e){window.__tdInitErr('media.js',_e)}\n",
+    "try{\n", include_str!("init_script/title_sync.js"),
+    "\n}catch(_e){window.__tdInitErr('title_sync.js',_e)}\n",
+    "try{\n", include_str!("init_script/favicon_sync.js"),
+    "\n}catch(_e){window.__tdInitErr('favicon_sync.js',_e)}\n",
+    "try{\n", include_str!("init_script/lan_sync.js"),
+    "\n}catch(_e){window.__tdInitErr('lan_sync.js',_e)}\n",
+    "try{\n", include_str!("init_script/conflict_ui.js"),
+    "\n}catch(_e){window.__tdInitErr('conflict_ui.js',_e)}\n",
 );
 
 /// Full JavaScript initialization script for wiki windows - sets all necessary variables early

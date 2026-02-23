@@ -140,8 +140,10 @@ fn get_machine_fingerprint() -> String {
     // Windows: MachineGuid from registry
     #[cfg(target_os = "windows")]
     {
+        use std::os::windows::process::CommandExt;
         if let Ok(output) = std::process::Command::new("reg")
             .args(["query", r"HKLM\SOFTWARE\Microsoft\Cryptography", "/v", "MachineGuid"])
+            .creation_flags(0x08000000) // CREATE_NO_WINDOW
             .output()
         {
             let stdout = String::from_utf8_lossy(&output.stdout);

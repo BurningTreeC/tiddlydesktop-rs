@@ -114,8 +114,10 @@ fn get_mac_address() -> Option<String> {
 /// Get the MAC address of the primary network interface (Windows).
 #[cfg(target_os = "windows")]
 fn get_mac_address() -> Option<String> {
+    use std::os::windows::process::CommandExt;
     let output = std::process::Command::new("getmac")
         .args(["/FO", "CSV", "/NH"])
+        .creation_flags(0x08000000) // CREATE_NO_WINDOW
         .output()
         .ok()?;
     let stdout = String::from_utf8_lossy(&output.stdout);

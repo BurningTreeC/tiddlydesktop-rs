@@ -8,7 +8,7 @@ use std::sync::Arc;
 use tokio::sync::mpsc;
 
 use super::conflict::{ConflictManager, ConflictResult};
-use super::protocol::SyncMessage;
+use super::protocol::{SyncMessage, VectorClock};
 use super::server::SyncServer;
 
 /// Messages from wiki processes to the LAN sync module
@@ -73,11 +73,15 @@ pub enum SyncToWiki {
         wiki_id: String,
         title: String,
         tiddler_json: String,
+        /// Vector clock to merge after confirmed IPC delivery (None = already merged)
+        vector_clock: Option<VectorClock>,
     },
     /// Apply a tiddler deletion from a remote peer
     ApplyTiddlerDeletion {
         wiki_id: String,
         title: String,
+        /// Vector clock to merge after confirmed IPC delivery (None = already merged)
+        vector_clock: Option<VectorClock>,
     },
     /// A conflict was detected — save the losing version
     SaveConflict {
@@ -144,16 +148,17 @@ impl SyncBridge {
                 match conflict_manager.check_remote_change(&wiki_id, &title, &vector_clock) {
                     ConflictResult::FastForward => {
                         eprintln!("[LAN Sync] Applying remote change (FastForward): '{}' from {}", title, from_device_id);
-                        // Send to wiki first — only merge clock if send succeeds
+                        // Defer clock merge until confirmed IPC delivery to JS.
+                        // Pass the vector clock through the channel so emit_to_wiki
+                        // can merge it after successful delivery.
                         if self.sync_to_wiki_tx.send(SyncToWiki::ApplyTiddlerChange {
                             wiki_id: wiki_id.clone(),
                             title: title.clone(),
                             tiddler_json,
-                        }).is_ok() {
-                            conflict_manager.accept_remote_change(&wiki_id, &title, &vector_clock);
-                        } else {
+                            vector_clock: Some(vector_clock),
+                        }).is_err() {
                             eprintln!(
-                                "[LAN Sync] Failed to send change for '{}' to wiki channel — clock not merged",
+                                "[LAN Sync] Failed to send change for '{}' to wiki channel",
                                 title
                             );
                         }
@@ -181,14 +186,13 @@ impl SyncBridge {
                         });
 
                         // Last-write-wins: apply the remote change
-                        // Send to wiki first — only merge clock if send succeeds
+                        // Defer clock merge until confirmed IPC delivery
                         if self.sync_to_wiki_tx.send(SyncToWiki::ApplyTiddlerChange {
                             wiki_id: wiki_id.clone(),
                             title: title.clone(),
                             tiddler_json,
-                        }).is_ok() {
-                            conflict_manager.accept_remote_change(&wiki_id, &title, &vector_clock);
-                        } else {
+                            vector_clock: Some(vector_clock),
+                        }).is_err() {
                             eprintln!(
                                 "[LAN Sync] Failed to send conflict change for '{}' to wiki channel",
                                 title
@@ -210,10 +214,11 @@ impl SyncBridge {
 
                 match conflict_manager.check_remote_change(&wiki_id, &title, &vector_clock) {
                     ConflictResult::FastForward => {
-                        conflict_manager.accept_remote_deletion(&wiki_id, &title, &vector_clock);
+                        // Defer clock merge until confirmed IPC delivery
                         let _ = self.sync_to_wiki_tx.send(SyncToWiki::ApplyTiddlerDeletion {
                             wiki_id,
                             title,
+                            vector_clock: Some(vector_clock),
                         });
                     }
                     ConflictResult::Conflict => {
@@ -228,10 +233,11 @@ impl SyncBridge {
                             title: title.clone(),
                             conflict_tiddler_json: String::new(), // JS side has the local version
                         });
-                        conflict_manager.accept_remote_deletion(&wiki_id, &title, &vector_clock);
+                        // Defer clock merge until confirmed IPC delivery
                         let _ = self.sync_to_wiki_tx.send(SyncToWiki::ApplyTiddlerDeletion {
                             wiki_id,
                             title,
+                            vector_clock: Some(vector_clock),
                         });
                     }
                     ConflictResult::LocalNewer => {
@@ -267,16 +273,13 @@ impl SyncBridge {
                         &tiddler.vector_clock,
                     ) {
                         ConflictResult::FastForward => {
+                            // Defer clock merge until confirmed IPC delivery
                             if self.sync_to_wiki_tx.send(SyncToWiki::ApplyTiddlerChange {
                                 wiki_id: wiki_id.clone(),
                                 title: tiddler.title.clone(),
                                 tiddler_json: tiddler.tiddler_json,
+                                vector_clock: Some(tiddler.vector_clock),
                             }).is_ok() {
-                                conflict_manager.accept_remote_change(
-                                    &wiki_id,
-                                    &tiddler.title,
-                                    &tiddler.vector_clock,
-                                );
                                 applied += 1;
                             }
                         }
@@ -293,16 +296,13 @@ impl SyncBridge {
                                 title: tiddler.title.clone(),
                                 conflict_tiddler_json: String::new(),
                             });
+                            // Defer clock merge until confirmed IPC delivery
                             if self.sync_to_wiki_tx.send(SyncToWiki::ApplyTiddlerChange {
                                 wiki_id: wiki_id.clone(),
                                 title: tiddler.title.clone(),
                                 tiddler_json: tiddler.tiddler_json,
+                                vector_clock: Some(tiddler.vector_clock),
                             }).is_ok() {
-                                conflict_manager.accept_remote_change(
-                                    &wiki_id,
-                                    &tiddler.title,
-                                    &tiddler.vector_clock,
-                                );
                                 applied += 1;
                             }
                         }

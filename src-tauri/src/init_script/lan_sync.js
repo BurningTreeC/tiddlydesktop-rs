@@ -13,6 +13,8 @@
   // Only run in wiki windows (not landing page)
   if (window.__IS_MAIN_WIKI__) return;
 
+  console.warn('[LAN Sync] IIFE started');
+
   // Transport variables — determined lazily once $tw is ready
   // (window.__TAURI__ may not be available yet during initial script parse)
   var isAndroid = false;
@@ -97,7 +99,9 @@
 
   // Wait for TiddlyWiki AND transport to be ready
   var _initCheckCount = 0;
-  var checkInterval = setInterval(function() {
+  var _tauriLoggedOnce = false;
+  var _rootWidgetLoggedOnce = false;
+  function _checkReady() {
     _initCheckCount++;
     // Re-check transport each tick (Tauri IPC bridge loads asynchronously)
     isAndroid = typeof window.TiddlyDesktopSync !== 'undefined';
@@ -106,14 +110,14 @@
     if (!isAndroid && !hasTauri) {
       // Log once at 2s to help diagnose Windows transport issues
       if (_initCheckCount === 20) {
-        try {
-          var msg = '[LAN Sync] Transport not ready after 2s (hasTauri=' + hasTauri + ', __TAURI__=' + !!window.__TAURI__ + ')';
-          if (window.__TAURI__ && window.__TAURI__.core) {
-            window.__TAURI__.core.invoke('js_log', { message: msg }).catch(function() {});
-          }
-        } catch(_e) {}
+        console.warn('[LAN Sync] Transport not ready after 2s (__TAURI__=' + !!window.__TAURI__ + ')');
       }
       return; // transport not ready yet
+    }
+
+    if (!_tauriLoggedOnce) {
+      _tauriLoggedOnce = true;
+      console.warn('[LAN Sync] hasTauri became true (tick ' + _initCheckCount + ')');
     }
 
     // On Android, check that bridge is running
@@ -123,13 +127,23 @@
     // and the rendering system is ready.  Without this, addTiddler() during
     // catch-up sync silently drops change events and the UI never updates.
     if (typeof $tw !== 'undefined' && $tw.wiki && $tw.wiki.addEventListener && $tw.rootWidget) {
+      if (!_rootWidgetLoggedOnce) {
+        _rootWidgetLoggedOnce = true;
+        console.warn('[LAN Sync] $tw.rootWidget ready (tick ' + _initCheckCount + ')');
+      }
       clearInterval(checkInterval);
       initLanSync();
+      return;
     }
-  }, 100);
 
-  // Timeout after 30s
-  setTimeout(function() { clearInterval(checkInterval); }, 30000);
+    // After 60s (600 ticks), back off to 1s polling instead of giving up
+    if (_initCheckCount === 600) {
+      clearInterval(checkInterval);
+      console.warn('[LAN Sync] Switching to 1s polling after 60s');
+      checkInterval = setInterval(_checkReady, 1000);
+    }
+  }
+  var checkInterval = setInterval(_checkReady, 100);
 
   // ── Initialization ───────────────────────────────────────────────────
 

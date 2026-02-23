@@ -2012,8 +2012,8 @@ async fn extract_video_poster(app: tauri::AppHandle, path: String) -> Result<Opt
     // Extract poster: frame at 0.5s, scaled to 480px width, quality 8
     let cache_path_str = cache_path.to_string_lossy().to_string();
     let result = tokio::task::spawn_blocking(move || {
-        Command::new(&ffmpeg)
-            .args([
+        let mut cmd = Command::new(&ffmpeg);
+        cmd.args([
                 "-ss", "0.5",
                 "-i", &path,
                 "-vframes", "1",
@@ -2022,8 +2022,10 @@ async fn extract_video_poster(app: tauri::AppHandle, path: String) -> Result<Opt
                 "-f", "image2",
                 "-y",
                 &cache_path_str,
-            ])
-            .output()
+            ]);
+        #[cfg(target_os = "windows")]
+        cmd.creation_flags(CREATE_NO_WINDOW);
+        cmd.output()
     }).await.map_err(|e| format!("Task error: {}", e))?;
 
     match result {
@@ -2158,7 +2160,11 @@ fn register_media_url() -> Result<String, String> {
 #[cfg(not(target_os = "android"))]
 fn find_ffmpeg() -> Option<String> {
     // Try PATH first
-    if let Ok(output) = std::process::Command::new("ffmpeg").arg("-version").output() {
+    let mut cmd = std::process::Command::new("ffmpeg");
+    cmd.arg("-version");
+    #[cfg(target_os = "windows")]
+    cmd.creation_flags(CREATE_NO_WINDOW);
+    if let Ok(output) = cmd.output() {
         if output.status.success() {
             return Some("ffmpeg".into());
         }
@@ -9119,6 +9125,16 @@ pub fn run() {
                                         server.send_lan_sync_to_all("*", &payload);
                                         eprintln!("[IPC] Sent sync-activate to new client: wiki={}, sync_id={}", wiki_path, sync_id);
                                     }
+                                    // Also trigger on_wiki_opened to drain pending
+                                    // buffers and request fingerprint sync from peers.
+                                    // This ensures buffered changes are delivered even
+                                    // if JS hasn't called lan_sync_wiki_opened yet.
+                                    let sync_id = sync_id.clone();
+                                    tauri::async_runtime::spawn(async move {
+                                        if let Some(mgr) = lan_sync::get_sync_manager() {
+                                            mgr.on_wiki_opened(&sync_id).await;
+                                        }
+                                    });
                                 }
                             }
                             break;

@@ -165,6 +165,12 @@ pub struct SyncManager {
     /// round-trip to the peer.
     #[cfg(not(target_os = "android"))]
     pending_wiki_changes: std::sync::Mutex<HashMap<String, Vec<String>>>,
+    /// Deferred vector clocks for buffered tiddler changes.
+    /// When emit_to_wiki buffers a message (0 IPC clients), the vector clock
+    /// is stored here. Drained by on_wiki_opened after buffer delivery.
+    /// Maps wiki_id → Vec<(title, clock, is_deletion)>.
+    #[cfg(not(target_os = "android"))]
+    pending_wiki_clocks: std::sync::Mutex<HashMap<String, Vec<(String, protocol::VectorClock, bool)>>>,
     /// Tracks tiddler titles that were merged into local_fingerprint_cache
     /// from FullSyncBatch while no wiki JS was connected.  These tiddlers
     /// exist in the Rust cache but NOT in the wiki file, so they must be
@@ -292,6 +298,8 @@ impl SyncManager {
             pre_sync_buffer: std::sync::Mutex::new(HashMap::new()),
             #[cfg(not(target_os = "android"))]
             pending_wiki_changes: std::sync::Mutex::new(HashMap::new()),
+            #[cfg(not(target_os = "android"))]
+            pending_wiki_clocks: std::sync::Mutex::new(HashMap::new()),
             cache_merge_overrides: std::sync::Mutex::new(HashMap::new()),
             last_fp_send: std::sync::Mutex::new(HashMap::new()),
             last_fp_forward: std::sync::Mutex::new(HashMap::new()),
@@ -1565,6 +1573,23 @@ impl SyncManager {
                     }
                 }
             }
+
+            // Accept deferred vector clocks for the buffered changes we just delivered.
+            // These clocks were stored by spawn_emit_task when IPC had 0 clients.
+            let pending_clocks = self.pending_wiki_clocks.lock().unwrap().remove(wiki_id).unwrap_or_default();
+            if !pending_clocks.is_empty() {
+                eprintln!(
+                    "[LAN Sync] Accepting {} deferred vector clocks for wiki {}",
+                    pending_clocks.len(), wiki_id
+                );
+                for (title, clock, is_deletion) in pending_clocks {
+                    if is_deletion {
+                        self.conflict_manager.accept_remote_deletion(wiki_id, &title, &clock);
+                    } else {
+                        self.conflict_manager.accept_remote_change(wiki_id, &title, &clock);
+                    }
+                }
+            }
         }
 
         // Deliver any messages buffered by pre_request_sync
@@ -2159,29 +2184,63 @@ impl SyncManager {
     /// Spawn the task that emits sync-to-wiki events.
     /// On desktop: emits Tauri events (received by all wiki windows in the same process).
     /// On Android: queues changes to the Android bridge (polled by JS in :wiki process).
+    ///
+    /// Vector clocks are merged only after confirmed delivery to IPC clients.
+    /// If no clients are connected (message buffered), clocks are stored in
+    /// pending_wiki_clocks and merged when on_wiki_opened drains the buffer.
     fn spawn_emit_task(&self) -> tokio::task::JoinHandle<()> {
         let sync_to_wiki_rx = self.bridge.sync_to_wiki_rx.clone();
+        let conflict_manager = self.conflict_manager.clone();
 
         tokio::spawn(async move {
             let mut rx = sync_to_wiki_rx.lock().await;
             while let Some(msg) = rx.recv().await {
                 match msg {
-                    SyncToWiki::ApplyTiddlerChange { wiki_id, title, tiddler_json } => {
+                    SyncToWiki::ApplyTiddlerChange { wiki_id, title, tiddler_json, vector_clock } => {
                         let payload = serde_json::json!({
                             "type": "apply-change",
                             "wiki_id": wiki_id,
                             "title": title,
                             "tiddler_json": tiddler_json,
                         });
-                        Self::emit_to_wiki(&wiki_id, "lan-sync-apply-change", payload);
+                        let sent = Self::emit_to_wiki(&wiki_id, "lan-sync-apply-change", payload);
+                        // Accept vector clock only after confirmed delivery
+                        if let Some(clock) = vector_clock {
+                            if sent > 0 {
+                                conflict_manager.accept_remote_change(&wiki_id, &title, &clock);
+                            } else {
+                                // Buffer clock for acceptance when wiki JS connects
+                                #[cfg(not(target_os = "android"))]
+                                if let Some(mgr) = get_sync_manager() {
+                                    if let Ok(mut buf) = mgr.pending_wiki_clocks.lock() {
+                                        let vec = buf.entry(wiki_id.clone()).or_insert_with(Vec::new);
+                                        vec.push((title, clock, false));
+                                    }
+                                }
+                            }
+                        }
                     }
-                    SyncToWiki::ApplyTiddlerDeletion { wiki_id, title } => {
+                    SyncToWiki::ApplyTiddlerDeletion { wiki_id, title, vector_clock } => {
                         let payload = serde_json::json!({
                             "type": "apply-deletion",
                             "wiki_id": wiki_id,
                             "title": title,
                         });
-                        Self::emit_to_wiki(&wiki_id, "lan-sync-apply-deletion", payload);
+                        let sent = Self::emit_to_wiki(&wiki_id, "lan-sync-apply-deletion", payload);
+                        // Accept vector clock only after confirmed delivery
+                        if let Some(clock) = vector_clock {
+                            if sent > 0 {
+                                conflict_manager.accept_remote_deletion(&wiki_id, &title, &clock);
+                            } else {
+                                #[cfg(not(target_os = "android"))]
+                                if let Some(mgr) = get_sync_manager() {
+                                    if let Ok(mut buf) = mgr.pending_wiki_clocks.lock() {
+                                        let vec = buf.entry(wiki_id.clone()).or_insert_with(Vec::new);
+                                        vec.push((title, clock, true));
+                                    }
+                                }
+                            }
+                        }
                     }
                     SyncToWiki::SaveConflict { wiki_id, title, .. } => {
                         let payload = serde_json::json!({
@@ -2198,7 +2257,8 @@ impl SyncManager {
 
     /// Emit a sync event to wiki windows.
     /// Desktop: IPC to wiki processes. Android: queue to bridge for JS polling.
-    fn emit_to_wiki(wiki_id: &str, _event_name: &str, payload: serde_json::Value) {
+    /// Returns the number of IPC clients that received the message (0 = buffered).
+    fn emit_to_wiki(wiki_id: &str, _event_name: &str, payload: serde_json::Value) -> usize {
         // On Android, queue to bridge for JS polling
         #[cfg(target_os = "android")]
         {
@@ -2209,11 +2269,13 @@ impl SyncManager {
                     if let Some(ref bridge) = *guard {
                         bridge.queue_change(wiki_id, payload.clone());
                         eprintln!("[LAN Sync] emit_to_wiki (Android): queued to bridge");
+                        return 1; // Android bridge always accepts
                     } else {
                         eprintln!("[LAN Sync] emit_to_wiki (Android): bridge is None!");
                     }
                 }
             }
+            return 0;
         }
 
         // On desktop, send via IPC to wiki processes (they're separate processes)
@@ -2255,6 +2317,8 @@ impl SyncManager {
                     }
                 }
             }
+
+            sent_count
         }
     }
 

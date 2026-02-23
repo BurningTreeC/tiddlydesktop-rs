@@ -9568,6 +9568,7 @@ pub fn run() {
             lan_sync::lan_sync_start,
             lan_sync::lan_sync_stop,
             lan_sync::lan_sync_get_status,
+            lan_sync::lan_sync_announce_username,
             lan_sync::lan_sync_tiddler_changed,
             lan_sync::lan_sync_tiddler_deleted,
             lan_sync::lan_sync_wiki_opened,

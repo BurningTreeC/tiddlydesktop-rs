@@ -69,6 +69,8 @@ pub struct PeerConnection {
     pub cipher: SessionCipher,
     /// Room code this peer authenticated with (for LAN connections)
     pub auth_room_code: Option<String>,
+    /// TiddlyWiki username of this peer (from UserNameAnnounce)
+    pub user_name: Option<String>,
 }
 
 /// Events emitted by the server to be handled by the sync manager
@@ -347,6 +349,23 @@ impl SyncServer {
             .collect()
     }
 
+    /// Get list of LAN-only connected peers with user_name
+    pub async fn lan_connected_peers_full(&self) -> Vec<(String, String, Option<String>)> {
+        let peers = self.peers.read().await;
+        peers
+            .iter()
+            .map(|(id, p)| (id.clone(), p.device_name.clone(), p.user_name.clone()))
+            .collect()
+    }
+
+    /// Set user_name for a specific peer
+    pub async fn set_peer_user_name(&self, device_id: &str, user_name: String) {
+        let mut peers = self.peers.write().await;
+        if let Some(peer) = peers.get_mut(device_id) {
+            peer.user_name = Some(user_name);
+        }
+    }
+
     /// Get all peer device IDs in a given room (LAN + relay).
     pub async fn peers_for_room(&self, room_code: &str) -> Vec<String> {
         let mut result = Vec::new();
@@ -379,12 +398,12 @@ impl SyncServer {
     }
 
     /// Get list of connected peer device IDs (LAN + relay)
-    pub async fn connected_peers(&self) -> Vec<(String, String)> {
-        let mut all: Vec<(String, String)> = {
+    pub async fn connected_peers(&self) -> Vec<(String, String, Option<String>)> {
+        let mut all: Vec<(String, String, Option<String>)> = {
             let peers = self.peers.read().await;
             peers
                 .iter()
-                .map(|(id, p)| (id.clone(), p.device_name.clone()))
+                .map(|(id, p)| (id.clone(), p.device_name.clone(), p.user_name.clone()))
                 .collect()
         };
 
@@ -392,8 +411,8 @@ impl SyncServer {
         if let Some(relay) = self.relay.read().await.as_ref() {
             let relay_peers = relay.connected_peers().await;
             for (id, name) in relay_peers {
-                if !all.iter().any(|(aid, _)| aid == &id) {
-                    all.push((id, name));
+                if !all.iter().any(|(aid, _, _)| aid == &id) {
+                    all.push((id, name, None));
                 }
             }
         }
@@ -547,6 +566,7 @@ async fn handle_connection(
                 bulk_tx,
                 cipher: send_cipher,
                 auth_room_code: Some(auth_room_code),
+                user_name: None,
             },
         );
     }

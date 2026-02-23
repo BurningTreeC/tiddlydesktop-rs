@@ -314,6 +314,7 @@
         // NOTE: Do NOT reset collabListeners here — CM6 editors created before
         // sync activation have already registered their inbound listeners via
         // collab.on(). Wiping them would break inbound message delivery.
+        clearAllEditingTiddlers();
         remoteEditorsCache = {};
 
         // Flush queued outbound messages
@@ -386,6 +387,7 @@
       _collabWikiId = null;
       _collabOutboundQueue = [];
       collabListeners = {};
+      clearAllEditingTiddlers();
       remoteEditorsCache = {};
       if (collabWs) {
         try { collabWs.close(); } catch (e) {}
@@ -1376,6 +1378,33 @@
     }
   }
 
+  // Write/delete a $:/temp/tiddlydesktop/editing/<title> tiddler from remoteEditorsCache
+  function updateEditingTiddler(tiddlerTitle) {
+    if (typeof $tw === 'undefined' || !$tw.wiki) return;
+    var editors = remoteEditorsCache[tiddlerTitle] || [];
+    var tid = '$:/temp/tiddlydesktop/editing/' + tiddlerTitle;
+    if (editors.length > 0) {
+      $tw.wiki.addTiddler({
+        title: tid,
+        type: 'application/json',
+        text: JSON.stringify(editors)
+      });
+    } else {
+      $tw.wiki.deleteTiddler(tid);
+    }
+  }
+
+  // Delete all $:/temp/tiddlydesktop/editing/* tiddlers (on sync reset)
+  function clearAllEditingTiddlers() {
+    if (typeof $tw === 'undefined' || !$tw.wiki) return;
+    var prefix = '$:/temp/tiddlydesktop/editing/';
+    $tw.wiki.each(function(tiddler, title) {
+      if (title.indexOf(prefix) === 0) {
+        $tw.wiki.deleteTiddler(title);
+      }
+    });
+  }
+
   function handleCollabMessage(data) {
     if (!data || !data.type) return;
     switch (data.type) {
@@ -1387,16 +1416,19 @@
           for (var i = 0; i < remoteEditorsCache[data.tiddler_title].length; i++) {
             if (remoteEditorsCache[data.tiddler_title][i].device_id === data.device_id) {
               found = true;
+              remoteEditorsCache[data.tiddler_title][i].user_name = data.user_name || '';
               break;
             }
           }
           if (!found) {
             remoteEditorsCache[data.tiddler_title].push({
               device_id: data.device_id,
-              device_name: data.device_name || ''
+              device_name: data.device_name || '',
+              user_name: data.user_name || ''
             });
           }
           _log('[Collab] Cache: added editor for ' + data.tiddler_title + ', now ' + remoteEditorsCache[data.tiddler_title].length + ' remote editors');
+          updateEditingTiddler(data.tiddler_title);
         }
         emitCollabEvent('editing-started', data);
         break;
@@ -1410,6 +1442,7 @@
             delete remoteEditorsCache[data.tiddler_title];
           }
           _log('[Collab] Cache: removed editor for ' + data.tiddler_title + ', now ' + (remoteEditorsCache[data.tiddler_title] ? remoteEditorsCache[data.tiddler_title].length : 0) + ' remote editors');
+          updateEditingTiddler(data.tiddler_title);
         }
         emitCollabEvent('editing-stopped', data);
         break;

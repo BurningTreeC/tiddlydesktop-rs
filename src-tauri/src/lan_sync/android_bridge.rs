@@ -528,6 +528,43 @@ fn run_bridge_server(
                 let _ = request.respond(cors_response("{\"ok\":true}", 200));
             }
 
+            ("POST", "/_bridge/announce-username") => {
+                if let Some(body) = read_body(&mut request) {
+                    if let Ok(json) = serde_json::from_str::<serde_json::Value>(&body) {
+                        let user_name = json["user_name"].as_str().unwrap_or("").to_string();
+                        if !user_name.is_empty() {
+                            if let Some(mgr) = super::get_sync_manager() {
+                                let mgr = mgr.clone();
+                                tauri::async_runtime::spawn(async move {
+                                    mgr.announce_username(user_name).await;
+                                });
+                            }
+                        }
+                    }
+                }
+                let _ = request.respond(cors_response("{\"ok\":true}", 200));
+            }
+
+            ("GET", "/_bridge/sync-status") => {
+                let status = if let Some(mgr) = super::get_sync_manager() {
+                    let mgr = mgr.clone();
+                    // Block on the async get_status call
+                    tauri::async_runtime::block_on(async move {
+                        mgr.get_status().await
+                    })
+                } else {
+                    super::SyncStatus {
+                        running: false,
+                        device_id: String::new(),
+                        device_name: String::new(),
+                        port: None,
+                        connected_peers: vec![],
+                    }
+                };
+                let resp = serde_json::to_string(&status).unwrap_or_else(|_| "{}".to_string());
+                let _ = request.respond(cors_response(&resp, 200));
+            }
+
             ("GET", url) if url.starts_with("/_bridge/collab-editors?") => {
                 // Parse query: wiki_id=...&tiddler_title=...
                 let query = url.strip_prefix("/_bridge/collab-editors?").unwrap_or("");

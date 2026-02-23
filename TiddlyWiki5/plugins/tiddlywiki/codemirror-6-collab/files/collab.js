@@ -896,6 +896,28 @@ function _connectTransport(engine, collab) {
 }
 
 
+// Update the user name (and derived color) on all active Yjs awareness instances.
+// Called when $:/status/UserName changes mid-session so remote cursor labels update.
+function _updateAllUserNames(newName) {
+	var color = _getUserColor(newName);
+	for(var title in _collabStateByTitle) {
+		if(_collabStateByTitle.hasOwnProperty(title)) {
+			var state = _collabStateByTitle[title];
+			if(!state.destroyed && state.awareness) {
+				try {
+					state.awareness.setLocalStateField("user", {
+						name: newName,
+						color: color.color,
+						colorLight: color.light
+					});
+				} catch(_e) {}
+			}
+		}
+	}
+}
+
+exports.updateUserName = _updateAllUserNames;
+
 exports.plugin = {
 	name: "collab",
 	description: "Real-time collaborative editing via Yjs",

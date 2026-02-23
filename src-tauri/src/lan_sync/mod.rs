@@ -86,6 +86,8 @@ pub struct SyncStatus {
 pub struct PeerInfo {
     pub device_id: String,
     pub device_name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub user_name: Option<String>,
 }
 
 /// Info about a wiki available from a remote peer
@@ -195,10 +197,12 @@ pub struct SyncManager {
 
     // ── Collaborative editing state ──────────────────────────────────
 
-    /// Remote editors: (wiki_id, tiddler_title) → HashSet<(device_id, device_name)>
-    collab_editors: std::sync::Mutex<HashMap<(String, String), HashSet<(String, String)>>>,
+    /// Remote editors: (wiki_id, tiddler_title) → HashSet<(device_id, device_name, user_name)>
+    collab_editors: std::sync::Mutex<HashMap<(String, String), HashSet<(String, String, String)>>>,
     /// Local editors: (wiki_id, tiddler_title) — tiddlers this device is currently editing
     local_collab_editors: std::sync::Mutex<HashSet<(String, String)>>,
+    /// Local TiddlyWiki username (from JS UserNameAnnounce)
+    local_user_name: std::sync::Mutex<Option<String>>,
     /// Port of the local collab WebSocket server (0 if not running)
     collab_ws_port: std::sync::atomic::AtomicU16,
     /// Connected collab WebSocket clients: wiki_id → list of sender handles
@@ -307,6 +311,7 @@ impl SyncManager {
             incoming_plugin_transfers: std::sync::Mutex::new(HashMap::new()),
             #[cfg(target_os = "android")]
             android_bridge: std::sync::Mutex::new(None),
+            local_user_name: std::sync::Mutex::new(None),
             collab_editors: std::sync::Mutex::new(HashMap::new()),
             local_collab_editors: std::sync::Mutex::new(HashSet::new()),
             collab_ws_port: std::sync::atomic::AtomicU16::new(0),
@@ -854,6 +859,19 @@ impl SyncManager {
         }
     }
 
+    /// Store local username and broadcast to all connected peers
+    pub async fn announce_username(&self, user_name: String) {
+        // Store locally
+        if let Ok(mut guard) = self.local_user_name.lock() {
+            *guard = Some(user_name.clone());
+        }
+        // Broadcast to all peers
+        let msg = SyncMessage::UserNameAnnounce { user_name };
+        if let Some(ref server) = *self.server.read().await {
+            server.broadcast(&msg).await;
+        }
+    }
+
     /// Stop the sync server and discovery
     pub async fn stop(&self) {
         // Mark as not running immediately so the event loop stops processing messages
@@ -965,7 +983,7 @@ impl SyncManager {
 
         // LAN peers
         if let Some(ref server) = *self.server.read().await {
-            for (id, name) in server.connected_peers().await {
+            for (id, name, _user_name) in server.connected_peers().await {
                 if seen.insert(id.clone()) {
                     result.push((id, name));
                 }
@@ -1437,9 +1455,10 @@ impl SyncManager {
             port,
             connected_peers: connected
                 .into_iter()
-                .map(|(id, name)| PeerInfo {
+                .map(|(id, name, user_name)| PeerInfo {
                     device_id: id,
                     device_name: name,
+                    user_name,
                 })
                 .collect(),
         }
@@ -1744,8 +1763,8 @@ impl SyncManager {
         });
     }
 
-    /// Get remote editors for a tiddler
-    pub fn get_remote_editors(&self, wiki_id: &str, tiddler_title: &str) -> Vec<(String, String)> {
+    /// Get remote editors for a tiddler (device_id, device_name, user_name)
+    pub fn get_remote_editors(&self, wiki_id: &str, tiddler_title: &str) -> Vec<(String, String, String)> {
         let key = (wiki_id.to_string(), tiddler_title.to_string());
         if let Ok(editors) = self.collab_editors.lock() {
             editors
@@ -1923,13 +1942,14 @@ impl SyncManager {
                         if let Ok(editors) = self.collab_editors.lock() {
                             for ((eid_wiki, eid_title), device_set) in editors.iter() {
                                 if eid_wiki == &wid {
-                                    for (device_id, device_name) in device_set {
+                                    for (device_id, device_name, user_name) in device_set {
                                         let msg = serde_json::json!({
                                             "type": "editing-started",
                                             "wiki_id": eid_wiki,
                                             "tiddler_title": eid_title,
                                             "device_id": device_id,
                                             "device_name": device_name,
+                                            "user_name": user_name,
                                         });
                                         let _ = tx.send(msg.to_string());
                                     }
@@ -2427,6 +2447,7 @@ impl SyncManager {
                         "device_id": device_id,
                         "device_name": device_name,
                     }));
+                    let _ = app.emit("lan-sync-peers-updated", serde_json::json!({}));
                 }
 
                 // Send WikiManifest to the newly connected peer
@@ -2434,6 +2455,17 @@ impl SyncManager {
 
                 // Send cached tiddlywiki.info for folder wikis
                 self.send_wiki_info_to_peer(&device_id).await;
+
+                // Send our username if we have one
+                let local_name = self.local_user_name.lock().ok().and_then(|g| g.clone());
+                if let Some(name) = local_name {
+                    let msg = SyncMessage::UserNameAnnounce {
+                        user_name: name,
+                    };
+                    if let Err(e) = self.send_to_peer_any(&device_id, &msg).await {
+                        eprintln!("[LAN Sync] Failed to send UserNameAnnounce to {}: {}", device_id, e);
+                    }
+                }
 
                 // Re-broadcast local collab editing sessions so the peer knows what we're editing
                 if let Ok(local) = self.local_collab_editors.lock() {
@@ -2466,12 +2498,12 @@ impl SyncManager {
                     let keys: Vec<(String, String)> = editors.keys().cloned().collect();
                     for key in keys {
                         if let Some(set) = editors.get_mut(&key) {
-                            let removed: Vec<(String, String)> = set.iter()
-                                .filter(|(did, _)| did == &device_id)
+                            let removed: Vec<(String, String, String)> = set.iter()
+                                .filter(|(did, _, _)| did == &device_id)
                                 .cloned()
                                 .collect();
-                            for (did, _) in &removed {
-                                set.retain(|(d, _)| d != did);
+                            for (did, _, _) in &removed {
+                                set.retain(|(d, _, _)| d != did);
                                 // Emit editing-stopped for each removed editor
                                 self.emit_collab_to_wiki(&key.0, serde_json::json!({
                                     "type": "editing-stopped",
@@ -2491,6 +2523,7 @@ impl SyncManager {
                     let _ = app.emit("lan-sync-peer-disconnected", serde_json::json!({
                         "device_id": device_id,
                     }));
+                    let _ = app.emit("lan-sync-peers-updated", serde_json::json!({}));
                     // Emit updated available wikis
                     let available = self.get_available_remote_wikis().await;
                     let _ = app.emit("lan-sync-remote-wikis-updated", &available);
@@ -2792,19 +2825,27 @@ impl SyncManager {
                         ref device_name,
                     } => {
                         eprintln!("[Collab] INBOUND EditingStarted: wiki={}, tiddler={}, from_device={}", wiki_id, tiddler_title, device_id);
-                        // Track remote editor
+                        // Look up peer's user_name from peers map
+                        let peer_user_name = self.peers.read().await
+                            .get(&from_device_id)
+                            .and_then(|pc| pc.user_name.clone())
+                            .unwrap_or_default();
+                        // Track remote editor (with user_name)
                         let key = (wiki_id.clone(), tiddler_title.clone());
                         if let Ok(mut editors) = self.collab_editors.lock() {
-                            editors.entry(key).or_insert_with(HashSet::new)
-                                .insert((device_id.clone(), device_name.clone()));
+                            let set = editors.entry(key).or_insert_with(HashSet::new);
+                            // Remove any existing entry for this device_id (user_name may have changed)
+                            set.retain(|(did, _, _)| did != device_id);
+                            set.insert((device_id.clone(), device_name.clone(), peer_user_name.clone()));
                         }
-                        // Forward to JS
+                        // Forward to JS (with user_name)
                         self.emit_collab_to_wiki(wiki_id, serde_json::json!({
                             "type": "editing-started",
                             "wiki_id": wiki_id,
                             "tiddler_title": tiddler_title,
                             "device_id": device_id,
                             "device_name": device_name,
+                            "user_name": peer_user_name,
                         }));
                     }
                     SyncMessage::EditingStopped {
@@ -2817,7 +2858,7 @@ impl SyncManager {
                         let key = (wiki_id.clone(), tiddler_title.clone());
                         if let Ok(mut editors) = self.collab_editors.lock() {
                             if let Some(set) = editors.get_mut(&key) {
-                                set.retain(|(did, _)| did != device_id);
+                                set.retain(|(did, _, _)| did != device_id);
                                 if set.is_empty() {
                                     editors.remove(&key);
                                 }
@@ -2948,6 +2989,20 @@ impl SyncManager {
                                 "to_device_id": from_device_id,
                             }),
                         );
+                    }
+                    SyncMessage::UserNameAnnounce { ref user_name } => {
+                        eprintln!(
+                            "[LAN Sync] Peer {} announced username: {}",
+                            from_device_id, user_name
+                        );
+                        // Store user_name on the peer connection
+                        if let Some(ref server) = *self.server.read().await {
+                            server.set_peer_user_name(&from_device_id, user_name.clone()).await;
+                        }
+                        // Emit peers-updated event to all wiki windows
+                        if let Some(app) = GLOBAL_APP_HANDLE.get() {
+                            let _ = app.emit("lan-sync-peers-updated", serde_json::json!({}));
+                        }
                     }
                     SyncMessage::RequestWikiFile { ref wiki_id, ref have_files } => {
                         self.handle_request_wiki_file(&from_device_id, wiki_id, have_files).await;
@@ -4938,7 +4993,7 @@ impl SyncManager {
 
         let peers = self.server.read().await;
         let peer_ids: Vec<String> = if let Some(ref server) = *peers {
-            server.connected_peers().await.into_iter().map(|(id, _)| id).collect()
+            server.connected_peers().await.into_iter().map(|(id, _, _)| id).collect()
         } else {
             return;
         };
@@ -5783,6 +5838,13 @@ pub async fn lan_sync_stop() -> Result<(), String> {
 }
 
 #[tauri::command]
+pub async fn lan_sync_announce_username(user_name: String) -> Result<(), String> {
+    let mgr = get_sync_manager().ok_or("Sync not initialized")?;
+    mgr.announce_username(user_name).await;
+    Ok(())
+}
+
+#[tauri::command]
 pub async fn lan_sync_get_status() -> Result<SyncStatus, String> {
     let mgr = get_sync_manager().ok_or("Sync not initialized")?;
     Ok(mgr.get_status().await)
@@ -6158,8 +6220,8 @@ pub fn lan_sync_get_remote_editors(
         let editors = mgr.get_remote_editors(&wiki_id, &tiddler_title);
         let result: Vec<serde_json::Value> = editors
             .into_iter()
-            .map(|(device_id, device_name)| {
-                serde_json::json!({"deviceId": device_id, "deviceName": device_name})
+            .map(|(device_id, device_name, user_name)| {
+                serde_json::json!({"deviceId": device_id, "deviceName": device_name, "userName": user_name})
             })
             .collect();
         return Ok(result);

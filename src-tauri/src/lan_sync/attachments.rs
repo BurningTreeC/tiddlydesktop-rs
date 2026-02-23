@@ -197,7 +197,9 @@ impl AttachmentManager {
     fn resolve_path(&self, wiki_id: &str, relative_path: &str) -> Option<PathBuf> {
         let paths = self.wiki_paths.lock().unwrap();
         let base = paths.get(wiki_id)?;
-        let clean_path = relative_path.strip_prefix("./").unwrap_or(relative_path);
+        // Normalize Windows backslashes to forward slashes (cross-platform sync safety)
+        let normalized = relative_path.replace('\\', "/");
+        let clean_path = normalized.strip_prefix("./").unwrap_or(&normalized);
 
         // Reject obvious traversal before even joining
         if clean_path.contains("..") {
@@ -580,7 +582,9 @@ impl AttachmentManager {
         let wiki_uri = wiki_uri.clone();
         drop(uris);
 
-        let clean_path = relative_path.strip_prefix("./").unwrap_or(relative_path);
+        // Normalize Windows backslashes to forward slashes (cross-platform sync safety)
+        let normalized = relative_path.replace('\\', "/");
+        let clean_path = normalized.strip_prefix("./").unwrap_or(&normalized);
         let components: Vec<&str> = clean_path.split('/').collect();
         if components.is_empty() {
             return None;
@@ -626,7 +630,9 @@ impl AttachmentManager {
         };
         drop(uris);
 
-        let clean_path = filename.strip_prefix("./").unwrap_or(filename);
+        // Normalize Windows backslashes to forward slashes (cross-platform sync safety)
+        let normalized = filename.replace('\\', "/");
+        let clean_path = normalized.strip_prefix("./").unwrap_or(&normalized);
         let components: Vec<&str> = clean_path.split('/').collect();
         if components.is_empty() {
             return Err("Empty filename".to_string());
@@ -763,7 +769,7 @@ impl AttachmentWatcher {
                                             .strip_prefix(parent_dir)
                                             .unwrap_or(path)
                                             .to_string_lossy()
-                                            .to_string();
+                                            .replace('\\', "/");
 
                                         let evt = if is_change {
                                             AttachmentEvent::Changed {

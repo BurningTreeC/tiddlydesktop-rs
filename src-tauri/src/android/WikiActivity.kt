@@ -2352,6 +2352,32 @@ class WikiActivity : AppCompatActivity() {
                 body
             } catch (_: Exception) { "[]" }
         }
+
+        // ── Peer status ─────────────────────────────────────────────────
+
+        @JavascriptInterface
+        fun announceUsername(userName: String) {
+            Thread {
+                bridgePost("/_bridge/announce-username", org.json.JSONObject().apply {
+                    put("user_name", userName)
+                })
+            }.start()
+        }
+
+        @JavascriptInterface
+        fun getSyncStatus(): String {
+            val port = bridgePort()
+            if (port <= 0) return "{}"
+            return try {
+                val url = java.net.URL("http://127.0.0.1:$port/_bridge/sync-status")
+                val conn = url.openConnection() as java.net.HttpURLConnection
+                conn.connectTimeout = 2000
+                conn.readTimeout = 2000
+                val body = conn.inputStream.bufferedReader().readText()
+                conn.disconnect()
+                body
+            } catch (_: Exception) { "{}" }
+        }
     }
 
     /**
@@ -6186,8 +6212,10 @@ class WikiActivity : AppCompatActivity() {
             // Collab API: created immediately so CM6 plugin can find it before sync activates.
             // Outbound methods queue until activate() sets syncActive=true.
             "var collabListeners={};" +
-            "var _syncActive=false;var _syncId=null;var _collabQueue=[];" +
+            "var _syncActive=false;var _syncId=null;var _collabQueue=[];var rec={};" +
             "function emitCollab(type,data){var ls=collabListeners[type];if(ls)for(var i=0;i<ls.length;i++){try{ls[i](data);}catch(e){}}}" +
+            "function updateET(tt){if(typeof \$tw==='undefined'||!\$tw.wiki)return;var eds=rec[tt]||[];var tid='\$:/temp/tiddlydesktop/editing/'+tt;if(eds.length>0){\$tw.wiki.addTiddler({title:tid,type:'application/json',text:JSON.stringify(eds)});}else{\$tw.wiki.deleteTiddler(tid);}}" +
+            "function clearAllET(){if(typeof \$tw==='undefined'||!\$tw.wiki)return;\$tw.wiki.each(function(td,t){if(t.indexOf('\$:/temp/tiddlydesktop/editing/')===0)\$tw.wiki.deleteTiddler(t);});}" +
             "if(!window.TiddlyDesktop)window.TiddlyDesktop={};" +
             "window.TiddlyDesktop.collab={" +
             "startEditing:function(t){if(_syncActive){S.collabEditingStarted(_syncId,t);}else{_collabQueue.push(['startEditing',t]);}}," +
@@ -6223,7 +6251,7 @@ class WikiActivity : AppCompatActivity() {
             // Activate collab: set flag, flush queued outbound messages
             // NOTE: Do NOT reset collabListeners — CM6 editors created before sync
             // activation already registered their inbound listeners via collab.on().
-            "_syncActive=true;_syncId=syncId;" +
+            "clearAllET();rec={};_syncActive=true;_syncId=syncId;" +
             "var q=_collabQueue;_collabQueue=[];" +
             "for(var qi=0;qi<q.length;qi++){var qe=q[qi];" +
             "if(qe[0]==='startEditing')S.collabEditingStarted(syncId,qe[1]);" +
@@ -6298,7 +6326,9 @@ class WikiActivity : AppCompatActivity() {
             "if(d.type==='compare-fingerprints'){compareFingerprints(d.from_device_id,d.fingerprints);return;}" +
             "if(d.type==='attachment-received'){reloadAttachment(d.filename);return;}" +
             "if(d.type==='wiki-info-changed'){console.log('[LAN Sync] Wiki config changed from another device');\$tw.wiki.addTiddler(new \$tw.Tiddler({title:'\$:/temp/tiddlydesktop/config-reload-required',text:'yes'}));return;}" +
-            "if(d.type==='editing-started'||d.type==='editing-stopped'||d.type==='collab-update'||d.type==='collab-awareness'){emitCollab(d.type,d);return;}" +
+            "if(d.type==='editing-started'){if(d.tiddler_title&&d.device_id){if(!rec[d.tiddler_title])rec[d.tiddler_title]=[];var ef=false;for(var ei=0;ei<rec[d.tiddler_title].length;ei++){if(rec[d.tiddler_title][ei].device_id===d.device_id){ef=true;rec[d.tiddler_title][ei].user_name=d.user_name||'';break;}}if(!ef){rec[d.tiddler_title].push({device_id:d.device_id,device_name:d.device_name||'',user_name:d.user_name||''});}updateET(d.tiddler_title);}emitCollab(d.type,d);return;}" +
+            "if(d.type==='editing-stopped'){if(d.tiddler_title&&d.device_id&&rec[d.tiddler_title]){rec[d.tiddler_title]=rec[d.tiddler_title].filter(function(e){return e.device_id!==d.device_id;});if(rec[d.tiddler_title].length===0)delete rec[d.tiddler_title];updateET(d.tiddler_title);}emitCollab(d.type,d);return;}" +
+            "if(d.type==='collab-update'||d.type==='collab-awareness'){emitCollab(d.type,d);return;}" +
             "queue.push(d);if(!batchTimer)batchTimer=setTimeout(applyBatch,50);" +
             "}" +
             "function applyBatch(){batchTimer=null;var b=queue;queue=[];if(!b.length)return;" +
@@ -6387,7 +6417,7 @@ class WikiActivity : AppCompatActivity() {
             "function pollIv(){return(Date.now()-pollStart<5000)?20:100;}" +
             "function poll(){if(!syncActive)return;try{var j=S.pollChanges(syncId);var c=JSON.parse(j);" +
             "if(c&&c.length){for(var i=0;i<c.length;i++){" +
-            "if(c[i].type==='sync-deactivate'){console.log('[LAN Sync] Deactivated by landing page');syncActive=false;_syncActive=false;" +
+            "if(c[i].type==='sync-deactivate'){console.log('[LAN Sync] Deactivated by landing page');syncActive=false;_syncActive=false;clearAllET();rec={};" +
             // After deactivation, poll for re-activation (user may re-enable sync)
             "var reiv=setInterval(function(){var rid=S.getSyncId(wp);if(rid){clearInterval(reiv);console.log('[LAN Sync] Re-activated: '+rid);syncActive=true;_syncActive=true;pollStart=Date.now();setTimeout(poll,0);var rfps=cfps();S.broadcastFingerprints(rid,JSON.stringify(rfps));}},500);" +
             "return;}" +
@@ -6539,6 +6569,90 @@ class WikiActivity : AppCompatActivity() {
             "updateBanner();" +
             "\$tw.wiki.addEventListener('change',function(changes){var rel=false;for(var t in changes){if(t.indexOf(CONFLICT_PREFIX)===0){rel=true;break;}}if(rel){bannerDismissed=false;updateBanner();}});}" +
             "if(document.readyState==='loading'){document.addEventListener('DOMContentLoaded',function(){init();});}else{init();}" +
+            "})()"
+
+        // Peer status badge: shows connected LAN sync peers in TopRightBar
+        val peerStatusScript = "(function(){" +
+            "'use strict';" +
+            "if(!window.__WIKI_PATH__)return;" +
+            "var S=window.TiddlyDesktopSync;if(!S)return;" +
+            "var POLL=5000;" +
+            "var PT='\$:/temp/tiddlydesktop/connected-peers';" +
+            "var CT='\$:/temp/tiddlydesktop/peer-count';" +
+            "var BT='\$:/temp/tiddlydesktop/PeerBadge';" +
+            "var EBT='\$:/temp/tiddlydesktop/EditingBadge';" +
+            "var lastJ='';" +
+            "function waitTw(cb){if(typeof \$tw!=='undefined'&&\$tw.wiki&&\$tw.wiki.addTiddler){cb();}else{setTimeout(function(){waitTw(cb);},200);}}" +
+            "function fetch(cb){try{var j=S.getSyncStatus();cb(JSON.parse(j||'{}'));}catch(_){cb({});}}" +
+            "function announce(n){try{S.announceUsername(n);}catch(_){}}" +
+            "function update(st){var p=st.connected_peers||[];var j=JSON.stringify(p);if(j===lastJ)return;lastJ=j;" +
+            "\$tw.wiki.addTiddler({title:PT,type:'application/json',text:j});" +
+            "\$tw.wiki.addTiddler({title:CT,text:String(p.length)});}" +
+            "function createBadge(){if(\$tw.wiki.tiddlerExists(BT))return;" +
+            "var wt=" +
+            "'\\\\define peer-badge-styles()\\n" +
+            ".td-peer-badge{display:inline-block;cursor:pointer;padding:2px 6px;position:relative;}\\n" +
+            ".td-peer-badge svg{width:18px;height:18px;vertical-align:middle;fill:<<colour foreground>>;}\\n" +
+            ".td-peer-badge-count{font-size:0.75em;vertical-align:top;margin-left:1px;}\\n" +
+            ".td-peer-dropdown{position:absolute;right:0;top:100%;background:<<colour dropdown-background>>;border:1px solid <<colour dropdown-border>>;border-radius:4px;padding:6px 0;min-width:200px;box-shadow:1px 1px 5px rgba(0,0,0,0.15);z-index:1000;white-space:nowrap;}\\n" +
+            ".td-peer-dropdown-item{padding:4px 12px;font-size:0.85em;}\\n" +
+            ".td-peer-dropdown-item-name{font-weight:bold;}\\n" +
+            ".td-peer-dropdown-item-device{color:<<colour muted-foreground>>;font-size:0.85em;}\\n" +
+            ".td-peer-dropdown-empty{padding:8px 12px;color:<<colour muted-foreground>>;font-size:0.85em;}\\n" +
+            "\\\\end\\n" +
+            "<\\$reveal type=\"nomatch\" state=\"'+CT+'\" text=\"0\" default=\"0\">\\n" +
+            "<\\$reveal type=\"nomatch\" state=\"'+CT+'\" text=\"\" default=\"0\">\\n" +
+            "<\\$button popup=\"\\$:/state/tiddlydesktop/peer-dropdown\" class=\"tc-btn-invisible td-peer-badge\" tooltip=\"Connected peers\">\\n" +
+            "<\\$text text={{'+CT+'}}/> {{\\$:/core/images/globe}}\\n" +
+            "</\\$button>\\n" +
+            "<\\$reveal state=\"\\$:/state/tiddlydesktop/peer-dropdown\" type=\"popup\" position=\"belowleft\">\\n" +
+            "<div class=\"td-peer-dropdown\">\\n" +
+            "<\\$list filter=\"[['+PT+']jsonindexes[]]\" variable=\"idx\" emptyMessage=\"\"\"<div class=\\\"td-peer-dropdown-empty\\\">No peers connected</div>\"\"\">\\n" +
+            "<div class=\"td-peer-dropdown-item\">\\n" +
+            "<\\$let userName={{{ [['+PT+']jsonget<idx>,[user_name]] }}} deviceName={{{ [['+PT+']jsonget<idx>,[device_name]] }}}>\\n" +
+            "<\\$reveal type=\"nomatch\" default=<<userName>> text=\"\">\\n" +
+            "<span class=\"td-peer-dropdown-item-name\"><\\$text text=<<userName>>/></span> <span class=\"td-peer-dropdown-item-device\">(<\\$text text=<<deviceName>>/>)</span>\\n" +
+            "</\\$reveal>\\n" +
+            "<\\$reveal type=\"match\" default=<<userName>> text=\"\">\\n" +
+            "<span class=\"td-peer-dropdown-item-name\">Anonymous</span> <span class=\"td-peer-dropdown-item-device\">(<\\$text text=<<deviceName>>/>)</span>\\n" +
+            "</\\$reveal>\\n" +
+            "</\\$let></div>\\n" +
+            "</\\$list></div>\\n" +
+            "</\\$reveal></\\$reveal></\\$reveal>\\n" +
+            "<style><<peer-badge-styles>></style>';" +
+            "\$tw.wiki.addTiddler({title:BT,tags:'\$:/tags/TopRightBar',text:wt});}" +
+            "function createEditBadge(){if(\$tw.wiki.tiddlerExists(EBT))return;" +
+            "var eb=" +
+            "'\\\\define editing-badge-styles()\\n" +
+            ".td-editing-badge{display:inline-block;font-size:0.8em;padding:2px 8px;margin:0 0 4px 0;border-radius:10px;background:<<colour notification-background>>;border:1px solid <<colour notification-border>>;color:<<colour foreground>>;}\\n" +
+            ".td-editing-badge svg{width:14px;height:14px;vertical-align:middle;fill:<<colour foreground>>;margin-right:3px;}\\n" +
+            "\\\\end\\n" +
+            "<\\$set name=\"editingTid\" value={{{ [[\\$:/temp/tiddlydesktop/editing/]addsuffix<currentTiddler>] }}}>\\n" +
+            "<\\$list filter=\"[<editingTid>is[tiddler]]\" variable=\"ignore\">\\n" +
+            "<div class=\"td-editing-badge\">\\n" +
+            "{{\\$:/core/images/edit-button}} \\n" +
+            "<\\$list filter=\"[<editingTid>jsonindexes[]]\" variable=\"idx\" counter=\"cnt\">\\n" +
+            "<\\$let un={{{ [<editingTid>jsonget<idx>,[user_name]] }}} dn={{{ [<editingTid>jsonget<idx>,[device_name]] }}}>\\n" +
+            "<\\$reveal type=\"nomatch\" default=<<un>> text=\"\"><\\$text text=<<un>>/></\\$reveal>\\n" +
+            "<\\$reveal type=\"match\" default=<<un>> text=\"\"><\\$text text=<<dn>>/></\\$reveal>\\n" +
+            "</\\$let>\\n" +
+            "<\\$list filter=\"[<editingTid>jsonindexes[]count[]compare:number:gt<cnt-first>]\" variable=\"ignore\">, </\\$list>\\n" +
+            "</\\$list>\\n" +
+            "</div>\\n" +
+            "</\\$list>\\n" +
+            "</\\$set>\\n" +
+            "<style><<editing-badge-styles>></style>';" +
+            "\$tw.wiki.addTiddler({title:EBT,tags:'\$:/tags/ViewTemplate','list-before':'\$:/core/ui/ViewTemplate/body',text:eb});}" +
+            "waitTw(function(){" +
+            "\$tw.wiki.addTiddler({title:PT,type:'application/json',text:'[]'});" +
+            "\$tw.wiki.addTiddler({title:CT,text:'0'});" +
+            "createBadge();createEditBadge();" +
+            "var un=\$tw.wiki.getTiddlerText('\$:/status/UserName')||'';" +
+            "if(un)announce(un);" +
+            "\$tw.wiki.addEventListener('change',function(ch){if(ch['\$:/status/UserName']){var nn=\$tw.wiki.getTiddlerText('\$:/status/UserName')||'';announce(nn);try{var cp=require('\$:/plugins/tiddlywiki/codemirror-6-collab/collab.js');if(cp&&cp.updateUserName)cp.updateUserName(nn||'Anonymous');}catch(_){}}});" +
+            "function poll(){fetch(function(st){update(st);});}" +
+            "poll();setInterval(poll,POLL);" +
+            "});" +
             "})()"
 
         // Add a WebViewClient that injects the script after page load
@@ -6745,6 +6859,8 @@ class WikiActivity : AppCompatActivity() {
                     view.evaluateJavascript(lanSyncScript, null)
                     // Inject conflict resolution UI (banner + modal for sync conflicts)
                     view.evaluateJavascript(conflictUiScript, null)
+                    // Inject peer status badge (shows connected LAN sync peers)
+                    view.evaluateJavascript(peerStatusScript, null)
                     // Import pending Quick Captures
                     importPendingCaptures()
                 }

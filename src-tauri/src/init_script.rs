@@ -55,6 +55,8 @@ const COMBINED_INIT_SCRIPT: &str = concat!(
     "\n}catch(_e){window.__tdInitErr('lan_sync.js',_e)}\n",
     "try{\n", include_str!("init_script/conflict_ui.js"),
     "\n}catch(_e){window.__tdInitErr('conflict_ui.js',_e)}\n",
+    "try{\n", include_str!("init_script/peer_status.js"),
+    "\n}catch(_e){window.__tdInitErr('peer_status.js',_e)}\n",
 );
 
 /// Full JavaScript initialization script for wiki windows - sets all necessary variables early

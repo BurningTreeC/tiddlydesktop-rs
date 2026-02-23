@@ -268,6 +268,11 @@ pub enum SyncMessage {
         update_base64: String,
     },
 
+    /// Announce this device's TiddlyWiki username to peers
+    UserNameAnnounce {
+        user_name: String,
+    },
+
     /// Keepalive
     Ping,
     Pong,

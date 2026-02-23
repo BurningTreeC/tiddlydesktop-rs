@@ -1147,9 +1147,9 @@ body {
 
 /* Medium screens (small laptops, 769px–1200px) */
 @media screen and (min-width: 769px) and (max-width: 1200px) {
-	/* Toolbar */
+	/* Toolbar — tighter vertical padding */
 	.td-toolbar {
-		padding: 10px 14px;
+		padding: 6px 14px;
 	}
 
 	.td-toolbar-item {
@@ -1165,30 +1165,30 @@ body {
 		font-size: 13px;
 	}
 
-	/* Drop zone */
+	/* Drop zone — reduced vertical margins */
 	.td-drop-zone {
-		margin: 12px;
-		padding: 24px;
+		margin: 6px 12px;
+		padding: 16px;
 	}
 
-	/* Search bar */
+	/* Search bar — tighter top/bottom */
 	.td-search-bar {
-		margin: 0 12px 6px 12px;
+		margin: 0 12px 4px 12px;
 	}
 
 	.td-search-input {
-		padding: 8px 32px 8px 10px;
+		padding: 6px 32px 6px 10px;
 		font-size: 13px;
 	}
 
-	/* Wiki list */
+	/* Wiki list — tighter top padding */
 	.td-wikilist {
-		padding: 12px;
+		padding: 8px 12px;
 	}
 
 	.td-wikilist-item {
 		padding: 10px;
-		margin-bottom: 10px;
+		margin-bottom: 8px;
 	}
 
 	.td-wikilist-thumbnail .tc-image-button,
@@ -1248,6 +1248,51 @@ body {
 	/* Empty message */
 	.td-empty-message {
 		padding: 36px 20px;
+	}
+}
+
+/* Small-medium screens (769px–900px) — stack toolbar vertically */
+@media screen and (min-width: 769px) and (max-width: 900px) {
+	.td-toolbar {
+		flex-direction: column;
+		align-items: stretch;
+		padding: 6px 10px;
+		gap: 4px;
+	}
+
+	.td-toolbar-right {
+		order: -1;
+		width: 100%;
+		margin-left: 0;
+		flex-direction: column;
+		gap: 4px;
+	}
+
+	.td-toolbar-right .td-button,
+	.td-toolbar-right a.td-button {
+		width: 100%;
+		justify-content: center;
+	}
+
+	.td-toolbar-item:first-child {
+		order: 0;
+		display: flex;
+		justify-content: center;
+	}
+
+	.td-toolbar-item {
+		margin-right: 0;
+		order: 1;
+		width: 100%;
+	}
+
+	.td-toolbar-item .td-button {
+		width: 100%;
+		justify-content: center;
+	}
+
+	.td-logo {
+		height: 26px;
 	}
 }
 

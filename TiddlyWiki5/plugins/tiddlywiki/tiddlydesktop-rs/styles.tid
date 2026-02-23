@@ -1145,6 +1145,112 @@ body {
    RESPONSIVE STYLES FOR SMALL SCREENS
    ============================================ */
 
+/* Medium screens (small laptops, 769px–1200px) */
+@media screen and (min-width: 769px) and (max-width: 1200px) {
+	/* Toolbar */
+	.td-toolbar {
+		padding: 10px 14px;
+	}
+
+	.td-toolbar-item {
+		margin-right: 10px;
+	}
+
+	.td-logo {
+		height: 28px;
+	}
+
+	.td-button {
+		padding: 5px 10px;
+		font-size: 13px;
+	}
+
+	/* Drop zone */
+	.td-drop-zone {
+		margin: 12px;
+		padding: 24px;
+	}
+
+	/* Search bar */
+	.td-search-bar {
+		margin: 0 12px 6px 12px;
+	}
+
+	.td-search-input {
+		padding: 8px 32px 8px 10px;
+		font-size: 13px;
+	}
+
+	/* Wiki list */
+	.td-wikilist {
+		padding: 12px;
+	}
+
+	.td-wikilist-item {
+		padding: 10px;
+		margin-bottom: 10px;
+	}
+
+	.td-wikilist-thumbnail .tc-image-button,
+	.td-favicon {
+		width: 40px;
+		height: 40px;
+	}
+
+	.td-wiki-title {
+		font-size: 14px;
+	}
+
+	.td-wiki-url {
+		font-size: 11px;
+		margin-bottom: 6px;
+	}
+
+	.td-wiki-toolbar .td-button {
+		padding: 3px 8px;
+		font-size: 11px;
+	}
+
+	/* Modals */
+	.td-modal {
+		max-width: 600px;
+	}
+
+	.td-modal-header {
+		padding: 14px 18px;
+	}
+
+	.td-modal-header h2 {
+		font-size: 18px;
+	}
+
+	.td-modal-body {
+		padding: 14px 18px;
+	}
+
+	.td-modal-footer {
+		padding: 10px 18px;
+	}
+
+	.td-edition-grid {
+		grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+	}
+
+	/* Groups */
+	.td-group-toggle {
+		padding: 8px 12px;
+	}
+
+	.td-group-name {
+		font-size: 14px;
+	}
+
+	/* Empty message */
+	.td-empty-message {
+		padding: 36px 20px;
+	}
+}
+
 /* Tablet breakpoint (768px and below) */
 @media screen and (max-width: 768px) {
 	/* Toolbar - stack everything vertically */

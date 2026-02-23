@@ -5806,8 +5806,19 @@ pub fn lan_sync_tiddler_changed(
         if let Some(ipc) = IPC_CLIENT_FOR_SYNC.get() {
             let mut guard = ipc.lock().unwrap();
             if let Some(ref mut client) = *guard {
-                let _ = client.send_lan_sync_tiddler_changed(&wiki_id, &title, &tiddler_json);
+                match client.send_lan_sync_tiddler_changed(&wiki_id, &title, &tiddler_json) {
+                    Ok(()) => {
+                        eprintln!("[LAN Sync] IPC tiddler_changed sent: wiki={}, title={}", wiki_id, title);
+                    }
+                    Err(e) => {
+                        eprintln!("[LAN Sync] IPC tiddler_changed failed: {} — IPC connection may be broken", e);
+                    }
+                }
+            } else {
+                eprintln!("[LAN Sync] IPC client is None in tiddler_changed");
             }
+        } else {
+            eprintln!("[LAN Sync] IPC_CLIENT_FOR_SYNC not set in tiddler_changed");
         }
     }
     Ok(())
@@ -5959,12 +5970,18 @@ pub async fn lan_sync_broadcast_fingerprints(
     // Fall back to IPC (wiki process → main process)
     #[cfg(not(target_os = "android"))]
     {
+        let fp_count = fingerprints.len();
         if let Some(ipc) = IPC_CLIENT_FOR_SYNC.get() {
             let fingerprints_json = serde_json::to_string(&fingerprints).unwrap_or_default();
             let mut guard = ipc.lock().unwrap();
             if let Some(ref mut client) = *guard {
-                if let Err(e) = client.send_lan_sync_broadcast_fingerprints(&wiki_id, &fingerprints_json) {
-                    eprintln!("[LAN Sync] IPC broadcast_fingerprints failed: {} — IPC connection may be broken", e);
+                match client.send_lan_sync_broadcast_fingerprints(&wiki_id, &fingerprints_json) {
+                    Ok(()) => {
+                        eprintln!("[LAN Sync] IPC broadcast_fingerprints sent: {} fingerprints for wiki {}", fp_count, wiki_id);
+                    }
+                    Err(e) => {
+                        eprintln!("[LAN Sync] IPC broadcast_fingerprints failed: {} — IPC connection may be broken", e);
+                    }
                 }
             } else {
                 eprintln!("[LAN Sync] IPC client is None in broadcast_fingerprints");

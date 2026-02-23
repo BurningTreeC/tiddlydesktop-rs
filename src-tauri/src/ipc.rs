@@ -689,6 +689,7 @@ fn handle_client(
                                 if !client_authenticated {
                                     continue;
                                 }
+                                eprintln!("[IPC] Received LanSyncWikiOpened: wiki_id={} from pid {:?}", wiki_id, client_pid);
                                 #[cfg(not(target_os = "android"))]
                                 {
                                     if let Some(mgr) = crate::lan_sync::get_sync_manager() {
@@ -705,6 +706,7 @@ fn handle_client(
                                 if !client_authenticated {
                                     continue;
                                 }
+                                eprintln!("[IPC] Received LanSyncTiddlerChanged: wiki_id={}, title={} from pid {:?}", wiki_id, title, client_pid);
                                 #[cfg(not(target_os = "android"))]
                                 {
                                     if let Some(mgr) = crate::lan_sync::get_sync_manager() {
@@ -798,6 +800,10 @@ fn handle_client(
                                     if let Some(mgr) = crate::lan_sync::get_sync_manager() {
                                         let fingerprints: Vec<crate::lan_sync::protocol::TiddlerFingerprint> =
                                             serde_json::from_str(fingerprints_json).unwrap_or_default();
+                                        eprintln!(
+                                            "[IPC] Received LanSyncBroadcastFingerprints: {} fingerprints for wiki {} from pid {:?}",
+                                            fingerprints.len(), wiki_id, client_pid
+                                        );
                                         let mgr = mgr.clone();
                                         let wiki_id_owned = wiki_id.clone();
                                         tauri::async_runtime::spawn(async move {
@@ -814,6 +820,8 @@ fn handle_client(
                                                 );
                                             }
                                         });
+                                    } else {
+                                        eprintln!("[IPC] Received LanSyncBroadcastFingerprints but sync manager not initialized!");
                                     }
                                 }
                             }

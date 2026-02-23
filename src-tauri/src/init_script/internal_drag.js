@@ -619,19 +619,26 @@
             log('Set $tw.dragInProgress early (pointerdown)');
         }
 
-        // Generate PNG and send to Rust immediately so it's ready when drag-begin fires
-        generateDragImagePng(draggable, function(result) {
-            if (result && window.__TAURI__?.core?.invoke) {
-                window.__TAURI__.core.invoke('set_pending_drag_icon', {
-                    imageData: result.pngData,
-                    offsetX: result.offsetX,
-                    offsetY: result.offsetY
-                }).then(function() {
-                    log('Drag image PNG sent: ' + result.width + 'x' + result.height);
-                }).catch(function(e) {
-                    log('set_pending_drag_icon failed: ' + e);
-                });
-            }
+        // Defer PNG generation to avoid blocking the main thread during pointerdown.
+        // The heavy work (cloneNode + inlineAllStyles with recursive getComputedStyle)
+        // would otherwise prevent motion events from reaching WebKit's drag detection,
+        // causing a ~0.5-1s delay before dragstart fires (especially on Wayland).
+        // The existing transparent-icon + 100ms retry mechanism in Rust handles late PNGs.
+        var dragTarget = draggable;
+        requestAnimationFrame(function() {
+            generateDragImagePng(dragTarget, function(result) {
+                if (result && window.__TAURI__?.core?.invoke) {
+                    window.__TAURI__.core.invoke('set_pending_drag_icon', {
+                        imageData: result.pngData,
+                        offsetX: result.offsetX,
+                        offsetY: result.offsetY
+                    }).then(function() {
+                        log('Drag image PNG sent: ' + result.width + 'x' + result.height);
+                    }).catch(function(e) {
+                        log('set_pending_drag_icon failed: ' + e);
+                    });
+                }
+            });
         });
     }
 

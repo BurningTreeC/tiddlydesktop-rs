@@ -5833,8 +5833,14 @@ pub async fn lan_sync_send_fingerprints(
             let fingerprints_json = serde_json::to_string(&fingerprints).unwrap_or_default();
             let mut guard = ipc.lock().unwrap();
             if let Some(ref mut client) = *guard {
-                let _ = client.send_lan_sync_fingerprints(&wiki_id, &to_device_id, &fingerprints_json);
+                if let Err(e) = client.send_lan_sync_fingerprints(&wiki_id, &to_device_id, &fingerprints_json) {
+                    eprintln!("[LAN Sync] IPC send_fingerprints failed: {} — IPC connection may be broken", e);
+                }
+            } else {
+                eprintln!("[LAN Sync] IPC client is None in send_fingerprints");
             }
+        } else {
+            eprintln!("[LAN Sync] IPC_CLIENT_FOR_SYNC not set in send_fingerprints");
         }
     }
     Ok(())
@@ -5891,8 +5897,14 @@ pub async fn lan_sync_broadcast_fingerprints(
             let fingerprints_json = serde_json::to_string(&fingerprints).unwrap_or_default();
             let mut guard = ipc.lock().unwrap();
             if let Some(ref mut client) = *guard {
-                let _ = client.send_lan_sync_broadcast_fingerprints(&wiki_id, &fingerprints_json);
+                if let Err(e) = client.send_lan_sync_broadcast_fingerprints(&wiki_id, &fingerprints_json) {
+                    eprintln!("[LAN Sync] IPC broadcast_fingerprints failed: {} — IPC connection may be broken", e);
+                }
+            } else {
+                eprintln!("[LAN Sync] IPC client is None in broadcast_fingerprints");
             }
+        } else {
+            eprintln!("[LAN Sync] IPC_CLIENT_FOR_SYNC not set in broadcast_fingerprints");
         }
     }
     Ok(())

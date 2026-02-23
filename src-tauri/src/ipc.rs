@@ -218,7 +218,7 @@ pub enum IpcMessage {
 /// A connected wiki process
 #[allow(dead_code)]
 struct WikiClient {
-    stream: TcpStream,
+    write_stream: Arc<Mutex<TcpStream>>,
     wiki_path: String,
     pid: u32,
     is_tiddler_window: bool,
@@ -229,7 +229,7 @@ pub struct IpcServer {
     /// Connected clients grouped by wiki path
     wiki_groups: Arc<Mutex<HashMap<String, Vec<WikiClient>>>>,
     /// All clients by PID for quick lookup
-    clients_by_pid: Arc<Mutex<HashMap<u32, TcpStream>>>,
+    clients_by_pid: Arc<Mutex<HashMap<u32, Arc<Mutex<TcpStream>>>>>,
     /// Callback for opening wikis
     open_wiki_callback: Arc<Mutex<Option<Box<dyn Fn(String) + Send + 'static>>>>,
     /// Callback for opening tiddler windows
@@ -273,8 +273,8 @@ impl IpcServer {
                 let clients = self.clients_by_pid.lock().unwrap();
                 client_count = clients.len();
                 eprintln!("[IPC] send_lan_sync_to_all: wiki_id={}, {} clients, payload_len={}", wiki_id, client_count, payload_json.len());
-                for (pid, stream) in clients.iter() {
-                    let mut s = stream;
+                for (pid, stream_arc) in clients.iter() {
+                    let mut s = stream_arc.lock().unwrap();
                     if let Err(e) = writeln!(s, "{}", json) {
                         eprintln!("[IPC] Failed to send LAN sync to pid {}: {}", pid, e);
                         broken_pids.push(*pid);
@@ -306,7 +306,7 @@ impl IpcServer {
     }
 
     /// Get a reference to clients_by_pid for sending targeted messages
-    pub fn clients_by_pid(&self) -> &Arc<Mutex<HashMap<u32, TcpStream>>> {
+    pub fn clients_by_pid(&self) -> &Arc<Mutex<HashMap<u32, Arc<Mutex<TcpStream>>>>> {
         &self.clients_by_pid
     }
 
@@ -357,6 +357,9 @@ impl IpcServer {
                         drop(stream); // Close the connection
                         continue;
                     }
+
+                    // Reduce write latency for IPC messages
+                    let _ = stream.set_nodelay(true);
 
                     // Security: Set read timeout during handshake to prevent slow-loris attacks
                     // After authentication, timeout is removed to allow long-lived idle connections
@@ -411,7 +414,7 @@ impl IpcServer {
         let groups = self.wiki_groups.lock().unwrap();
         if let Some(clients) = groups.get(wiki_path) {
             for client in clients {
-                let mut s = &client.stream;
+                let mut s = client.write_stream.lock().unwrap();
                 let _ = writeln!(s, "{}", json);
             }
         }
@@ -422,7 +425,7 @@ impl IpcServer {
 fn handle_client(
     stream: TcpStream,
     wiki_groups: Arc<Mutex<HashMap<String, Vec<WikiClient>>>>,
-    clients_by_pid: Arc<Mutex<HashMap<u32, TcpStream>>>,
+    clients_by_pid: Arc<Mutex<HashMap<u32, Arc<Mutex<TcpStream>>>>>,
     open_wiki_cb: Arc<Mutex<Option<Box<dyn Fn(String) + Send + 'static>>>>,
     open_tiddler_cb: Arc<Mutex<Option<Box<dyn Fn(String, String, Option<String>) + Send + 'static>>>>,
     update_favicon_cb: Arc<Mutex<Option<Box<dyn Fn(String, Option<String>) + Send + 'static>>>>,
@@ -432,8 +435,13 @@ fn handle_client(
     let peer_addr = stream.peer_addr()?;
     eprintln!("[IPC] New connection from {}", peer_addr);
 
-    let mut reader = BufReader::new(stream.try_clone()?);
-    let mut write_stream = stream.try_clone()?;
+    // ONLY clone — used exclusively by BufReader for reading.
+    // The original stream is wrapped in Arc<Mutex<>> for ALL writes, ensuring
+    // serialization across threads. This fixes Windows/macOS where try_clone()
+    // (WSADuplicateSocketW / dup) creates handles that don't serialize writes.
+    let reader_clone = stream.try_clone()?;
+    let write_stream = Arc::new(Mutex::new(stream));
+    let mut reader = BufReader::new(reader_clone);
     let mut client_wiki_path: Option<String> = None;
     let mut client_pid: Option<u32> = None;
     let mut client_authenticated = false;
@@ -463,7 +471,8 @@ fn handle_client(
                                         success: false,
                                         message: Some("Invalid authentication token".to_string()),
                                     };
-                                    let _ = writeln!(write_stream, "{}", serde_json::to_string(&ack)?);
+                                    let mut ws = write_stream.lock().unwrap();
+                                    let _ = writeln!(ws, "{}", serde_json::to_string(&ack)?);
                                     // Close connection on auth failure
                                     break;
                                 }
@@ -473,10 +482,21 @@ fn handle_client(
 
                                 client_authenticated = true;
 
-                                // Remove read timeout after successful auth to allow long-lived idle connections
-                                // This is safe because we've already authenticated the client
-                                if let Err(e) = stream.set_read_timeout(None) {
-                                    eprintln!("[IPC] Warning: Failed to clear read timeout: {}", e);
+                                // Remove read timeout after successful auth to allow long-lived idle connections.
+                                // CRITICAL: Must clear on BOTH the original stream AND the reader's clone.
+                                // On Windows, WSADuplicateSocketW creates a new socket descriptor and
+                                // SO_RCVTIMEO set on one handle may not propagate to the other (unlike
+                                // Linux where dup() shares the underlying socket object). If the reader's
+                                // clone keeps the 30s handshake timeout, the server disconnects the client
+                                // after 30s of inactivity — breaking all IPC communication silently.
+                                {
+                                    let ws = write_stream.lock().unwrap();
+                                    if let Err(e) = ws.set_read_timeout(None) {
+                                        eprintln!("[IPC] Warning: Failed to clear read timeout on original: {}", e);
+                                    }
+                                }
+                                if let Err(e) = reader.get_mut().set_read_timeout(None) {
+                                    eprintln!("[IPC] Warning: Failed to clear read timeout on reader: {}", e);
                                 }
                                 client_wiki_path = Some(wiki_path.clone());
                                 client_pid = Some(*pid);
@@ -485,18 +505,21 @@ fn handle_client(
                                 let mut groups = wiki_groups.lock().unwrap();
                                 let group = groups.entry(wiki_path.clone()).or_insert_with(Vec::new);
                                 group.push(WikiClient {
-                                    stream: stream.try_clone()?,
+                                    write_stream: Arc::clone(&write_stream),
                                     wiki_path: wiki_path.clone(),
                                     pid: *pid,
                                     is_tiddler_window: *is_tiddler_window,
                                 });
 
                                 // Track by PID
-                                clients_by_pid.lock().unwrap().insert(*pid, stream.try_clone()?);
+                                clients_by_pid.lock().unwrap().insert(*pid, Arc::clone(&write_stream));
 
                                 // Send ack
                                 let ack = IpcMessage::Ack { success: true, message: None };
-                                let _ = writeln!(write_stream, "{}", serde_json::to_string(&ack)?);
+                                {
+                                    let mut ws = write_stream.lock().unwrap();
+                                    let _ = writeln!(ws, "{}", serde_json::to_string(&ack)?);
+                                }
 
                                 // Notify callback that a new client registered
                                 if let Some(ref cb) = *register_cb.lock().unwrap() {
@@ -534,7 +557,8 @@ fn handle_client(
                                     cb(path.clone());
                                 }
                                 let ack = IpcMessage::Ack { success: true, message: None };
-                                let _ = writeln!(write_stream, "{}", serde_json::to_string(&ack)?);
+                                let mut ws = write_stream.lock().unwrap();
+                                let _ = writeln!(ws, "{}", serde_json::to_string(&ack)?);
                             }
 
                             IpcMessage::OpenTiddlerWindow { wiki_path, tiddler_title, startup_tiddler } => {
@@ -548,7 +572,8 @@ fn handle_client(
                                     cb(wiki_path.clone(), tiddler_title.clone(), startup_tiddler.clone());
                                 }
                                 let ack = IpcMessage::Ack { success: true, message: None };
-                                let _ = writeln!(write_stream, "{}", serde_json::to_string(&ack)?);
+                                let mut ws = write_stream.lock().unwrap();
+                                let _ = writeln!(ws, "{}", serde_json::to_string(&ack)?);
                             }
 
                             IpcMessage::TiddlerChanged { wiki_path, sender_pid, .. } => {
@@ -562,7 +587,7 @@ fn handle_client(
                                     for client in clients {
                                         if client.pid != *sender_pid {
                                             if let Ok(json) = serde_json::to_string(&msg) {
-                                                let mut s = &client.stream;
+                                                let mut s = client.write_stream.lock().unwrap();
                                                 let _ = writeln!(s, "{}", json);
                                             }
                                         }
@@ -581,7 +606,7 @@ fn handle_client(
                                     for client in clients {
                                         if client.pid != *sender_pid {
                                             if let Ok(json) = serde_json::to_string(&msg) {
-                                                let mut s = &client.stream;
+                                                let mut s = client.write_stream.lock().unwrap();
                                                 let _ = writeln!(s, "{}", json);
                                             }
                                         }
@@ -602,7 +627,7 @@ fn handle_client(
                                         if !client.is_tiddler_window && client.pid != *requester_pid {
                                             // Ask this client to send sync state
                                             if let Ok(json) = serde_json::to_string(&msg) {
-                                                let mut s = &client.stream;
+                                                let mut s = client.write_stream.lock().unwrap();
                                                 let _ = writeln!(s, "{}", json);
                                             }
                                             break;
@@ -622,7 +647,7 @@ fn handle_client(
                                     for client in clients {
                                         if client.is_tiddler_window {
                                             if let Ok(json) = serde_json::to_string(&msg) {
-                                                let mut s = &client.stream;
+                                                let mut s = client.write_stream.lock().unwrap();
                                                 let _ = writeln!(s, "{}", json);
                                             }
                                         }
@@ -640,12 +665,14 @@ fn handle_client(
                                     cb(wiki_path.clone(), favicon.clone());
                                 }
                                 let ack = IpcMessage::Ack { success: true, message: None };
-                                let _ = writeln!(write_stream, "{}", serde_json::to_string(&ack)?);
+                                let mut ws = write_stream.lock().unwrap();
+                                let _ = writeln!(ws, "{}", serde_json::to_string(&ack)?);
                             }
 
                             IpcMessage::Ping => {
                                 let pong = IpcMessage::Pong;
-                                let _ = writeln!(write_stream, "{}", serde_json::to_string(&pong)?);
+                                let mut ws = write_stream.lock().unwrap();
+                                let _ = writeln!(ws, "{}", serde_json::to_string(&pong)?);
                             }
 
                             // ── LAN Sync: wiki process → main process ─────────
@@ -1126,7 +1153,7 @@ where
                 }
             }
             Err(e) => {
-                eprintln!("[IPC Listener] Read error: {}", e);
+                eprintln!("[IPC Listener] Read error (IPC connection lost, LAN sync IPC broken): {}", e);
                 break;
             }
         }

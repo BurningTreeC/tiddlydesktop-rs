@@ -6339,7 +6339,7 @@ async fn check_for_updates() -> Result<UpdateCheckResult, String> {
 
 /// Android version - separate from desktop versioning (must match build.gradle.kts versionName)
 #[cfg(target_os = "android")]
-const ANDROID_VERSION: &str = "0.0.31";
+const ANDROID_VERSION: &str = "0.0.33";
 
 /// Check for updates on Android via version file on GitHub, linking to Play Store
 #[cfg(target_os = "android")]
@@ -8218,6 +8218,7 @@ fn run_wiki_mode(args: WikiModeArgs) {
             let client_guard = ipc_client_for_state.lock().unwrap();
             if let Some(ref client) = *client_guard {
                 if let Some(listener_stream) = client.get_listener_stream() {
+                    eprintln!("[TiddlyDesktop] IPC listener stream cloned successfully");
                     let app_handle = app.handle().clone();
                     std::thread::spawn(move || {
                         ipc::run_listener(listener_stream, |msg| {
@@ -8302,7 +8303,11 @@ fn run_wiki_mode(args: WikiModeArgs) {
                         });
                     });
                     eprintln!("[TiddlyDesktop] IPC listener thread started");
+                } else {
+                    eprintln!("[TiddlyDesktop] WARNING: Failed to clone IPC stream for listener — LAN sync IPC will not work!");
                 }
+            } else {
+                eprintln!("[TiddlyDesktop] WARNING: IPC client not connected — LAN sync IPC will not work!");
             }
             drop(client_guard);
 

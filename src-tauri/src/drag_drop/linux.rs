@@ -402,7 +402,10 @@ pub fn setup_drag_handlers(window: &WebviewWindow) {
         // Note: Window dragging uses a separate hardcoded threshold in lib.rs
         if let Some(settings) = gtk::Settings::default() {
             settings.set_property("gtk-dnd-drag-threshold", 2i32);
-            eprintln!("[TiddlyDesktop] Linux: Set GTK drag threshold to 2 pixels (content drags)");
+            // Reduce long-press timeout to minimize drag gesture disambiguation delay.
+            // Default is 500ms which matches the ~0.5s delay seen on Wayland.
+            settings.set_property("gtk-long-press-time", 50u32);
+            eprintln!("[TiddlyDesktop] Linux: Set GTK drag threshold to 2px, long-press time to 50ms");
         }
     });
 

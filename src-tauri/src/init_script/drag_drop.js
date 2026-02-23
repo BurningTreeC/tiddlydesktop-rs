@@ -2387,6 +2387,42 @@
                     }
                 }
 
+                // Non-TW-native file with a known filesystem path but external
+                // attachments disabled: read via Tauri IPC and embed as binary.
+                // On Windows the native HTML5 drop triggers TW's import hook but the
+                // File object from the WebView sandbox may not be readable via FileReader.
+                // Using read_file_as_binary bypasses the sandbox limitation.
+                if (originalPath && !externalEnabled) {
+                    invoke("js_log", { message: "th-importing-file: embedding '" + filename + "' via Tauri IPC (external attachments disabled)" });
+                    invoke("read_file_as_binary", { path: originalPath }).then(function(bytes) {
+                        var uint8 = new Uint8Array(bytes);
+                        var isBinary;
+                        if (type.indexOf('text/') === 0) {
+                            isBinary = false;
+                        } else {
+                            var cti = $tw.config.contentTypeInfo && $tw.config.contentTypeInfo[type];
+                            isBinary = cti ? cti.encoding === "base64" : true;
+                        }
+                        var tiddler = { title: filename, type: type };
+                        if (isBinary) {
+                            var binary = '';
+                            for (var i = 0; i < uint8.length; i++) {
+                                binary += String.fromCharCode(uint8[i]);
+                            }
+                            tiddler.text = btoa(binary);
+                        } else {
+                            tiddler.text = new TextDecoder('utf-8').decode(uint8);
+                        }
+                        delete window.__pendingExternalFiles[filename];
+                        info.callback([tiddler]);
+                    }).catch(function(err) {
+                        console.error("[TiddlyDesktop] Failed to embed file:", filename, err);
+                        delete window.__pendingExternalFiles[filename];
+                        info.callback(null);
+                    });
+                    return true;
+                }
+
                 // Android fallback: If no originalPath but we're on Android,
                 // read the file content and save it to attachments folder
                 if (isAndroid && externalEnabled && file) {

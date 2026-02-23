@@ -521,6 +521,52 @@
             }
             patchTextParsersForCanonicalUri();
 
+            // Patch image parsers to resolve _canonical_uri filesystem paths at parse time.
+            // TiddlyWiki's imageparser creates <img src="./attachments/image.png"> for
+            // _canonical_uri tiddlers. On Windows/WebView2, the browser eagerly resolves
+            // this relative URL against the wikifile:// page URL and fires a request
+            // BEFORE the MutationObserver can convert it to tdasset://.
+            // If the wikifile:// handler can't resolve the relative path (e.g. missing
+            // or differently-formatted Referer header on Windows), the image fails.
+            // By resolving the path in the parser, the <img> is created with a working
+            // tdasset:// URL from the start, avoiding the race condition entirely.
+            // Also ensures cross-platform _canonical_uri paths (e.g. ./attachments/image.png)
+            // work when the same wiki is synced between Linux and Windows.
+            function patchImageParsersForCanonicalUri() {
+                if (!$tw.Wiki || !$tw.Wiki.parsers) return;
+                var imageTypes = ['image/png', 'image/jpeg', 'image/jpg', 'image/gif',
+                                  'image/webp', 'image/svg+xml', 'image/heic', 'image/heif',
+                                  'image/avif', 'image/x-icon', 'image/vnd.microsoft.icon', 'image/bmp'];
+                imageTypes.forEach(function(parserType) {
+                    var OrigParser = $tw.Wiki.parsers[parserType];
+                    if (!OrigParser) return;
+                    var PatchedParser = function(type, text, options) {
+                        if (options && options._canonical_uri && isFilesystemPath(options._canonical_uri)) {
+                            var resolved = resolveFilesystemPath(options._canonical_uri);
+                            if (resolved && !isFolderWiki) {
+                                // Single-file wiki: resolve to tdasset:// URL directly.
+                                // Folder wikis need async media server registration (tdasset://
+                                // is blocked from HTTP origin), handled by the MutationObserver.
+                                var newOptions = {};
+                                for (var key in options) {
+                                    if (options.hasOwnProperty(key)) {
+                                        newOptions[key] = options[key];
+                                    }
+                                }
+                                newOptions._canonical_uri = 'tdasset://localhost/' + encodeURIComponent(resolved);
+                                OrigParser.call(this, type, text, newOptions);
+                                return;
+                            }
+                        }
+                        OrigParser.call(this, type, text, options);
+                    };
+                    PatchedParser.prototype = OrigParser.prototype;
+                    $tw.Wiki.parsers[parserType] = PatchedParser;
+                });
+                console.log('[TiddlyDesktop] Image parser _canonical_uri path resolution installed');
+            }
+            patchImageParsersForCanonicalUri();
+
             console.log('[TiddlyDesktop] Filesystem support installed');
         }
 

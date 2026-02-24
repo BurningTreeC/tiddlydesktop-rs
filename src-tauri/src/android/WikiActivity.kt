@@ -6270,6 +6270,8 @@ class WikiActivity : AppCompatActivity() {
             // Check if title is a draft tiddler (including numbered drafts)
             "function isDraft(t){if(t.indexOf(\"Draft of '\")==0)return true;" +
             "if(t.indexOf('Draft ')==0){var r=t.substring(6);var p=r.indexOf(\" of '\");if(p>0){var n=r.substring(0,p);if(/^\\d+\$/.test(n))return true;}}return false;}" +
+            // Compare version strings (semver-like). Returns 1 if a>b, -1 if a<b, 0 if equal.
+            "function cmpVer(a,b){if(!a&&!b)return 0;if(!a)return -1;if(!b)return 1;var pa=a.split('.'),pb=b.split('.');var len=Math.max(pa.length,pb.length);for(var i=0;i<len;i++){var na=parseInt(pa[i]||'0',10)||0;var nb=parseInt(pb[i]||'0',10)||0;if(na>nb)return 1;if(na<nb)return -1;}return 0;}" +
             "function activate(syncId){" +
             "var syncActive=true;" +
             "console.log('[LAN Sync] Activated for wiki: '+syncId);" +
@@ -6346,7 +6348,7 @@ class WikiActivity : AppCompatActivity() {
             "if(t.indexOf('\$:/themes/tiddlywiki/vanilla/options/')==0)continue;" +
             "if(t.indexOf('\$:/themes/tiddlywiki/vanilla/metrics/')==0)continue;" +
             "if(\$tw.wiki.isShadowTiddler(t)&&!\$tw.wiki.tiddlerExists(t))continue;" +
-            "var td=\$tw.wiki.getTiddler(t);if(td){var m=td.fields.modified;fps.push({title:t,modified:m?fts(m):''});seen[t]=1;}}" +
+            "var td=\$tw.wiki.getTiddler(t);if(td){var m=td.fields.modified;var fp={title:t,modified:m?fts(m):''};if(td.fields['plugin-type']&&td.fields.version)fp.version=td.fields.version;fps.push(fp);seen[t]=1;}}" +
             "var ks=Object.keys(kst);for(var j=0;j<ks.length;j++){if(!seen[ks[j]])fps.push({title:ks[j],modified:kst[ks[j]]});}" +
             "var tks=Object.keys(tomb);var tc=false;for(var k=0;k<tks.length;k++){if(tomb[tks[k]].cleared)continue;if(!seen[tks[k]])fps.push({title:tks[k],modified:tomb[tks[k]].modified,deleted:true});else{tomb[tks[k]].cleared=true;tc=true;}}if(tc)S.saveTombstones(syncId,JSON.stringify(tomb));" +
             "return fps;}" +
@@ -6367,7 +6369,9 @@ class WikiActivity : AppCompatActivity() {
             "console.log('[LAN Sync] Applying batch of '+b.length+' changes');" +
             "var ns=false;var pc=false;" +
             "for(var i=0;i<b.length;i++){var d=b[i];" +
-            "if(d.type==='apply-change'){try{var f=JSON.parse(d.tiddler_json);if(tomb[f.title])delete tomb[f.title];if(tiddlerDiffers(f)){if(f.created)f.created=\$tw.utils.parseDate(f.created);if(f.modified)f.modified=\$tw.utils.parseDate(f.modified);suppress.add(f.title);\$tw.wiki.addTiddler(new \$tw.Tiddler(f));ns=true;if(f.title.indexOf('\$:/plugins/')===0&&f['plugin-type'])pc=true;}else{kst[f.title]=f.modified?String(f.modified):'';}}catch(e){}}" +
+            "if(d.type==='apply-change'){try{var f=JSON.parse(d.tiddler_json);" +
+            "if(f['plugin-type']&&f.version){var lp=\$tw.wiki.getTiddler(f.title);if(lp&&lp.fields.version&&cmpVer(f.version,lp.fields.version)<=0){kst[f.title]=f.modified?String(f.modified):'';continue;}}" +
+            "if(tomb[f.title])delete tomb[f.title];if(tiddlerDiffers(f)){if(f.created)f.created=\$tw.utils.parseDate(f.created);if(f.modified)f.modified=\$tw.utils.parseDate(f.modified);suppress.add(f.title);\$tw.wiki.addTiddler(new \$tw.Tiddler(f));ns=true;if(f.title.indexOf('\$:/plugins/')===0&&f['plugin-type'])pc=true;}else{kst[f.title]=f.modified?String(f.modified):'';}}catch(e){}}" +
             "else if(d.type==='apply-deletion'){try{if(\$tw.wiki.tiddlerExists(d.title)){suppress.add(d.title);\$tw.wiki.deleteTiddler(d.title);ns=true;}var ddm=\$tw.utils.stringifyDate(new Date());if(!tomb[d.title]||tomb[d.title].modified<ddm){tomb[d.title]={modified:ddm,time:Date.now()};S.saveTombstones(syncId,JSON.stringify(tomb));}}catch(e){}}" +
             "else if(d.type==='conflict'){var lt=\$tw.wiki.getTiddler(d.title);if(lt){var ct='\$:/TiddlyDesktopRS/Conflicts/'+d.title;" +
             "conflicts[ct]=1;var cf=Object.assign({},lt.fields,{title:ct,'conflict-original-title':d.title,'conflict-timestamp':new Date().toISOString(),'conflict-source':'local'});" +
@@ -6380,7 +6384,7 @@ class WikiActivity : AppCompatActivity() {
             "function compareFingerprints(fromDevId,fps){" +
             "console.log('[LAN Sync] compareFingerprints: received '+fps.length+' fingerprints from '+fromDevId);" +
             // Separate normal fingerprints from tombstones
-            "var remote={};var peerTombs={};for(var i=0;i<fps.length;i++){if(fps[i].deleted)peerTombs[fps[i].title]=fps[i].modified;else remote[fps[i].title]=fps[i].modified;}" +
+            "var remote={};var peerVer={};var peerTombs={};for(var i=0;i<fps.length;i++){if(fps[i].deleted)peerTombs[fps[i].title]=fps[i].modified;else{remote[fps[i].title]=fps[i].modified;if(fps[i].version)peerVer[fps[i].title]=fps[i].version;}}" +
             // Apply peer tombstones: delete local tiddlers that peer intentionally deleted
             "var tombNs=false;var ptks=Object.keys(peerTombs);for(var ti=0;ti<ptks.length;ti++){" +
             "var tt=ptks[ti];var tm=peerTombs[tt];" +
@@ -6402,9 +6406,9 @@ class WikiActivity : AppCompatActivity() {
             "if(t.indexOf('\$:/themes/tiddlywiki/vanilla/metrics/')==0)continue;" +
             "if(\$tw.wiki.isShadowTiddler(t)&&!\$tw.wiki.tiddlerExists(t))continue;" +
             "var td=\$tw.wiki.getTiddler(t);if(!td)continue;" +
-            "var localMod=td.fields.modified?fts(td.fields.modified):'';" +
             "if(!(t in remote)){diffs.push({title:t,tiddler_json:serFields(td.fields)});}" +
-            "else if(localMod>(remote[t]||'')){diffs.push({title:t,tiddler_json:serFields(td.fields)});}" +
+            "else if(td.fields['plugin-type']){var lv=td.fields.version||'';var pv=peerVer[t]||'';if(cmpVer(lv,pv)>0)diffs.push({title:t,tiddler_json:serFields(td.fields)});}" +
+            "else{var localMod=td.fields.modified?fts(td.fields.modified):'';if(localMod>(remote[t]||''))diffs.push({title:t,tiddler_json:serFields(td.fields)});}" +
             "delete remote[t];}" +
             "console.log('[LAN Sync] compareFingerprints: '+diffs.length+' diffs to send (of '+all.length+' local, peer has '+fps.length+')');" +
             "if(diffs.length>0){var MAX_BYTES=500000;" +

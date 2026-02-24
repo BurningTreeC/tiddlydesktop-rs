@@ -542,6 +542,30 @@
     return false;
   }
 
+  // Compare version strings (semver-like: "0.0.4" vs "0.0.5").
+  // Returns  1 if a > b,  -1 if a < b,  0 if equal.
+  function compareVersions(a, b) {
+    if (!a && !b) return 0;
+    if (!a) return -1;
+    if (!b) return 1;
+    var pa = a.split('.'), pb = b.split('.');
+    var len = Math.max(pa.length, pb.length);
+    for (var i = 0; i < len; i++) {
+      var na = parseInt(pa[i] || '0', 10) || 0;
+      var nb = parseInt(pb[i] || '0', 10) || 0;
+      if (na > nb) return 1;
+      if (na < nb) return -1;
+    }
+    return 0;
+  }
+
+  // Check if a title is a syncable plugin tiddler (has plugin-type, not our injected ones)
+  function isSyncablePlugin(title) {
+    if (title.indexOf('$:/plugins/') !== 0) return false;
+    var t = $tw.wiki.getTiddler(title);
+    return t && t.fields['plugin-type'];
+  }
+
   // Check if a title should be excluded from sync
   function isSyncExcluded(title) {
     if (title === '$:/StoryList' || title === '$:/HistoryList' || title === '$:/library/sjcl.js' ||
@@ -662,7 +686,12 @@
         var t = $tw.wiki.getTiddler(titles[i]);
         if (t) {
           var mod = t.fields.modified;
-          fps.push({ title: titles[i], modified: mod ? fieldToString(mod) : '' });
+          var fp = { title: titles[i], modified: mod ? fieldToString(mod) : '' };
+          // Include version for plugin tiddlers so peers can do version-aware comparison
+          if (t.fields['plugin-type'] && t.fields.version) {
+            fp.version = t.fields.version;
+          }
+          fps.push(fp);
           seen[titles[i]] = true;
         }
       }
@@ -838,6 +867,17 @@
         if (data.type === 'apply-change') {
           try {
             var fields = JSON.parse(data.tiddler_json);
+            // Plugin tiddlers: only accept if incoming version is newer
+            if (fields['plugin-type'] && fields.version) {
+              var localPlugin = $tw.wiki.getTiddler(fields.title);
+              if (localPlugin && localPlugin.fields.version &&
+                  compareVersions(fields.version, localPlugin.fields.version) <= 0) {
+                _log('[LAN Sync] Skipped older/equal plugin: ' + fields.title +
+                     ' (local=' + localPlugin.fields.version + ', remote=' + fields.version + ')');
+                knownSyncTitles[fields.title] = fields.modified ? String(fields.modified) : '';
+                continue;
+              }
+            }
             // If we had a tombstone for this title, the peer re-created it
             if (deletionTombstones[fields.title]) {
               delete deletionTombstones[fields.title];
@@ -945,7 +985,8 @@
         return;
       }
       // Separate peer's fingerprints into normal tiddlers and tombstones
-      var peerMap = {};
+      var peerMap = {};       // title → modified
+      var peerVersions = {};  // title → version (only for plugin tiddlers)
       var peerTombstones = {};
       for (var i = 0; i < peerFingerprints.length; i++) {
         var fp = peerFingerprints[i];
@@ -953,6 +994,7 @@
           peerTombstones[fp.title] = fp.modified;
         } else {
           peerMap[fp.title] = fp.modified;
+          if (fp.version) peerVersions[fp.title] = fp.version;
         }
       }
 
@@ -1004,14 +1046,22 @@
         var tiddler = $tw.wiki.getTiddler(title);
         if (!tiddler) continue;
 
-        var localMod2 = tiddler.fields.modified ? fieldToString(tiddler.fields.modified) : '';
-
         if (!(title in peerMap)) {
           // Peer doesn't have this tiddler — send it
           toSend.push(title);
-        } else if (localMod2 > (peerMap[title] || '')) {
-          // Our version is newer — send it
-          toSend.push(title);
+        } else if (tiddler.fields['plugin-type']) {
+          // Plugin tiddler: compare by version exclusively (not modified timestamp)
+          var localVer = tiddler.fields.version || '';
+          var peerVer = peerVersions[title] || '';
+          if (compareVersions(localVer, peerVer) > 0) {
+            toSend.push(title);
+          }
+        } else {
+          // Regular tiddler: compare by modified timestamp
+          var localMod2 = tiddler.fields.modified ? fieldToString(tiddler.fields.modified) : '';
+          if (localMod2 > (peerMap[title] || '')) {
+            toSend.push(title);
+          }
         }
       }
 

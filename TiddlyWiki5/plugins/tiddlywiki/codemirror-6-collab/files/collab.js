@@ -876,7 +876,7 @@ function _connectTransport(engine, collab) {
 			doc.transact(function() {
 				// Sync new/changed fields to Y.Map
 				for(var key in fields) {
-					if(!fields.hasOwnProperty(key)) continue;
+					if(!Object.prototype.hasOwnProperty.call(fields, key)) continue;
 					if(_isFieldExcluded(key, editField)) continue;
 					var val = typeof fields[key] === "string" ? fields[key] : "" + fields[key];
 					if(ymap.get(key) !== val) {
@@ -907,7 +907,7 @@ function _connectTransport(engine, collab) {
 			doc.transact(function() {
 				var fields = tid.fields;
 				for(var key in fields) {
-					if(!fields.hasOwnProperty(key)) continue;
+					if(!Object.prototype.hasOwnProperty.call(fields, key)) continue;
 					if(_isFieldExcluded(key, editField)) continue;
 					var val = typeof fields[key] === "string" ? fields[key] : "" + fields[key];
 					ymap.set(key, val);

@@ -110,6 +110,18 @@ exports.startup = function(callback) {
 		document.documentElement.classList.add("td-android-main-wiki");
 	}
 
+	// Scroll focused inputs into view when Android keyboard opens
+	if (isAndroid) {
+		document.addEventListener("focusin", function(e) {
+			var el = e.target;
+			if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.tagName === "SELECT")) {
+				setTimeout(function() {
+					el.scrollIntoView({block: "center", behavior: "smooth"});
+				}, 300);
+			}
+		});
+	}
+
 	// ========================================
 	// Android System Bar Color Sync
 	// ========================================

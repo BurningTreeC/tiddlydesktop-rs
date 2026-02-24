@@ -6644,7 +6644,7 @@ class WikiActivity : AppCompatActivity() {
             "function waitTw(cb){if(typeof \$tw!=='undefined'&&\$tw.wiki&&\$tw.wiki.addTiddler){cb();}else{setTimeout(function(){waitTw(cb);},200);}}" +
             "function fetch(cb){try{var j=S.getSyncStatus();cb(JSON.parse(j||'{}'));}catch(_){cb({});}}" +
             "function announce(n){try{S.announceUsername(n);}catch(_){}}" +
-            "function update(st){var p=st.connected_peers||[];var o={};for(var i=0;i<p.length;i++){o[p[i].device_id]=p[i];}var j=JSON.stringify(o);if(j!==lastJ){lastJ=j;" +
+            "function update(st){var p=st.connected_peers||[];var o={};for(var i=0;i<p.length;i++){o[i]={user_name:p[i].user_name||'',device_name:p[i].device_name||''};}var j=JSON.stringify(o);if(j!==lastJ){lastJ=j;" +
             "\$tw.wiki.addTiddler({title:PT,type:'application/json',text:j});" +
             "\$tw.wiki.addTiddler({title:CT,text:String(p.length)});}" +
             "var rc=st.relay_connected||false;if(rc!==_lastRelay){_lastRelay=rc;try{S.setRelayConnected(rc);}catch(_){}}}" +
@@ -6921,6 +6921,11 @@ class WikiActivity : AppCompatActivity() {
                     view.evaluateJavascript(conflictUiScript, null)
                     // Inject peer status badge (shows connected LAN sync peers)
                     view.evaluateJavascript(peerStatusScript, null)
+                    // Scroll focused inputs into view when keyboard opens
+                    view.evaluateJavascript(
+                        "document.addEventListener('focusin',function(e){var el=e.target;" +
+                        "if(el&&(el.tagName==='INPUT'||el.tagName==='TEXTAREA'||el.tagName==='SELECT')){" +
+                        "setTimeout(function(){el.scrollIntoView({block:'center',behavior:'smooth'});},300);}})", null)
                     // Import pending Quick Captures
                     importPendingCaptures()
                 }

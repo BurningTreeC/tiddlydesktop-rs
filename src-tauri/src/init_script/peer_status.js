@@ -43,10 +43,10 @@
   }
 
   function updatePeerData(peers) {
-    // Convert array to object keyed by device_id for jsonindexes compatibility
+    // Convert array to object keyed by index — strip device_id (sensitive)
     var peersObj = {};
     for (var i = 0; i < peers.length; i++) {
-      peersObj[peers[i].device_id] = peers[i];
+      peersObj[i] = {user_name: peers[i].user_name || '', device_name: peers[i].device_name || ''};
     }
     var peersJson = JSON.stringify(peersObj);
 

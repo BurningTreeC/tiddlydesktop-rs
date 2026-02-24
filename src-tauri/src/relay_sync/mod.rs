@@ -38,8 +38,17 @@ const DEFAULT_RELAY_URL: &str = "wss://relay.tiddlydesktop-rs.com:8443";
 /// Old relay URL (plain WebSocket, pre-TLS) — auto-migrated on config load
 const OLD_RELAY_URL: &str = "ws://164.92.180.226:8443";
 
-/// App token for relay server authentication
-const RELAY_APP_TOKEN: &str = "tdr1-9f8b2c4a7e6d";
+/// Derive a per-device app token for relay server authentication.
+/// Uses HMAC-SHA256(device_key, label) truncated to 16 hex chars with a "tdr1-" prefix.
+/// Each installation gets a unique, stable token that isn't hardcoded in the source.
+fn derive_app_token(device_key: &[u8; 32]) -> String {
+    let mut mac = Hmac::<Sha256>::new_from_slice(device_key)
+        .expect("HMAC can take key of any size");
+    mac.update(b"tiddlydesktop-relay-app-token");
+    let result = mac.finalize().into_bytes();
+    let hex: String = result[..8].iter().map(|b| format!("{:02x}", b)).collect();
+    format!("tdr1-{}", hex)
+}
 
 /// Config file name
 const RELAY_CONFIG_FILE: &str = "relay_sync_config.json";
@@ -637,6 +646,7 @@ impl RelaySyncManager {
         let my_device_id = self.pairing_manager.device_id().to_string();
         let my_device_name = self.pairing_manager.device_name().to_string();
         let room_code = room_def.room_code.clone();
+        let app_token = derive_app_token(&self.device_key);
 
         // Create a per-room running flag
         let running = Arc::new(AtomicBool::new(true));
@@ -685,7 +695,7 @@ impl RelaySyncManager {
                 let (sender, receiver) = match connection::connect(
                     &url,
                     &my_device_id,
-                    RELAY_APP_TOKEN,
+                    &app_token,
                     Some(&room_token),
                 )
                 .await

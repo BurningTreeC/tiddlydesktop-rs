@@ -148,18 +148,27 @@ fn read_body(request: &mut tiny_http::Request) -> Option<String> {
     Some(body)
 }
 
-/// Add CORS headers to a response
-fn cors_response(data: &str, status: u16) -> tiny_http::Response<std::io::Cursor<Vec<u8>>> {
+/// Add CORS headers to a response.
+/// Only reflects the Origin if it matches http://127.0.0.1:{port} to prevent
+/// cross-origin attacks from malicious websites on the same device.
+fn cors_response(data: &str, status: u16, origin: &str) -> tiny_http::Response<std::io::Cursor<Vec<u8>>> {
     let bytes = data.as_bytes().to_vec();
+    let mut headers = vec![
+        tiny_http::Header::from_bytes("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+            .unwrap(),
+        tiny_http::Header::from_bytes("Access-Control-Allow-Headers", "Content-Type").unwrap(),
+        tiny_http::Header::from_bytes("Content-Type", "application/json").unwrap(),
+    ];
+    // Only allow CORS from our own wiki HTTP server (http://127.0.0.1:PORT)
+    if origin.starts_with("http://127.0.0.1:") {
+        headers.push(
+            tiny_http::Header::from_bytes("Access-Control-Allow-Origin", origin.to_string())
+                .unwrap(),
+        );
+    }
     tiny_http::Response::new(
         tiny_http::StatusCode(status),
-        vec![
-            tiny_http::Header::from_bytes("Access-Control-Allow-Origin", "*").unwrap(),
-            tiny_http::Header::from_bytes("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-                .unwrap(),
-            tiny_http::Header::from_bytes("Access-Control-Allow-Headers", "Content-Type").unwrap(),
-            tiny_http::Header::from_bytes("Content-Type", "application/json").unwrap(),
-        ],
+        headers,
         std::io::Cursor::new(bytes),
         Some(data.len()),
         None,
@@ -188,10 +197,14 @@ fn run_bridge_server(
         let mut request = request;
         let url = request.url().to_string();
         let method = request.method().to_string();
+        let origin = request.headers().iter()
+            .find(|h| h.field.equiv("Origin"))
+            .map(|h| h.value.as_str().to_string())
+            .unwrap_or_default();
 
         // Handle CORS preflight
         if method == "OPTIONS" {
-            let _ = request.respond(cors_response("", 204));
+            let _ = request.respond(cors_response("", 204, &origin));
             continue;
         }
 
@@ -214,7 +227,7 @@ fn run_bridge_server(
                         }
                     }
                 }
-                let _ = request.respond(cors_response("{\"ok\":true}", 200));
+                let _ = request.respond(cors_response("{\"ok\":true}", 200, &origin));
             }
 
             ("POST", "/_bridge/tiddler-deleted") => {
@@ -228,7 +241,7 @@ fn run_bridge_server(
                         }
                     }
                 }
-                let _ = request.respond(cors_response("{\"ok\":true}", 200));
+                let _ = request.respond(cors_response("{\"ok\":true}", 200, &origin));
             }
 
             ("POST", "/_bridge/wiki-opened") => {
@@ -253,7 +266,7 @@ fn run_bridge_server(
                         }
                     }
                 }
-                let _ = request.respond(cors_response("{\"ok\":true}", 200));
+                let _ = request.respond(cors_response("{\"ok\":true}", 200, &origin));
             }
 
             ("POST", "/_bridge/full-sync-batch") => {
@@ -306,7 +319,7 @@ fn run_bridge_server(
                         }
                     }
                 }
-                let _ = request.respond(cors_response("{\"ok\":true}", 200));
+                let _ = request.respond(cors_response("{\"ok\":true}", 200, &origin));
             }
 
             ("POST", "/_bridge/send-fingerprints") => {
@@ -357,7 +370,7 @@ fn run_bridge_server(
                         }
                     }
                 }
-                let _ = request.respond(cors_response("{\"ok\":true}", 200));
+                let _ = request.respond(cors_response("{\"ok\":true}", 200, &origin));
             }
 
             ("POST", "/_bridge/broadcast-fingerprints") => {
@@ -405,7 +418,7 @@ fn run_bridge_server(
                         }
                     }
                 }
-                let _ = request.respond(cors_response("{\"ok\":true}", 200));
+                let _ = request.respond(cors_response("{\"ok\":true}", 200, &origin));
             }
 
             // ── Queries ───────────────────────────────────────────────
@@ -431,7 +444,7 @@ fn run_bridge_server(
                 };
 
                 let resp = serde_json::json!({ "sync_id": sync_id }).to_string();
-                let _ = request.respond(cors_response(&resp, 200));
+                let _ = request.respond(cors_response(&resp, 200, &origin));
             }
 
             // ── Inbound: poll for changes to apply in wiki ────────────
@@ -461,7 +474,7 @@ fn run_bridge_server(
                 }
                 let resp =
                     serde_json::to_string(&changes).unwrap_or_else(|_| "[]".to_string());
-                let _ = request.respond(cors_response(&resp, 200));
+                let _ = request.respond(cors_response(&resp, 200, &origin));
             }
 
             // ── Collaborative editing ─────────────────────────────────
@@ -478,7 +491,7 @@ fn run_bridge_server(
                         }
                     }
                 }
-                let _ = request.respond(cors_response("{\"ok\":true}", 200));
+                let _ = request.respond(cors_response("{\"ok\":true}", 200, &origin));
             }
 
             ("POST", "/_bridge/collab-editing-stopped") => {
@@ -493,7 +506,7 @@ fn run_bridge_server(
                         }
                     }
                 }
-                let _ = request.respond(cors_response("{\"ok\":true}", 200));
+                let _ = request.respond(cors_response("{\"ok\":true}", 200, &origin));
             }
 
             ("POST", "/_bridge/collab-update") => {
@@ -509,7 +522,7 @@ fn run_bridge_server(
                         }
                     }
                 }
-                let _ = request.respond(cors_response("{\"ok\":true}", 200));
+                let _ = request.respond(cors_response("{\"ok\":true}", 200, &origin));
             }
 
             ("POST", "/_bridge/collab-awareness") => {
@@ -525,7 +538,7 @@ fn run_bridge_server(
                         }
                     }
                 }
-                let _ = request.respond(cors_response("{\"ok\":true}", 200));
+                let _ = request.respond(cors_response("{\"ok\":true}", 200, &origin));
             }
 
             ("POST", "/_bridge/collab-peer-saved") => {
@@ -541,7 +554,7 @@ fn run_bridge_server(
                         }
                     }
                 }
-                let _ = request.respond(cors_response("{\"ok\":true}", 200));
+                let _ = request.respond(cors_response("{\"ok\":true}", 200, &origin));
             }
 
             ("POST", "/_bridge/announce-username") => {
@@ -558,7 +571,7 @@ fn run_bridge_server(
                         }
                     }
                 }
-                let _ = request.respond(cors_response("{\"ok\":true}", 200));
+                let _ = request.respond(cors_response("{\"ok\":true}", 200, &origin));
             }
 
             ("GET", "/_bridge/sync-status") => {
@@ -579,7 +592,7 @@ fn run_bridge_server(
                     }
                 };
                 let resp = serde_json::to_string(&status).unwrap_or_else(|_| "{}".to_string());
-                let _ = request.respond(cors_response(&resp, 200));
+                let _ = request.respond(cors_response(&resp, 200, &origin));
             }
 
             ("GET", url) if url.starts_with("/_bridge/collab-editors?") => {
@@ -608,11 +621,11 @@ fn run_bridge_server(
                     .map(|(did, dname, uname)| serde_json::json!({"deviceId": did, "deviceName": dname, "userName": uname}))
                     .collect();
                 let resp = serde_json::to_string(&result).unwrap_or_else(|_| "[]".to_string());
-                let _ = request.respond(cors_response(&resp, 200));
+                let _ = request.respond(cors_response(&resp, 200, &origin));
             }
 
             _ => {
-                let _ = request.respond(cors_response("{\"error\":\"not found\"}", 404));
+                let _ = request.respond(cors_response("{\"error\":\"not found\"}", 404, &origin));
             }
         }
     }

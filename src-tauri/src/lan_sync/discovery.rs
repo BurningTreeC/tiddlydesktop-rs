@@ -53,10 +53,10 @@ struct Beacon {
     name: String,
     /// WebSocket sync server port
     port: u16,
-    /// Room codes this device is currently in (cleartext, for backward compat with old clients)
+    /// Room codes — always empty, kept for backward compat with old beacon parsers
     #[serde(default)]
     rooms: Vec<String>,
-    /// HMAC-SHA256 hashes of room codes (preferred for matching — doesn't reveal codes to observers)
+    /// HMAC-SHA256 hashes of room codes (used for matching — doesn't reveal codes to observers)
     #[serde(default)]
     room_hashes: Vec<String>,
 }
@@ -157,7 +157,7 @@ impl DiscoveryManager {
                     id: our_id.clone(),
                     name: our_name.clone(),
                     port: our_port,
-                    rooms,
+                    rooms: vec![],  // Never send cleartext room codes
                     room_hashes,
                 };
                 serde_json::to_vec(&beacon).unwrap_or_default()
@@ -268,8 +268,8 @@ impl DiscoveryManager {
                                 };
                                 if is_new {
                                     eprintln!(
-                                        "[LAN Sync] Discovered peer: {} ({}) at {}:{} rooms={:?}",
-                                        beacon.name, beacon.id, addr, beacon.port, beacon.rooms
+                                        "[LAN Sync] Discovered peer: {} ({}) at {}:{} room_hashes={}",
+                                        beacon.name, beacon.id, addr, beacon.port, beacon.room_hashes.len()
                                     );
                                 }
                                 let _ = event_tx.send(DiscoveryEvent::PeerDiscovered {

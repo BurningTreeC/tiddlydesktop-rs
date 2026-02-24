@@ -615,13 +615,8 @@ impl SyncManager {
                                 } else {
                                     vec![]
                                 };
-                                // Prefer hash-based matching (doesn't expose room codes in beacons)
-                                // Fall back to cleartext matching for old peers that don't send hashes
-                                let shared_room = if !peer_room_hashes.is_empty() {
-                                    protocol::select_shared_room_by_hash(&our_rooms, &peer_room_hashes)
-                                } else {
-                                    protocol::select_shared_room(&our_rooms, &peer_room_codes)
-                                };
+                                // Match rooms by comparing hashes (never uses cleartext codes)
+                                let shared_room = protocol::select_shared_room_by_hash(&our_rooms, &peer_room_hashes);
 
                                 if let Some(room_code) = shared_room {
                                     // We share a room — auto-connect via LAN
@@ -2583,22 +2578,14 @@ impl SyncManager {
                 // Only the device with the smaller device ID initiates reconnection.
                 // Look up the room this peer was connected via.
                 let peer_room_code = {
-                    // Prefer hash-based matching, fall back to cleartext for old peers
+                    // Match rooms by comparing hashes (never uses cleartext codes)
                     let our_rooms = self.active_room_codes.read()
                         .unwrap_or_else(|e| e.into_inner())
                         .clone();
                     let peer_hashes_guard = self.peer_room_hashes.read().await;
-                    let hash_match = peer_hashes_guard.get(&device_id)
+                    peer_hashes_guard.get(&device_id)
                         .filter(|h| !h.is_empty())
-                        .and_then(|h| protocol::select_shared_room_by_hash(&our_rooms, h));
-                    drop(peer_hashes_guard);
-                    if hash_match.is_some() {
-                        hash_match
-                    } else {
-                        let peer_rooms_guard = self.peer_rooms.read().await;
-                        peer_rooms_guard.get(&device_id)
-                            .and_then(|pr| protocol::select_shared_room(&our_rooms, pr))
-                    }
+                        .and_then(|h| protocol::select_shared_room_by_hash(&our_rooms, h))
                 };
                 if let Some(room_code) = peer_room_code {
                     if self.server.read().await.is_some() {

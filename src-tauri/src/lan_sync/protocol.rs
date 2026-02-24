@@ -452,7 +452,8 @@ impl SessionCipher {
     /// Encrypt a message for sending
     pub fn encrypt(&mut self, plaintext: &[u8]) -> Result<Vec<u8>, String> {
         let nonce_bytes = self.send_counter.to_le_bytes();
-        self.send_counter += 1;
+        self.send_counter = self.send_counter.checked_add(1)
+            .ok_or("Session nonce counter overflow — connection must be rekeyed")?;
 
         // ChaCha20-Poly1305 nonce is 12 bytes, we use 8 bytes of counter + 4 zero bytes
         let mut nonce_arr = [0u8; 12];

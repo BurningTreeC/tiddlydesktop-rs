@@ -6644,7 +6644,7 @@ class WikiActivity : AppCompatActivity() {
             "function waitTw(cb){if(typeof \$tw!=='undefined'&&\$tw.wiki&&\$tw.wiki.addTiddler){cb();}else{setTimeout(function(){waitTw(cb);},200);}}" +
             "function fetch(cb){try{var j=S.getSyncStatus();cb(JSON.parse(j||'{}'));}catch(_){cb({});}}" +
             "function announce(n){try{S.announceUsername(n);}catch(_){}}" +
-            "function update(st){var p=st.connected_peers||[];var j=JSON.stringify(p);if(j!==lastJ){lastJ=j;" +
+            "function update(st){var p=st.connected_peers||[];var o={};for(var i=0;i<p.length;i++){o[p[i].device_id]=p[i];}var j=JSON.stringify(o);if(j!==lastJ){lastJ=j;" +
             "\$tw.wiki.addTiddler({title:PT,type:'application/json',text:j});" +
             "\$tw.wiki.addTiddler({title:CT,text:String(p.length)});}" +
             "var rc=st.relay_connected||false;if(rc!==_lastRelay){_lastRelay=rc;try{S.setRelayConnected(rc);}catch(_){}}}" +
@@ -6667,9 +6667,9 @@ class WikiActivity : AppCompatActivity() {
             "</\$button>\\n" +
             "<\$reveal state=\"\\$:/state/tiddlydesktop/peer-dropdown\" type=\"popup\" position=\"belowleft\">\\n" +
             "<div class=\"td-peer-dropdown\">\\n" +
-            "<\$list filter=\"[['+PT+']jsonindexes[]]\" variable=\"idx\" emptyMessage=\"\"\"<div class=\\\"td-peer-dropdown-empty\\\">No peers connected</div>\"\"\">\\n" +
+            "<\$list filter=\"[{'+PT+'}jsonindexes[]]\" variable=\"idx\" emptyMessage=\"\"\"<div class=\\\"td-peer-dropdown-empty\\\">No peers connected</div>\"\"\">\\n" +
             "<div class=\"td-peer-dropdown-item\">\\n" +
-            "<\$let userName={{{ [['+PT+']jsonget<idx>,[user_name]] }}} deviceName={{{ [['+PT+']jsonget<idx>,[device_name]] }}}>\\n" +
+            "<\$let userName={{{ [{'+PT+'}jsonget<idx>,[user_name]] }}} deviceName={{{ [{'+PT+'}jsonget<idx>,[device_name]] }}}>\\n" +
             "<\$reveal type=\"nomatch\" default=<<userName>> text=\"\">\\n" +
             "<span class=\"td-peer-dropdown-item-name\"><\$text text=<<userName>>/></span> <span class=\"td-peer-dropdown-item-device\">(<\$text text=<<deviceName>>/>)</span>\\n" +
             "</\$reveal>\\n" +
@@ -6691,12 +6691,12 @@ class WikiActivity : AppCompatActivity() {
             "<\$list filter=\"[<editingTid>is[tiddler]]\" variable=\"ignore\">\\n" +
             "<div class=\"td-editing-badge\">\\n" +
             "{{\\$:/core/images/edit-button}} \\n" +
-            "<\$list filter=\"[<editingTid>jsonindexes[]]\" variable=\"idx\" counter=\"cnt\">\\n" +
-            "<\$let un={{{ [<editingTid>jsonget<idx>,[user_name]] }}} dn={{{ [<editingTid>jsonget<idx>,[device_name]] }}}>\\n" +
+            "<\$list filter=\"[<editingTid>get[text]jsonindexes[]]\" variable=\"idx\" counter=\"cnt\">\\n" +
+            "<\$let un={{{ [<editingTid>get[text]jsonget<idx>,[user_name]] }}} dn={{{ [<editingTid>get[text]jsonget<idx>,[device_name]] }}}>\\n" +
             "<\$reveal type=\"nomatch\" default=<<un>> text=\"\"><\$text text=<<un>>/></\$reveal>\\n" +
             "<\$reveal type=\"match\" default=<<un>> text=\"\"><\$text text=<<dn>>/></\$reveal>\\n" +
             "</\$let>\\n" +
-            "<\$list filter=\"[<editingTid>jsonindexes[]count[]compare:number:gt<cnt-first>]\" variable=\"ignore\">, </\$list>\\n" +
+            "<\$list filter=\"[<editingTid>get[text]jsonindexes[]count[]compare:number:gt<cnt-first>]\" variable=\"ignore\">, </\$list>\\n" +
             "</\$list>\\n" +
             "</div>\\n" +
             "</\$list>\\n" +
@@ -6704,7 +6704,7 @@ class WikiActivity : AppCompatActivity() {
             "<style><<editing-badge-styles>></style>';" +
             "\$tw.wiki.addTiddler({title:EBT,tags:'\$:/tags/ViewTemplate','list-before':'\$:/core/ui/ViewTemplate/body',text:eb});}" +
             "waitTw(function(){" +
-            "\$tw.wiki.addTiddler({title:PT,type:'application/json',text:'[]'});" +
+            "\$tw.wiki.addTiddler({title:PT,type:'application/json',text:'{}'});" +
             "\$tw.wiki.addTiddler({title:CT,text:'0'});" +
             "createBadge();createEditBadge();" +
             "var un=\$tw.wiki.getTiddlerText('\$:/status/UserName')||'';" +

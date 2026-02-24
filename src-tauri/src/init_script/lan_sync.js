@@ -861,7 +861,12 @@
       // Only call addTiddler if value actually changed (avoid unnecessary refresh cycles)
       if (data.type === 'peer-update') {
         if (data.peers) {
-          var peersJson = JSON.stringify(data.peers);
+          // Convert array to object keyed by device_id for jsonindexes compatibility
+          var peersObj = {};
+          for (var pi = 0; pi < data.peers.length; pi++) {
+            peersObj[data.peers[pi].device_id] = data.peers[pi];
+          }
+          var peersJson = JSON.stringify(peersObj);
           var countStr = String(data.peers.length);
           var PEERS_TITLE = '$:/temp/tiddlydesktop/connected-peers';
           var COUNT_TITLE = '$:/temp/tiddlydesktop/peer-count';
@@ -1305,7 +1310,12 @@
                     if (data.peers) {
                       var PEERS_TIDDLER = '$:/temp/tiddlydesktop/connected-peers';
                       var COUNT_TIDDLER = '$:/temp/tiddlydesktop/peer-count';
-                      var peersJson = JSON.stringify(data.peers);
+                      // Convert array to object keyed by device_id for jsonindexes compatibility
+                      var peersObj2 = {};
+                      for (var pi2 = 0; pi2 < data.peers.length; pi2++) {
+                        peersObj2[data.peers[pi2].device_id] = data.peers[pi2];
+                      }
+                      var peersJson = JSON.stringify(peersObj2);
                       var countStr = String(data.peers.length);
                       if ($tw.wiki.getTiddlerText(PEERS_TIDDLER) !== peersJson) {
                         $tw.wiki.addTiddler({

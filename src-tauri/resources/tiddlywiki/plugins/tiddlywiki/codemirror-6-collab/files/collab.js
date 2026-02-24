@@ -430,6 +430,7 @@ function _buildRemoteSelectionsPlugin(core, collabState, fieldState) {
 	var awareness = collabState.awareness;
 	var ytext = fieldState.ytext;
 	var ydoc = collabState.doc;
+	var cursorKey = "cursor_" + fieldState.editField;
 
 	// Remote caret widget class (extends CM6 WidgetType)
 	class YRemoteCaretWidget extends WidgetType {
@@ -497,22 +498,23 @@ function _buildRemoteSelectionsPlugin(core, collabState, fieldState) {
 			if(localState != null) {
 				var hasFocus = viewUpdate.view.hasFocus && viewUpdate.view.dom.ownerDocument.hasFocus();
 				var sel = hasFocus ? viewUpdate.state.selection.main : null;
-				var currentAnchor = localState.cursor == null ? null : Y.createRelativePositionFromJSON(localState.cursor.anchor);
-				var currentHead = localState.cursor == null ? null : Y.createRelativePositionFromJSON(localState.cursor.head);
+				var currentCursor = localState[cursorKey] || null;
+				var currentAnchor = currentCursor == null ? null : Y.createRelativePositionFromJSON(currentCursor.anchor);
+				var currentHead = currentCursor == null ? null : Y.createRelativePositionFromJSON(currentCursor.head);
 
 				if(sel != null) {
 					var anchor = Y.createRelativePositionFromTypeIndex(ytext, sel.anchor);
 					var head = Y.createRelativePositionFromTypeIndex(ytext, sel.head);
-					if(localState.cursor == null || !Y.compareRelativePositions(currentAnchor, anchor) || !Y.compareRelativePositions(currentHead, head)) {
-						awareness.setLocalStateField("cursor", {
+					if(currentCursor == null || !Y.compareRelativePositions(currentAnchor, anchor) || !Y.compareRelativePositions(currentHead, head)) {
+						awareness.setLocalStateField(cursorKey, {
 							anchor: anchor,
 							head: head
 						});
 					}
-				} else if(localState.cursor != null) {
+				} else if(currentCursor != null) {
 					// Clear cursor when editor loses focus (sel is null)
 					// so peers don't see a stale cursor position
-					awareness.setLocalStateField("cursor", null);
+					awareness.setLocalStateField(cursorKey, null);
 				}
 			}
 
@@ -520,7 +522,12 @@ function _buildRemoteSelectionsPlugin(core, collabState, fieldState) {
 			awareness.getStates().forEach(function(state, clientid) {
 				if(clientid === awareness.doc.clientID) return;
 
-				var cursor = state.cursor;
+				// Check per-field cursor key first, fall back to legacy "cursor" key
+				var cursor = state[cursorKey] || null;
+				if(cursor == null) {
+					// Legacy fallback: read "cursor" key from peers using older plugin version
+					cursor = state.cursor || null;
+				}
 				if(cursor == null || cursor.anchor == null || cursor.head == null) return;
 
 				var absAnchor = Y.createAbsolutePositionFromRelativePosition(cursor.anchor, ydoc);

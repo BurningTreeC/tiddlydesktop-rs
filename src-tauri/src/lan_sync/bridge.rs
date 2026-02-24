@@ -532,11 +532,21 @@ impl SyncBridge {
                 tiddler_title,
                 update_base64,
             } => {
-                let peers = if let Some(app) = super::GLOBAL_APP_HANDLE.get() {
+                // Get the peer we recently received awareness from (if any) to avoid echo-back
+                let echo_peer = if let Some(mgr) = super::get_sync_manager() {
+                    mgr.get_awareness_echo_peer(&wiki_id, &tiddler_title)
+                } else {
+                    None
+                };
+                let mut peers = if let Some(app) = super::GLOBAL_APP_HANDLE.get() {
                     if let Some(room_code) = crate::wiki_storage::get_wiki_relay_room_by_sync_id(app, &wiki_id) {
                         server.peers_for_room(&room_code).await
                     } else { vec![] }
                 } else { vec![] };
+                // Exclude the peer that sent us this awareness (suppress echo-back)
+                if let Some(ref exclude_id) = echo_peer {
+                    peers.retain(|p| p != exclude_id);
+                }
                 if !peers.is_empty() {
                     eprintln!("[Collab] OUTBOUND broadcast CollabAwareness: wiki={}, tiddler={}, len={}", wiki_id, tiddler_title, update_base64.len());
                     server

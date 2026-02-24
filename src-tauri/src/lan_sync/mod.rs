@@ -210,6 +210,9 @@ pub struct SyncManager {
     collab_ws_clients: std::sync::Mutex<HashMap<String, Vec<tokio::sync::mpsc::UnboundedSender<String>>>>,
     /// Shutdown signal for collab WebSocket server
     collab_ws_shutdown: tokio::sync::watch::Sender<bool>,
+    /// Last inbound awareness sender per tiddler: (wiki_id, tiddler_title) → (device_id, timestamp)
+    /// Used to suppress echo-back: when JS re-sends awareness we just received, we exclude the original sender
+    awareness_last_inbound: std::sync::Mutex<HashMap<(String, String), (String, std::time::Instant)>>,
 }
 
 /// State for an incoming wiki file transfer
@@ -318,6 +321,7 @@ impl SyncManager {
             collab_ws_port: std::sync::atomic::AtomicU16::new(0),
             collab_ws_clients: std::sync::Mutex::new(HashMap::new()),
             collab_ws_shutdown: tokio::sync::watch::channel(false).0,
+            awareness_last_inbound: std::sync::Mutex::new(HashMap::new()),
         });
 
         // Store globally
@@ -1226,9 +1230,14 @@ impl SyncManager {
                     Some(rc) => rc,
                     None => return,
                 };
-                let _ = relay.send_to_room(&room_code, &SyncMessage::CollabAwareness {
+                // Exclude the peer that sent us this awareness (suppress echo-back)
+                let mut exclude = std::collections::HashSet::new();
+                if let Some(echo_peer) = self.get_awareness_echo_peer(&wiki_id, &tiddler_title) {
+                    exclude.insert(echo_peer);
+                }
+                let _ = relay.send_to_room_excluding(&room_code, &SyncMessage::CollabAwareness {
                     wiki_id, tiddler_title, update_base64,
-                }).await;
+                }, &exclude).await;
             }
             WikiToSync::CollabPeerSaved { wiki_id, tiddler_title, saved_title, device_id, device_name } => {
                 let room_code = match crate::wiki_storage::get_wiki_relay_room_by_sync_id(app, &wiki_id) {
@@ -1345,10 +1354,15 @@ impl SyncManager {
                     Some(rc) => rc,
                     None => return,
                 };
+                // Also exclude the echo peer (the one who sent us this awareness)
+                let mut exclude = lan_peer_ids.clone();
+                if let Some(echo_peer) = self.get_awareness_echo_peer(wiki_id, tiddler_title) {
+                    exclude.insert(echo_peer);
+                }
                 let _ = relay.send_to_room_excluding(&room_code, &SyncMessage::CollabAwareness {
                     wiki_id: wiki_id.clone(), tiddler_title: tiddler_title.clone(),
                     update_base64: update_base64.clone(),
-                }, lan_peer_ids).await;
+                }, &exclude).await;
             }
             WikiToSync::CollabPeerSaved { wiki_id, tiddler_title, saved_title, device_id, device_name } => {
                 let room_code = match crate::wiki_storage::get_wiki_relay_room_by_sync_id(app, wiki_id) {
@@ -1943,6 +1957,20 @@ impl SyncManager {
             tiddler_title: tiddler_title.to_string(),
             update_base64: update_base64.to_string(),
         });
+    }
+
+    /// Get the device_id that most recently sent us awareness for this tiddler (within 500ms).
+    /// Used by the bridge/relay to exclude that peer from the outbound broadcast (echo suppression).
+    pub fn get_awareness_echo_peer(&self, wiki_id: &str, tiddler_title: &str) -> Option<String> {
+        let key = (wiki_id.to_string(), tiddler_title.to_string());
+        if let Ok(map) = self.awareness_last_inbound.lock() {
+            if let Some((device_id, ts)) = map.get(&key) {
+                if ts.elapsed().as_millis() < 500 {
+                    return Some(device_id.clone());
+                }
+            }
+        }
+        None
     }
 
     /// Get remote editors for a tiddler (device_id, device_name, user_name)
@@ -3104,12 +3132,18 @@ impl SyncManager {
                         ref tiddler_title,
                         ref update_base64,
                     } => {
-                        eprintln!("[Collab] INBOUND CollabAwareness: wiki={}, tiddler={}, len={}", wiki_id, tiddler_title, update_base64.len());
                         // Skip messages from our own device (self-echo guard)
                         if from_device_id == self.pairing_manager.device_id() {
-                            eprintln!("[Collab] Skipping self-echoed CollabAwareness for {}", tiddler_title);
                             return;
                         }
+                        // Record sender so outbound echo-back can be suppressed
+                        if let Ok(mut map) = self.awareness_last_inbound.lock() {
+                            map.insert(
+                                (wiki_id.to_string(), tiddler_title.to_string()),
+                                (from_device_id.to_string(), std::time::Instant::now()),
+                            );
+                        }
+                        eprintln!("[Collab] INBOUND CollabAwareness: wiki={}, tiddler={}, len={}", wiki_id, tiddler_title, update_base64.len());
                         self.emit_collab_to_wiki(wiki_id, serde_json::json!({
                             "type": "collab-awareness",
                             "wiki_id": wiki_id,

@@ -43,7 +43,12 @@
   }
 
   function updatePeerData(peers) {
-    var peersJson = JSON.stringify(peers);
+    // Convert array to object keyed by device_id for jsonindexes compatibility
+    var peersObj = {};
+    for (var i = 0; i < peers.length; i++) {
+      peersObj[peers[i].device_id] = peers[i];
+    }
+    var peersJson = JSON.stringify(peersObj);
 
     // Skip if unchanged
     if (peersJson === lastPeersJson) return;
@@ -87,9 +92,9 @@
       '</$button>\n' +
       '<$reveal state="$:/state/tiddlydesktop/peer-dropdown" type="popup" position="belowleft">\n' +
       '<div class="td-peer-dropdown">\n' +
-      '<$list filter="[[' + PEERS_TIDDLER + ']jsonindexes[]]" variable="idx" emptyMessage="""<div class="td-peer-dropdown-empty">No peers connected</div>""">\n' +
+      '<$list filter="[{' + PEERS_TIDDLER + '}jsonindexes[]]" variable="idx" emptyMessage="""<div class="td-peer-dropdown-empty">No peers connected</div>""">\n' +
       '<div class="td-peer-dropdown-item">\n' +
-      '<$let userName={{{ [[' + PEERS_TIDDLER + ']jsonget<idx>,[user_name]] }}} deviceName={{{ [[' + PEERS_TIDDLER + ']jsonget<idx>,[device_name]] }}}>\n' +
+      '<$let userName={{{ [{' + PEERS_TIDDLER + '}jsonget<idx>,[user_name]] }}} deviceName={{{ [{' + PEERS_TIDDLER + '}jsonget<idx>,[device_name]] }}}>\n' +
       '<$reveal type="nomatch" default=<<userName>> text="">\n' +
       '<span class="td-peer-dropdown-item-name"><$text text=<<userName>>/></span>\n' +
       ' <span class="td-peer-dropdown-item-device">(<$text text=<<deviceName>>/>)</span>\n' +
@@ -130,8 +135,8 @@
       '<$list filter="[<editingTid>is[tiddler]]" variable="ignore">\n' +
       '<div class="td-editing-badge">\n' +
       '{{$:/core/images/edit-button}} \n' +
-      '<$list filter="[<editingTid>jsonindexes[]]" variable="idx" counter="cnt">\n' +
-      '<$let un={{{ [<editingTid>jsonget<idx>,[user_name]] }}} dn={{{ [<editingTid>jsonget<idx>,[device_name]] }}}>\n' +
+      '<$list filter="[<editingTid>get[text]jsonindexes[]]" variable="idx" counter="cnt">\n' +
+      '<$let un={{{ [<editingTid>get[text]jsonget<idx>,[user_name]] }}} dn={{{ [<editingTid>get[text]jsonget<idx>,[device_name]] }}}>\n' +
       '<$reveal type="nomatch" default=<<un>> text="">\n' +
       '<$text text=<<un>>/>\n' +
       '</$reveal>\n' +
@@ -139,7 +144,7 @@
       '<$text text=<<dn>>/>\n' +
       '</$reveal>\n' +
       '</$let>\n' +
-      '<$list filter="[<editingTid>jsonindexes[]count[]compare:number:gt<cnt-first>]" variable="ignore">, </$list>\n' +
+      '<$list filter="[<editingTid>get[text]jsonindexes[]count[]compare:number:gt<cnt-first>]" variable="ignore">, </$list>\n' +
       '</$list>\n' +
       '</div>\n' +
       '</$list>\n' +
@@ -158,7 +163,7 @@
 
   waitForTw(function() {
     // Initialize data tiddlers with empty state
-    $tw.wiki.addTiddler({ title: PEERS_TIDDLER, type: 'application/json', text: '[]' });
+    $tw.wiki.addTiddler({ title: PEERS_TIDDLER, type: 'application/json', text: '{}' });
     $tw.wiki.addTiddler({ title: COUNT_TIDDLER, text: '0' });
 
     // Create the badge UIs

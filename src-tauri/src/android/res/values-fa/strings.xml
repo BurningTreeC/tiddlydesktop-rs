@@ -74,4 +74,6 @@
     <string name="sync_notif_channel_desc">Sync را برای همگام‌سازی ویکی در زمان واقعی فعال نگه می‌دارد</string>
     <string name="sync_notif_title">Sync فعال است</string>
     <string name="sync_notif_text">همگام‌سازی ویکی‌ها با دستگاه‌های نزدیک</string>
+    <string name="sync_notif_text_idle">در انتظار دستگاه‌ها</string>
+    <string name="sync_notif_text_connected">همگام‌سازی با %d دستگاه</string>
 </resources>

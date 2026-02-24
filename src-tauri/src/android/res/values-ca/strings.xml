@@ -74,4 +74,6 @@
     <string name="sync_notif_channel_desc">Manté Sync actiu per a la sincronització en temps real dels wikis</string>
     <string name="sync_notif_title">Sync Actiu</string>
     <string name="sync_notif_text">Sincronitzant wikis amb dispositius propers</string>
+    <string name="sync_notif_text_idle">Esperant dispositius</string>
+    <string name="sync_notif_text_connected">Sincronitzant amb %d dispositiu(s)</string>
 </resources>

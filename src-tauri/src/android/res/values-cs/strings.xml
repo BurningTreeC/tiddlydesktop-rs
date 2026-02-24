@@ -74,4 +74,6 @@
     <string name="sync_notif_channel_desc">Udržuje Sync aktivní pro synchronizaci wiki v reálném čase</string>
     <string name="sync_notif_title">Sync Aktivní</string>
     <string name="sync_notif_text">Synchronizace wiki s blízkými zařízeními</string>
+    <string name="sync_notif_text_idle">Čekání na zařízení</string>
+    <string name="sync_notif_text_connected">Synchronizace s %d zařízením(i)</string>
 </resources>

@@ -74,4 +74,6 @@
     <string name="sync_notif_channel_desc">שומר על Sync פעיל לסנכרון ויקי בזמן אמת</string>
     <string name="sync_notif_title">Sync פעיל</string>
     <string name="sync_notif_text">סנכרון ויקים עם מכשירים קרובים</string>
+    <string name="sync_notif_text_idle">ממתין למכשירים</string>
+    <string name="sync_notif_text_connected">סנכרון עם %d מכשיר(ים)</string>
 </resources>

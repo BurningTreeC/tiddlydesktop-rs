@@ -2393,6 +2393,22 @@ class WikiActivity : AppCompatActivity() {
         }
 
         @JavascriptInterface
+        fun getWikiPeers(wikiId: String): String {
+            val port = bridgePort()
+            if (port <= 0) return "[]"
+            return try {
+                val encoded = java.net.URLEncoder.encode(wikiId, "UTF-8")
+                val url = java.net.URL("http://127.0.0.1:$port/_bridge/wiki-peers?wiki_id=$encoded")
+                val conn = url.openConnection() as java.net.HttpURLConnection
+                conn.connectTimeout = 2000
+                conn.readTimeout = 2000
+                val body = conn.inputStream.bufferedReader().readText()
+                conn.disconnect()
+                body
+            } catch (_: Exception) { "[]" }
+        }
+
+        @JavascriptInterface
         fun setRelayConnected(connected: Boolean) {
             this@WikiActivity.runOnUiThread {
                 if (connected && !notificationStarted) {

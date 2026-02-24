@@ -74,4 +74,6 @@
     <string name="sync_notif_channel_desc">يحافظ على Sync نشطًا لمزامنة الويكي في الوقت الفعلي</string>
     <string name="sync_notif_title">Sync نشط</string>
     <string name="sync_notif_text">مزامنة الويكي مع الأجهزة القريبة</string>
+    <string name="sync_notif_text_idle">في انتظار الأجهزة</string>
+    <string name="sync_notif_text_connected">مزامنة مع %d جهاز(أجهزة)</string>
 </resources>

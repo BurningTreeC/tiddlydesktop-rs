@@ -74,4 +74,6 @@
     <string name="sync_notif_channel_desc">Håller Sync aktiv för realtidswikisynchronisering</string>
     <string name="sync_notif_title">Sync Aktiv</string>
     <string name="sync_notif_text">Synkroniserar wikis med närliggande enheter</string>
+    <string name="sync_notif_text_idle">Väntar på enheter</string>
+    <string name="sync_notif_text_connected">Synkroniserar med %d enhet(er)</string>
 </resources>

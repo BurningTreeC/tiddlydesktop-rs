@@ -6345,7 +6345,7 @@ async fn check_for_updates() -> Result<UpdateCheckResult, String> {
 
 /// Android version - separate from desktop versioning (must match build.gradle.kts versionName)
 #[cfg(target_os = "android")]
-const ANDROID_VERSION: &str = "0.0.36";
+const ANDROID_VERSION: &str = "0.0.38";
 
 /// Check for updates on Android via version file on GitHub, linking to Play Store
 #[cfg(target_os = "android")]
@@ -9570,6 +9570,7 @@ pub fn run() {
             lan_sync::lan_sync_start,
             lan_sync::lan_sync_stop,
             lan_sync::lan_sync_get_status,
+            lan_sync::lan_sync_get_wiki_peers,
             lan_sync::lan_sync_announce_username,
             lan_sync::lan_sync_tiddler_changed,
             lan_sync::lan_sync_tiddler_deleted,

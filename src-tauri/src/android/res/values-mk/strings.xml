@@ -74,4 +74,6 @@
     <string name="sync_notif_channel_desc">Ја одржува Sync активна за синхронизација на вики во реално време</string>
     <string name="sync_notif_title">Sync активна</string>
     <string name="sync_notif_text">Синхронизирање на викиња со блискু уреди</string>
+    <string name="sync_notif_text_idle">Чекање на уреди</string>
+    <string name="sync_notif_text_connected">Синхронизирање со %d уред(и)</string>
 </resources>

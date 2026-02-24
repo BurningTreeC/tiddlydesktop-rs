@@ -74,4 +74,6 @@
     <string name="sync_notif_channel_desc">Houdt synchronisatie actief voor real-time wiki-synchronisatie</string>
     <string name="sync_notif_title">Synchronisatie actief</string>
     <string name="sync_notif_text">Wiki\'s synchroniseren met nabijgelegen apparaten</string>
+    <string name="sync_notif_text_idle">Wachten op apparaten</string>
+    <string name="sync_notif_text_connected">Synchroniseren met %d apparaat/apparaten</string>
 </resources>

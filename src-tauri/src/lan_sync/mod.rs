@@ -755,6 +755,76 @@ impl SyncManager {
             }
         }
 
+        // Desktop: periodically push peer lists to wiki processes via IPC.
+        // Wiki processes are separate OS processes where get_sync_manager() returns None,
+        // so they can't query peers directly via Tauri commands.
+        #[cfg(not(target_os = "android"))]
+        {
+            tokio::spawn(async {
+                let mut interval = tokio::time::interval(std::time::Duration::from_secs(5));
+                loop {
+                    interval.tick().await;
+                    let mgr = match get_sync_manager() {
+                        Some(m) => m,
+                        None => break,
+                    };
+                    if !mgr.running.load(std::sync::atomic::Ordering::Acquire) {
+                        break;
+                    }
+                    let server = match crate::GLOBAL_IPC_SERVER.get() {
+                        Some(s) => s,
+                        None => continue,
+                    };
+                    let app = match GLOBAL_APP_HANDLE.get() {
+                        Some(a) => a,
+                        None => continue,
+                    };
+                    // For each sync-enabled wiki, push its peer list
+                    let entries = crate::wiki_storage::load_recent_files_from_disk(app);
+                    for entry in &entries {
+                        if entry.sync_enabled {
+                            if let Some(ref sync_id) = entry.sync_id {
+                                if !sync_id.is_empty() {
+                                    let peers = mgr.get_wiki_peers(sync_id).await;
+                                    let payload = serde_json::json!({
+                                        "type": "peer-update",
+                                        "wiki_id": sync_id,
+                                        "peers": peers,
+                                    }).to_string();
+                                    server.send_lan_sync_to_all(sync_id, &payload);
+                                }
+                            }
+                        }
+                    }
+                }
+            });
+        }
+
+        // Android: periodically update the foreground notification with total peer count.
+        #[cfg(target_os = "android")]
+        {
+            tokio::spawn(async {
+                let mut interval = tokio::time::interval(std::time::Duration::from_secs(5));
+                let mut last_count: i32 = -1;
+                loop {
+                    interval.tick().await;
+                    let mgr = match get_sync_manager() {
+                        Some(m) => m,
+                        None => break,
+                    };
+                    if !mgr.running.load(std::sync::atomic::Ordering::Acquire) {
+                        break;
+                    }
+                    let status = mgr.get_status().await;
+                    let count = status.connected_peers.len() as i32;
+                    if count != last_count {
+                        last_count = count;
+                        update_sync_notification_peers(count);
+                    }
+                }
+            });
+        }
+
         eprintln!("[LAN Sync] Started on port {}", port);
         Ok(())
     }
@@ -1485,6 +1555,54 @@ impl SyncManager {
                 .collect(),
             relay_connected,
         }
+    }
+
+    /// Get peers connected to a specific wiki (both LAN and relay), with names.
+    pub async fn get_wiki_peers(&self, wiki_id: &str) -> Vec<PeerInfo> {
+        let mut seen = HashSet::new();
+        let mut result = Vec::new();
+        let app = match GLOBAL_APP_HANDLE.get() {
+            Some(a) => a,
+            None => return result,
+        };
+        let room_code = match crate::wiki_storage::get_wiki_relay_room_by_sync_id(app, wiki_id) {
+            Some(rc) => rc,
+            None => return result,
+        };
+
+        // LAN peers authenticated for this wiki's room
+        let peers_guard = self.peers.read().await;
+        if let Some(ref server) = *self.server.read().await {
+            for (id, name, user_name) in server.connected_peers().await {
+                if let Some(pc) = peers_guard.get(&id) {
+                    if pc.auth_room_code.as_deref() == Some(room_code.as_str()) {
+                        if seen.insert(id.clone()) {
+                            result.push(PeerInfo { device_id: id, device_name: name, user_name });
+                        }
+                    }
+                }
+            }
+        }
+        drop(peers_guard);
+
+        // Relay peers in this wiki's room
+        if let Some(ref relay) = self.relay_manager {
+            for room in relay.get_rooms().await {
+                if room.room_code == room_code && room.connected {
+                    for peer in room.connected_peers {
+                        if seen.insert(peer.device_id.clone()) {
+                            result.push(PeerInfo {
+                                device_id: peer.device_id.clone(),
+                                device_name: peer.device_name.clone(),
+                                user_name: None,
+                            });
+                        }
+                    }
+                }
+            }
+        }
+
+        result
     }
 
     /// Check if a peer is allowed to sync a specific wiki (via room membership).
@@ -5904,6 +6022,11 @@ pub async fn lan_sync_get_status() -> Result<SyncStatus, String> {
     Ok(mgr.get_status().await)
 }
 
+#[tauri::command]
+pub async fn lan_sync_get_wiki_peers(wiki_id: String) -> Result<Vec<PeerInfo>, String> {
+    let mgr = get_sync_manager().ok_or("Sync not initialized")?;
+    Ok(mgr.get_wiki_peers(&wiki_id).await)
+}
 
 #[tauri::command]
 pub fn lan_sync_tiddler_changed(
@@ -6726,4 +6849,98 @@ fn stop_sync_foreground_service() {
     } else {
         eprintln!("[LAN Sync] Foreground service stopped");
     }
+}
+
+/// Update the LanSyncService notification with the current peer count.
+/// Sends an Intent with ACTION_UPDATE_PEERS to the service (same pattern as wiki open/close).
+#[cfg(target_os = "android")]
+fn update_sync_notification_peers(peer_count: i32) {
+    use crate::android::wiki_activity::get_java_vm;
+    use jni::objects::{JValue, JObject};
+
+    let vm = match get_java_vm() {
+        Ok(vm) => vm,
+        Err(_) => return,
+    };
+
+    let mut env = match vm.attach_current_thread() {
+        Ok(env) => env,
+        Err(_) => return,
+    };
+
+    let context = match env.call_static_method(
+        "android/app/ActivityThread",
+        "currentApplication",
+        "()Landroid/app/Application;",
+        &[],
+    ) {
+        Ok(val) => match val.l() {
+            Ok(obj) if !obj.is_null() => obj,
+            _ => return,
+        },
+        Err(_) => return,
+    };
+
+    let intent = match env.new_object("android/content/Intent", "()V", &[]) {
+        Ok(i) => i,
+        Err(_) => return,
+    };
+
+    let pkg = match env.call_method(&context, "getPackageName", "()Ljava/lang/String;", &[]) {
+        Ok(val) => match val.l() {
+            Ok(obj) => obj,
+            Err(_) => return,
+        },
+        Err(_) => return,
+    };
+
+    let cls_name = match env.new_string("com.burningtreec.tiddlydesktop_rs.LanSyncService") {
+        Ok(s) => s,
+        Err(_) => return,
+    };
+
+    if env.call_method(
+        &intent,
+        "setClassName",
+        "(Ljava/lang/String;Ljava/lang/String;)Landroid/content/Intent;",
+        &[JValue::Object(&pkg), JValue::Object(&JObject::from(cls_name))],
+    ).is_err() {
+        return;
+    }
+
+    // Set action
+    let action = match env.new_string("com.burningtreec.tiddlydesktop_rs.UPDATE_PEERS") {
+        Ok(s) => s,
+        Err(_) => return,
+    };
+    if env.call_method(
+        &intent,
+        "setAction",
+        "(Ljava/lang/String;)Landroid/content/Intent;",
+        &[JValue::Object(&JObject::from(action))],
+    ).is_err() {
+        return;
+    }
+
+    // Put peer count extra
+    let key = match env.new_string("peer_count") {
+        Ok(s) => s,
+        Err(_) => return,
+    };
+    if env.call_method(
+        &intent,
+        "putExtra",
+        "(Ljava/lang/String;I)Landroid/content/Intent;",
+        &[JValue::Object(&JObject::from(key)), JValue::Int(peer_count)],
+    ).is_err() {
+        return;
+    }
+
+    // Start service with this intent (delivers to onStartCommand)
+    let _ = env.call_method(
+        &context,
+        "startService",
+        "(Landroid/content/Intent;)Landroid/content/ComponentName;",
+        &[JValue::Object(&intent)],
+    );
 }

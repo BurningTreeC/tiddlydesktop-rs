@@ -74,4 +74,6 @@
     <string name="sync_notif_channel_desc">保持 Sync 運行以實現即時維基同步</string>
     <string name="sync_notif_title">Sync 運行中</string>
     <string name="sync_notif_text">正在與附近裝置同步維基</string>
+    <string name="sync_notif_text_idle">等待裝置連線</string>
+    <string name="sync_notif_text_connected">正在與 %d 台裝置同步</string>
 </resources>

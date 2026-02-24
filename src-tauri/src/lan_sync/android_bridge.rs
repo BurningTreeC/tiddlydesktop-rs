@@ -595,6 +595,28 @@ fn run_bridge_server(
                 let _ = request.respond(cors_response(&resp, 200, &origin));
             }
 
+            ("GET", url) if url.starts_with("/_bridge/wiki-peers?") => {
+                let query = url.strip_prefix("/_bridge/wiki-peers?").unwrap_or("");
+                let wiki_id = query.split('&')
+                    .find(|p| p.starts_with("wiki_id="))
+                    .map(|p| urlencoding::decode(p.strip_prefix("wiki_id=").unwrap_or("")).unwrap_or_default().into_owned())
+                    .unwrap_or_default();
+                let peers = if !wiki_id.is_empty() {
+                    if let Some(mgr) = super::get_sync_manager() {
+                        let mgr = mgr.clone();
+                        tauri::async_runtime::block_on(async move {
+                            mgr.get_wiki_peers(&wiki_id).await
+                        })
+                    } else {
+                        vec![]
+                    }
+                } else {
+                    vec![]
+                };
+                let resp = serde_json::to_string(&peers).unwrap_or_else(|_| "[]".to_string());
+                let _ = request.respond(cors_response(&resp, 200, &origin));
+            }
+
             ("GET", url) if url.starts_with("/_bridge/collab-editors?") => {
                 // Parse query: wiki_id=...&tiddler_title=...
                 let query = url.strip_prefix("/_bridge/collab-editors?").unwrap_or("");

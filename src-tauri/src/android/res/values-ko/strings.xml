@@ -74,4 +74,6 @@
     <string name="sync_notif_channel_desc">Sync을 활성 상태로 유지하여 실시간 위키 동기화</string>
     <string name="sync_notif_title">Sync 활성</string>
     <string name="sync_notif_text">근처 기기와 위키 동기화 중</string>
+    <string name="sync_notif_text_idle">기기 대기 중</string>
+    <string name="sync_notif_text_connected">%d개 기기와 동기화 중</string>
 </resources>

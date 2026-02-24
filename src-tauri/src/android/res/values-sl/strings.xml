@@ -74,4 +74,6 @@
     <string name="sync_notif_channel_desc">Ohranja Sync aktivnega za sinhronizacijo wikija v realnem času</string>
     <string name="sync_notif_title">Sync je aktiven</string>
     <string name="sync_notif_text">Sinhronizacija wikija z bližnjimi napravami</string>
+    <string name="sync_notif_text_idle">Čakanje na naprave</string>
+    <string name="sync_notif_text_connected">Sinhronizacija z %d napravo/ami</string>
 </resources>

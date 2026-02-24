@@ -74,4 +74,6 @@
     <string name="sync_notif_channel_desc">Syncをアクティブに保ち、リアルタイムでwikiを同期します</string>
     <string name="sync_notif_title">Sync アクティブ</string>
     <string name="sync_notif_text">近くのデバイスとwikiを同期中</string>
+    <string name="sync_notif_text_idle">デバイスを待機中</string>
+    <string name="sync_notif_text_connected">%d台のデバイスと同期中</string>
 </resources>

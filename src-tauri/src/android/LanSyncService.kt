@@ -40,6 +40,8 @@ class LanSyncService : Service() {
 
         const val ACTION_WIKI_OPENED = "com.burningtreec.tiddlydesktop_rs.WIKI_OPENED"
         const val ACTION_WIKI_CLOSED = "com.burningtreec.tiddlydesktop_rs.WIKI_CLOSED"
+        const val ACTION_UPDATE_PEERS = "com.burningtreec.tiddlydesktop_rs.UPDATE_PEERS"
+        const val EXTRA_PEER_COUNT = "peer_count"
 
         @Volatile
         private var isRunning = false
@@ -165,6 +167,7 @@ class LanSyncService : Service() {
 
     private val handler = Handler(Looper.getMainLooper())
     private var wakeLock: PowerManager.WakeLock? = null
+    private var currentPeerCount = 0
 
     private val notificationChecker = object : Runnable {
         override fun run() {
@@ -196,6 +199,14 @@ class LanSyncService : Service() {
                 if (!mainActivityAlive && wikiCount <= 0) {
                     Log.d(TAG, "All activities closed — stopping service")
                     stopSelf()
+                }
+                return START_NOT_STICKY
+            }
+            ACTION_UPDATE_PEERS -> {
+                val newCount = intent.getIntExtra(EXTRA_PEER_COUNT, 0)
+                if (newCount != currentPeerCount) {
+                    currentPeerCount = newCount
+                    updateNotification()
                 }
                 return START_NOT_STICKY
             }
@@ -285,10 +296,17 @@ class LanSyncService : Service() {
         }
     }
 
+    private fun updateNotification() {
+        if (!isRunning) return
+        val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        notificationManager.notify(NOTIFICATION_ID, createNotification())
+    }
+
     override fun onDestroy() {
         Log.d(TAG, "Service onDestroy")
         isRunning = false
         wikiCount = 0
+        currentPeerCount = 0
         setLanSyncActive(this, false)
         releaseWakeLock()
         handler.removeCallbacks(notificationChecker)
@@ -322,9 +340,15 @@ class LanSyncService : Service() {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
+        val text = if (currentPeerCount > 0) {
+            getString(R.string.sync_notif_text_connected, currentPeerCount)
+        } else {
+            getString(R.string.sync_notif_text_idle)
+        }
+
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle(getString(R.string.sync_notif_title))
-            .setContentText(getString(R.string.sync_notif_text))
+            .setContentText(text)
             .setSmallIcon(R.drawable.ic_sync)
             .setContentIntent(pendingIntent)
             .setOngoing(true)

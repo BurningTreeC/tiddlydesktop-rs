@@ -74,4 +74,6 @@
     <string name="sync_notif_channel_desc">保持 Sync 活跃，实现实时维基同步</string>
     <string name="sync_notif_title">Sync 活跃中</string>
     <string name="sync_notif_text">正在与附近设备同步维基</string>
+    <string name="sync_notif_text_idle">等待设备连接</string>
+    <string name="sync_notif_text_connected">正在与 %d 台设备同步</string>
 </resources>

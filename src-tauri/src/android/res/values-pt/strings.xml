@@ -74,4 +74,6 @@
     <string name="sync_notif_channel_desc">Mantém a sincronização ativa para sincronização de wiki em tempo real</string>
     <string name="sync_notif_title">Sincronização ativa</string>
     <string name="sync_notif_text">Sincronizando wikis com dispositivos próximos</string>
+    <string name="sync_notif_text_idle">Aguardando dispositivos</string>
+    <string name="sync_notif_text_connected">Sincronizando com %d dispositivo(s)</string>
 </resources>

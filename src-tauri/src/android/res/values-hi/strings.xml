@@ -74,4 +74,6 @@
     <string name="sync_notif_channel_desc">रीयल-टाइम विकी सिंक्रोनाइजेशन के लिए Sync को सक्रिय रखता है</string>
     <string name="sync_notif_title">Sync सक्रिय है</string>
     <string name="sync_notif_text">पास की डिवाइसों के साथ विकी को सिंक्रोनाइज़ कर रहे हैं</string>
+    <string name="sync_notif_text_idle">डिवाइसों की प्रतीक्षा</string>
+    <string name="sync_notif_text_connected">%d डिवाइस के साथ सिंक हो रहा है</string>
 </resources>

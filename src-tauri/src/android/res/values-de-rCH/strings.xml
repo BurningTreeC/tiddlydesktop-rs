@@ -74,4 +74,6 @@
     <string name="sync_notif_channel_desc">Hält Sync aktiv für Echtzeitwiki-Synchronisierung</string>
     <string name="sync_notif_title">Sync ist aktiv</string>
     <string name="sync_notif_text">Synchronisiert Wikis mit nahe gelegenen Geräten</string>
+    <string name="sync_notif_text_idle">Warte auf Geräte</string>
+    <string name="sync_notif_text_connected">Synchronisiert mit %d Gerät(en)</string>
 </resources>

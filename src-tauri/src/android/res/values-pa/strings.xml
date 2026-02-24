@@ -74,4 +74,6 @@
     <string name="sync_notif_channel_desc">ਸਿੰਕ ਨੂੰ ਮਲਟੀ-ਸਿਸਟਮ ਵਿਕੀ ਸਿੰਕ ਲਈ ਕਿਰਿਆਸ਼ੀਲ ਰੱਖਦਾ ਹੈ</string>
     <string name="sync_notif_title">Sync ਕਿਰਿਆਸ਼ੀਲ</string>
     <string name="sync_notif_text">ਨਜ਼ਦੀਕੀ ਸਾਜ਼-ਸਮਾਨ ਨਾਲ ਵਿਕੀ ਨੂੰ ਸਿੰਕ ਕਰ ਰਹੇ ਹਨ</string>
+    <string name="sync_notif_text_idle">ਸਾਜ਼-ਸਮਾਨ ਦੀ ਉਡੀਕ</string>
+    <string name="sync_notif_text_connected">%d ਸਾਜ਼-ਸਮਾਨ ਨਾਲ ਸਿੰਕ ਹੋ ਰਿਹਾ ਹੈ</string>
 </resources>

@@ -121,10 +121,15 @@ var _YMAP_EXCLUDED_FIELDS = {
 	"creator": true, "draft.of": true, "revision": true, "bag": true
 };
 
-// Check if a field should be excluded from Y.Map sync.
-// The editField (usually "text") is always excluded since it's synced via Y.Text.
-function _isFieldExcluded(fieldName, editField) {
-	return _YMAP_EXCLUDED_FIELDS[fieldName] || fieldName === editField;
+// Check if a field is hard-excluded from Y.Map sync (immutable/internal fields).
+function _isFieldHardExcluded(fieldName) {
+	return !!_YMAP_EXCLUDED_FIELDS[fieldName];
+}
+
+// Get the Y.Text key for a given edit field.
+// "text" → "content" (backward compat), others → "field:" + name.
+function _ytextKeyForField(editField) {
+	return editField === "text" ? "content" : "field:" + editField;
 }
 
 // Module-level registry of active collab engines by tiddler title
@@ -151,25 +156,30 @@ function _showCollabBanner(message, duration) {
 	}, duration || 4000);
 }
 
-// Destroy collab session for a given tiddler title.
-// Tries both the draft title and the original title (draft.of).
+// Destroy ALL collab field editors for a given tiddler title.
+// Keys in _activeEngines are "tiddlerTitle\0editField".
+// Also matches by collabTitle (original tiddler, not the draft).
 function _destroyCollabForTitle(title) {
-	var engine = _activeEngines[title];
-	if(!engine) {
-		// Try looking up by collabTitle (original tiddler, not the draft)
-		for(var key in _activeEngines) {
-			if(_activeEngines.hasOwnProperty(key)) {
-				var st = _activeEngines[key]._collabState;
-				if(st && st.collabTitle === title) {
-					engine = _activeEngines[key];
-					break;
-				}
-			}
+	var enginesToDestroy = [];
+	for(var key in _activeEngines) {
+		if(!_activeEngines.hasOwnProperty(key)) continue;
+		var eng = _activeEngines[key];
+		var tTitle = key.split("\0")[0];
+		if(tTitle === title) {
+			enginesToDestroy.push(eng);
+			continue;
+		}
+		var st = eng._collabState;
+		if(st && st.collabTitle === title) {
+			enginesToDestroy.push(eng);
 		}
 	}
-	if(engine && engine._collabState && !engine._collabState.destroyed) {
-		_clog("[Collab] Destroying session for: " + title);
-		exports.plugin.destroy(engine);
+	for(var i = 0; i < enginesToDestroy.length; i++) {
+		var eng = enginesToDestroy[i];
+		if(eng._collabState && !eng._collabState.destroyed) {
+			_clog("[Collab] Destroying session for: " + title);
+			exports.plugin.destroy(eng);
+		}
 	}
 }
 
@@ -185,7 +195,17 @@ function _ensureLifecycleListeners() {
 	// Primary: wiki change listener — catches ALL draft deletions
 	$tw.wiki.addEventListener("change", function(changes) {
 		for(var title in changes) {
-			if(changes[title].deleted && _activeEngines[title]) {
+			if(!changes[title].deleted) continue;
+			// Check if any _activeEngines key starts with "title\0"
+			var hasEngine = false;
+			var prefix = title + "\0";
+			for(var key in _activeEngines) {
+				if(key.substring(0, prefix.length) === prefix) {
+					hasEngine = true;
+					break;
+				}
+			}
+			if(hasEngine) {
 				_clog("[Collab] Draft deleted, destroying session: " + title);
 				_destroyCollabForTitle(title);
 			}
@@ -200,21 +220,23 @@ function _ensureLifecycleListeners() {
 			if(!event.param) return;
 			var draftTitle = event.param;
 			_clog("[Collab] tm-save-tiddler: " + draftTitle);
-			// Find engine for this draft
-			var engine = _activeEngines[draftTitle];
-			if(!engine) {
-				for(var key in _activeEngines) {
-					if(_activeEngines.hasOwnProperty(key)) {
-						var st = _activeEngines[key]._collabState;
-						if(st && st.collabTitle === draftTitle) {
-							engine = _activeEngines[key];
-							break;
-						}
-					}
+			// Find any engine for this draft (any field shares the Y.Doc)
+			var foundEngine = null;
+			var prefix = draftTitle + "\0";
+			for(var key in _activeEngines) {
+				if(!_activeEngines.hasOwnProperty(key)) continue;
+				if(key.substring(0, prefix.length) === prefix) {
+					foundEngine = _activeEngines[key];
+					break;
+				}
+				var st = _activeEngines[key]._collabState;
+				if(st && st.collabTitle === draftTitle) {
+					foundEngine = _activeEngines[key];
+					break;
 				}
 			}
-			if(engine && engine._collabState && !engine._collabState.destroyed) {
-				var state = engine._collabState;
+			if(foundEngine && foundEngine._collabState && !foundEngine._collabState.destroyed) {
+				var state = foundEngine._collabState;
 				var collab = window.TiddlyDesktop && window.TiddlyDesktop.collab;
 				if(collab && state._transportConnected) {
 					// Get the title the tiddler is being saved as
@@ -280,6 +302,21 @@ function _createCaretDOM(color, name) {
 
 	span.appendChild(document.createTextNode("\u2060"));
 
+	// After mount: detect if dot/info would be clipped (single-line field)
+	// and flip them below the caret instead of above.
+	requestAnimationFrame(function() {
+		if(!span.parentNode) return;
+		var editor = span.closest(".cm-editor");
+		if(!editor) return;
+		var editorRect = editor.getBoundingClientRect();
+		var spanRect = span.getBoundingClientRect();
+		// If the caret is close to the top of the editor (within 1.5em ≈ 24px),
+		// the above-positioned elements would be clipped
+		if(spanRect.top - editorRect.top < 24) {
+			span.classList.add("cm-ySelectionCaret-below");
+		}
+	});
+
 	return span;
 }
 
@@ -338,6 +375,15 @@ function _buildRemoteSelectionsTheme(EditorView) {
 		".cm-ySelectionCaret:hover > .cm-ySelectionInfo": {
 			opacity: 1,
 			transitionDelay: "0s"
+		},
+		// Flipped positioning for single-line / overflow-hidden editors
+		".cm-ySelectionCaret-below > .cm-ySelectionCaretDot": {
+			top: "auto",
+			bottom: "-.2em"
+		},
+		".cm-ySelectionCaret-below > .cm-ySelectionInfo": {
+			top: "auto",
+			bottom: "-1.05em"
 		}
 	});
 }
@@ -345,14 +391,14 @@ function _buildRemoteSelectionsTheme(EditorView) {
 // Build the ViewPlugin for remote selections
 // This replicates y-codemirror.next's YRemoteSelectionsPluginValue exactly,
 // but reads from engine._collabState instead of ySyncFacet.
-function _buildRemoteSelectionsPlugin(core, collabState) {
+function _buildRemoteSelectionsPlugin(core, collabState, fieldState) {
 	var ViewPlugin = core.view.ViewPlugin;
 	var Decoration = core.view.Decoration;
 	var WidgetType = core.view.WidgetType;
 	var Annotation = core.state.Annotation;
 	var yRemoteSelectionsAnnotation = Annotation.define();
 	var awareness = collabState.awareness;
-	var ytext = collabState.ytext;
+	var ytext = fieldState.ytext;
 	var ydoc = collabState.doc;
 
 	// Remote caret widget class (extends CM6 WidgetType)
@@ -531,20 +577,17 @@ function _buildRemoteSelectionsPlugin(core, collabState) {
 // instance than what the CM6 core uses, Pi is silently ignored (update() never
 // fires, so CM6 typing changes never reach Y.Text — exactly the bug we saw).
 // ============================================================================
-function _buildSyncPlugin(core, collabState) {
+function _buildSyncPlugin(core, collabState, fieldState) {
 	var ViewPlugin = core.view.ViewPlugin;
 	var Annotation = core.state.Annotation;
 
 	var syncAnnotation = Annotation.define();
-	var ytext = collabState.ytext;
+	var ytext = fieldState.ytext;
+	var syncOrigin = fieldState.syncOrigin;
+	var editField = fieldState.editField;
 
-	// Use the collabState object as the transaction origin.
-	// The Y.Text observer checks origin === syncOrigin to skip feedback loops.
-	var syncOrigin = collabState;
-	collabState._syncOrigin = syncOrigin;
-
-	// We must capture 'collabState' in this closure so the ViewPlugin instance
-	// has access to the correct ytext/doc even if collabState is reused.
+	// We must capture 'collabState' and 'fieldState' in this closure so the
+	// ViewPlugin instance has access to the correct ytext/doc.
 	var pluginClass = function(view) {
 		this.view = view;
 		this._ytext = ytext;
@@ -582,7 +625,6 @@ function _buildSyncPlugin(core, collabState) {
 					// tiddler text — causing an infinite insert/delete feedback loop.
 					if($tw && $tw.wiki && collabState.tiddlerTitle) {
 						var newText = ytext.toString();
-						var editField = collabState._editField || "text";
 						var tid = $tw.wiki.getTiddler(collabState.tiddlerTitle);
 						if(tid && tid.fields[editField] !== newText) {
 							var fields = {};
@@ -607,7 +649,7 @@ function _buildSyncPlugin(core, collabState) {
 		};
 
 		this._ytext.observe(this._observer);
-		_clog("[Collab] YSyncPlugin constructed for " + collabState.collabTitle);
+		_clog("[Collab] YSyncPlugin constructed for " + collabState.collabTitle + " field=" + editField);
 	};
 
 	pluginClass.prototype.update = function(viewUpdate) {
@@ -656,6 +698,9 @@ function _setupCollabExtensions(context, core) {
 	var tiddlerTitle = context.tiddlerTitle;
 	var engine = context.engine;
 	var EditorView = core.view.EditorView;
+	var editField = (context.options && context.options.widget && context.options.widget.editField) || "text";
+	var ytextKey = _ytextKeyForField(editField);
+	var engineKey = tiddlerTitle + "\0" + editField;
 
 	// Use the underlying tiddler name (draft.of) as the collab channel so
 	// drafts with different usernames still collaborate on the same document.
@@ -669,40 +714,80 @@ function _setupCollabExtensions(context, core) {
 	}
 
 	// Check for existing Y.Doc for this collabTitle (editor widget recreated
-	// during TW5 refresh). Reuse the Y.Doc to avoid duplicate text, orphaned
-	// listeners, and dedup cycles.
+	// during TW5 refresh, or a new field joining an existing session).
 	var existingState = _collabStateByTitle[collabTitle];
-	if(existingState && !existingState.destroyed) {
-		_clog("[Collab] Reusing Y.Doc for " + collabTitle + " (editor recreated)");
 
-		// Remove old engine reference
-		if(_activeEngines[existingState.tiddlerTitle]) {
-			delete _activeEngines[existingState.tiddlerTitle];
+	if(existingState && !existingState.destroyed) {
+		// --- Case A: Widget recreate for same field ---
+		if(existingState._fieldEditors && existingState._fieldEditors[editField]) {
+			_clog("[Collab] Case A: Reusing Y.Text for " + collabTitle + " field=" + editField + " (widget recreated)");
+
+			// Remove old engine reference for this field
+			var oldKey = existingState.tiddlerTitle + "\0" + editField;
+			if(_activeEngines[oldKey]) {
+				delete _activeEngines[oldKey];
+			}
+
+			// Update state to point to new engine/title
+			existingState.tiddlerTitle = tiddlerTitle;
+			var fieldState = existingState._fieldEditors[editField];
+			fieldState.engine = engine;
+			engine._collabState = existingState;
+			engine._collabFieldState = fieldState;
+			_activeEngines[engineKey] = engine;
+
+			// Create fresh sync + remote selection extensions bound to the SAME Y.Text
+			var syncPlugin = _buildSyncPlugin(core, existingState, fieldState);
+			var theme = _buildRemoteSelectionsTheme(EditorView);
+			var plugin = _buildRemoteSelectionsPlugin(core, existingState, fieldState);
+			return [syncPlugin, theme, plugin];
 		}
 
-		// Update state to point to new engine/title
-		existingState.tiddlerTitle = tiddlerTitle;
-		engine._collabState = existingState;
-		_activeEngines[tiddlerTitle] = engine;
+		// --- Case B: New field joining existing Y.Doc ---
+		_clog("[Collab] Case B: New field " + editField + " joining Y.Doc for " + collabTitle);
 
-		// Create fresh sync + remote selection extensions bound to the SAME Y.Text
-		var syncPlugin = _buildSyncPlugin(core, existingState);
+		existingState.tiddlerTitle = tiddlerTitle;
+		var doc = existingState.doc;
+		var ytext = doc.getText(ytextKey);
+
+		// Populate Y.Text with current field content
+		var currentText = "";
+		var tid = wiki ? wiki.getTiddler(tiddlerTitle) : null;
+		if(tid && tid.fields[editField] !== undefined) {
+			currentText = "" + tid.fields[editField];
+		}
+		if(currentText && ytext.length === 0) {
+			doc.transact(function() { ytext.insert(0, currentText); });
+		}
+
+		var fieldSyncOrigin = { _field: editField };
+		var fieldState = {
+			ytext: ytext,
+			editField: editField,
+			syncOrigin: fieldSyncOrigin,
+			engine: engine
+		};
+		existingState._fieldEditors[editField] = fieldState;
+		existingState._ytextFields.add(editField);
+
+		engine._collabState = existingState;
+		engine._collabFieldState = fieldState;
+		_activeEngines[engineKey] = engine;
+
+		var syncPlugin = _buildSyncPlugin(core, existingState, fieldState);
 		var theme = _buildRemoteSelectionsTheme(EditorView);
-		var plugin = _buildRemoteSelectionsPlugin(core, existingState);
+		var plugin = _buildRemoteSelectionsPlugin(core, existingState, fieldState);
+
+		_clog("[Collab] Case B: Y.Text(" + ytextKey + ") created with " + (currentText ? currentText.length : 0) + " chars for " + collabTitle);
 		return [syncPlugin, theme, plugin];
 	}
 
-	// Create Yjs document, text type, and field map
-	var doc = new Y.Doc();
-	var ytext = doc.getText("content");
-	var ymap = doc.getMap("fields");
+	// --- Case C: Brand new session ---
+	_clog("[Collab] Case C: New session for " + collabTitle + " field=" + editField);
 
-	// Debug: observe Y.Text changes
-	ytext.observe(function(event) {
-		try {
-			_clog("[Collab] Y.Text CHANGED: delta=" + JSON.stringify(event.delta).substring(0, 200) + ", origin=" + event.transaction.origin + ", ytext.len=" + ytext.toString().length);
-		} catch(_e) {}
-	});
+	var doc = new Y.Doc();
+	var ytext = doc.getText(ytextKey);
+	var ymap = doc.getMap("fields");
 
 	// Create awareness for cursor/selection sharing
 	var awareness = new Awareness(doc);
@@ -718,11 +803,19 @@ function _setupCollabExtensions(context, core) {
 
 	var _collabId = _nextId++;
 
+	// Per-field state
+	var fieldSyncOrigin = { _field: editField };
+	var fieldState = {
+		ytext: ytext,
+		editField: editField,
+		syncOrigin: fieldSyncOrigin,
+		engine: engine
+	};
+
 	// Store collab state on engine
 	var state = {
 		id: _collabId,
 		doc: doc,
-		ytext: ytext,
 		ymap: ymap,
 		awareness: awareness,
 		tiddlerTitle: tiddlerTitle,
@@ -731,37 +824,39 @@ function _setupCollabExtensions(context, core) {
 		destroyed: false,
 		_transportConnected: false,
 		_awaitingRemoteState: false,
-		_receivedRemoteState: false
+		_receivedRemoteState: false,
+		_fieldEditors: {},
+		_ytextFields: new Set()
 	};
+	state._fieldEditors[editField] = fieldState;
+	state._ytextFields.add(editField);
+
 	engine._collabState = state;
-	_activeEngines[tiddlerTitle] = engine;
+	engine._collabFieldState = fieldState;
+	_activeEngines[engineKey] = engine;
 	_collabStateByTitle[collabTitle] = state;
 
 	// Insert tiddler text into Y.Text. Every editor starts as "first editor".
 	// When transport connects (Phase 2), joining mode may clear this text
 	// and replace it with the remote peer's state.
-	var editField = (context.options && context.options.widget && context.options.widget.editField) || "text";
-	state._editField = editField;
 	var currentText = "";
 	var tid = wiki ? wiki.getTiddler(tiddlerTitle) : null;
 	if(tid && tid.fields[editField] !== undefined) {
-		currentText = tid.fields[editField];
+		currentText = "" + tid.fields[editField];
 	} else if(wiki) {
 		currentText = wiki.getTiddlerText(tiddlerTitle) || "";
 	}
 	if(currentText) {
 		doc.transact(function() { ytext.insert(0, currentText); });
 	}
-	_clog("[Collab] Phase 1: inserted " + (currentText ? currentText.length : 0) + " chars for " + collabTitle);
+	_clog("[Collab] Case C: Y.Text(" + ytextKey + ") inserted " + (currentText ? currentText.length : 0) + " chars for " + collabTitle);
 
 	// Create sync + remote selections — ALWAYS in initial extensions.
-	// Uses our custom sync plugin (not yCollab's bundled Pi) to guarantee
-	// we use the same ViewPlugin class as the CM6 editor core.
-	var syncPlugin = _buildSyncPlugin(core, state);
+	var syncPlugin = _buildSyncPlugin(core, state, fieldState);
 	var theme = _buildRemoteSelectionsTheme(EditorView);
-	var plugin = _buildRemoteSelectionsPlugin(core, state);
+	var plugin = _buildRemoteSelectionsPlugin(core, state, fieldState);
 
-	_clog("[Collab] Phase 1: sync plugin created (initial extensions) for " + collabTitle);
+	_clog("[Collab] Phase 1: sync plugin created (initial extensions) for " + collabTitle + " field=" + editField);
 	return [syncPlugin, theme, plugin];
 }
 
@@ -777,7 +872,6 @@ function _connectTransport(engine, collab) {
 
 	var collabTitle = state.collabTitle;
 	var doc = state.doc;
-	var ytext = state.ytext;
 	var awareness = state.awareness;
 
 	// --- Outbound: local Yjs changes → transport ---
@@ -803,119 +897,126 @@ function _connectTransport(engine, collab) {
 	state._onAwarenessUpdate = onAwarenessUpdate;
 
 	// --- Y.Map field sync: remote ↔ local draft fields ---
-	// Only the primary text editor owns Y.Map sync. If the CM6 edit-text plugin
-	// is installed, every field (tags, type, caption, ...) gets its own CM6 engine
-	// and collab session. Without this guard, each would register its own draft
-	// change listener and Y.Map observer, causing redundant writes and suppression
-	// flag races. Non-text field editors still sync their field via Y.Text.
+	// Y.Map handles STRUCTURAL changes (add/delete fields) for ALL fields,
+	// and VALUE changes only for fields WITHOUT Y.Text editors.
+	// Fields with Y.Text editors get character-level CRDT merge instead.
 
-	var editField = state._editField || "text";
+	var ymapOrigin = "ymap-local";
+	var ymap = state.ymap;
 
-	if(editField === "text") {
-		var ymapOrigin = "ymap-local";
-		var ymap = state.ymap;
+	// Y.Map observer: remote field changes → update local draft tiddler
+	var onYmapChange = function(event, transaction) {
+		if(state.destroyed) return;
+		if(transaction.origin === ymapOrigin) return; // skip our own local writes
 
-		// Y.Map observer: remote field changes → update local draft tiddler
-		var onYmapChange = function(event, transaction) {
-			if(state.destroyed) return;
-			if(transaction.origin === ymapOrigin) return; // skip our own local writes
+		if(!$tw || !$tw.wiki) return;
+		var tid = $tw.wiki.getTiddler(state.tiddlerTitle);
+		if(!tid) return;
 
-			if(!$tw || !$tw.wiki) return;
-			var tid = $tw.wiki.getTiddler(state.tiddlerTitle);
-			if(!tid) return;
-
-			var changedFields = {};
-			var hasChanges = false;
-			event.changes.keys.forEach(function(change, key) {
-				if(change.action === "add" || change.action === "update") {
-					changedFields[key] = ymap.get(key);
-					hasChanges = true;
-				} else if(change.action === "delete") {
-					changedFields[key] = undefined;
-					hasChanges = true;
-				}
-			});
-
-			if(!hasChanges) return;
-
-			_clog("[Collab] Y.Map remote change: " + JSON.stringify(Object.keys(changedFields)) + " for " + state.collabTitle);
-
-			// Suppress the echo in our draft change listener BEFORE addTiddler,
-			// since addTiddler enqueues a deferred change event.
-			state._ymapSuppressDraftListener = true;
-
-			// Use addTiddler (NOT silent store) so TW5 triggers a refresh cycle.
-			// Unlike Y.Text changes (which must be silent to avoid editTextWidget
-			// cursor reset), Y.Map changes affect non-text fields (tags, type,
-			// draft.title, custom fields) that need a UI refresh to become visible.
-			// This is safe because we don't touch the editField (text).
-			var newTid = new $tw.Tiddler(tid, changedFields, {modified: tid.fields.modified});
-			$tw.wiki.addTiddler(newTid);
-		};
-		ymap.observe(onYmapChange);
-		state._onYmapChange = onYmapChange;
-
-		// Draft change listener: local field edits → Y.Map
-		var onDraftFieldChange = function(changes) {
-			if(state.destroyed) return;
-			if(!changes[state.tiddlerTitle]) return;
-			if(changes[state.tiddlerTitle].deleted) return;
-
-			// Skip echo from Y.Map observer
-			if(state._ymapSuppressDraftListener) {
-				state._ymapSuppressDraftListener = false;
-				return;
+		var changedFields = {};
+		var hasChanges = false;
+		event.changes.keys.forEach(function(change, key) {
+			if(change.action === "add") {
+				// Structural: new field from remote — always apply
+				changedFields[key] = ymap.get(key);
+				hasChanges = true;
+			} else if(change.action === "update") {
+				// Skip VALUE updates for Y.Text fields (Y.Text handles those)
+				if(state._ytextFields && state._ytextFields.has(key)) return;
+				changedFields[key] = ymap.get(key);
+				hasChanges = true;
+			} else if(change.action === "delete") {
+				// Structural: field removed — always apply
+				changedFields[key] = undefined;
+				hasChanges = true;
 			}
+		});
 
-			var tid = $tw.wiki.getTiddler(state.tiddlerTitle);
-			if(!tid) return;
+		if(!hasChanges) return;
 
-			var fields = tid.fields;
-			var hasUpdates = false;
+		_clog("[Collab] Y.Map remote change: " + JSON.stringify(Object.keys(changedFields)) + " for " + state.collabTitle);
 
-			doc.transact(function() {
-				// Sync new/changed fields to Y.Map
-				for(var key in fields) {
-					if(!Object.prototype.hasOwnProperty.call(fields, key)) continue;
-					if(_isFieldExcluded(key, editField)) continue;
-					var val = typeof fields[key] === "string" ? fields[key] : "" + fields[key];
+		// Suppress the echo in our draft change listener BEFORE addTiddler,
+		// since addTiddler enqueues a deferred change event.
+		state._ymapSuppressDraftListener = true;
+
+		// Use addTiddler (NOT silent store) so TW5 triggers a refresh cycle.
+		var newTid = new $tw.Tiddler(tid, changedFields, {modified: tid.fields.modified});
+		$tw.wiki.addTiddler(newTid);
+	};
+	ymap.observe(onYmapChange);
+	state._onYmapChange = onYmapChange;
+
+	// Draft change listener: local field edits → Y.Map
+	var onDraftFieldChange = function(changes) {
+		if(state.destroyed) return;
+		if(!changes[state.tiddlerTitle]) return;
+		if(changes[state.tiddlerTitle].deleted) return;
+
+		// Skip echo from Y.Map observer
+		if(state._ymapSuppressDraftListener) {
+			state._ymapSuppressDraftListener = false;
+			return;
+		}
+
+		var tid = $tw.wiki.getTiddler(state.tiddlerTitle);
+		if(!tid) return;
+
+		var fields = tid.fields;
+		var hasUpdates = false;
+
+		doc.transact(function() {
+			// Sync new/changed fields to Y.Map
+			for(var key in fields) {
+				if(!Object.prototype.hasOwnProperty.call(fields, key)) continue;
+				if(_isFieldHardExcluded(key)) continue;
+				var val = typeof fields[key] === "string" ? fields[key] : "" + fields[key];
+				if(state._ytextFields && state._ytextFields.has(key)) {
+					// Y.Text field: only sync structural presence (new field)
+					if(!ymap.has(key)) {
+						ymap.set(key, val);
+						hasUpdates = true;
+					}
+					// Value changes handled by Y.Text CRDT
+				} else {
+					// Non-Y.Text field: sync value changes normally
 					if(ymap.get(key) !== val) {
 						ymap.set(key, val);
 						hasUpdates = true;
 					}
 				}
-				// Remove deleted fields from Y.Map
-				ymap.forEach(function(_val, key) {
-					if(fields[key] === undefined && !_isFieldExcluded(key, editField)) {
-						ymap.delete(key);
-						hasUpdates = true;
-					}
-				});
-			}, ymapOrigin);
-
-			if(hasUpdates) {
-				_clog("[Collab] Y.Map local update for " + state.collabTitle);
 			}
-		};
-		$tw.wiki.addEventListener("change", onDraftFieldChange);
-		state._onDraftFieldChange = onDraftFieldChange;
-
-		// Helper: populate Y.Map from current draft fields
-		state._populateYmapFromDraft = function() {
-			var tid = $tw.wiki.getTiddler(state.tiddlerTitle);
-			if(!tid) return;
-			doc.transact(function() {
-				var fields = tid.fields;
-				for(var key in fields) {
-					if(!Object.prototype.hasOwnProperty.call(fields, key)) continue;
-					if(_isFieldExcluded(key, editField)) continue;
-					var val = typeof fields[key] === "string" ? fields[key] : "" + fields[key];
-					ymap.set(key, val);
+			// Remove deleted fields from Y.Map (structural — always sync)
+			ymap.forEach(function(_val, key) {
+				if(fields[key] === undefined && !_isFieldHardExcluded(key)) {
+					ymap.delete(key);
+					hasUpdates = true;
 				}
-			}, ymapOrigin);
-			_clog("[Collab] Y.Map populated from draft for " + state.collabTitle);
-		};
-	} // end editField === "text" guard
+			});
+		}, ymapOrigin);
+
+		if(hasUpdates) {
+			_clog("[Collab] Y.Map local update for " + state.collabTitle);
+		}
+	};
+	$tw.wiki.addEventListener("change", onDraftFieldChange);
+	state._onDraftFieldChange = onDraftFieldChange;
+
+	// Helper: populate Y.Map from current draft fields (all non-hard-excluded)
+	state._populateYmapFromDraft = function() {
+		var tid = $tw.wiki.getTiddler(state.tiddlerTitle);
+		if(!tid) return;
+		doc.transact(function() {
+			var fields = tid.fields;
+			for(var key in fields) {
+				if(!Object.prototype.hasOwnProperty.call(fields, key)) continue;
+				if(_isFieldHardExcluded(key)) continue;
+				var val = typeof fields[key] === "string" ? fields[key] : "" + fields[key];
+				ymap.set(key, val);
+			}
+		}, ymapOrigin);
+		_clog("[Collab] Y.Map populated from draft for " + state.collabTitle);
+	};
 
 	// --- Inbound: transport → local Yjs doc ---
 
@@ -924,45 +1025,63 @@ function _connectTransport(engine, collab) {
 		if(data.tiddler_title !== collabTitle) return;
 		try {
 			var update = base64ToUint8(data.update_base64);
-			var ytextBefore = ytext.toString().length;
-			_clog("[Collab] INBOUND update: " + update.length + " bytes for " + collabTitle + ", awaitingRemote=" + state._awaitingRemoteState + ", ytext.before=" + ytextBefore);
 
-			// JOINING: on first remote update, clear our locally-inserted text
-			// BEFORE applying the remote state. This avoids CRDT interleaving
-			// (our items get tombstoned, remote items fill Y.Text cleanly).
+			// Capture lengths of ALL Y.Texts before applying update
+			var ytextLengthsBefore = {};
+			var fieldEditors = state._fieldEditors || {};
+			for(var fname in fieldEditors) {
+				if(fieldEditors.hasOwnProperty(fname)) {
+					ytextLengthsBefore[fname] = fieldEditors[fname].ytext.toString().length;
+				}
+			}
+
+			_clog("[Collab] INBOUND update: " + update.length + " bytes for " + collabTitle + ", awaitingRemote=" + state._awaitingRemoteState + ", fields=" + Object.keys(ytextLengthsBefore).join(","));
+
+			// JOINING: on first remote update, clear ALL Y.Texts
+			// BEFORE applying the remote state.
 			if(state._awaitingRemoteState) {
 				state._awaitingRemoteState = false;
 				if(state._joinTimer) { clearTimeout(state._joinTimer); state._joinTimer = null; }
-				_clog("[Collab] Joining: clearing " + ytextBefore + " local chars before applying remote state for " + collabTitle);
+				_clog("[Collab] Joining: clearing all Y.Texts before applying remote state for " + collabTitle);
 				doc.transact(function() {
-					if(ytext.length > 0) {
-						ytext.delete(0, ytext.length);
+					for(var fname in fieldEditors) {
+						if(fieldEditors.hasOwnProperty(fname)) {
+							var yt = fieldEditors[fname].ytext;
+							if(yt.length > 0) {
+								yt.delete(0, yt.length);
+							}
+						}
 					}
 				});
-				ytextBefore = 0;
+				// Reset lengths to 0 after clearing
+				for(var fname in ytextLengthsBefore) {
+					if(ytextLengthsBefore.hasOwnProperty(fname)) {
+						ytextLengthsBefore[fname] = 0;
+					}
+				}
 			}
 
 			Y.applyUpdate(doc, update, "remote");
-			var ytextAfter = ytext.toString().length;
 
-			// Dedup safety net: when both devices independently insert the
-			// same text (both become first editors due to race condition),
-			// Y.js merges them as two separate inserts → text doubles.
-			// Delete the duplicate half. Y.js deletes reference items by ID,
-			// so both devices can independently dedup and converge correctly.
-			if(ytextBefore > 0 && ytextAfter === ytextBefore * 2) {
-				var afterStr = ytext.toString();
-				if(afterStr.substring(0, ytextBefore) === afterStr.substring(ytextBefore)) {
-					_clog("[Collab] DEDUP: removing duplicate " + ytextBefore + " chars for " + collabTitle);
-					doc.transact(function() {
-						ytext.delete(ytextBefore, ytextBefore);
-					});
-					ytextAfter = ytext.toString().length;
+			// Per-field dedup safety net
+			for(var fname in fieldEditors) {
+				if(!fieldEditors.hasOwnProperty(fname)) continue;
+				var yt = fieldEditors[fname].ytext;
+				var before = ytextLengthsBefore[fname] || 0;
+				var after = yt.toString().length;
+				if(before > 0 && after === before * 2) {
+					var afterStr = yt.toString();
+					if(afterStr.substring(0, before) === afterStr.substring(before)) {
+						_clog("[Collab] DEDUP field=" + fname + ": removing duplicate " + before + " chars for " + collabTitle);
+						doc.transact(function() {
+							yt.delete(before, before);
+						});
+					}
 				}
 			}
 
 			state._receivedRemoteState = true;
-			_clog("[Collab] After update: ytext.after=" + ytextAfter + (ytextAfter !== ytextBefore ? " (CHANGED)" : " (unchanged)"));
+			_clog("[Collab] After update for " + collabTitle);
 		} catch(_e) {
 			_clog("[Collab] INBOUND update error: " + (_e && _e.message ? _e.message : String(_e)));
 		}
@@ -1185,9 +1304,12 @@ exports.plugin = {
 	condition: function(context) {
 		var wiki = context.options && context.options.widget && context.options.widget.wiki;
 		var enabled = wiki && wiki.getTiddlerText("$:/config/codemirror-6/collab/enabled") !== "no";
-		_clog("[Collab] condition: tiddlerTitle=" + (context.tiddlerTitle || "none") + ", enabled=" + enabled);
 		if(!enabled) return false;
 		if(!context.tiddlerTitle) return false;
+		// Enable collab for all text-editable fields. Each field gets its own
+		// Y.Text instance within the shared Y.Doc (per-field CRDT).
+		var editField = (context.options && context.options.widget && context.options.widget.editField) || "text";
+		_clog("[Collab] condition: tiddlerTitle=" + (context.tiddlerTitle || "none") + ", editField=" + editField + ", enabled=" + enabled);
 		return true;
 	},
 
@@ -1253,7 +1375,38 @@ exports.plugin = {
 
 	destroy: function(engine) {
 		var state = engine._collabState;
-		if(!state || state.destroyed) return;
+		if(!state) return;
+
+		var fieldState = engine._collabFieldState;
+		var editField = fieldState ? fieldState.editField : null;
+
+		// Remove this field from per-field tracking
+		if(editField && state._fieldEditors && state._fieldEditors[editField]) {
+			// Only remove if this engine owns this field slot
+			if(state._fieldEditors[editField].engine === engine) {
+				delete state._fieldEditors[editField];
+				if(state._ytextFields) state._ytextFields.delete(editField);
+			}
+		}
+
+		// Remove from _activeEngines (composite key)
+		var engineKey = state.tiddlerTitle + "\0" + (editField || "text");
+		if(_activeEngines[engineKey] === engine) {
+			delete _activeEngines[engineKey];
+		}
+
+		engine._collabState = null;
+		engine._collabFieldState = null;
+
+		// Check if other field editors remain for this Y.Doc
+		var remainingFields = state._fieldEditors ? Object.keys(state._fieldEditors) : [];
+		if(remainingFields.length > 0) {
+			_clog("[Collab] Field " + editField + " removed, " + remainingFields.length + " field(s) remain for " + state.collabTitle);
+			return; // Don't tear down shared state yet
+		}
+
+		// Last field editor — full teardown
+		if(state.destroyed) return;
 		state.destroyed = true;
 
 		// Clean up pending collab-sync-activated listener (editor created before sync)
@@ -1313,14 +1466,10 @@ exports.plugin = {
 		} catch(_e) {}
 
 		state.listeners = {};
-		if(_activeEngines[state.tiddlerTitle] === engine) {
-			delete _activeEngines[state.tiddlerTitle];
-		}
 		if(_collabStateByTitle[state.collabTitle] === state) {
 			delete _collabStateByTitle[state.collabTitle];
 		}
-		engine._collabState = null;
-		_clog("[Collab] Session destroyed for: " + state.collabTitle);
+		_clog("[Collab] Session fully destroyed for: " + state.collabTitle);
 	},
 
 	extendAPI: function(engine, context) {

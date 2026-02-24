@@ -845,6 +845,22 @@
         return;
       }
 
+      // Peer status updates — update data tiddlers for peer badge UI
+      if (data.type === 'peer-update') {
+        if (data.peers) {
+          $tw.wiki.addTiddler({
+            title: '$:/temp/tiddlydesktop/connected-peers',
+            type: 'application/json',
+            text: JSON.stringify(data.peers)
+          });
+          $tw.wiki.addTiddler({
+            title: '$:/temp/tiddlydesktop/peer-count',
+            text: String(data.peers.length)
+          });
+        }
+        return;
+      }
+
       state.inboundQueue.push(data);
       if (!state.batchTimer) {
         state.batchTimer = setTimeout(applyInboundBatch, 50);
@@ -1261,6 +1277,23 @@
                   case 'collab-update':
                   case 'collab-awareness':
                     handleCollabMessage(data);
+                    break;
+                  case 'peer-update':
+                    // Update peer data tiddlers (pushed from main process)
+                    if (data.peers) {
+                      var PEERS_TIDDLER = '$:/temp/tiddlydesktop/connected-peers';
+                      var COUNT_TIDDLER = '$:/temp/tiddlydesktop/peer-count';
+                      var peersJson = JSON.stringify(data.peers);
+                      $tw.wiki.addTiddler({
+                        title: PEERS_TIDDLER,
+                        type: 'application/json',
+                        text: peersJson
+                      });
+                      $tw.wiki.addTiddler({
+                        title: COUNT_TIDDLER,
+                        text: String(data.peers.length)
+                      });
+                    }
                     break;
                 }
               } catch (e) {

@@ -74,4 +74,6 @@
     <string name="sync_notif_channel_desc">Διατηρεί το Sync ενεργό για συγχρονισμό wiki σε πραγματικό χρόνο</string>
     <string name="sync_notif_title">Sync Ενεργό</string>
     <string name="sync_notif_text">Συγχρονισμός wikis με κοντινές συσκευές</string>
+    <string name="sync_notif_text_idle">Αναμονή για συσκευές</string>
+    <string name="sync_notif_text_connected">Συγχρονισμός με %d συσκευή(ές)</string>
 </resources>

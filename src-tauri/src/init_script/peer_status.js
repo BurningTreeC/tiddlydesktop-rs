@@ -1,6 +1,7 @@
 // Peer status badge — shows connected LAN sync peers in the TopRightBar
-// Polls sync status periodically and creates/updates data tiddlers that
-// drive a wikitext badge with a dropdown list of connected peers.
+// Creates wikitext badge UI tiddlers and data tiddlers that drive the badge.
+// Desktop: peer data is pushed from main process via IPC and handled by lan_sync.js.
+// Android: peer data is polled from the bridge here.
 (function() {
   'use strict';
 
@@ -31,25 +32,6 @@
     }
   }
 
-  function fetchStatus(cb) {
-    if (isAndroid) {
-      try {
-        var json = window.TiddlyDesktopSync.getSyncStatus();
-        cb(JSON.parse(json || '{}'));
-      } catch (_) {
-        cb({});
-      }
-    } else if (hasTauri) {
-      window.__TAURI__.core.invoke('lan_sync_get_status').then(function(status) {
-        cb(status || {});
-      }).catch(function() {
-        cb({});
-      });
-    } else {
-      cb({});
-    }
-  }
-
   function announceUsername(name) {
     if (isAndroid) {
       try { window.TiddlyDesktopSync.announceUsername(name); } catch (_) {}
@@ -60,8 +42,7 @@
     }
   }
 
-  function updatePeerData(status) {
-    var peers = status.connected_peers || [];
+  function updatePeerData(peers) {
     var peersJson = JSON.stringify(peers);
 
     // Skip if unchanged
@@ -205,17 +186,40 @@
       }
     });
 
-    // Poll for peer status
-    function poll() {
-      fetchStatus(function(status) {
-        updatePeerData(status);
-      });
+    // Android: poll for peers via bridge (sync manager is in-process)
+    // Desktop: peer data is pushed from main process via IPC → lan_sync.js handles it
+    if (isAndroid) {
+      var currentSyncId = '';
+
+      function getSyncId(cb) {
+        try {
+          var id = window.TiddlyDesktopSync.getSyncId(window.__WIKI_PATH__ || '');
+          cb(id || '');
+        } catch (_) { cb(''); }
+      }
+
+      function fetchWikiPeers(wikiId, cb) {
+        try {
+          var json = window.TiddlyDesktopSync.getWikiPeers(wikiId);
+          cb(JSON.parse(json || '[]'));
+        } catch (_) { cb([]); }
+      }
+
+      function poll() {
+        if (!currentSyncId) {
+          getSyncId(function(id) {
+            if (id) {
+              currentSyncId = id;
+              fetchWikiPeers(currentSyncId, updatePeerData);
+            }
+          });
+        } else {
+          fetchWikiPeers(currentSyncId, updatePeerData);
+        }
+      }
+
+      poll();
+      setInterval(poll, POLL_INTERVAL);
     }
-
-    // Initial poll
-    poll();
-
-    // Regular polling
-    setInterval(poll, POLL_INTERVAL);
   });
 })();

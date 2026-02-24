@@ -74,4 +74,6 @@
     <string name="sync_notif_channel_desc">Mantene Sync active pro synchronisation real-tempore de wikis</string>
     <string name="sync_notif_title">Sync Activ</string>
     <string name="sync_notif_text">Synchronisante wikis con dispositivos proxime</string>
+    <string name="sync_notif_text_idle">Attendente pares</string>
+    <string name="sync_notif_text_connected">Synchronisante con %d dispositivo(s)</string>
 </resources>

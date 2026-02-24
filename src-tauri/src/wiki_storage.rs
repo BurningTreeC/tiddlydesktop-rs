@@ -744,6 +744,21 @@ pub fn get_wiki_relay_room_by_sync_id(app: &tauri::AppHandle, sync_id: &str) -> 
         .and_then(|e| e.relay_room)
 }
 
+/// Clear relay_room from all wikis assigned to a given room code (used when removing a room)
+pub fn clear_relay_room_for_code(app: &tauri::AppHandle, room_code: &str) {
+    let mut entries = load_recent_files_from_disk(app);
+    let mut changed = false;
+    for entry in entries.iter_mut() {
+        if entry.relay_room.as_deref() == Some(room_code) {
+            entry.relay_room = None;
+            changed = true;
+        }
+    }
+    if changed {
+        let _ = save_recent_files_to_disk(app, &entries);
+    }
+}
+
 /// Set group for a wiki (None to move to "Ungrouped")
 #[tauri::command]
 pub fn set_wiki_group(app: tauri::AppHandle, path: String, group: Option<String>) -> Result<(), String> {

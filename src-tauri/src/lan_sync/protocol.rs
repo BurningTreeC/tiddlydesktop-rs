@@ -268,6 +268,15 @@ pub enum SyncMessage {
         update_base64: String,
     },
 
+    /// A peer saved a tiddler that was being collaboratively edited
+    PeerSaved {
+        wiki_id: String,
+        tiddler_title: String,
+        saved_title: String,
+        device_id: String,
+        device_name: String,
+    },
+
     /// Announce this device's TiddlyWiki username to peers
     UserNameAnnounce {
         user_name: String,

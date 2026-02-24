@@ -115,6 +115,18 @@ var _nextId = 0;
 // Module-level: compartment from last registerCompartments() call
 var _lastCollabCompartment = null;
 
+// Fields excluded from Y.Map sync (handled separately or immutable)
+var _YMAP_EXCLUDED_FIELDS = {
+	"title": true, "created": true, "modified": true, "modifier": true,
+	"creator": true, "draft.of": true, "revision": true, "bag": true
+};
+
+// Check if a field should be excluded from Y.Map sync.
+// The editField (usually "text") is always excluded since it's synced via Y.Text.
+function _isFieldExcluded(fieldName, editField) {
+	return _YMAP_EXCLUDED_FIELDS[fieldName] || fieldName === editField;
+}
+
 // Module-level registry of active collab engines by tiddler title
 // Keyed by tiddlerTitle (the draft title, e.g. "Draft of 'Foo'")
 var _activeEngines = {};
@@ -125,6 +137,19 @@ var _lifecycleListenersRegistered = false;
 // existing Y.Doc rather than creating a fresh one. This avoids duplicate text,
 // orphaned listeners, and dedup cycles.
 var _collabStateByTitle = {};
+
+// Show a transient notification banner for collab events
+function _showCollabBanner(message, duration) {
+	var banner = document.createElement("div");
+	banner.className = "td-collab-banner";
+	banner.textContent = message;
+	banner.style.cssText = "position:fixed;top:0;left:0;right:0;padding:8px 16px;background:#2196F3;color:white;text-align:center;z-index:10000;font-size:14px;opacity:1;transition:opacity 0.5s;";
+	document.body.appendChild(banner);
+	setTimeout(function() {
+		banner.style.opacity = "0";
+		setTimeout(function() { banner.remove(); }, 500);
+	}, duration || 4000);
+}
 
 // Destroy collab session for a given tiddler title.
 // Tries both the draft title and the original title (draft.of).
@@ -170,7 +195,47 @@ function _ensureLifecycleListeners() {
 	// Secondary: TW message listeners as backup (e.g. tm-close-tiddler
 	// removes from story river without deleting the draft in some configs)
 	if($tw.rootWidget) {
-		var msgs = ["tm-save-tiddler", "tm-cancel-tiddler", "tm-delete-tiddler", "tm-close-tiddler"];
+		// Intercept tm-save-tiddler to broadcast peer-saved BEFORE destroying
+		$tw.rootWidget.addEventListener("tm-save-tiddler", function(event) {
+			if(!event.param) return;
+			var draftTitle = event.param;
+			_clog("[Collab] tm-save-tiddler: " + draftTitle);
+			// Find engine for this draft
+			var engine = _activeEngines[draftTitle];
+			if(!engine) {
+				for(var key in _activeEngines) {
+					if(_activeEngines.hasOwnProperty(key)) {
+						var st = _activeEngines[key]._collabState;
+						if(st && st.collabTitle === draftTitle) {
+							engine = _activeEngines[key];
+							break;
+						}
+					}
+				}
+			}
+			if(engine && engine._collabState && !engine._collabState.destroyed) {
+				var state = engine._collabState;
+				var collab = window.TiddlyDesktop && window.TiddlyDesktop.collab;
+				if(collab && state._transportConnected) {
+					// Get the title the tiddler is being saved as
+					var tid = $tw.wiki.getTiddler(state.tiddlerTitle);
+					var savedTitle = (tid && tid.fields["draft.title"]) || state.collabTitle;
+					_clog("[Collab] Broadcasting peer-saved: collabTitle=" + state.collabTitle + " savedTitle=" + savedTitle);
+					// Send final Y.Doc state so peers get any last changes
+					try {
+						var finalState = Y.encodeStateAsUpdate(state.doc);
+						collab.sendUpdate(state.collabTitle, uint8ToBase64(finalState));
+					} catch(_e) {
+						_clog("[Collab] peer-saved final state send error: " + (_e && _e.message ? _e.message : String(_e)));
+					}
+					// Broadcast peer-saved message
+					collab.peerSaved(state.collabTitle, savedTitle);
+				}
+			}
+			_destroyCollabForTitle(draftTitle);
+		});
+
+		var msgs = ["tm-cancel-tiddler", "tm-delete-tiddler", "tm-close-tiddler"];
 		for(var i = 0; i < msgs.length; i++) {
 			(function(msg) {
 				$tw.rootWidget.addEventListener(msg, function(event) {
@@ -627,9 +692,10 @@ function _setupCollabExtensions(context, core) {
 		return [syncPlugin, theme, plugin];
 	}
 
-	// Create Yjs document and text type
+	// Create Yjs document, text type, and field map
 	var doc = new Y.Doc();
 	var ytext = doc.getText("content");
+	var ymap = doc.getMap("fields");
 
 	// Debug: observe Y.Text changes
 	ytext.observe(function(event) {
@@ -657,6 +723,7 @@ function _setupCollabExtensions(context, core) {
 		id: _collabId,
 		doc: doc,
 		ytext: ytext,
+		ymap: ymap,
 		awareness: awareness,
 		tiddlerTitle: tiddlerTitle,
 		collabTitle: collabTitle,
@@ -734,6 +801,121 @@ function _connectTransport(engine, collab) {
 	};
 	awareness.on("update", onAwarenessUpdate);
 	state._onAwarenessUpdate = onAwarenessUpdate;
+
+	// --- Y.Map field sync: remote ↔ local draft fields ---
+	// Only the primary text editor owns Y.Map sync. If the CM6 edit-text plugin
+	// is installed, every field (tags, type, caption, ...) gets its own CM6 engine
+	// and collab session. Without this guard, each would register its own draft
+	// change listener and Y.Map observer, causing redundant writes and suppression
+	// flag races. Non-text field editors still sync their field via Y.Text.
+
+	var editField = state._editField || "text";
+
+	if(editField === "text") {
+		var ymapOrigin = "ymap-local";
+		var ymap = state.ymap;
+
+		// Y.Map observer: remote field changes → update local draft tiddler
+		var onYmapChange = function(event, transaction) {
+			if(state.destroyed) return;
+			if(transaction.origin === ymapOrigin) return; // skip our own local writes
+
+			if(!$tw || !$tw.wiki) return;
+			var tid = $tw.wiki.getTiddler(state.tiddlerTitle);
+			if(!tid) return;
+
+			var changedFields = {};
+			var hasChanges = false;
+			event.changes.keys.forEach(function(change, key) {
+				if(change.action === "add" || change.action === "update") {
+					changedFields[key] = ymap.get(key);
+					hasChanges = true;
+				} else if(change.action === "delete") {
+					changedFields[key] = undefined;
+					hasChanges = true;
+				}
+			});
+
+			if(!hasChanges) return;
+
+			_clog("[Collab] Y.Map remote change: " + JSON.stringify(Object.keys(changedFields)) + " for " + state.collabTitle);
+
+			// Suppress the echo in our draft change listener BEFORE addTiddler,
+			// since addTiddler enqueues a deferred change event.
+			state._ymapSuppressDraftListener = true;
+
+			// Use addTiddler (NOT silent store) so TW5 triggers a refresh cycle.
+			// Unlike Y.Text changes (which must be silent to avoid editTextWidget
+			// cursor reset), Y.Map changes affect non-text fields (tags, type,
+			// draft.title, custom fields) that need a UI refresh to become visible.
+			// This is safe because we don't touch the editField (text).
+			var newTid = new $tw.Tiddler(tid, changedFields, {modified: tid.fields.modified});
+			$tw.wiki.addTiddler(newTid);
+		};
+		ymap.observe(onYmapChange);
+		state._onYmapChange = onYmapChange;
+
+		// Draft change listener: local field edits → Y.Map
+		var onDraftFieldChange = function(changes) {
+			if(state.destroyed) return;
+			if(!changes[state.tiddlerTitle]) return;
+			if(changes[state.tiddlerTitle].deleted) return;
+
+			// Skip echo from Y.Map observer
+			if(state._ymapSuppressDraftListener) {
+				state._ymapSuppressDraftListener = false;
+				return;
+			}
+
+			var tid = $tw.wiki.getTiddler(state.tiddlerTitle);
+			if(!tid) return;
+
+			var fields = tid.fields;
+			var hasUpdates = false;
+
+			doc.transact(function() {
+				// Sync new/changed fields to Y.Map
+				for(var key in fields) {
+					if(!fields.hasOwnProperty(key)) continue;
+					if(_isFieldExcluded(key, editField)) continue;
+					var val = typeof fields[key] === "string" ? fields[key] : "" + fields[key];
+					if(ymap.get(key) !== val) {
+						ymap.set(key, val);
+						hasUpdates = true;
+					}
+				}
+				// Remove deleted fields from Y.Map
+				ymap.forEach(function(_val, key) {
+					if(fields[key] === undefined && !_isFieldExcluded(key, editField)) {
+						ymap.delete(key);
+						hasUpdates = true;
+					}
+				});
+			}, ymapOrigin);
+
+			if(hasUpdates) {
+				_clog("[Collab] Y.Map local update for " + state.collabTitle);
+			}
+		};
+		$tw.wiki.addEventListener("change", onDraftFieldChange);
+		state._onDraftFieldChange = onDraftFieldChange;
+
+		// Helper: populate Y.Map from current draft fields
+		state._populateYmapFromDraft = function() {
+			var tid = $tw.wiki.getTiddler(state.tiddlerTitle);
+			if(!tid) return;
+			doc.transact(function() {
+				var fields = tid.fields;
+				for(var key in fields) {
+					if(!fields.hasOwnProperty(key)) continue;
+					if(_isFieldExcluded(key, editField)) continue;
+					var val = typeof fields[key] === "string" ? fields[key] : "" + fields[key];
+					ymap.set(key, val);
+				}
+			}, ymapOrigin);
+			_clog("[Collab] Y.Map populated from draft for " + state.collabTitle);
+		};
+	} // end editField === "text" guard
 
 	// --- Inbound: transport → local Yjs doc ---
 
@@ -835,6 +1017,49 @@ function _connectTransport(engine, collab) {
 		} catch(_e) {}
 	};
 
+	// When a peer saves the tiddler: update draft.of/draft.title, show banner, continue editing
+	state.listeners["peer-saved"] = function(data) {
+		if(state.destroyed) return;
+		if(data.tiddler_title !== collabTitle) return;
+		var savedTitle = data.saved_title || collabTitle;
+		var deviceName = data.device_name || data.device_id || "A peer";
+		_clog("[Collab] peer-saved for " + collabTitle + " savedAs=" + savedTitle + " from=" + deviceName);
+
+		// Show notification banner
+		_showCollabBanner(deviceName + " saved this tiddler" + (savedTitle !== collabTitle ? " as '" + savedTitle + "'" : ""));
+
+		// Update the draft tiddler's draft.of and draft.title to point to the saved title
+		try {
+			var tid = $tw.wiki.getTiddler(state.tiddlerTitle);
+			if(tid && savedTitle !== (tid.fields["draft.of"] || "")) {
+				var newFields = {"draft.of": savedTitle, "draft.title": savedTitle};
+				$tw.wiki.addTiddler(new $tw.Tiddler(tid, newFields));
+				_clog("[Collab] Updated draft.of/draft.title to: " + savedTitle);
+			}
+		} catch(_e) {
+			_clog("[Collab] peer-saved draft update error: " + (_e && _e.message ? _e.message : String(_e)));
+		}
+
+		// Update collab session title if it changed
+		var oldCollabTitle = collabTitle;
+		if(savedTitle !== collabTitle) {
+			// Re-register in _collabStateByTitle under the new key
+			if(_collabStateByTitle[collabTitle] === state) {
+				delete _collabStateByTitle[collabTitle];
+			}
+			state.collabTitle = savedTitle;
+			collabTitle = savedTitle;
+			_collabStateByTitle[savedTitle] = state;
+			_clog("[Collab] Session retargeted: " + oldCollabTitle + " -> " + savedTitle);
+
+			// Re-register editing status under new title
+			try {
+				collab.stopEditing(oldCollabTitle);
+				collab.startEditing(savedTitle);
+			} catch(_e) {}
+		}
+	};
+
 	// Register all event listeners
 	for(var eventName in state.listeners) {
 		if(state.listeners.hasOwnProperty(eventName)) {
@@ -856,12 +1081,23 @@ function _connectTransport(engine, collab) {
 			// locally-inserted text before applying the remote state.
 			// The editor keeps showing our text until then (no blank flicker).
 			state._awaitingRemoteState = true;
+			// Do NOT populate Y.Map here — defer to remote state arrival.
 			// Fallback: if no remote state arrives in 5s, stop waiting
-			// (the editor keeps our locally-inserted text which is fine)
+			// and send our full state so peers can dedup-merge.
 			state._joinTimer = setTimeout(function() {
 				if(state._awaitingRemoteState && !state.destroyed) {
 					state._awaitingRemoteState = false;
 					_clog("[Collab] Join timeout (5s): keeping local text for " + collabTitle);
+					// Populate Y.Map from draft as fallback (same as first-editor)
+					if(state._populateYmapFromDraft) {
+						state._populateYmapFromDraft();
+					}
+					// Send full state as fallback (peers' dedup safety net handles doubling)
+					try {
+						var fullState = Y.encodeStateAsUpdate(doc);
+						_clog("[Collab] Join timeout: sending full state (" + fullState.length + " bytes) for " + collabTitle);
+						collab.sendUpdate(collabTitle, uint8ToBase64(fullState));
+					} catch(_e2) {}
 				}
 			}, 5000);
 		}
@@ -871,17 +1107,31 @@ function _connectTransport(engine, collab) {
 			collab.startEditing(collabTitle);
 		} catch(_e) {}
 
-		// Always send our full Y.Doc state after announcing ourselves.
-		// This ensures the remote peer gets our items even if they started
-		// editing before we were listening for their EditingStarted event.
-		// Without this, the peer only gets our dedup deletes but never our items.
-		try {
-			var fullState = Y.encodeStateAsUpdate(doc);
-			_clog("[Collab] Phase 2: sending full state (" + fullState.length + " bytes) for " + collabTitle);
-			collab.sendUpdate(collabTitle, uint8ToBase64(fullState));
-			var awarenessUpdate = encodeAwarenessUpdate(awareness, [doc.clientID]);
-			collab.sendAwareness(collabTitle, uint8ToBase64(awarenessUpdate));
-		} catch(_e) {}
+		// Send our full Y.Doc state — but only when NOT joining.
+		// When joining, we skip sending to avoid transient text doubling on
+		// existing peers. Our startEditing() triggers them to send their state;
+		// once we receive it, we clear our local text and apply theirs.
+		// If the remote state never arrives, the join timeout above sends
+		// our state as a fallback.
+		if(!hasRemote) {
+			// First editor: populate Y.Map from draft before sending full state
+			if(state._populateYmapFromDraft) {
+				state._populateYmapFromDraft();
+			}
+			try {
+				var fullState = Y.encodeStateAsUpdate(doc);
+				_clog("[Collab] Phase 2: sending full state (" + fullState.length + " bytes) for " + collabTitle);
+				collab.sendUpdate(collabTitle, uint8ToBase64(fullState));
+				var awarenessUpdate = encodeAwarenessUpdate(awareness, [doc.clientID]);
+				collab.sendAwareness(collabTitle, uint8ToBase64(awarenessUpdate));
+			} catch(_e) {}
+		} else {
+			// Still send awareness so remote cursors show up immediately
+			try {
+				var awarenessUpdate = encodeAwarenessUpdate(awareness, [doc.clientID]);
+				collab.sendAwareness(collabTitle, uint8ToBase64(awarenessUpdate));
+			} catch(_e) {}
+		}
 	}
 
 	if(typeof collab.getRemoteEditorsAsync === "function") {
@@ -1032,6 +1282,14 @@ exports.plugin = {
 					} catch(_e2) {}
 				}
 			}
+		}
+
+		// Clean up Y.Map observer and draft change listener
+		if(state._onYmapChange && state.ymap) {
+			state.ymap.unobserve(state._onYmapChange);
+		}
+		if(state._onDraftFieldChange && $tw && $tw.wiki) {
+			$tw.wiki.removeEventListener("change", state._onDraftFieldChange);
 		}
 
 		// Clean up Yjs

@@ -81,6 +81,13 @@
         _collabOutboundQueue.push(['sendAwareness', tiddlerTitle, base64]);
       }
     },
+    peerSaved: function(tiddlerTitle, savedTitle) {
+      if (_collabSyncActive) {
+        sendCollabOutbound('peerSaved', _collabWikiId, tiddlerTitle, null, savedTitle);
+      } else {
+        _collabOutboundQueue.push(['peerSaved', tiddlerTitle, null, savedTitle]);
+      }
+    },
     getRemoteEditors: function(tiddlerTitle) {
       if (!_collabSyncActive) return [];
       if (isAndroid) {
@@ -322,7 +329,7 @@
         _collabOutboundQueue = [];
         for (var qi = 0; qi < queued.length; qi++) {
           var q = queued[qi];
-          sendCollabOutbound(q[0], syncId, q[1], q[2]);
+          sendCollabOutbound(q[0], syncId, q[1], q[2], q[3]);
         }
 
         // Connect collab WebSocket (desktop only — gives sub-ms push delivery)
@@ -548,7 +555,9 @@
     if (title.indexOf('$:/temp/') === 0) return true;
     if (title.indexOf('$:/plugins/tiddlydesktop-rs/') === 0) return true;
     if (title.indexOf('$:/plugins/tiddlydesktop/') === 0) return true;
-    if (title.indexOf('$:/config/ViewToolbarButtons/Visibility/$:/plugins/tiddlydesktop-rs/') === 0) return true;
+    if (title.indexOf('$:/config/') === 0) return true;
+    if (title.indexOf('$:/themes/tiddlywiki/vanilla/options/') === 0) return true;
+    if (title.indexOf('$:/themes/tiddlywiki/vanilla/metrics/') === 0) return true;
     return false;
   }
 
@@ -1452,14 +1461,18 @@
       case 'collab-awareness':
         emitCollabEvent('collab-awareness', data);
         break;
+      case 'peer-saved':
+        emitCollabEvent('peer-saved', data);
+        break;
     }
   }
 
-  function sendCollabOutbound(type, wikiId, tiddlerTitle, base64) {
+  function sendCollabOutbound(type, wikiId, tiddlerTitle, base64, savedTitle) {
     // Try WebSocket first (instant)
     if (collabWs && collabWs.readyState === WebSocket.OPEN) {
       var msg = { type: type, wiki_id: wikiId, tiddler_title: tiddlerTitle };
       if (base64) msg.update_base64 = base64;
+      if (savedTitle) msg.saved_title = savedTitle;
       collabWs.send(JSON.stringify(msg));
       return;
     }
@@ -1478,6 +1491,9 @@
           break;
         case 'sendAwareness':
           window.TiddlyDesktopSync.collabAwareness(wikiId, tiddlerTitle, base64);
+          break;
+        case 'peerSaved':
+          window.TiddlyDesktopSync.collabPeerSaved(wikiId, tiddlerTitle, savedTitle);
           break;
       }
     } else if (hasTauri) {
@@ -1500,6 +1516,11 @@
         case 'sendAwareness':
           window.__TAURI__.core.invoke('lan_sync_collab_awareness', {
             wikiId: wikiId, tiddlerTitle: tiddlerTitle, updateBase64: base64
+          }).catch(function() {});
+          break;
+        case 'peerSaved':
+          window.__TAURI__.core.invoke('lan_sync_collab_peer_saved', {
+            wikiId: wikiId, tiddlerTitle: tiddlerTitle, savedTitle: savedTitle
           }).catch(function() {});
           break;
       }

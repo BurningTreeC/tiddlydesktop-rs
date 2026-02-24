@@ -80,6 +80,7 @@ pub struct SyncStatus {
     pub device_name: String,
     pub port: Option<u16>,
     pub connected_peers: Vec<PeerInfo>,
+    pub relay_connected: bool,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -1158,6 +1159,15 @@ impl SyncManager {
                     wiki_id, tiddler_title, update_base64,
                 }).await;
             }
+            WikiToSync::CollabPeerSaved { wiki_id, tiddler_title, saved_title, device_id, device_name } => {
+                let room_code = match crate::wiki_storage::get_wiki_relay_room_by_sync_id(app, &wiki_id) {
+                    Some(rc) => rc,
+                    None => return,
+                };
+                let _ = relay.send_to_room(&room_code, &SyncMessage::PeerSaved {
+                    wiki_id, tiddler_title, saved_title, device_id, device_name,
+                }).await;
+            }
         }
     }
 
@@ -1262,6 +1272,17 @@ impl SyncManager {
                 let _ = relay.send_to_room(&room_code, &SyncMessage::CollabAwareness {
                     wiki_id: wiki_id.clone(), tiddler_title: tiddler_title.clone(),
                     update_base64: update_base64.clone(),
+                }).await;
+            }
+            WikiToSync::CollabPeerSaved { wiki_id, tiddler_title, saved_title, device_id, device_name } => {
+                let room_code = match crate::wiki_storage::get_wiki_relay_room_by_sync_id(app, wiki_id) {
+                    Some(rc) => rc,
+                    None => return,
+                };
+                let _ = relay.send_to_room(&room_code, &SyncMessage::PeerSaved {
+                    wiki_id: wiki_id.clone(), tiddler_title: tiddler_title.clone(),
+                    saved_title: saved_title.clone(),
+                    device_id: device_id.clone(), device_name: device_name.clone(),
                 }).await;
             }
             _ => {}
@@ -1448,6 +1469,12 @@ impl SyncManager {
             vec![]
         };
 
+        let relay_connected = if let Some(ref relay) = self.relay_manager {
+            relay.any_room_connected().await
+        } else {
+            false
+        };
+
         SyncStatus {
             running: server.is_some(),
             device_id: self.pairing_manager.device_id().to_string(),
@@ -1461,6 +1488,7 @@ impl SyncManager {
                     user_name,
                 })
                 .collect(),
+            relay_connected,
         }
     }
 
@@ -1743,6 +1771,20 @@ impl SyncManager {
         });
     }
 
+    /// Notify peers that we saved a tiddler being collaboratively edited
+    pub fn notify_collab_peer_saved(&self, wiki_id: &str, tiddler_title: &str, saved_title: &str) {
+        eprintln!("[Collab] notify_collab_peer_saved: wiki={}, tiddler={}, saved_as={}", wiki_id, tiddler_title, saved_title);
+        let device_id = self.pairing_manager.device_id().to_string();
+        let device_name = self.pairing_manager.device_name().to_string();
+        let _ = self.wiki_tx.send(WikiToSync::CollabPeerSaved {
+            wiki_id: wiki_id.to_string(),
+            tiddler_title: tiddler_title.to_string(),
+            saved_title: saved_title.to_string(),
+            device_id,
+            device_name,
+        });
+    }
+
     /// Send a Yjs document update to peers
     pub fn send_collab_update(&self, wiki_id: &str, tiddler_title: &str, update_base64: &str) {
         eprintln!("[Collab] send_collab_update: wiki={}, tiddler={}, len={}", wiki_id, tiddler_title, update_base64.len());
@@ -1987,6 +2029,14 @@ impl SyncManager {
                     let data = json["update_base64"].as_str().unwrap_or("");
                     if !wid.is_empty() && !title.is_empty() && !data.is_empty() {
                         self.send_collab_awareness(wid, title, data);
+                    }
+                }
+                "peerSaved" => {
+                    let wid = json["wiki_id"].as_str().unwrap_or("");
+                    let title = json["tiddler_title"].as_str().unwrap_or("");
+                    let saved = json["saved_title"].as_str().unwrap_or("");
+                    if !wid.is_empty() && !title.is_empty() && !saved.is_empty() {
+                        self.notify_collab_peer_saved(wid, title, saved);
                     }
                 }
                 _ => {}
@@ -2896,6 +2946,23 @@ impl SyncManager {
                             "wiki_id": wiki_id,
                             "tiddler_title": tiddler_title,
                             "update_base64": update_base64,
+                        }));
+                    }
+                    SyncMessage::PeerSaved {
+                        ref wiki_id,
+                        ref tiddler_title,
+                        ref saved_title,
+                        ref device_id,
+                        ref device_name,
+                    } => {
+                        eprintln!("[Collab] INBOUND PeerSaved: wiki={}, tiddler={}, saved_as={}, from={}", wiki_id, tiddler_title, saved_title, device_id);
+                        self.emit_collab_to_wiki(wiki_id, serde_json::json!({
+                            "type": "peer-saved",
+                            "wiki_id": wiki_id,
+                            "tiddler_title": tiddler_title,
+                            "saved_title": saved_title,
+                            "device_id": device_id,
+                            "device_name": device_name,
                         }));
                     }
 
@@ -6165,6 +6232,29 @@ pub fn lan_sync_collab_editing_stopped(wiki_id: String, tiddler_title: String) -
 }
 
 #[tauri::command]
+pub fn lan_sync_collab_peer_saved(
+    wiki_id: String,
+    tiddler_title: String,
+    saved_title: String,
+) -> Result<(), String> {
+    eprintln!("[Collab CMD] lan_sync_collab_peer_saved: wiki={}, tiddler={}, saved_as={}", wiki_id, tiddler_title, saved_title);
+    if let Some(mgr) = get_sync_manager() {
+        mgr.notify_collab_peer_saved(&wiki_id, &tiddler_title, &saved_title);
+        return Ok(());
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        if let Some(ipc) = IPC_CLIENT_FOR_SYNC.get() {
+            let mut guard = ipc.lock().unwrap();
+            if let Some(ref mut client) = *guard {
+                let _ = client.send_lan_sync_collab_peer_saved(&wiki_id, &tiddler_title, &saved_title);
+            }
+        }
+    }
+    Ok(())
+}
+
+#[tauri::command]
 pub fn lan_sync_collab_update(
     wiki_id: String,
     tiddler_title: String,
@@ -6301,6 +6391,10 @@ pub async fn relay_sync_remove_room(room_code: String) -> Result<(), String> {
     let mgr = get_sync_manager().ok_or("Sync not initialized")?;
     if let Some(relay) = &mgr.relay_manager {
         let result = relay.remove_room(&room_code).await;
+        // Clear relay_room from any wikis still assigned to this room
+        if let Some(app) = crate::get_global_app_handle() {
+            crate::wiki_storage::clear_relay_room_for_code(&app, &room_code);
+        }
         // Refresh LAN room keys and discovery beacons
         mgr.update_room_keys().await;
         mgr.update_active_room_codes().await;

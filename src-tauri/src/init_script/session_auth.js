@@ -32,11 +32,7 @@
         var invoke = window.__TAURI__.core.invoke;
 
         function isInjectedTiddler(title) {
-            // External attachments config tiddlers persist in the wiki (not the settings UI tab)
-            if (title.indexOf("$:/plugins/tiddlydesktop-rs/external-attachments/") === 0 &&
-                title !== "$:/plugins/tiddlydesktop-rs/external-attachments/settings") {
-                return false;
-            }
+            if (title === "$:/config/TiddlyDesktopRS/ExternalAttachments/settings") return true;
             return title === PLUGIN_TITLE ||
                 title.indexOf("$:/plugins/tiddlydesktop-rs/") === 0 ||
                 title.indexOf("$:/temp/tiddlydesktop") === 0;

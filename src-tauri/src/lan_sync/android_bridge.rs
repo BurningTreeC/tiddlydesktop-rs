@@ -528,6 +528,22 @@ fn run_bridge_server(
                 let _ = request.respond(cors_response("{\"ok\":true}", 200));
             }
 
+            ("POST", "/_bridge/collab-peer-saved") => {
+                if let Some(body) = read_body(&mut request) {
+                    if let Ok(json) = serde_json::from_str::<serde_json::Value>(&body) {
+                        let wiki_id = json["wiki_id"].as_str().unwrap_or("").to_string();
+                        let tiddler_title = json["tiddler_title"].as_str().unwrap_or("").to_string();
+                        let saved_title = json["saved_title"].as_str().unwrap_or("").to_string();
+                        if !wiki_id.is_empty() && !tiddler_title.is_empty() && !saved_title.is_empty() {
+                            if let Some(mgr) = super::get_sync_manager() {
+                                mgr.notify_collab_peer_saved(&wiki_id, &tiddler_title, &saved_title);
+                            }
+                        }
+                    }
+                }
+                let _ = request.respond(cors_response("{\"ok\":true}", 200));
+            }
+
             ("POST", "/_bridge/announce-username") => {
                 if let Some(body) = read_body(&mut request) {
                     if let Ok(json) = serde_json::from_str::<serde_json::Value>(&body) {
@@ -559,6 +575,7 @@ fn run_bridge_server(
                         device_name: String::new(),
                         port: None,
                         connected_peers: vec![],
+                        relay_connected: false,
                     }
                 };
                 let resp = serde_json::to_string(&status).unwrap_or_else(|_| "{}".to_string());
@@ -588,7 +605,7 @@ fn run_bridge_server(
                 };
                 let result: Vec<serde_json::Value> = editors
                     .into_iter()
-                    .map(|(did, dname)| serde_json::json!({"deviceId": did, "deviceName": dname}))
+                    .map(|(did, dname, uname)| serde_json::json!({"deviceId": did, "deviceName": dname, "userName": uname}))
                     .collect();
                 let resp = serde_json::to_string(&result).unwrap_or_else(|_| "[]".to_string());
                 let _ = request.respond(cors_response(&resp, 200));

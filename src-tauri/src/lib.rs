@@ -6345,7 +6345,7 @@ async fn check_for_updates() -> Result<UpdateCheckResult, String> {
 
 /// Android version - separate from desktop versioning (must match build.gradle.kts versionName)
 #[cfg(target_os = "android")]
-const ANDROID_VERSION: &str = "0.0.33";
+const ANDROID_VERSION: &str = "0.0.34";
 
 /// Check for updates on Android via version file on GitHub, linking to Play Store
 #[cfg(target_os = "android")]
@@ -8422,6 +8422,7 @@ fn run_wiki_mode(args: WikiModeArgs) {
             lan_sync::lan_sync_save_tombstones,
             lan_sync::lan_sync_collab_editing_started,
             lan_sync::lan_sync_collab_editing_stopped,
+            lan_sync::lan_sync_collab_peer_saved,
             lan_sync::lan_sync_collab_update,
             lan_sync::lan_sync_collab_awareness,
             lan_sync::lan_sync_get_remote_editors,
@@ -8871,6 +8872,7 @@ fn run_wiki_folder_mode(args: WikiFolderModeArgs) {
             lan_sync::lan_sync_save_tombstones,
             lan_sync::lan_sync_collab_editing_started,
             lan_sync::lan_sync_collab_editing_stopped,
+            lan_sync::lan_sync_collab_peer_saved,
             lan_sync::lan_sync_collab_update,
             lan_sync::lan_sync_collab_awareness,
             lan_sync::lan_sync_get_remote_editors,
@@ -9583,6 +9585,7 @@ pub fn run() {
             lan_sync::lan_sync_save_tombstones,
             lan_sync::lan_sync_collab_editing_started,
             lan_sync::lan_sync_collab_editing_stopped,
+            lan_sync::lan_sync_collab_peer_saved,
             lan_sync::lan_sync_collab_update,
             lan_sync::lan_sync_collab_awareness,
             lan_sync::lan_sync_get_remote_editors,

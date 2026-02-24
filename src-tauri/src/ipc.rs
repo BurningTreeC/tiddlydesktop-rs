@@ -213,6 +213,12 @@ pub enum IpcMessage {
         tiddler_title: String,
         update_base64: String,
     },
+    /// Wiki process → main process: peer saved a collab tiddler
+    LanSyncCollabPeerSaved {
+        wiki_id: String,
+        tiddler_title: String,
+        saved_title: String,
+    },
 }
 
 /// A connected wiki process
@@ -305,6 +311,7 @@ impl IpcServer {
             // Same-process fallback: On Linux/macOS, wiki windows run inside
             // the main process and never connect as TCP IPC clients. Push to
             // IPC_SYNC_QUEUE so JS can poll via lan_sync_poll_ipc.
+            #[cfg(not(target_os = "android"))]
             if delivered == 0 {
                 crate::lan_sync::queue_lan_sync_ipc(payload_json.to_string());
             }
@@ -875,6 +882,18 @@ fn handle_client(
                                 }
                             }
 
+                            IpcMessage::LanSyncCollabPeerSaved { wiki_id, tiddler_title, saved_title } => {
+                                if !client_authenticated {
+                                    continue;
+                                }
+                                #[cfg(not(target_os = "android"))]
+                                {
+                                    if let Some(mgr) = crate::lan_sync::get_sync_manager() {
+                                        mgr.notify_collab_peer_saved(wiki_id, tiddler_title, saved_title);
+                                    }
+                                }
+                            }
+
                             _ => {}
                         }
                     }
@@ -1118,6 +1137,15 @@ impl IpcClient {
             wiki_id: wiki_id.to_string(),
             tiddler_title: tiddler_title.to_string(),
             update_base64: update_base64.to_string(),
+        })
+    }
+
+    /// Notify main process that a peer saved a collab tiddler
+    pub fn send_lan_sync_collab_peer_saved(&mut self, wiki_id: &str, tiddler_title: &str, saved_title: &str) -> std::io::Result<()> {
+        self.send(&IpcMessage::LanSyncCollabPeerSaved {
+            wiki_id: wiki_id.to_string(),
+            tiddler_title: tiddler_title.to_string(),
+            saved_title: saved_title.to_string(),
         })
     }
 }

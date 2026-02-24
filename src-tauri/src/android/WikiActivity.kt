@@ -440,6 +440,8 @@ class WikiActivity : AppCompatActivity() {
     @Volatile private var folderServerReady = false
     // Local filesystem path for SAF folder wikis (Node.js reads from here)
     private var folderLocalPath: String? = null
+    // Whether the sync foreground notification is currently started by this activity
+    private var notificationStarted = false
 
     // SyncWatcher — syncs local folder wiki changes back to SAF via FileObserver (inotify)
     @Volatile private var syncWatcherRunning = false
@@ -2317,6 +2319,17 @@ class WikiActivity : AppCompatActivity() {
         }
 
         @JavascriptInterface
+        fun collabPeerSaved(wikiId: String, tiddlerTitle: String, savedTitle: String) {
+            Thread {
+                bridgePost("/_bridge/collab-peer-saved", org.json.JSONObject().apply {
+                    put("wiki_id", wikiId)
+                    put("tiddler_title", tiddlerTitle)
+                    put("saved_title", savedTitle)
+                })
+            }.start()
+        }
+
+        @JavascriptInterface
         fun collabUpdate(wikiId: String, tiddlerTitle: String, updateBase64: String) {
             Thread {
                 bridgePost("/_bridge/collab-update", org.json.JSONObject().apply {
@@ -2377,6 +2390,25 @@ class WikiActivity : AppCompatActivity() {
                 conn.disconnect()
                 body
             } catch (_: Exception) { "{}" }
+        }
+
+        @JavascriptInterface
+        fun setRelayConnected(connected: Boolean) {
+            this@WikiActivity.runOnUiThread {
+                if (connected && !notificationStarted) {
+                    try {
+                        WikiServerService.startService(applicationContext)
+                        notificationStarted = true
+                        Log.d(TAG, "Started foreground service (relay connected)")
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Failed to start foreground service: ${e.message}")
+                    }
+                } else if (!connected && notificationStarted) {
+                    WikiServerService.wikiClosed(applicationContext)
+                    notificationStarted = false
+                    Log.d(TAG, "Stopped foreground service (relay disconnected)")
+                }
+            }
         }
     }
 
@@ -2994,15 +3026,8 @@ class WikiActivity : AppCompatActivity() {
 
         Log.d(TAG, "WikiActivity onCreate - path: $wikiPath, title: $wikiTitle, isFolder: $isFolder, folderUrl: $folderServerUrl, localPath: $folderLocalPath, backupsEnabled: $backupsEnabled, backupCount: $backupCount")
 
-        // Start foreground service from WikiActivity (runs in :wiki process, same as the service).
-        // This is more reliable than the cross-process JNI call from the main process,
-        // because SharedPreferences used for the active wiki count are not multi-process safe.
-        try {
-            WikiServerService.startService(applicationContext)
-            Log.d(TAG, "Started foreground service from WikiActivity")
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to start foreground service: ${e.message}")
-        }
+        // Foreground notification is started on-demand when relay sync connects
+        // (via SyncInterface.setRelayConnected called from JS polling)
 
         // Notify LAN sync service (main process) that a wiki is open — only if LAN sync is active
         if (LanSyncService.isLanSyncActive(applicationContext)) {
@@ -6222,6 +6247,7 @@ class WikiActivity : AppCompatActivity() {
             "stopEditing:function(t){if(_syncActive){S.collabEditingStopped(_syncId,t);}else{_collabQueue.push(['stopEditing',t]);}}," +
             "sendUpdate:function(t,b){if(_syncActive){S.collabUpdate(_syncId,t,b);}else{_collabQueue.push(['sendUpdate',t,b]);}}," +
             "sendAwareness:function(t,b){if(_syncActive){S.collabAwareness(_syncId,t,b);}else{_collabQueue.push(['sendAwareness',t,b]);}}," +
+            "peerSaved:function(t,s){if(_syncActive){S.collabPeerSaved(_syncId,t,s);}else{_collabQueue.push(['peerSaved',t,s]);}}," +
             "getRemoteEditors:function(t){if(!_syncActive)return[];try{return JSON.parse(S.getRemoteEditors(_syncId,t)||'[]');}catch(e){return [];}}," +
             "getRemoteEditorsAsync:function(t){return Promise.resolve(this.getRemoteEditors(t));}," +
             "on:function(ev,cb){if(!collabListeners[ev])collabListeners[ev]=[];collabListeners[ev].push(cb);}," +
@@ -6258,6 +6284,7 @@ class WikiActivity : AppCompatActivity() {
             "else if(qe[0]==='stopEditing')S.collabEditingStopped(syncId,qe[1]);" +
             "else if(qe[0]==='sendUpdate')S.collabUpdate(syncId,qe[1],qe[2]);" +
             "else if(qe[0]==='sendAwareness')S.collabAwareness(syncId,qe[1],qe[2]);" +
+            "else if(qe[0]==='peerSaved')S.collabPeerSaved(syncId,qe[1],qe[2]);" +
             "}" +
             "console.log('[LAN Sync] Collab API activated for wiki: '+syncId);" +
             // Notify CM6 collab plugins that transport is active (for late Phase 2)
@@ -6289,7 +6316,9 @@ class WikiActivity : AppCompatActivity() {
             "if(t.indexOf('\$:/temp/')==0)continue;" +
             "if(t.indexOf('\$:/plugins/tiddlydesktop-rs/')==0)continue;" +
             "if(t.indexOf('\$:/plugins/tiddlydesktop/')==0)continue;" +
-            "if(t.indexOf('\$:/config/ViewToolbarButtons/Visibility/\$:/plugins/tiddlydesktop-rs/')==0)continue;" +
+            "if(t.indexOf('\$:/config/')==0)continue;" +
+            "if(t.indexOf('\$:/themes/tiddlywiki/vanilla/options/')==0)continue;" +
+            "if(t.indexOf('\$:/themes/tiddlywiki/vanilla/metrics/')==0)continue;" +
             "if(conflicts[t])continue;" +
             "var td=\$tw.wiki.getTiddler(t);" +
             "if(ch[t].deleted){var dm=\$tw.utils.stringifyDate(new Date());tomb[t]={modified:dm,time:Date.now()};S.saveTombstones(syncId,JSON.stringify(tomb));console.log('[LAN Sync] Outbound delete: '+t);S.tiddlerDeleted(syncId,t);}" +
@@ -6313,7 +6342,9 @@ class WikiActivity : AppCompatActivity() {
             "if(t.indexOf('\$:/TiddlyDesktopRS/Conflicts/')==0)continue;" +
             "if(t.indexOf('\$:/state/')==0||t.indexOf('\$:/status/')==0||t.indexOf('\$:/temp/')==0)continue;" +
             "if(t.indexOf('\$:/plugins/tiddlydesktop-rs/')==0||t.indexOf('\$:/plugins/tiddlydesktop/')==0)continue;" +
-            "if(t.indexOf('\$:/config/ViewToolbarButtons/Visibility/\$:/plugins/tiddlydesktop-rs/')==0)continue;" +
+            "if(t.indexOf('\$:/config/')==0)continue;" +
+            "if(t.indexOf('\$:/themes/tiddlywiki/vanilla/options/')==0)continue;" +
+            "if(t.indexOf('\$:/themes/tiddlywiki/vanilla/metrics/')==0)continue;" +
             "if(\$tw.wiki.isShadowTiddler(t)&&!\$tw.wiki.tiddlerExists(t))continue;" +
             "var td=\$tw.wiki.getTiddler(t);if(td){var m=td.fields.modified;fps.push({title:t,modified:m?fts(m):''});seen[t]=1;}}" +
             "var ks=Object.keys(kst);for(var j=0;j<ks.length;j++){if(!seen[ks[j]])fps.push({title:ks[j],modified:kst[ks[j]]});}" +
@@ -6329,6 +6360,7 @@ class WikiActivity : AppCompatActivity() {
             "if(d.type==='editing-started'){if(d.tiddler_title&&d.device_id){if(!rec[d.tiddler_title])rec[d.tiddler_title]=[];var ef=false;for(var ei=0;ei<rec[d.tiddler_title].length;ei++){if(rec[d.tiddler_title][ei].device_id===d.device_id){ef=true;rec[d.tiddler_title][ei].user_name=d.user_name||'';break;}}if(!ef){rec[d.tiddler_title].push({device_id:d.device_id,device_name:d.device_name||'',user_name:d.user_name||''});}updateET(d.tiddler_title);}emitCollab(d.type,d);return;}" +
             "if(d.type==='editing-stopped'){if(d.tiddler_title&&d.device_id&&rec[d.tiddler_title]){rec[d.tiddler_title]=rec[d.tiddler_title].filter(function(e){return e.device_id!==d.device_id;});if(rec[d.tiddler_title].length===0)delete rec[d.tiddler_title];updateET(d.tiddler_title);}emitCollab(d.type,d);return;}" +
             "if(d.type==='collab-update'||d.type==='collab-awareness'){emitCollab(d.type,d);return;}" +
+            "if(d.type==='peer-saved'){emitCollab(d.type,d);return;}" +
             "queue.push(d);if(!batchTimer)batchTimer=setTimeout(applyBatch,50);" +
             "}" +
             "function applyBatch(){batchTimer=null;var b=queue;queue=[];if(!b.length)return;" +
@@ -6365,7 +6397,9 @@ class WikiActivity : AppCompatActivity() {
             "if(t.indexOf('\$:/TiddlyDesktopRS/Conflicts/')==0)continue;" +
             "if(t.indexOf('\$:/state/')==0||t.indexOf('\$:/status/')==0||t.indexOf('\$:/temp/')==0)continue;" +
             "if(t.indexOf('\$:/plugins/tiddlydesktop-rs/')==0||t.indexOf('\$:/plugins/tiddlydesktop/')==0)continue;" +
-            "if(t.indexOf('\$:/config/ViewToolbarButtons/Visibility/\$:/plugins/tiddlydesktop-rs/')==0)continue;" +
+            "if(t.indexOf('\$:/config/')==0)continue;" +
+            "if(t.indexOf('\$:/themes/tiddlywiki/vanilla/options/')==0)continue;" +
+            "if(t.indexOf('\$:/themes/tiddlywiki/vanilla/metrics/')==0)continue;" +
             "if(\$tw.wiki.isShadowTiddler(t)&&!\$tw.wiki.tiddlerExists(t))continue;" +
             "var td=\$tw.wiki.getTiddler(t);if(!td)continue;" +
             "var localMod=td.fields.modified?fts(td.fields.modified):'';" +
@@ -6397,7 +6431,9 @@ class WikiActivity : AppCompatActivity() {
             "if(t.indexOf('\$:/TiddlyDesktopRS/Conflicts/')==0)continue;" +
             "if(t.indexOf('\$:/state/')==0||t.indexOf('\$:/status/')==0||t.indexOf('\$:/temp/')==0)continue;" +
             "if(t.indexOf('\$:/plugins/tiddlydesktop-rs/')==0||t.indexOf('\$:/plugins/tiddlydesktop/')==0)continue;" +
-            "if(t.indexOf('\$:/config/ViewToolbarButtons/Visibility/\$:/plugins/tiddlydesktop-rs/')==0)continue;" +
+            "if(t.indexOf('\$:/config/')==0)continue;" +
+            "if(t.indexOf('\$:/themes/tiddlywiki/vanilla/options/')==0)continue;" +
+            "if(t.indexOf('\$:/themes/tiddlywiki/vanilla/metrics/')==0)continue;" +
             "if(\$tw.wiki.isShadowTiddler(t)&&!\$tw.wiki.tiddlerExists(t))continue;" +
             "var td=\$tw.wiki.getTiddler(t);if(td){var j=serFields(td.fields);bytes+=j.length;batch.push({title:t,tiddler_json:j});}}" +
             "var last=i>=all.length;S.sendFullSyncBatch(syncId,toDevId,JSON.stringify(batch),last);" +
@@ -6582,12 +6618,14 @@ class WikiActivity : AppCompatActivity() {
             "var BT='\$:/temp/tiddlydesktop/PeerBadge';" +
             "var EBT='\$:/temp/tiddlydesktop/EditingBadge';" +
             "var lastJ='';" +
+            "var _lastRelay=false;" +
             "function waitTw(cb){if(typeof \$tw!=='undefined'&&\$tw.wiki&&\$tw.wiki.addTiddler){cb();}else{setTimeout(function(){waitTw(cb);},200);}}" +
             "function fetch(cb){try{var j=S.getSyncStatus();cb(JSON.parse(j||'{}'));}catch(_){cb({});}}" +
             "function announce(n){try{S.announceUsername(n);}catch(_){}}" +
-            "function update(st){var p=st.connected_peers||[];var j=JSON.stringify(p);if(j===lastJ)return;lastJ=j;" +
+            "function update(st){var p=st.connected_peers||[];var j=JSON.stringify(p);if(j!==lastJ){lastJ=j;" +
             "\$tw.wiki.addTiddler({title:PT,type:'application/json',text:j});" +
             "\$tw.wiki.addTiddler({title:CT,text:String(p.length)});}" +
+            "var rc=st.relay_connected||false;if(rc!==_lastRelay){_lastRelay=rc;try{S.setRelayConnected(rc);}catch(_){}}}" +
             "function createBadge(){if(\$tw.wiki.tiddlerExists(BT))return;" +
             "var wt=" +
             "'\\\\define peer-badge-styles()\\n" +
@@ -6600,25 +6638,25 @@ class WikiActivity : AppCompatActivity() {
             ".td-peer-dropdown-item-device{color:<<colour muted-foreground>>;font-size:0.85em;}\\n" +
             ".td-peer-dropdown-empty{padding:8px 12px;color:<<colour muted-foreground>>;font-size:0.85em;}\\n" +
             "\\\\end\\n" +
-            "<\\$reveal type=\"nomatch\" state=\"'+CT+'\" text=\"0\" default=\"0\">\\n" +
-            "<\\$reveal type=\"nomatch\" state=\"'+CT+'\" text=\"\" default=\"0\">\\n" +
-            "<\\$button popup=\"\\$:/state/tiddlydesktop/peer-dropdown\" class=\"tc-btn-invisible td-peer-badge\" tooltip=\"Connected peers\">\\n" +
-            "<\\$text text={{'+CT+'}}/> {{\\$:/core/images/globe}}\\n" +
-            "</\\$button>\\n" +
-            "<\\$reveal state=\"\\$:/state/tiddlydesktop/peer-dropdown\" type=\"popup\" position=\"belowleft\">\\n" +
+            "<\$reveal type=\"nomatch\" state=\"'+CT+'\" text=\"0\" default=\"0\">\\n" +
+            "<\$reveal type=\"nomatch\" state=\"'+CT+'\" text=\"\" default=\"0\">\\n" +
+            "<\$button popup=\"\\$:/state/tiddlydesktop/peer-dropdown\" class=\"tc-btn-invisible td-peer-badge\" tooltip=\"Connected peers\">\\n" +
+            "<\$text text={{'+CT+'}}/> {{\\$:/core/images/globe}}\\n" +
+            "</\$button>\\n" +
+            "<\$reveal state=\"\\$:/state/tiddlydesktop/peer-dropdown\" type=\"popup\" position=\"belowleft\">\\n" +
             "<div class=\"td-peer-dropdown\">\\n" +
-            "<\\$list filter=\"[['+PT+']jsonindexes[]]\" variable=\"idx\" emptyMessage=\"\"\"<div class=\\\"td-peer-dropdown-empty\\\">No peers connected</div>\"\"\">\\n" +
+            "<\$list filter=\"[['+PT+']jsonindexes[]]\" variable=\"idx\" emptyMessage=\"\"\"<div class=\\\"td-peer-dropdown-empty\\\">No peers connected</div>\"\"\">\\n" +
             "<div class=\"td-peer-dropdown-item\">\\n" +
-            "<\\$let userName={{{ [['+PT+']jsonget<idx>,[user_name]] }}} deviceName={{{ [['+PT+']jsonget<idx>,[device_name]] }}}>\\n" +
-            "<\\$reveal type=\"nomatch\" default=<<userName>> text=\"\">\\n" +
-            "<span class=\"td-peer-dropdown-item-name\"><\\$text text=<<userName>>/></span> <span class=\"td-peer-dropdown-item-device\">(<\\$text text=<<deviceName>>/>)</span>\\n" +
-            "</\\$reveal>\\n" +
-            "<\\$reveal type=\"match\" default=<<userName>> text=\"\">\\n" +
-            "<span class=\"td-peer-dropdown-item-name\">Anonymous</span> <span class=\"td-peer-dropdown-item-device\">(<\\$text text=<<deviceName>>/>)</span>\\n" +
-            "</\\$reveal>\\n" +
-            "</\\$let></div>\\n" +
-            "</\\$list></div>\\n" +
-            "</\\$reveal></\\$reveal></\\$reveal>\\n" +
+            "<\$let userName={{{ [['+PT+']jsonget<idx>,[user_name]] }}} deviceName={{{ [['+PT+']jsonget<idx>,[device_name]] }}}>\\n" +
+            "<\$reveal type=\"nomatch\" default=<<userName>> text=\"\">\\n" +
+            "<span class=\"td-peer-dropdown-item-name\"><\$text text=<<userName>>/></span> <span class=\"td-peer-dropdown-item-device\">(<\$text text=<<deviceName>>/>)</span>\\n" +
+            "</\$reveal>\\n" +
+            "<\$reveal type=\"match\" default=<<userName>> text=\"\">\\n" +
+            "<span class=\"td-peer-dropdown-item-name\">Anonymous</span> <span class=\"td-peer-dropdown-item-device\">(<\$text text=<<deviceName>>/>)</span>\\n" +
+            "</\$reveal>\\n" +
+            "</\$let></div>\\n" +
+            "</\$list></div>\\n" +
+            "</\$reveal></\$reveal></\$reveal>\\n" +
             "<style><<peer-badge-styles>></style>';" +
             "\$tw.wiki.addTiddler({title:BT,tags:'\$:/tags/TopRightBar',text:wt});}" +
             "function createEditBadge(){if(\$tw.wiki.tiddlerExists(EBT))return;" +
@@ -6627,20 +6665,20 @@ class WikiActivity : AppCompatActivity() {
             ".td-editing-badge{display:inline-block;font-size:0.8em;padding:2px 8px;margin:0 0 4px 0;border-radius:10px;background:<<colour notification-background>>;border:1px solid <<colour notification-border>>;color:<<colour foreground>>;}\\n" +
             ".td-editing-badge svg{width:14px;height:14px;vertical-align:middle;fill:<<colour foreground>>;margin-right:3px;}\\n" +
             "\\\\end\\n" +
-            "<\\$set name=\"editingTid\" value={{{ [[\\$:/temp/tiddlydesktop/editing/]addsuffix<currentTiddler>] }}}>\\n" +
-            "<\\$list filter=\"[<editingTid>is[tiddler]]\" variable=\"ignore\">\\n" +
+            "<\$set name=\"editingTid\" value={{{ [[\\$:/temp/tiddlydesktop/editing/]addsuffix<currentTiddler>] }}}>\\n" +
+            "<\$list filter=\"[<editingTid>is[tiddler]]\" variable=\"ignore\">\\n" +
             "<div class=\"td-editing-badge\">\\n" +
             "{{\\$:/core/images/edit-button}} \\n" +
-            "<\\$list filter=\"[<editingTid>jsonindexes[]]\" variable=\"idx\" counter=\"cnt\">\\n" +
-            "<\\$let un={{{ [<editingTid>jsonget<idx>,[user_name]] }}} dn={{{ [<editingTid>jsonget<idx>,[device_name]] }}}>\\n" +
-            "<\\$reveal type=\"nomatch\" default=<<un>> text=\"\"><\\$text text=<<un>>/></\\$reveal>\\n" +
-            "<\\$reveal type=\"match\" default=<<un>> text=\"\"><\\$text text=<<dn>>/></\\$reveal>\\n" +
-            "</\\$let>\\n" +
-            "<\\$list filter=\"[<editingTid>jsonindexes[]count[]compare:number:gt<cnt-first>]\" variable=\"ignore\">, </\\$list>\\n" +
-            "</\\$list>\\n" +
+            "<\$list filter=\"[<editingTid>jsonindexes[]]\" variable=\"idx\" counter=\"cnt\">\\n" +
+            "<\$let un={{{ [<editingTid>jsonget<idx>,[user_name]] }}} dn={{{ [<editingTid>jsonget<idx>,[device_name]] }}}>\\n" +
+            "<\$reveal type=\"nomatch\" default=<<un>> text=\"\"><\$text text=<<un>>/></\$reveal>\\n" +
+            "<\$reveal type=\"match\" default=<<un>> text=\"\"><\$text text=<<dn>>/></\$reveal>\\n" +
+            "</\$let>\\n" +
+            "<\$list filter=\"[<editingTid>jsonindexes[]count[]compare:number:gt<cnt-first>]\" variable=\"ignore\">, </\$list>\\n" +
+            "</\$list>\\n" +
             "</div>\\n" +
-            "</\\$list>\\n" +
-            "</\\$set>\\n" +
+            "</\$list>\\n" +
+            "</\$set>\\n" +
             "<style><<editing-badge-styles>></style>';" +
             "\$tw.wiki.addTiddler({title:EBT,tags:'\$:/tags/ViewTemplate','list-before':'\$:/core/ui/ViewTemplate/body',text:eb});}" +
             "waitTw(function(){" +
@@ -8042,8 +8080,11 @@ class WikiActivity : AppCompatActivity() {
             LanSyncService.notifyWikiClosed(applicationContext)
         }
 
-        // Notify foreground service that wiki is closed
-        WikiServerService.wikiClosed(applicationContext)
+        // Notify foreground service that wiki is closed (only if we started it)
+        if (notificationStarted) {
+            WikiServerService.wikiClosed(applicationContext)
+            notificationStarted = false
+        }
 
         // Release WakeLock
         releaseWakeLock()

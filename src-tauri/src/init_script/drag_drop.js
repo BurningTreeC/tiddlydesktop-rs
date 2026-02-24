@@ -2259,8 +2259,8 @@
         // External Attachments Configuration
         // ========================================
 
-        // Use $:/plugins/tiddlydesktop-rs/ prefix - shared with session_auth.js
-        var CONFIG_PREFIX = "$:/plugins/tiddlydesktop-rs/external-attachments/";
+        // Use $:/config/ namespace for wiki-persisted settings
+        var CONFIG_PREFIX = "$:/config/TiddlyDesktopRS/ExternalAttachments/";
         var CONFIG_ENABLE = CONFIG_PREFIX + "Enable";
         var CONFIG_ABS_DESC = CONFIG_PREFIX + "UseAbsoluteForDescendents";
         var CONFIG_ABS_NONDESC = CONFIG_PREFIX + "UseAbsoluteForNonDescendents";

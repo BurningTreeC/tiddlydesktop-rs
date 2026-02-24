@@ -63,6 +63,14 @@ pub enum WikiToSync {
         tiddler_title: String,
         update_base64: String,
     },
+    /// Local device saved a tiddler being collaboratively edited
+    CollabPeerSaved {
+        wiki_id: String,
+        tiddler_title: String,
+        saved_title: String,
+        device_id: String,
+        device_name: String,
+    },
 }
 
 /// Messages from LAN sync to wiki processes
@@ -536,6 +544,31 @@ impl SyncBridge {
                             wiki_id,
                             tiddler_title,
                             update_base64,
+                        })
+                        .await;
+                }
+            }
+            WikiToSync::CollabPeerSaved {
+                wiki_id,
+                tiddler_title,
+                saved_title,
+                device_id,
+                device_name,
+            } => {
+                let peers = if let Some(app) = super::GLOBAL_APP_HANDLE.get() {
+                    if let Some(room_code) = crate::wiki_storage::get_wiki_relay_room_by_sync_id(app, &wiki_id) {
+                        server.peers_for_room(&room_code).await
+                    } else { vec![] }
+                } else { vec![] };
+                if !peers.is_empty() {
+                    eprintln!("[Collab] OUTBOUND broadcast PeerSaved: wiki={}, tiddler={}, saved_as={}", wiki_id, tiddler_title, saved_title);
+                    server
+                        .send_to_peers(&peers, &SyncMessage::PeerSaved {
+                            wiki_id,
+                            tiddler_title,
+                            saved_title,
+                            device_id,
+                            device_name,
                         })
                         .await;
                 }

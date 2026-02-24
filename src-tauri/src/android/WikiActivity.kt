@@ -6327,7 +6327,7 @@ class WikiActivity : AppCompatActivity() {
             "for(var i=0;i<keys.length;i++){" +
             "var t=keys[i];" +
             "if(suppress.delete(t))continue;" +
-            "if(t==='\$:/StoryList'||t==='\$:/HistoryList'||t==='\$:/library/sjcl.js'||t==='\$:/Import'||t==='\$:/language'||t==='\$:/theme'||t==='\$:/palette'||t==='\$:/isEncrypted'||t==='\$:/view'||t==='\$:/layout'||t==='\$:/DefaultTiddlers')continue;" +
+            "if(t==='\$:/StoryList'||t==='\$:/HistoryList'||t==='\$:/library/sjcl.js'||t==='\$:/Import'||t==='\$:/language'||t==='\$:/theme'||t==='\$:/palette'||t==='\$:/isEncrypted'||t==='\$:/view'||t==='\$:/layout'||t==='\$:/DefaultTiddlers'||t==='\$:/core')continue;" +
             "if(isDraft(t))continue;" +
             "if(t.indexOf('\$:/TiddlyDesktopRS/Conflicts/')==0)continue;" +
             "if(t.indexOf('\$:/state/')==0)continue;" +
@@ -6356,7 +6356,7 @@ class WikiActivity : AppCompatActivity() {
             // collectFingerprints: includes knownSyncTitles for convergence
             "function cfps(){var all=\$tw.wiki.allTitles();var seen={};var fps=[];" +
             "for(var i=0;i<all.length;i++){var t=all[i];" +
-            "if(t==='\$:/StoryList'||t==='\$:/HistoryList'||t==='\$:/library/sjcl.js'||t==='\$:/Import'||t==='\$:/language'||t==='\$:/theme'||t==='\$:/palette'||t==='\$:/isEncrypted'||t==='\$:/view'||t==='\$:/layout'||t==='\$:/DefaultTiddlers')continue;" +
+            "if(t==='\$:/StoryList'||t==='\$:/HistoryList'||t==='\$:/library/sjcl.js'||t==='\$:/Import'||t==='\$:/language'||t==='\$:/theme'||t==='\$:/palette'||t==='\$:/isEncrypted'||t==='\$:/view'||t==='\$:/layout'||t==='\$:/DefaultTiddlers'||t==='\$:/core')continue;" +
             "if(isDraft(t))continue;" +
             "if(t.indexOf('\$:/TiddlyDesktopRS/Conflicts/')==0)continue;" +
             "if(t.indexOf('\$:/state/')==0||t.indexOf('\$:/status/')==0||t.indexOf('\$:/temp/')==0)continue;" +
@@ -6414,7 +6414,7 @@ class WikiActivity : AppCompatActivity() {
             "if(tombNs)scheduleSave();if(ptks.length>0)S.saveTombstones(syncId,JSON.stringify(tomb));" +
             "var all=\$tw.wiki.allTitles();var diffs=[];" +
             "for(var j=0;j<all.length;j++){var t=all[j];" +
-            "if(t==='\$:/StoryList'||t==='\$:/HistoryList'||t==='\$:/library/sjcl.js'||t==='\$:/Import'||t==='\$:/language'||t==='\$:/theme'||t==='\$:/palette'||t==='\$:/isEncrypted'||t==='\$:/view'||t==='\$:/layout'||t==='\$:/DefaultTiddlers')continue;" +
+            "if(t==='\$:/StoryList'||t==='\$:/HistoryList'||t==='\$:/library/sjcl.js'||t==='\$:/Import'||t==='\$:/language'||t==='\$:/theme'||t==='\$:/palette'||t==='\$:/isEncrypted'||t==='\$:/view'||t==='\$:/layout'||t==='\$:/DefaultTiddlers'||t==='\$:/core')continue;" +
             "if(isDraft(t))continue;" +
             "if(t.indexOf('\$:/TiddlyDesktopRS/Conflicts/')==0)continue;" +
             "if(t.indexOf('\$:/state/')==0||t.indexOf('\$:/status/')==0||t.indexOf('\$:/temp/')==0)continue;" +
@@ -6448,7 +6448,7 @@ class WikiActivity : AppCompatActivity() {
             "console.log('[LAN Sync] Dumping '+all.length+' tiddlers to '+toDevId);" +
             "function send(si){var batch=[];var bytes=0;var i=si;" +
             "while(i<all.length&&(batch.length===0||bytes<MX)){var t=all[i];i++;" +
-            "if(t==='\$:/StoryList'||t==='\$:/HistoryList'||t==='\$:/library/sjcl.js'||t==='\$:/Import'||t==='\$:/language'||t==='\$:/theme'||t==='\$:/palette'||t==='\$:/isEncrypted'||t==='\$:/view'||t==='\$:/layout'||t==='\$:/DefaultTiddlers')continue;" +
+            "if(t==='\$:/StoryList'||t==='\$:/HistoryList'||t==='\$:/library/sjcl.js'||t==='\$:/Import'||t==='\$:/language'||t==='\$:/theme'||t==='\$:/palette'||t==='\$:/isEncrypted'||t==='\$:/view'||t==='\$:/layout'||t==='\$:/DefaultTiddlers'||t==='\$:/core')continue;" +
             "if(isDraft(t))continue;" +
             "if(t.indexOf('\$:/TiddlyDesktopRS/Conflicts/')==0)continue;" +
             "if(t.indexOf('\$:/state/')==0||t.indexOf('\$:/status/')==0||t.indexOf('\$:/temp/')==0)continue;" +

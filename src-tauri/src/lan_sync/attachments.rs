@@ -297,7 +297,7 @@ impl AttachmentManager {
             server.broadcast(&header_msg).await;
         }
 
-        // Second pass: stream chunks via bounded channel (max ~8MB buffered)
+        // Second pass: stream chunks via bounded channel (max ~2MB buffered)
         let (tx, mut rx) = tokio::sync::mpsc::channel::<String>(8);
         let read_path = full_path.clone();
         let chunk_size = ATTACHMENT_CHUNK_SIZE;
@@ -336,6 +336,11 @@ impl AttachmentManager {
                 server.broadcast(&chunk_msg).await;
             }
             idx += 1;
+            // Pace chunk sends to avoid saturating relay and leave bandwidth for tiddler sync
+            tokio::time::sleep(std::time::Duration::from_millis(
+                super::protocol::ATTACHMENT_CHUNK_DELAY_MS,
+            ))
+            .await;
         }
 
         // Wait for reader thread

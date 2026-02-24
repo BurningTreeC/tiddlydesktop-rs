@@ -4130,6 +4130,11 @@ impl SyncManager {
                     );
                     return;
                 }
+                // Pace chunk sends to avoid saturating relay
+                tokio::time::sleep(std::time::Duration::from_millis(
+                    protocol::ATTACHMENT_CHUNK_DELAY_MS,
+                ))
+                .await;
             }
         }
 
@@ -5832,6 +5837,11 @@ async fn send_attachment_to_peer(
         )
         .await?;
         idx += 1;
+        // Pace chunk sends to avoid saturating relay and leave bandwidth for tiddler sync
+        tokio::time::sleep(std::time::Duration::from_millis(
+            protocol::ATTACHMENT_CHUNK_DELAY_MS,
+        ))
+        .await;
     }
 
     // Handle empty files

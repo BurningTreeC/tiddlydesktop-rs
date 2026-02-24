@@ -12,10 +12,15 @@ use hkdf::Hkdf;
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
 
-/// Maximum chunk size for file transfer (1MB).
-/// Larger chunks reduce per-message overhead (JSON framing, encryption,
-/// base64 expansion) and improve throughput for large file transfers.
-pub const ATTACHMENT_CHUNK_SIZE: usize = 1024 * 1024;
+/// Maximum chunk size for file transfer (256KB).
+/// Balances per-message overhead against relay server memory pressure.
+/// Each chunk is base64-encoded (~33% expansion), so wire size is ~341KB.
+pub const ATTACHMENT_CHUNK_SIZE: usize = 256 * 1024;
+
+/// Delay between sending attachment chunks (ms).
+/// Prevents saturating the relay connection and leaves bandwidth for
+/// tiddler sync messages on the same WebSocket.
+pub const ATTACHMENT_CHUNK_DELAY_MS: u64 = 25;
 
 /// Port range for LAN sync WebSocket server
 pub const LAN_SYNC_PORT_START: u16 = 45700;

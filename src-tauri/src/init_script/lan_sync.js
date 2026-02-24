@@ -583,7 +583,7 @@
     if (title === '$:/StoryList' || title === '$:/HistoryList' || title === '$:/library/sjcl.js' ||
         title === '$:/Import' || title === '$:/language' || title === '$:/theme' || title === '$:/palette' ||
         title === '$:/isEncrypted' || title === '$:/view' || title === '$:/layout' ||
-        title === '$:/DefaultTiddlers') return true;
+        title === '$:/DefaultTiddlers' || title === '$:/core') return true;
     if (isDraft(title)) return true;
     if (title.indexOf('$:/TiddlyDesktopRS/Conflicts/') === 0) return true;
     if (title.indexOf('$:/state/') === 0) return true;

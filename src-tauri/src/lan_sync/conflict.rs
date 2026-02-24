@@ -36,9 +36,9 @@ const EXCLUDED_PREFIXES: &[&str] = &[
     "$:/state/",
     "$:/status/",
     "$:/temp/",
+    "$:/config/",
     "$:/plugins/tiddlydesktop-rs/",
     "$:/plugins/tiddlydesktop/",
-    "$:/config/ViewToolbarButtons/Visibility/$:/plugins/tiddlydesktop-rs/",
 ];
 
 /// A deletion tombstone

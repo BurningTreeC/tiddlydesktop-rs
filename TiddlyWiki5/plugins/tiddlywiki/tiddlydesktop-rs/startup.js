@@ -1723,16 +1723,18 @@ exports.startup = function(callback) {
 			}
 		});
 
-		// Build list of local wikis that don't have sync enabled yet
-		var entries = getWikiListEntries();
-		var candidates = entries.filter(function(e) { return !e.sync_enabled; });
-
-		candidates.forEach(function(e, i) {
-			$tw.wiki.addTiddler({
-				title: "$:/temp/tiddlydesktop-rs/link-candidate/" + i,
-				"candidate-path": e.path,
-				text: e.filename + (e.display_path ? " (" + e.display_path + ")" : "")
+		// Load from Rust backend (source of truth) to ensure paths match recent_files.json
+		invoke("get_recent_files").then(function(rustEntries) {
+			var candidates = (rustEntries || []).filter(function(e) { return !e.sync_enabled; });
+			candidates.forEach(function(e, i) {
+				$tw.wiki.addTiddler({
+					title: "$:/temp/tiddlydesktop-rs/link-candidate/" + i,
+					"candidate-path": e.path,
+					text: e.filename + (e.display_path ? " (" + e.display_path + ")" : "")
+				});
 			});
+		}).catch(function(err) {
+			console.error("[LAN Sync] Failed to load recent files for link candidates:", err);
 		});
 	});
 

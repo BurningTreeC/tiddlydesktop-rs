@@ -12,6 +12,8 @@ pub enum RelayFrame {
     Binary(Vec<u8>),
     /// Text control message from relay server (members, member_joined, member_left)
     Control(String),
+    /// Server ping received (resets receive timeout — no data to process)
+    Heartbeat,
 }
 
 /// Sender half — used by RelaySyncManager to send encrypted frames
@@ -139,7 +141,13 @@ pub async fn connect(
                     }
                 }
                 Ok(Message::Close(_)) => break,
-                Ok(Message::Ping(_) | Message::Pong(_) | Message::Frame(_)) => {}
+                Ok(Message::Ping(_) | Message::Pong(_)) => {
+                    // Forward as heartbeat so receive timeout resets
+                    if frame_tx.send(RelayFrame::Heartbeat).is_err() {
+                        break;
+                    }
+                }
+                Ok(Message::Frame(_)) => {}
                 Err(e) => {
                     eprintln!("[Relay] WebSocket receive error: {}", e);
                     break;

@@ -233,6 +233,7 @@ jobs:
           mkdir -p src-tauri/resources
           rm -rf ../TiddlyWiki5/.git
           rm -rf ../TiddlyWiki5/editions/tiddlywiki-surveys
+          rm -rf src-tauri/resources/tiddlywiki
           cp -r ../TiddlyWiki5 src-tauri/resources/tiddlywiki
           cp src/index.html src-tauri/resources/index.html
 
@@ -331,6 +332,7 @@ jobs:
           mkdir -p src-tauri/resources
           rm -rf ../TiddlyWiki5/.git
           rm -rf ../TiddlyWiki5/editions/tiddlywiki-surveys
+          rm -rf src-tauri/resources/tiddlywiki
           cp -r ../TiddlyWiki5 src-tauri/resources/tiddlywiki
           # Copy index.html to resources for bundling (avoids WiX issues with map format)
           cp src/index.html src-tauri/resources/index.html
@@ -412,6 +414,7 @@ jobs:
           mkdir -p src-tauri/resources
           rm -rf ../TiddlyWiki5/.git
           rm -rf ../TiddlyWiki5/editions/tiddlywiki-surveys
+          rm -rf src-tauri/resources/tiddlywiki
           cp -r ../TiddlyWiki5 src-tauri/resources/tiddlywiki
           # Copy index.html to resources for bundling (avoids WiX issues with map format)
           cp src/index.html src-tauri/resources/index.html
@@ -524,6 +527,7 @@ jobs:
           mkdir -p src-tauri/resources
           rm -rf ../TiddlyWiki5/.git
           rm -rf ../TiddlyWiki5/editions/tiddlywiki-surveys
+          rm -rf src-tauri/resources/tiddlywiki
           cp -r ../TiddlyWiki5 src-tauri/resources/tiddlywiki
           # Copy index.html to resources for bundling
           cp src/index.html src-tauri/resources/index.html
@@ -609,6 +613,7 @@ jobs:
           mkdir -p src-tauri/resources
           rm -rf ../TiddlyWiki5/.git
           rm -rf ../TiddlyWiki5/editions/tiddlywiki-surveys
+          rm -rf src-tauri/resources/tiddlywiki
           cp -r ../TiddlyWiki5 src-tauri/resources/tiddlywiki
           # Copy index.html to resources for bundling
           cp src/index.html src-tauri/resources/index.html
@@ -726,6 +731,7 @@ jobs:
           mkdir -p src-tauri/resources
           rm -rf ../TiddlyWiki5/.git
           rm -rf ../TiddlyWiki5/editions/tiddlywiki-surveys
+          rm -rf src-tauri/resources/tiddlywiki
           cp -r ../TiddlyWiki5 src-tauri/resources/tiddlywiki
           cp src/index.html src-tauri/resources/index.html
 

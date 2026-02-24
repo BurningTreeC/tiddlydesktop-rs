@@ -27,6 +27,7 @@ use hmac::{Hmac, Mac};
 use sha2::Sha256;
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::time::Instant;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tauri::Emitter;
@@ -34,6 +35,25 @@ use tokio::sync::{mpsc, RwLock};
 
 /// Relay server URL (TLS via rustls + WebPKI roots)
 const DEFAULT_RELAY_URL: &str = "wss://relay.tiddlydesktop-rs.com:8443";
+
+/// Encrypted payloads larger than this are split into chunks (1.5 MB)
+const CHUNK_THRESHOLD: usize = 1_500_000;
+
+/// Size of each chunk (1 MB — well under the 2 MB server limit)
+const CHUNK_SIZE: usize = 1_000_000;
+
+/// Timeout for incomplete chunk reassembly (30 seconds)
+const CHUNK_REASSEMBLY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// Key for reassembly buffer: (sender_device_id, message_id)
+type ChunkKey = (String, [u8; 16]);
+
+struct ChunkReassembly {
+    chunks: Vec<Option<Vec<u8>>>,
+    total_chunks: u16,
+    received_count: u16,
+    created_at: Instant,
+}
 
 /// Old relay URL (plain WebSocket, pre-TLS) — auto-migrated on config load
 const OLD_RELAY_URL: &str = "ws://164.92.180.226:8443";
@@ -813,8 +833,34 @@ impl RelaySyncManager {
         rooms: &Arc<RwLock<HashMap<String, RoomConnection>>>,
         running: &Arc<AtomicBool>,
     ) {
+        // Reassembly buffer for chunked messages (0x03 frames)
+        let mut reassembly_buffers: HashMap<ChunkKey, ChunkReassembly> = HashMap::new();
+
+        // Receive timeout: server pings every 30s, so if nothing arrives
+        // within 90s the connection is likely dead (Android Doze, NAT timeout, etc.)
+        const RECV_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(90);
+
         loop {
-            match receiver.recv().await {
+            // Prune expired reassembly buffers
+            reassembly_buffers.retain(|_key, entry| {
+                entry.created_at.elapsed() < CHUNK_REASSEMBLY_TIMEOUT
+            });
+
+            let frame = tokio::time::timeout(RECV_TIMEOUT, receiver.recv()).await;
+            let frame = match frame {
+                Ok(f) => f,
+                Err(_) => {
+                    // Timeout — no frames received in 90s, connection presumed dead
+                    eprintln!(
+                        "[Relay] Room {}: receive timeout ({}s), disconnecting",
+                        room_code,
+                        RECV_TIMEOUT.as_secs()
+                    );
+                    return;
+                }
+            };
+
+            match frame {
                 Some(RelayFrame::Binary(data)) => {
                     if data.is_empty() {
                         continue;
@@ -993,6 +1039,174 @@ impl RelaySyncManager {
                             }
                         }
 
+                        // Chunk frame: [0x03][2-byte sender_id_len LE][sender_id UTF-8]
+                        //              [1-byte mode: 0x00=broadcast, 0x01=targeted]
+                        //              [if targeted: 2-byte recipient_len LE][recipient_id UTF-8]
+                        //              [16-byte message_id][2-byte chunk_index LE][2-byte total_chunks LE]
+                        //              [chunk payload]
+                        0x03 => {
+                            if data.len() < 4 {
+                                continue;
+                            }
+                            let sender_id_len =
+                                u16::from_le_bytes([data[1], data[2]]) as usize;
+                            if data.len() < 3 + sender_id_len + 1 {
+                                continue;
+                            }
+                            let sender_id =
+                                String::from_utf8_lossy(&data[3..3 + sender_id_len]).to_string();
+
+                            if sender_id == my_device_id {
+                                continue;
+                            }
+
+                            let mode_offset = 3 + sender_id_len;
+                            let mode = data[mode_offset];
+                            let meta_offset;
+
+                            if mode == 0x01 {
+                                // Targeted message — check if we're the recipient
+                                if data.len() < mode_offset + 3 {
+                                    continue;
+                                }
+                                let recipient_len = u16::from_le_bytes([
+                                    data[mode_offset + 1],
+                                    data[mode_offset + 2],
+                                ]) as usize;
+                                if data.len() < mode_offset + 3 + recipient_len {
+                                    continue;
+                                }
+                                let recipient_id = String::from_utf8_lossy(
+                                    &data[mode_offset + 3..mode_offset + 3 + recipient_len],
+                                );
+                                if recipient_id != my_device_id {
+                                    continue;
+                                }
+                                meta_offset = mode_offset + 3 + recipient_len;
+                            } else {
+                                meta_offset = mode_offset + 1;
+                            }
+
+                            // Parse chunk metadata: message_id (16) + chunk_index (2) + total_chunks (2) = 20 bytes
+                            if data.len() < meta_offset + 20 {
+                                continue;
+                            }
+                            let mut message_id = [0u8; 16];
+                            message_id.copy_from_slice(&data[meta_offset..meta_offset + 16]);
+                            let chunk_index = u16::from_le_bytes([
+                                data[meta_offset + 16],
+                                data[meta_offset + 17],
+                            ]);
+                            let total_chunks = u16::from_le_bytes([
+                                data[meta_offset + 18],
+                                data[meta_offset + 19],
+                            ]);
+                            let chunk_payload = &data[meta_offset + 20..];
+
+                            if total_chunks == 0 || chunk_index >= total_chunks {
+                                continue;
+                            }
+
+                            let key: ChunkKey = (sender_id.clone(), message_id);
+                            let entry = reassembly_buffers
+                                .entry(key)
+                                .or_insert_with(|| ChunkReassembly {
+                                    chunks: vec![None; total_chunks as usize],
+                                    total_chunks,
+                                    received_count: 0,
+                                    created_at: Instant::now(),
+                                });
+
+                            // Validate total_chunks consistency
+                            if entry.total_chunks != total_chunks {
+                                continue;
+                            }
+
+                            let idx = chunk_index as usize;
+                            if idx < entry.chunks.len() && entry.chunks[idx].is_none() {
+                                entry.chunks[idx] = Some(chunk_payload.to_vec());
+                                entry.received_count += 1;
+                            }
+
+                            // Check if all chunks received
+                            if entry.received_count == entry.total_chunks {
+                                // Reassemble the full encrypted payload
+                                let key = (sender_id.clone(), message_id);
+                                if let Some(completed) = reassembly_buffers.remove(&key) {
+                                    let total_len: usize = completed
+                                        .chunks
+                                        .iter()
+                                        .map(|c| c.as_ref().map_or(0, |v| v.len()))
+                                        .sum();
+                                    let mut encrypted_payload = Vec::with_capacity(total_len);
+                                    for chunk in &completed.chunks {
+                                        if let Some(data) = chunk {
+                                            encrypted_payload.extend_from_slice(data);
+                                        }
+                                    }
+
+                                    eprintln!(
+                                        "[Relay] Room {}: reassembled {} chunks ({} bytes) from {}",
+                                        room_code,
+                                        completed.total_chunks,
+                                        encrypted_payload.len(),
+                                        &sender_id[..8.min(sender_id.len())]
+                                    );
+
+                                    // Decrypt (same logic as 0x02 handler)
+                                    let rooms_guard = rooms.read().await;
+                                    if let Some(room) = rooms_guard.get(room_code) {
+                                        if let Some(cipher) = room.decrypt_ciphers.get(&sender_id) {
+                                            match decrypt_message(cipher, &encrypted_payload) {
+                                                Ok(message) => {
+                                                    let _ = event_tx.send(
+                                                        ServerEvent::SyncMessageReceived {
+                                                            from_device_id: sender_id.clone(),
+                                                            message,
+                                                        },
+                                                    );
+                                                }
+                                                Err(_) => {
+                                                    if let Some(old_cipher) =
+                                                        room.old_decrypt_ciphers.get(&sender_id)
+                                                    {
+                                                        match decrypt_message(
+                                                            old_cipher,
+                                                            &encrypted_payload,
+                                                        ) {
+                                                            Ok(message) => {
+                                                                let _ = event_tx.send(
+                                                                    ServerEvent::SyncMessageReceived {
+                                                                        from_device_id: sender_id
+                                                                            .clone(),
+                                                                        message,
+                                                                    },
+                                                                );
+                                                            }
+                                                            Err(e2) => {
+                                                                eprintln!(
+                                                                    "[Relay] Room {}: chunked decrypt failed from {} (both ciphers): {}",
+                                                                    room_code,
+                                                                    &sender_id[..8.min(sender_id.len())],
+                                                                    e2
+                                                                );
+                                                            }
+                                                        }
+                                                    } else {
+                                                        eprintln!(
+                                                            "[Relay] Room {}: chunked decrypt failed from {} (no old cipher)",
+                                                            room_code,
+                                                            &sender_id[..8.min(sender_id.len())]
+                                                        );
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
                         _ => {
                             // Unknown frame type, ignore
                         }
@@ -1072,6 +1286,10 @@ impl RelaySyncManager {
                         }
                     }
                 }
+                Some(RelayFrame::Heartbeat) => {
+                    // Server ping received — timeout already reset by loop iteration
+                    continue;
+                }
                 None => {
                     // Connection closed
                     return;
@@ -1090,17 +1308,20 @@ impl RelaySyncManager {
 
     /// Send an encrypted message to a specific relay peer (targeted).
     /// Finds which room has this device and sends through it.
+    /// Large payloads are automatically chunked to fit under the server's message size limit.
     pub async fn send_to_peer(&self, device_id: &str, msg: &SyncMessage) -> Result<(), String> {
         let mut rooms = self.rooms.write().await;
-        for (room_code, room) in rooms.iter_mut() {
+        for (_room_code, room) in rooms.iter_mut() {
             if room.decrypt_ciphers.contains_key(device_id) {
                 let encrypted = encrypt_message(&mut room.encrypt_cipher, msg)?;
-                let frame = build_data_frame(
-                    &self.pairing_manager.device_id(),
+                let my_id = self.pairing_manager.device_id().to_string();
+                return send_maybe_chunked(
+                    &room.sender,
+                    &my_id,
                     Some(device_id),
-                    &encrypted,
-                );
-                return room.sender.send_binary(frame).await;
+                    encrypted,
+                )
+                .await;
             }
         }
         Err(format!("Relay peer {} not connected in any room", device_id))
@@ -1125,13 +1346,19 @@ impl RelaySyncManager {
             }
         }
 
-        // Send once per room as broadcast
+        // Send once per room as broadcast (auto-chunking large payloads)
         for (room_code, _targets) in &room_targets {
             if let Some(room) = rooms.get_mut(room_code) {
                 match encrypt_message(&mut room.encrypt_cipher, msg) {
                     Ok(encrypted) => {
-                        let frame = build_data_frame(&my_device_id, None, &encrypted);
-                        if let Err(e) = room.sender.send_binary(frame).await {
+                        if let Err(e) = send_maybe_chunked(
+                            &room.sender,
+                            &my_device_id,
+                            None,
+                            encrypted,
+                        )
+                        .await
+                        {
                             eprintln!("[Relay] Send to room {} failed: {}", room_code, e);
                         }
                     }
@@ -1143,7 +1370,8 @@ impl RelaySyncManager {
         }
     }
 
-    /// Send a broadcast message to a specific room
+    /// Send a broadcast message to a specific room.
+    /// Large payloads are automatically chunked.
     pub async fn send_to_room(&self, room_code: &str, msg: &SyncMessage) -> Result<(), String> {
         let mut rooms = self.rooms.write().await;
         let room = rooms
@@ -1152,8 +1380,7 @@ impl RelaySyncManager {
 
         let my_device_id = self.pairing_manager.device_id().to_string();
         let encrypted = encrypt_message(&mut room.encrypt_cipher, msg)?;
-        let frame = build_data_frame(&my_device_id, None, &encrypted);
-        room.sender.send_binary(frame).await
+        send_maybe_chunked(&room.sender, &my_device_id, None, encrypted).await
     }
 
     /// Get list of connected relay peers across all rooms (deduped)
@@ -1293,4 +1520,87 @@ fn build_data_frame(
 
     frame.extend_from_slice(encrypted_payload);
     frame
+}
+
+/// Build a chunk frame:
+/// [0x03][2-byte sender_id_len LE][sender_id UTF-8]
+/// [1-byte mode: 0x00=broadcast, 0x01=targeted]
+/// [if targeted: 2-byte recipient_len LE][recipient_id UTF-8]
+/// [16-byte message_id]
+/// [2-byte chunk_index LE]
+/// [2-byte total_chunks LE]
+/// [chunk payload]
+fn build_chunk_frame(
+    sender_id: &str,
+    target_device_id: Option<&str>,
+    message_id: &[u8; 16],
+    chunk_index: u16,
+    total_chunks: u16,
+    chunk_payload: &[u8],
+) -> Vec<u8> {
+    let sender_bytes = sender_id.as_bytes();
+    let sender_len = sender_bytes.len() as u16;
+
+    let mut frame = Vec::with_capacity(
+        1 + 2 + sender_bytes.len() + 1 + 16 + 4 + chunk_payload.len() + 32,
+    );
+
+    frame.push(0x03);
+    frame.extend_from_slice(&sender_len.to_le_bytes());
+    frame.extend_from_slice(sender_bytes);
+
+    if let Some(recipient) = target_device_id {
+        frame.push(0x01); // targeted
+        let recipient_bytes = recipient.as_bytes();
+        let recipient_len = recipient_bytes.len() as u16;
+        frame.extend_from_slice(&recipient_len.to_le_bytes());
+        frame.extend_from_slice(recipient_bytes);
+    } else {
+        frame.push(0x00); // broadcast
+    }
+
+    frame.extend_from_slice(message_id);
+    frame.extend_from_slice(&chunk_index.to_le_bytes());
+    frame.extend_from_slice(&total_chunks.to_le_bytes());
+    frame.extend_from_slice(chunk_payload);
+    frame
+}
+
+/// Send an encrypted payload, chunking it if it exceeds CHUNK_THRESHOLD.
+/// Small payloads are sent as a single 0x02 data frame.
+/// Large payloads are split into 0x03 chunk frames.
+async fn send_maybe_chunked(
+    sender: &RelaySender,
+    sender_id: &str,
+    target: Option<&str>,
+    encrypted: Vec<u8>,
+) -> Result<(), String> {
+    if encrypted.len() <= CHUNK_THRESHOLD {
+        let frame = build_data_frame(sender_id, target, &encrypted);
+        return sender.send_binary(frame).await;
+    }
+
+    // Split into chunks
+    let message_id: [u8; 16] = rand::random();
+    let chunk_slices: Vec<&[u8]> = encrypted.chunks(CHUNK_SIZE).collect();
+    let total_chunks = chunk_slices.len() as u16;
+
+    eprintln!(
+        "[Relay] Chunking {} byte payload into {} chunks",
+        encrypted.len(),
+        total_chunks
+    );
+
+    for (i, chunk_data) in chunk_slices.iter().enumerate() {
+        let frame = build_chunk_frame(
+            sender_id,
+            target,
+            &message_id,
+            i as u16,
+            total_chunks,
+            chunk_data,
+        );
+        sender.send_binary(frame).await?;
+    }
+    Ok(())
 }

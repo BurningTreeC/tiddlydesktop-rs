@@ -846,17 +846,26 @@
       }
 
       // Peer status updates — update data tiddlers for peer badge UI
+      // Only call addTiddler if value actually changed (avoid unnecessary refresh cycles)
       if (data.type === 'peer-update') {
         if (data.peers) {
-          $tw.wiki.addTiddler({
-            title: '$:/temp/tiddlydesktop/connected-peers',
-            type: 'application/json',
-            text: JSON.stringify(data.peers)
-          });
-          $tw.wiki.addTiddler({
-            title: '$:/temp/tiddlydesktop/peer-count',
-            text: String(data.peers.length)
-          });
+          var peersJson = JSON.stringify(data.peers);
+          var countStr = String(data.peers.length);
+          var PEERS_TITLE = '$:/temp/tiddlydesktop/connected-peers';
+          var COUNT_TITLE = '$:/temp/tiddlydesktop/peer-count';
+          if ($tw.wiki.getTiddlerText(PEERS_TITLE) !== peersJson) {
+            $tw.wiki.addTiddler({
+              title: PEERS_TITLE,
+              type: 'application/json',
+              text: peersJson
+            });
+          }
+          if ($tw.wiki.getTiddlerText(COUNT_TITLE) !== countStr) {
+            $tw.wiki.addTiddler({
+              title: COUNT_TITLE,
+              text: countStr
+            });
+          }
         }
         return;
       }
@@ -1280,19 +1289,25 @@
                     break;
                   case 'peer-update':
                     // Update peer data tiddlers (pushed from main process)
+                    // Only call addTiddler if value changed (avoid unnecessary refresh cycles)
                     if (data.peers) {
                       var PEERS_TIDDLER = '$:/temp/tiddlydesktop/connected-peers';
                       var COUNT_TIDDLER = '$:/temp/tiddlydesktop/peer-count';
                       var peersJson = JSON.stringify(data.peers);
-                      $tw.wiki.addTiddler({
-                        title: PEERS_TIDDLER,
-                        type: 'application/json',
-                        text: peersJson
-                      });
-                      $tw.wiki.addTiddler({
-                        title: COUNT_TIDDLER,
-                        text: String(data.peers.length)
-                      });
+                      var countStr = String(data.peers.length);
+                      if ($tw.wiki.getTiddlerText(PEERS_TIDDLER) !== peersJson) {
+                        $tw.wiki.addTiddler({
+                          title: PEERS_TIDDLER,
+                          type: 'application/json',
+                          text: peersJson
+                        });
+                      }
+                      if ($tw.wiki.getTiddlerText(COUNT_TIDDLER) !== countStr) {
+                        $tw.wiki.addTiddler({
+                          title: COUNT_TIDDLER,
+                          text: countStr
+                        });
+                      }
                     }
                     break;
                 }

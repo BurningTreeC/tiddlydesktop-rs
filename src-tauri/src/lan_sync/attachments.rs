@@ -590,6 +590,12 @@ impl AttachmentManager {
             return None;
         }
 
+        // Reject path traversal (defense-in-depth — SAF wouldn't resolve ".." anyway)
+        if components.iter().any(|c| *c == ".." || c.is_empty()) {
+            eprintln!("[LAN Sync] Security: Rejected SAF attachment path with traversal: {}", relative_path);
+            return None;
+        }
+
         // Get parent directory of wiki file
         let parent_uri = crate::android::saf::get_parent_uri(&wiki_uri).ok()?;
 
@@ -636,6 +642,11 @@ impl AttachmentManager {
         let components: Vec<&str> = clean_path.split('/').collect();
         if components.is_empty() {
             return Err("Empty filename".to_string());
+        }
+
+        // Reject path traversal (defense-in-depth — SAF wouldn't resolve ".." anyway)
+        if components.iter().any(|c| *c == ".." || c.is_empty()) {
+            return Err(format!("Security: Rejected path with traversal: {}", filename));
         }
 
         // Get parent directory of wiki file

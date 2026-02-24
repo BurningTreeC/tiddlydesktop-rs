@@ -126,6 +126,16 @@ function _isFieldHardExcluded(fieldName) {
 	return !!_YMAP_EXCLUDED_FIELDS[fieldName];
 }
 
+// Check if a tiddler's text field contains binary data.
+// Binary when: type is base64-encoded AND _canonical_uri is not set.
+// When _canonical_uri IS set, the text is just a URI reference, not binary blob data.
+function _isBinaryTextField(fields) {
+	if(!fields || !fields.type) return false;
+	if(fields._canonical_uri) return false;
+	var contentTypeInfo = $tw.config && $tw.config.contentTypeInfo && $tw.config.contentTypeInfo[fields.type];
+	return !!contentTypeInfo && contentTypeInfo.encoding === "base64";
+}
+
 // Get the Y.Text key for a given edit field.
 // "text" → "content" (backward compat), others → "field:" + name.
 function _ytextKeyForField(editField) {
@@ -302,18 +312,26 @@ function _createCaretDOM(color, name) {
 
 	span.appendChild(document.createTextNode("\u2060"));
 
-	// After mount: detect if dot/info would be clipped (single-line field)
-	// and flip them below the caret instead of above.
+	// After mount: detect if dot/info would be clipped and adjust position.
+	// A) Default: above the cursor (enough space above)
+	// B) Below the cursor (no space above, but space below)
+	// C) Right beneath the cursor line (single-line input, no space above or below)
 	requestAnimationFrame(function() {
 		if(!span.parentNode) return;
 		var editor = span.closest(".cm-editor");
 		if(!editor) return;
 		var editorRect = editor.getBoundingClientRect();
 		var spanRect = span.getBoundingClientRect();
-		// If the caret is close to the top of the editor (within 1.5em ≈ 24px),
-		// the above-positioned elements would be clipped
-		if(spanRect.top - editorRect.top < 24) {
-			span.classList.add("cm-ySelectionCaret-below");
+		var spaceAbove = spanRect.top - editorRect.top;
+		var spaceBelow = editorRect.bottom - spanRect.bottom;
+		if(spaceAbove < 24) {
+			if(spaceBelow < 24) {
+				// Single-line input: no room above or below — show inline beside cursor
+				span.classList.add("cm-ySelectionCaret-inline");
+			} else {
+				// No room above but room below — flip below
+				span.classList.add("cm-ySelectionCaret-below");
+			}
 		}
 	});
 
@@ -384,6 +402,18 @@ function _buildRemoteSelectionsTheme(EditorView) {
 		".cm-ySelectionCaret-below > .cm-ySelectionInfo": {
 			top: "auto",
 			bottom: "-1.05em"
+		},
+		// Inline positioning for single-line inputs (no space above or below)
+		".cm-ySelectionCaret-inline > .cm-ySelectionCaretDot": {
+			transform: "scale(0)"
+		},
+		".cm-ySelectionCaret-inline > .cm-ySelectionInfo": {
+			top: "auto",
+			bottom: "0",
+			opacity: 1,
+			fontSize: ".65em",
+			lineHeight: "1",
+			borderRadius: "2px"
 		}
 	});
 }
@@ -479,7 +509,9 @@ function _buildRemoteSelectionsPlugin(core, collabState, fieldState) {
 							head: head
 						});
 					}
-				} else if(localState.cursor != null && hasFocus) {
+				} else if(localState.cursor != null) {
+					// Clear cursor when editor loses focus (sel is null)
+					// so peers don't see a stale cursor position
 					awareness.setLocalStateField("cursor", null);
 				}
 			}
@@ -915,7 +947,10 @@ function _connectTransport(engine, collab) {
 
 		var changedFields = {};
 		var hasChanges = false;
+		var isBinary = _isBinaryTextField(tid.fields);
 		event.changes.keys.forEach(function(change, key) {
+			// Skip text field of binary tiddlers (defense-in-depth against old clients)
+			if(key === "text" && isBinary) return;
 			if(change.action === "add") {
 				// Structural: new field from remote — always apply
 				changedFields[key] = ymap.get(key);
@@ -964,12 +999,15 @@ function _connectTransport(engine, collab) {
 
 		var fields = tid.fields;
 		var hasUpdates = false;
+		var isBinary = _isBinaryTextField(fields);
 
 		doc.transact(function() {
 			// Sync new/changed fields to Y.Map
 			for(var key in fields) {
 				if(!Object.prototype.hasOwnProperty.call(fields, key)) continue;
 				if(_isFieldHardExcluded(key)) continue;
+				// Skip text field of binary tiddlers (large base64 blobs)
+				if(key === "text" && isBinary) continue;
 				var val = typeof fields[key] === "string" ? fields[key] : "" + fields[key];
 				if(state._ytextFields && state._ytextFields.has(key)) {
 					// Y.Text field: only sync structural presence (new field)
@@ -1006,11 +1044,14 @@ function _connectTransport(engine, collab) {
 	state._populateYmapFromDraft = function() {
 		var tid = $tw.wiki.getTiddler(state.tiddlerTitle);
 		if(!tid) return;
+		var isBinary = _isBinaryTextField(tid.fields);
 		doc.transact(function() {
 			var fields = tid.fields;
 			for(var key in fields) {
 				if(!Object.prototype.hasOwnProperty.call(fields, key)) continue;
 				if(_isFieldHardExcluded(key)) continue;
+				// Skip text field of binary tiddlers (large base64 blobs)
+				if(key === "text" && isBinary) continue;
 				var val = typeof fields[key] === "string" ? fields[key] : "" + fields[key];
 				ymap.set(key, val);
 			}
@@ -1306,10 +1347,8 @@ exports.plugin = {
 		var enabled = wiki && wiki.getTiddlerText("$:/config/codemirror-6/collab/enabled") !== "no";
 		if(!enabled) return false;
 		if(!context.tiddlerTitle) return false;
-		// Enable collab for all text-editable fields. Each field gets its own
-		// Y.Text instance within the shared Y.Doc (per-field CRDT).
-		var editField = (context.options && context.options.widget && context.options.widget.editField) || "text";
-		_clog("[Collab] condition: tiddlerTitle=" + (context.tiddlerTitle || "none") + ", editField=" + editField + ", enabled=" + enabled);
+		// Exclude search tiddlers — typing in search should not create collab sessions
+		if(context.tiddlerTitle === "$:/temp/search" || context.tiddlerTitle === "$:/temp/advancedsearch") return false;
 		return true;
 	},
 

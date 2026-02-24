@@ -758,10 +758,12 @@ impl SyncManager {
         // Desktop: periodically push peer lists to wiki processes via IPC.
         // Wiki processes are separate OS processes where get_sync_manager() returns None,
         // so they can't query peers directly via Tauri commands.
+        // Only sends when the peer list actually changes (avoids unnecessary TW5 refresh cycles).
         #[cfg(not(target_os = "android"))]
         {
             tokio::spawn(async {
                 let mut interval = tokio::time::interval(std::time::Duration::from_secs(5));
+                let mut last_peers: std::collections::HashMap<String, String> = std::collections::HashMap::new();
                 loop {
                     interval.tick().await;
                     let mgr = match get_sync_manager() {
@@ -779,7 +781,7 @@ impl SyncManager {
                         Some(a) => a,
                         None => continue,
                     };
-                    // For each sync-enabled wiki, push its peer list
+                    // For each sync-enabled wiki, push its peer list only if changed
                     let entries = crate::wiki_storage::load_recent_files_from_disk(app);
                     for entry in &entries {
                         if entry.sync_enabled {
@@ -791,7 +793,11 @@ impl SyncManager {
                                         "wiki_id": sync_id,
                                         "peers": peers,
                                     }).to_string();
-                                    server.send_lan_sync_to_all(sync_id, &payload);
+                                    let prev = last_peers.get(sync_id.as_str());
+                                    if prev.map_or(true, |p| p != &payload) {
+                                        last_peers.insert(sync_id.clone(), payload.clone());
+                                        server.send_lan_sync_to_all(sync_id, &payload);
+                                    }
                                 }
                             }
                         }
@@ -1565,37 +1571,53 @@ impl SyncManager {
             Some(a) => a,
             None => return result,
         };
-        let room_code = match crate::wiki_storage::get_wiki_relay_room_by_sync_id(app, wiki_id) {
-            Some(rc) => rc,
-            None => return result,
-        };
+        let room_code = crate::wiki_storage::get_wiki_relay_room_by_sync_id(app, wiki_id);
 
         // LAN peers authenticated for this wiki's room
-        let peers_guard = self.peers.read().await;
-        if let Some(ref server) = *self.server.read().await {
-            for (id, name, user_name) in server.connected_peers().await {
-                if let Some(pc) = peers_guard.get(&id) {
-                    if pc.auth_room_code.as_deref() == Some(room_code.as_str()) {
-                        if seen.insert(id.clone()) {
-                            result.push(PeerInfo { device_id: id, device_name: name, user_name });
+        if let Some(ref rc) = room_code {
+            let peers_guard = self.peers.read().await;
+            if let Some(ref server) = *self.server.read().await {
+                for (id, name, user_name) in server.connected_peers().await {
+                    if let Some(pc) = peers_guard.get(&id) {
+                        if pc.auth_room_code.as_deref() == Some(rc.as_str()) {
+                            if seen.insert(id.clone()) {
+                                result.push(PeerInfo { device_id: id, device_name: name, user_name });
+                            }
+                        }
+                    }
+                }
+            }
+            drop(peers_guard);
+        }
+
+        // Relay peers in this wiki's room
+        if let Some(ref rc) = room_code {
+            if let Some(ref relay) = self.relay_manager {
+                for room in relay.get_rooms().await {
+                    if room.room_code == *rc && room.connected {
+                        for peer in room.connected_peers {
+                            if seen.insert(peer.device_id.clone()) {
+                                result.push(PeerInfo {
+                                    device_id: peer.device_id.clone(),
+                                    device_name: peer.device_name.clone(),
+                                    user_name: None,
+                                });
+                            }
                         }
                     }
                 }
             }
         }
-        drop(peers_guard);
 
-        // Relay peers in this wiki's room
-        if let Some(ref relay) = self.relay_manager {
-            for room in relay.get_rooms().await {
-                if room.room_code == room_code && room.connected {
-                    for peer in room.connected_peers {
-                        if seen.insert(peer.device_id.clone()) {
-                            result.push(PeerInfo {
-                                device_id: peer.device_id.clone(),
-                                device_name: peer.device_name.clone(),
-                                user_name: None,
-                            });
+        // Fallback: if no room_code is assigned, include all connected LAN peers.
+        // This covers LAN-only wikis that haven't been assigned to a relay room yet.
+        if room_code.is_none() {
+            let peers_guard = self.peers.read().await;
+            if let Some(ref server) = *self.server.read().await {
+                for (id, name, user_name) in server.connected_peers().await {
+                    if peers_guard.contains_key(&id) {
+                        if seen.insert(id.clone()) {
+                            result.push(PeerInfo { device_id: id, device_name: name, user_name });
                         }
                     }
                 }
@@ -4001,7 +4023,17 @@ impl SyncManager {
         use base64::Engine;
 
         for rel_path in files {
-            let file_path = item_dir.join(rel_path);
+            // Validate path stays within plugin directory (prevents path traversal)
+            let file_path = match validate_contained_path(item_dir, rel_path) {
+                Some(p) => p,
+                None => {
+                    eprintln!(
+                        "[Sync] Security: Rejected plugin file request with unsafe path: {}",
+                        rel_path
+                    );
+                    continue;
+                }
+            };
             let data = match std::fs::read(&file_path) {
                 Ok(d) => d,
                 Err(e) => {
@@ -4166,6 +4198,19 @@ impl SyncManager {
         chunk_count: u32,
         data_base64: &str,
     ) {
+        // Early reject path traversal in rel_path before even accumulating data
+        let normalized = rel_path.replace('\\', "/");
+        let clean = normalized.strip_prefix("./").unwrap_or(&normalized);
+        for component in clean.split('/') {
+            if component == ".." || component.is_empty() {
+                eprintln!(
+                    "[LAN Sync] Security: Rejected plugin file chunk with unsafe path: {}",
+                    rel_path
+                );
+                return;
+            }
+        }
+
         use base64::Engine;
         let data = match base64::engine::general_purpose::STANDARD.decode(data_base64) {
             Ok(d) => d,
@@ -4238,7 +4283,17 @@ impl SyncManager {
 
         let mut written = 0;
         for (rel_path, data) in &file_map {
-            let file_path = target_dir.join(rel_path);
+            // Validate path stays within target plugin directory (prevents path traversal)
+            let file_path = match validate_contained_path(&target_dir, rel_path) {
+                Some(p) => p,
+                None => {
+                    eprintln!(
+                        "[LAN Sync] Security: Rejected plugin file write with unsafe path: {}",
+                        rel_path
+                    );
+                    continue;
+                }
+            };
             // Create parent directories if needed
             if let Some(parent) = file_path.parent() {
                 let _ = std::fs::create_dir_all(parent);
@@ -4656,8 +4711,26 @@ impl SyncManager {
             };
 
             let file_path = if is_folder {
-                target_dir.join(wiki_name).join(filename)
+                let folder_dir = target_dir.join(wiki_name);
+                match validate_contained_path(&folder_dir, filename) {
+                    Some(p) => p,
+                    None => {
+                        eprintln!(
+                            "[LAN Sync] Security: Rejected wiki file with unsafe path: {}",
+                            filename
+                        );
+                        return;
+                    }
+                }
             } else {
+                // Single-file wiki: filename should be just the wiki name, no subdirectories
+                if filename.contains('/') || filename.contains('\\') || filename.contains("..") {
+                    eprintln!(
+                        "[LAN Sync] Security: Rejected single-file wiki name with path components: {}",
+                        filename
+                    );
+                    return;
+                }
                 target_dir.join(filename)
             };
 
@@ -5881,21 +5954,104 @@ fn collect_attachment_entries_with_size(wiki_path: &str) -> Vec<(AttachmentEntry
     result
 }
 
-/// Recursively collect all files in a directory, returning (full_path, relative_path) pairs
+/// Validate that a relative path is safe and stays within a base directory.
+/// Rejects path traversal (..), absolute paths, and symlink escapes.
+/// Returns the validated joined path, or None if the path is unsafe.
+fn validate_contained_path(
+    base: &std::path::Path,
+    rel_path: &str,
+) -> Option<std::path::PathBuf> {
+    // Normalize backslashes for cross-platform safety
+    let normalized = rel_path.replace('\\', "/");
+    let clean = normalized.strip_prefix("./").unwrap_or(&normalized);
+
+    // Reject path traversal sequences
+    for component in clean.split('/') {
+        if component == ".." || component.is_empty() {
+            eprintln!(
+                "[LAN Sync] Security: Rejected path with traversal or empty component: {}",
+                rel_path
+            );
+            return None;
+        }
+    }
+
+    // Reject absolute paths
+    if std::path::Path::new(clean).is_absolute() {
+        eprintln!("[LAN Sync] Security: Rejected absolute path: {}", rel_path);
+        return None;
+    }
+
+    let joined = base.join(clean);
+
+    // Canonicalize and verify containment (catches symlink escapes)
+    let canonical_base = dunce::canonicalize(base).unwrap_or_else(|_| base.to_path_buf());
+    if let Ok(canonical) = dunce::canonicalize(&joined) {
+        if !canonical.starts_with(&canonical_base) {
+            eprintln!(
+                "[LAN Sync] Security: Path escapes base dir: {} -> {}",
+                rel_path,
+                canonical.display()
+            );
+            return None;
+        }
+        Some(canonical)
+    } else if let Some(parent) = joined.parent() {
+        // File doesn't exist yet — canonicalize parent and check
+        if let Ok(canonical_parent) = dunce::canonicalize(parent) {
+            if !canonical_parent.starts_with(&canonical_base) {
+                eprintln!(
+                    "[LAN Sync] Security: Parent path escapes base dir: {} -> {}",
+                    rel_path,
+                    canonical_parent.display()
+                );
+                return None;
+            }
+        }
+        Some(joined)
+    } else {
+        Some(joined)
+    }
+}
+
+/// Recursively collect all files in a directory, returning (full_path, relative_path) pairs.
+/// Skips symlinks that point outside the base directory to prevent data leakage.
 fn collect_files_recursive(
     base: &std::path::Path,
+    dir: &std::path::Path,
+    out: &mut Vec<(std::path::PathBuf, String)>,
+) {
+    let canonical_base = dunce::canonicalize(base).unwrap_or_else(|_| base.to_path_buf());
+    collect_files_recursive_inner(&canonical_base, dir, out);
+}
+
+fn collect_files_recursive_inner(
+    canonical_base: &std::path::Path,
     dir: &std::path::Path,
     out: &mut Vec<(std::path::PathBuf, String)>,
 ) {
     if let Ok(entries) = std::fs::read_dir(dir) {
         for entry in entries.flatten() {
             let path = entry.path();
+            // Verify every path stays within the base (catches symlinks)
+            if let Ok(canonical) = dunce::canonicalize(&path) {
+                if !canonical.starts_with(canonical_base) {
+                    eprintln!(
+                        "[LAN Sync] Security: Skipping symlink escape: {} -> {}",
+                        path.display(),
+                        canonical.display()
+                    );
+                    continue;
+                }
+            }
             if path.is_dir() {
-                collect_files_recursive(base, &path, out);
+                collect_files_recursive_inner(canonical_base, &path, out);
             } else if path.is_file() {
-                let rel = path
-                    .strip_prefix(base)
-                    .unwrap_or(&path)
+                // Use canonical path for reliable strip_prefix
+                let canonical = dunce::canonicalize(&path).unwrap_or_else(|_| path.clone());
+                let rel = canonical
+                    .strip_prefix(canonical_base)
+                    .unwrap_or(&canonical)
                     .to_string_lossy()
                     .to_string();
                 out.push((path, rel));

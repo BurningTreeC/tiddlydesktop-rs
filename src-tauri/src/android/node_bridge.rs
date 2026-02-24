@@ -921,16 +921,15 @@ pub fn build_wiki_file(
 
             if let Some(arr) = plugins_array {
                 for plugin in plugins {
-                    let plugin_path = format!("tiddlywiki/{}", plugin);
-                    let plugin_value = serde_json::Value::String(plugin_path.clone());
+                    let plugin_value = serde_json::Value::String(plugin.clone());
                     if !arr.contains(&plugin_value) {
                         arr.push(plugin_value);
-                        eprintln!("[NodeBridge]   Added plugin: {}", plugin_path);
+                        eprintln!("[NodeBridge]   Added plugin: {}", plugin);
                     }
                 }
             } else {
                 let plugin_values: Vec<serde_json::Value> = plugins.iter()
-                    .map(|p| serde_json::Value::String(format!("tiddlywiki/{}", p)))
+                    .map(|p| serde_json::Value::String(p.clone()))
                     .collect();
                 info["plugins"] = serde_json::Value::Array(plugin_values);
                 eprintln!("[NodeBridge]   Created plugins array with {} plugins", plugins.len());

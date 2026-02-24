@@ -4246,11 +4246,10 @@ async fn init_wiki_folder(app: tauri::AppHandle, path: String, edition: String, 
                 arr.push(serde_json::Value::String(plugin_path.to_string()));
             }
         }
-        // Add user-selected plugins
+        // Add user-selected plugins (IDs already include "tiddlywiki/" prefix)
         for plugin in &plugins {
-            let plugin_path = format!("tiddlywiki/{}", plugin);
-            if !arr.iter().any(|p| p.as_str() == Some(&plugin_path)) {
-                arr.push(serde_json::Value::String(plugin_path));
+            if !arr.iter().any(|p| p.as_str() == Some(plugin.as_str())) {
+                arr.push(serde_json::Value::String(plugin.clone()));
             }
         }
     } else {
@@ -4259,7 +4258,7 @@ async fn init_wiki_folder(app: tauri::AppHandle, path: String, edition: String, 
             .map(|p| serde_json::Value::String(p.to_string()))
             .collect();
         for plugin in &plugins {
-            all_plugins.push(serde_json::Value::String(format!("tiddlywiki/{}", plugin)));
+            all_plugins.push(serde_json::Value::String(plugin.clone()));
         }
         info["plugins"] = serde_json::Value::Array(all_plugins);
     }
@@ -4357,10 +4356,9 @@ async fn init_wiki_folder(app: tauri::AppHandle, path: String, edition: String, 
                     plugins_array.push(plugin_value);
                 }
             }
-            // Add user-selected plugins
+            // Add user-selected plugins (IDs already include "tiddlywiki/" prefix)
             for plugin in &plugins {
-                let plugin_path = format!("tiddlywiki/{}", plugin);
-                let plugin_value = serde_json::Value::String(plugin_path);
+                let plugin_value = serde_json::Value::String(plugin.clone());
                 if !plugins_array.contains(&plugin_value) {
                     plugins_array.push(plugin_value);
                 }
@@ -4664,15 +4662,15 @@ async fn create_wiki_file(app: tauri::AppHandle, path: String, edition: String, 
                 .and_then(|v| v.as_array_mut());
 
             if let Some(arr) = plugins_array {
+                // Plugin IDs already include "tiddlywiki/" prefix
                 for plugin in &plugins {
-                    let plugin_path = format!("tiddlywiki/{}", plugin);
-                    if !arr.iter().any(|p| p.as_str() == Some(&plugin_path)) {
-                        arr.push(serde_json::Value::String(plugin_path));
+                    if !arr.iter().any(|p| p.as_str() == Some(plugin.as_str())) {
+                        arr.push(serde_json::Value::String(plugin.clone()));
                     }
                 }
             } else {
                 let plugin_values: Vec<serde_json::Value> = plugins.iter()
-                    .map(|p| serde_json::Value::String(format!("tiddlywiki/{}", p)))
+                    .map(|p| serde_json::Value::String(p.clone()))
                     .collect();
                 info["plugins"] = serde_json::Value::Array(plugin_values);
             }
@@ -6345,7 +6343,7 @@ async fn check_for_updates() -> Result<UpdateCheckResult, String> {
 
 /// Android version - separate from desktop versioning (must match build.gradle.kts versionName)
 #[cfg(target_os = "android")]
-const ANDROID_VERSION: &str = "0.0.43";
+const ANDROID_VERSION: &str = "0.0.44";
 
 /// Check for updates on Android via version file on GitHub, linking to Play Store
 #[cfg(target_os = "android")]

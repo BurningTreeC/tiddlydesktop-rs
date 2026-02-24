@@ -48,6 +48,7 @@
   var remoteEditorsCache = {};
   var _collabSyncActive = false;
   var _collabWikiId = null;
+  var _collabLocalDeviceId = null;
   var _collabOutboundQueue = [];
 
   if (!window.TiddlyDesktop) window.TiddlyDesktop = {};
@@ -324,6 +325,16 @@
         clearAllEditingTiddlers();
         remoteEditorsCache = {};
 
+        // Fetch our own device_id so we can filter out self-echoed collab messages
+        if (hasTauri && !isAndroid) {
+          window.__TAURI__.core.invoke('lan_sync_get_status').then(function(status) {
+            if (status && status.device_id) {
+              _collabLocalDeviceId = status.device_id;
+              rsLog('[LAN Sync] Local device_id: ' + _collabLocalDeviceId);
+            }
+          }).catch(function() {});
+        }
+
         // Flush queued outbound messages
         var queued = _collabOutboundQueue;
         _collabOutboundQueue = [];
@@ -392,6 +403,7 @@
       // Deactivate collab (keep API object alive so CM6 plugin references remain valid)
       _collabSyncActive = false;
       _collabWikiId = null;
+      _collabLocalDeviceId = null;
       _collabOutboundQueue = [];
       collabListeners = {};
       clearAllEditingTiddlers();
@@ -1514,6 +1526,11 @@
 
   function handleCollabMessage(data) {
     if (!data || !data.type) return;
+    // Skip messages from our own device (self-echo guard)
+    if (_collabLocalDeviceId && data.device_id && data.device_id === _collabLocalDeviceId) {
+      _log('[Collab] Skipping self-echoed ' + data.type + ' for ' + (data.tiddler_title || ''));
+      return;
+    }
     switch (data.type) {
       case 'editing-started':
         // Update remote editors cache

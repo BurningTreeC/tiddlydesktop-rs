@@ -6253,7 +6253,7 @@ class WikiActivity : AppCompatActivity() {
             // Collab API: created immediately so CM6 plugin can find it before sync activates.
             // Outbound methods queue until activate() sets syncActive=true.
             "var collabListeners={};" +
-            "var _syncActive=false;var _syncId=null;var _collabQueue=[];var rec={};" +
+            "var _syncActive=false;var _syncId=null;var _localDeviceId=null;var _collabQueue=[];var rec={};" +
             "function emitCollab(type,data){var ls=collabListeners[type];if(ls)for(var i=0;i<ls.length;i++){try{ls[i](data);}catch(e){}}}" +
             "function updateET(tt){if(typeof \$tw==='undefined'||!\$tw.wiki)return;var eds=rec[tt]||[];var tid='\$:/temp/tiddlydesktop/editing/'+tt;if(eds.length>0){\$tw.wiki.addTiddler({title:tid,type:'application/json',text:JSON.stringify(eds)});}else{\$tw.wiki.deleteTiddler(tid);}}" +
             "function clearAllET(){if(typeof \$tw==='undefined'||!\$tw.wiki)return;\$tw.wiki.each(function(td,t){if(t.indexOf('\$:/temp/tiddlydesktop/editing/')===0)\$tw.wiki.deleteTiddler(t);});}" +
@@ -6296,6 +6296,7 @@ class WikiActivity : AppCompatActivity() {
             // NOTE: Do NOT reset collabListeners — CM6 editors created before sync
             // activation already registered their inbound listeners via collab.on().
             "clearAllET();rec={};_syncActive=true;_syncId=syncId;" +
+            "try{var ss=JSON.parse(S.getSyncStatus()||'{}');_localDeviceId=ss.device_id||null;console.log('[LAN Sync] Local device_id: '+_localDeviceId);}catch(e){}" +
             "var q=_collabQueue;_collabQueue=[];" +
             "for(var qi=0;qi<q.length;qi++){var qe=q[qi];" +
             "if(qe[0]==='startEditing')S.collabEditingStarted(syncId,qe[1]);" +
@@ -6375,6 +6376,7 @@ class WikiActivity : AppCompatActivity() {
             "if(d.type==='compare-fingerprints'){compareFingerprints(d.from_device_id,d.fingerprints);return;}" +
             "if(d.type==='attachment-received'){reloadAttachment(d.filename);return;}" +
             "if(d.type==='wiki-info-changed'){console.log('[LAN Sync] Wiki config changed from another device');\$tw.wiki.addTiddler(new \$tw.Tiddler({title:'\$:/temp/tiddlydesktop/config-reload-required',text:'yes'}));return;}" +
+            "if(_localDeviceId&&d.device_id&&d.device_id===_localDeviceId){console.log('[Collab] Skipping self-echoed '+d.type);return;}" +
             "if(d.type==='editing-started'){if(d.tiddler_title&&d.device_id){if(!rec[d.tiddler_title])rec[d.tiddler_title]=[];var ef=false;for(var ei=0;ei<rec[d.tiddler_title].length;ei++){if(rec[d.tiddler_title][ei].device_id===d.device_id){ef=true;rec[d.tiddler_title][ei].user_name=d.user_name||'';break;}}if(!ef){rec[d.tiddler_title].push({device_id:d.device_id,device_name:d.device_name||'',user_name:d.user_name||''});}updateET(d.tiddler_title);}emitCollab(d.type,d);return;}" +
             "if(d.type==='editing-stopped'){if(d.tiddler_title&&d.device_id&&rec[d.tiddler_title]){rec[d.tiddler_title]=rec[d.tiddler_title].filter(function(e){return e.device_id!==d.device_id;});if(rec[d.tiddler_title].length===0)delete rec[d.tiddler_title];updateET(d.tiddler_title);}emitCollab(d.type,d);return;}" +
             "if(d.type==='collab-update'||d.type==='collab-awareness'){emitCollab(d.type,d);return;}" +

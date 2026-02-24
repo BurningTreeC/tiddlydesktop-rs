@@ -3022,6 +3022,12 @@ impl SyncManager {
                         ref device_name,
                     } => {
                         eprintln!("[Collab] INBOUND EditingStarted: wiki={}, tiddler={}, from_device={}", wiki_id, tiddler_title, device_id);
+                        // Skip messages from our own device (self-echo guard)
+                        let my_device_id = self.pairing_manager.device_id();
+                        if device_id == my_device_id {
+                            eprintln!("[Collab] Skipping self-echoed EditingStarted for {}", tiddler_title);
+                            return;
+                        }
                         // Look up peer's user_name from peers map
                         let peer_user_name = self.peers.read().await
                             .get(&from_device_id)
@@ -3051,6 +3057,12 @@ impl SyncManager {
                         ref device_id,
                     } => {
                         eprintln!("[Collab] INBOUND EditingStopped: wiki={}, tiddler={}, from_device={}", wiki_id, tiddler_title, device_id);
+                        // Skip messages from our own device (self-echo guard)
+                        let my_device_id = self.pairing_manager.device_id();
+                        if device_id == my_device_id {
+                            eprintln!("[Collab] Skipping self-echoed EditingStopped for {}", tiddler_title);
+                            return;
+                        }
                         // Remove remote editor
                         let key = (wiki_id.clone(), tiddler_title.clone());
                         if let Ok(mut editors) = self.collab_editors.lock() {
@@ -3075,6 +3087,11 @@ impl SyncManager {
                         ref update_base64,
                     } => {
                         eprintln!("[Collab] INBOUND CollabUpdate: wiki={}, tiddler={}, len={}", wiki_id, tiddler_title, update_base64.len());
+                        // Skip messages from our own device (self-echo guard)
+                        if from_device_id == self.pairing_manager.device_id() {
+                            eprintln!("[Collab] Skipping self-echoed CollabUpdate for {}", tiddler_title);
+                            return;
+                        }
                         self.emit_collab_to_wiki(wiki_id, serde_json::json!({
                             "type": "collab-update",
                             "wiki_id": wiki_id,
@@ -3088,6 +3105,11 @@ impl SyncManager {
                         ref update_base64,
                     } => {
                         eprintln!("[Collab] INBOUND CollabAwareness: wiki={}, tiddler={}, len={}", wiki_id, tiddler_title, update_base64.len());
+                        // Skip messages from our own device (self-echo guard)
+                        if from_device_id == self.pairing_manager.device_id() {
+                            eprintln!("[Collab] Skipping self-echoed CollabAwareness for {}", tiddler_title);
+                            return;
+                        }
                         self.emit_collab_to_wiki(wiki_id, serde_json::json!({
                             "type": "collab-awareness",
                             "wiki_id": wiki_id,
@@ -3103,6 +3125,11 @@ impl SyncManager {
                         ref device_name,
                     } => {
                         eprintln!("[Collab] INBOUND PeerSaved: wiki={}, tiddler={}, saved_as={}, from={}", wiki_id, tiddler_title, saved_title, device_id);
+                        // Skip messages from our own device (self-echo guard)
+                        if device_id == self.pairing_manager.device_id() {
+                            eprintln!("[Collab] Skipping self-echoed PeerSaved for {}", tiddler_title);
+                            return;
+                        }
                         self.emit_collab_to_wiki(wiki_id, serde_json::json!({
                             "type": "peer-saved",
                             "wiki_id": wiki_id,

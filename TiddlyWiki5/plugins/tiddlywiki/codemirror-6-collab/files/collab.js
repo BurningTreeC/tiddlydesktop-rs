@@ -918,8 +918,10 @@ function _connectTransport(engine, collab) {
 	doc.on("update", onDocUpdate);
 	state._onDocUpdate = onDocUpdate;
 
-	var onAwarenessUpdate = function(changes) {
+	var onAwarenessUpdate = function(changes, origin) {
 		if(state.destroyed) return;
+		// Don't echo back awareness updates that came from remote peers
+		if(origin === "remote") return;
 		try {
 			var update = encodeAwarenessUpdate(awareness, changes.added.concat(changes.updated).concat(changes.removed));
 			collab.sendAwareness(collabTitle, uint8ToBase64(update));

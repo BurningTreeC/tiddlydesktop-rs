@@ -1383,6 +1383,56 @@ impl RelaySyncManager {
         send_maybe_chunked(&room.sender, &my_device_id, None, encrypted).await
     }
 
+    /// Send a message to a room, but skip peers that are already reachable via LAN.
+    /// If all room members are in the exclusion set, the send is skipped entirely.
+    /// If no members are excluded, falls back to a broadcast (same as send_to_room).
+    pub async fn send_to_room_excluding(
+        &self,
+        room_code: &str,
+        msg: &SyncMessage,
+        exclude_device_ids: &std::collections::HashSet<String>,
+    ) -> Result<(), String> {
+        let mut rooms = self.rooms.write().await;
+        let room = rooms
+            .get_mut(room_code)
+            .ok_or_else(|| format!("Room {} not connected", room_code))?;
+
+        let my_device_id = self.pairing_manager.device_id().to_string();
+
+        // Figure out which room members need the relay copy
+        let relay_only_targets: Vec<String> = room
+            .member_names
+            .keys()
+            .filter(|id| *id != &my_device_id && !exclude_device_ids.contains(id.as_str()))
+            .cloned()
+            .collect();
+
+        if relay_only_targets.is_empty() {
+            // All room members are reachable via LAN — skip relay entirely
+            return Ok(());
+        }
+
+        let encrypted = encrypt_message(&mut room.encrypt_cipher, msg)?;
+
+        // Check if we can use a broadcast (no exclusions apply)
+        let total_other_members = room.member_names.keys().filter(|id| *id != &my_device_id).count();
+        if relay_only_targets.len() == total_other_members {
+            // No exclusions — broadcast to whole room
+            return send_maybe_chunked(&room.sender, &my_device_id, None, encrypted).await;
+        }
+
+        // Send targeted frames to each relay-only peer (reuse same encrypted bytes)
+        for target_id in &relay_only_targets {
+            if let Err(e) =
+                send_maybe_chunked(&room.sender, &my_device_id, Some(target_id), encrypted.clone())
+                    .await
+            {
+                eprintln!("[Relay] Targeted send to {} failed: {}", target_id, e);
+            }
+        }
+        Ok(())
+    }
+
     /// Get list of connected relay peers across all rooms (deduped)
     pub async fn connected_peers(&self) -> Vec<(String, String)> {
         let rooms = self.rooms.read().await;

@@ -1245,7 +1245,12 @@ impl SyncManager {
     /// Route a local change through relay rooms (send-only, no conflict_manager).
     /// Called AFTER bridge.handle_local_change when LAN server is running,
     /// to additionally route through relay rooms for wikis assigned to rooms.
-    async fn relay_route_change(&self, change: &WikiToSync) {
+    /// Peers already reachable via LAN are excluded to avoid duplicate delivery.
+    async fn relay_route_change(
+        &self,
+        change: &WikiToSync,
+        lan_peer_ids: &std::collections::HashSet<String>,
+    ) {
         let relay = match &self.relay_manager {
             Some(r) => r,
             None => return,
@@ -1277,8 +1282,8 @@ impl SyncManager {
                     vector_clock: clock,
                     timestamp,
                 };
-                eprintln!("[Relay] Additionally routing change '{}' via room {}", title, room_code);
-                let _ = relay.send_to_room(&room_code, &msg).await;
+                eprintln!("[Relay] Additionally routing change '{}' via room {} (excluding {} LAN peers)", title, room_code, lan_peer_ids.len());
+                let _ = relay.send_to_room_excluding(&room_code, &msg, lan_peer_ids).await;
             }
             WikiToSync::TiddlerDeleted { wiki_id, title } => {
                 if !ConflictManager::should_sync_tiddler(title) {
@@ -1299,7 +1304,7 @@ impl SyncManager {
                     vector_clock: clock,
                     timestamp,
                 };
-                let _ = relay.send_to_room(&room_code, &msg).await;
+                let _ = relay.send_to_room_excluding(&room_code, &msg, lan_peer_ids).await;
             }
             WikiToSync::WikiOpened { .. } => {
                 // Send manifest to relay rooms too (bridge only sends to LAN peers)
@@ -1310,51 +1315,51 @@ impl SyncManager {
                     Some(rc) => rc,
                     None => return,
                 };
-                let _ = relay.send_to_room(&room_code, &SyncMessage::EditingStarted {
+                let _ = relay.send_to_room_excluding(&room_code, &SyncMessage::EditingStarted {
                     wiki_id: wiki_id.clone(), tiddler_title: tiddler_title.clone(),
                     device_id: device_id.clone(), device_name: device_name.clone(),
-                }).await;
+                }, lan_peer_ids).await;
             }
             WikiToSync::CollabEditingStopped { wiki_id, tiddler_title, device_id } => {
                 let room_code = match crate::wiki_storage::get_wiki_relay_room_by_sync_id(app, wiki_id) {
                     Some(rc) => rc,
                     None => return,
                 };
-                let _ = relay.send_to_room(&room_code, &SyncMessage::EditingStopped {
+                let _ = relay.send_to_room_excluding(&room_code, &SyncMessage::EditingStopped {
                     wiki_id: wiki_id.clone(), tiddler_title: tiddler_title.clone(),
                     device_id: device_id.clone(),
-                }).await;
+                }, lan_peer_ids).await;
             }
             WikiToSync::CollabUpdate { wiki_id, tiddler_title, update_base64 } => {
                 let room_code = match crate::wiki_storage::get_wiki_relay_room_by_sync_id(app, wiki_id) {
                     Some(rc) => rc,
                     None => return,
                 };
-                let _ = relay.send_to_room(&room_code, &SyncMessage::CollabUpdate {
+                let _ = relay.send_to_room_excluding(&room_code, &SyncMessage::CollabUpdate {
                     wiki_id: wiki_id.clone(), tiddler_title: tiddler_title.clone(),
                     update_base64: update_base64.clone(),
-                }).await;
+                }, lan_peer_ids).await;
             }
             WikiToSync::CollabAwareness { wiki_id, tiddler_title, update_base64 } => {
                 let room_code = match crate::wiki_storage::get_wiki_relay_room_by_sync_id(app, wiki_id) {
                     Some(rc) => rc,
                     None => return,
                 };
-                let _ = relay.send_to_room(&room_code, &SyncMessage::CollabAwareness {
+                let _ = relay.send_to_room_excluding(&room_code, &SyncMessage::CollabAwareness {
                     wiki_id: wiki_id.clone(), tiddler_title: tiddler_title.clone(),
                     update_base64: update_base64.clone(),
-                }).await;
+                }, lan_peer_ids).await;
             }
             WikiToSync::CollabPeerSaved { wiki_id, tiddler_title, saved_title, device_id, device_name } => {
                 let room_code = match crate::wiki_storage::get_wiki_relay_room_by_sync_id(app, wiki_id) {
                     Some(rc) => rc,
                     None => return,
                 };
-                let _ = relay.send_to_room(&room_code, &SyncMessage::PeerSaved {
+                let _ = relay.send_to_room_excluding(&room_code, &SyncMessage::PeerSaved {
                     wiki_id: wiki_id.clone(), tiddler_title: tiddler_title.clone(),
                     saved_title: saved_title.clone(),
                     device_id: device_id.clone(), device_name: device_name.clone(),
-                }).await;
+                }, lan_peer_ids).await;
             }
             _ => {}
         }
@@ -2245,8 +2250,16 @@ impl SyncManager {
                             &self.conflict_manager,
                             server,
                         ).await;
-                        // Additionally route through relay rooms (uses clock already set by bridge)
-                        self.relay_route_change(&change_for_relay).await;
+                        // Collect LAN peer device IDs to exclude from relay routing
+                        // (they already received the message via LAN)
+                        let lan_peer_ids: std::collections::HashSet<String> = server
+                            .lan_connected_peers()
+                            .await
+                            .into_iter()
+                            .map(|(id, _name)| id)
+                            .collect();
+                        // Additionally route through relay rooms, skipping LAN-reachable peers
+                        self.relay_route_change(&change_for_relay, &lan_peer_ids).await;
                     } else {
                         // Relay-only: handle conflict_manager + relay routing
                         self.handle_local_change_relay(change).await;
@@ -2331,8 +2344,15 @@ impl SyncManager {
                             &self.conflict_manager,
                             server,
                         ).await;
-                        // Additionally route through relay rooms (uses clock already set by bridge)
-                        self.relay_route_change(&change_for_relay).await;
+                        // Collect LAN peer device IDs to exclude from relay routing
+                        let lan_peer_ids: std::collections::HashSet<String> = server
+                            .lan_connected_peers()
+                            .await
+                            .into_iter()
+                            .map(|(id, _name)| id)
+                            .collect();
+                        // Additionally route through relay rooms, skipping LAN-reachable peers
+                        self.relay_route_change(&change_for_relay, &lan_peer_ids).await;
                     } else {
                         // Relay-only: handle conflict_manager + relay routing
                         self.handle_local_change_relay(change).await;
@@ -3422,8 +3442,14 @@ impl SyncManager {
                 }
             }
 
-            // Send per-room manifests through relay
+            // Send per-room manifests through relay (excluding LAN-reachable peers)
             if let Some(relay) = &self.relay_manager {
+                let lan_peer_ids: std::collections::HashSet<String> =
+                    if let Some(ref server) = *self.server.read().await {
+                        server.lan_connected_peers().await.into_iter().map(|(id, _)| id).collect()
+                    } else {
+                        std::collections::HashSet::new()
+                    };
                 let connected_rooms = relay.get_connected_room_codes().await;
                 for room_code in &connected_rooms {
                     let sync_wikis = crate::wiki_storage::get_sync_wikis_for_room(app, room_code);
@@ -3436,7 +3462,7 @@ impl SyncManager {
                         })
                         .collect();
                     let msg = SyncMessage::WikiManifest { wikis };
-                    if let Err(e) = relay.send_to_room(room_code, &msg).await {
+                    if let Err(e) = relay.send_to_room_excluding(room_code, &msg, &lan_peer_ids).await {
                         eprintln!("[Relay] Failed to send WikiManifest to room {}: {}", room_code, e);
                     }
                 }
@@ -3637,12 +3663,18 @@ impl SyncManager {
                 peers.len()
             );
         }
-        // Also broadcast via relay room if wiki is assigned to one
+        // Also broadcast via relay room if wiki is assigned to one (excluding LAN peers)
         if let Some(relay) = &self.relay_manager {
             if let Some(room_code) = crate::wiki_storage::get_wiki_relay_room_by_sync_id(
                 GLOBAL_APP_HANDLE.get().unwrap(), wiki_id,
             ) {
-                let _ = relay.send_to_room(&room_code, &msg).await;
+                let lan_peer_ids: std::collections::HashSet<String> =
+                    if let Some(ref server) = *self.server.read().await {
+                        server.lan_connected_peers().await.into_iter().map(|(id, _)| id).collect()
+                    } else {
+                        std::collections::HashSet::new()
+                    };
+                let _ = relay.send_to_room_excluding(&room_code, &msg, &lan_peer_ids).await;
             }
         }
     }

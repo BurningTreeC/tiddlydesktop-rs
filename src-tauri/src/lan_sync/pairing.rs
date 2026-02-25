@@ -3,30 +3,59 @@
 //! Provides stable device identification across sessions and reinstalls.
 //! Uses MAC address on desktop, ANDROID_ID on Android.
 
+use hmac::{Hmac, Mac};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
+use sha2::Sha256;
 use std::path::PathBuf;
 use std::sync::RwLock;
 
-/// Hash a device name (hostname / Build.MODEL) so raw hostnames never leave
-/// this module. Uses SHA-256 with domain separation, returns first 12 hex chars.
-fn hash_device_name(raw: &str) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(b"device_name:");
-    hasher.update(raw.as_bytes());
-    let result = hasher.finalize();
-    result[..6]
+type HmacSha256 = Hmac<Sha256>;
+
+/// HMAC-SHA256 a value with a device-local secret key.
+/// The secret is generated once per device and persisted — without it,
+/// the original input cannot be recovered even by brute-force.
+/// `domain` provides separation so the same input hashed for different
+/// purposes (device_id vs device_name) produces different outputs.
+fn hmac_hash(secret: &[u8], domain: &str, input: &str, hex_len: usize) -> String {
+    let mut mac = HmacSha256::new_from_slice(secret)
+        .expect("HMAC accepts any key length");
+    mac.update(domain.as_bytes());
+    mac.update(input.as_bytes());
+    let result = mac.finalize().into_bytes();
+    let byte_len = (hex_len + 1) / 2; // ceil
+    result[..byte_len]
         .iter()
         .map(|b| format!("{:02x}", b))
-        .collect()
+        .collect::<String>()[..hex_len]
+        .to_string()
+}
+
+/// HMAC-hash a hardware identifier (MAC address, ANDROID_ID).
+/// Returns first 16 hex chars (64 bits) — enough for unique device identification.
+fn hmac_hardware_id(secret: &[u8], raw: &str) -> String {
+    hmac_hash(secret, "device_id:", raw, 16)
+}
+
+/// HMAC-hash a device name (hostname / Build.MODEL).
+/// Returns first 12 hex chars (48 bits).
+fn hmac_device_name(secret: &[u8], raw: &str) -> String {
+    hmac_hash(secret, "device_name:", raw, 12)
+}
+
+/// Generate a random 32-byte HMAC secret key.
+fn generate_hmac_secret() -> Vec<u8> {
+    let mut rng = rand::rng();
+    let mut secret = vec![0u8; 32];
+    rng.fill(&mut secret[..]);
+    secret
 }
 
 /// Device identity manager — provides device_id and device_name for sync.
 pub struct PairingManager {
     /// This device's unique ID
     device_id: String,
-    /// This device's hashed hostname (fallback when no display_name is set)
+    /// This device's HMAC-hashed hostname (fallback when no display_name is set)
     hashed_hostname: String,
     /// User-chosen display name (overrides hashed_hostname when set)
     display_name: RwLock<Option<String>>,
@@ -49,7 +78,7 @@ impl PairingManager {
         &self.device_id
     }
 
-    /// Get this device's display name: custom name if set, else hashed hostname.
+    /// Get this device's display name: custom name if set, else HMAC-hashed hostname.
     pub fn device_name(&self) -> String {
         let guard = self.display_name.read().unwrap();
         if let Some(ref name) = *guard {
@@ -109,6 +138,10 @@ pub struct DeviceIdentity {
     pub device_name: String,
     #[serde(default)]
     pub display_name: Option<String>,
+    /// Device-local HMAC secret (hex-encoded). Generated once, never transmitted.
+    /// Without this key, the hashed device_id and device_name cannot be reversed.
+    #[serde(default)]
+    pub hmac_secret: Option<String>,
 }
 
 // ── Stable device ID (MAC address on desktop, ANDROID_ID on Android) ────
@@ -262,20 +295,6 @@ fn get_stable_device_id() -> Option<String> {
     }
 }
 
-/// Hash a raw hardware identifier (MAC address, ANDROID_ID) with SHA-256 so the
-/// raw value never leaves this module. Returns the first 16 hex chars (64 bits)
-/// which is enough for unique device identification without exposing the original.
-fn hash_hardware_id(raw: &str) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(raw.as_bytes());
-    let result = hasher.finalize();
-    // First 8 bytes → 16 hex chars
-    result[..8]
-        .iter()
-        .map(|b| format!("{:02x}", b))
-        .collect()
-}
-
 // ── Device name ─────────────────────────────────────────────────────────
 
 /// Get the device name for this platform
@@ -321,6 +340,24 @@ fn get_android_device_name() -> Option<String> {
     Some(model_str)
 }
 
+// ── HMAC secret helpers ─────────────────────────────────────────────────
+
+/// Decode a hex-encoded HMAC secret back to bytes.
+fn decode_hex_secret(hex: &str) -> Option<Vec<u8>> {
+    if hex.len() % 2 != 0 {
+        return None;
+    }
+    (0..hex.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).ok())
+        .collect()
+}
+
+/// Encode bytes as hex string.
+fn encode_hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{:02x}", b)).collect()
+}
+
 // ── Load / create identity ──────────────────────────────────────────────
 
 /// Load or create device identity.
@@ -328,37 +365,47 @@ fn get_android_device_name() -> Option<String> {
 /// so the device_id survives app data clears and reinstalls. Falls back to
 /// a persisted random UUID only if no stable ID is available.
 ///
-/// The device_name field is always the hashed hostname (never the raw hostname).
-/// The display_name field is preserved from disk if it exists.
+/// Both device_id and device_name are HMAC-SHA256 hashed with a device-local
+/// random secret key, so the original values (MAC address, hostname) cannot
+/// be recovered even by brute-force without access to the device's storage.
 pub fn load_or_create_device_identity(data_dir: &std::path::Path) -> DeviceIdentity {
     let path = data_dir.join("device_identity.json");
     let stable_id = get_stable_device_id();
     let raw_name = get_device_name();
-    let hashed_name = hash_device_name(&raw_name);
 
-    // Try to load existing display_name from disk
-    let existing_display_name = std::fs::read_to_string(&path)
+    // Load existing identity from disk (for secret + display_name)
+    let existing = std::fs::read_to_string(&path)
         .ok()
-        .and_then(|content| serde_json::from_str::<DeviceIdentity>(&content).ok())
-        .and_then(|id| id.display_name);
+        .and_then(|content| serde_json::from_str::<DeviceIdentity>(&content).ok());
 
-    // If we have a stable hardware ID, hash it so the raw MAC/ANDROID_ID
-    // never leaves this module, then use the hash as the device_id.
+    // Get or generate the HMAC secret
+    let secret_bytes = existing
+        .as_ref()
+        .and_then(|id| id.hmac_secret.as_deref())
+        .and_then(decode_hex_secret)
+        .unwrap_or_else(generate_hmac_secret);
+    let secret_hex = encode_hex(&secret_bytes);
+
+    let existing_display_name = existing.and_then(|id| id.display_name);
+
+    let hashed_name = hmac_device_name(&secret_bytes, &raw_name);
+
+    // If we have a stable hardware ID, HMAC-hash it
     if let Some(ref stable) = stable_id {
-        let hashed = hash_hardware_id(stable);
+        let hashed = hmac_hardware_id(&secret_bytes, stable);
         let identity = DeviceIdentity {
             device_id: hashed.clone(),
             device_name: hashed_name.clone(),
             display_name: existing_display_name,
+            hmac_secret: Some(secret_hex),
         };
-        // Save/update on disk
         if let Some(parent) = path.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
         if let Ok(json) = serde_json::to_string_pretty(&identity) {
             let _ = std::fs::write(&path, json);
         }
-        eprintln!("[LAN Sync] Device ID (stable, hashed): {}", hashed);
+        eprintln!("[LAN Sync] Device ID (stable, HMAC-hashed): {}", hashed);
         return identity;
     }
 
@@ -366,6 +413,7 @@ pub fn load_or_create_device_identity(data_dir: &std::path::Path) -> DeviceIdent
     if let Ok(content) = std::fs::read_to_string(&path) {
         if let Ok(mut identity) = serde_json::from_str::<DeviceIdentity>(&content) {
             identity.device_name = hashed_name;
+            identity.hmac_secret = Some(secret_hex);
             if let Ok(json) = serde_json::to_string_pretty(&identity) {
                 let _ = std::fs::write(&path, json);
             }
@@ -379,6 +427,7 @@ pub fn load_or_create_device_identity(data_dir: &std::path::Path) -> DeviceIdent
         device_id: generate_random_id(),
         device_name: hashed_name,
         display_name: None,
+        hmac_secret: Some(secret_hex),
     };
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);

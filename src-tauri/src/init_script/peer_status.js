@@ -117,6 +117,7 @@
     $tw.wiki.addTiddler({
       title: BADGE_TIDDLER,
       tags: '$:/tags/TopRightBar',
+      'list-before': '',
       text: wikitext
     });
   }

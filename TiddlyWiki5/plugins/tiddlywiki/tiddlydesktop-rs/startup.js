@@ -1850,7 +1850,7 @@ exports.startup = function(callback) {
 			// Legacy tiddlers
 			$tw.wiki.setText("$:/temp/tiddlydesktop-rs/github-login", "text", null, result.username || "");
 			$tw.wiki.setText("$:/temp/tiddlydesktop-rs/github-auth-status", "text", null, "authenticated");
-			updateRelayRoomList();
+			refreshSyncStatus();
 		}).catch(function(err) {
 			console.error("[Relay] Login failed:", err);
 			$tw.wiki.setText("$:/temp/tiddlydesktop-rs/auth-status", "text", null, "");
@@ -1889,7 +1889,7 @@ exports.startup = function(callback) {
 			// Legacy tiddlers
 			$tw.wiki.setText("$:/temp/tiddlydesktop-rs/github-login", "text", null, "");
 			$tw.wiki.setText("$:/temp/tiddlydesktop-rs/github-auth-status", "text", null, "");
-			updateRelayRoomList();
+			refreshSyncStatus();
 		});
 	});
 
@@ -1910,7 +1910,7 @@ exports.startup = function(callback) {
 		invoke("relay_sync_create_room", { name: p.name, roomCode: p.roomCode }).then(function(result) {
 			console.log("[Relay] Room registered on server:", result.room_code);
 			$tw.wiki.setText(statusTiddler, "text", null, "registered");
-			updateRelayRoomList();
+			refreshSyncStatus();
 		}).catch(function(err) {
 			var errStr = "" + err;
 			if (errStr.indexOf("409") !== -1 || errStr.indexOf("already exists") !== -1) {

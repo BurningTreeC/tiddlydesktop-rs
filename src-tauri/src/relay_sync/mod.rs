@@ -1432,62 +1432,64 @@ impl RelaySyncManager {
     /// Finds which room has this device and sends through it.
     /// Large payloads are automatically chunked to fit under the server's message size limit.
     pub async fn send_to_peer(&self, device_id: &str, msg: &SyncMessage) -> Result<(), String> {
-        let mut rooms = self.rooms.write().await;
-        for (_room_code, room) in rooms.iter_mut() {
-            if room.decrypt_ciphers.contains_key(device_id) {
-                let encrypted = encrypt_message(&mut room.encrypt_cipher, msg)?;
-                let my_id = self.pairing_manager.device_id().to_string();
-                return send_maybe_chunked(
-                    &room.sender,
-                    &my_id,
-                    Some(device_id),
-                    encrypted,
-                )
-                .await;
+        let (sender, encrypted) = {
+            let mut rooms = self.rooms.write().await;
+            let mut found = None;
+            for (_room_code, room) in rooms.iter_mut() {
+                if room.decrypt_ciphers.contains_key(device_id) {
+                    let encrypted = encrypt_message(&mut room.encrypt_cipher, msg)?;
+                    found = Some((room.sender.clone(), encrypted));
+                    break;
+                }
             }
-        }
-        Err(format!("Relay peer {} not connected in any room", device_id))
+            found.ok_or_else(|| format!("Relay peer {} not connected in any room", device_id))?
+        };
+        // Lock released — safe to await
+        let my_id = self.pairing_manager.device_id().to_string();
+        send_maybe_chunked(&sender, &my_id, Some(device_id), encrypted).await
     }
 
     /// Send to multiple relay peers (broadcast per room)
     pub async fn send_to_peers(&self, device_ids: &[String], msg: &SyncMessage) {
-        let mut rooms = self.rooms.write().await;
         let my_device_id = self.pairing_manager.device_id().to_string();
 
-        // Group target device_ids by room
-        let mut room_targets: HashMap<String, Vec<String>> = HashMap::new();
-        for device_id in device_ids {
-            for (room_code, room) in rooms.iter() {
-                if room.decrypt_ciphers.contains_key(device_id.as_str()) {
-                    room_targets
-                        .entry(room_code.clone())
-                        .or_default()
-                        .push(device_id.clone());
-                    break;
+        // Encrypt under lock, collect (sender, encrypted) pairs, then release lock before sending
+        let sends: Vec<(RelaySender, Vec<u8>, String)> = {
+            let mut rooms = self.rooms.write().await;
+
+            // Group target device_ids by room
+            let mut room_targets: HashMap<String, Vec<String>> = HashMap::new();
+            for device_id in device_ids {
+                for (room_code, room) in rooms.iter() {
+                    if room.decrypt_ciphers.contains_key(device_id.as_str()) {
+                        room_targets
+                            .entry(room_code.clone())
+                            .or_default()
+                            .push(device_id.clone());
+                        break;
+                    }
                 }
             }
-        }
 
-        // Send once per room as broadcast (auto-chunking large payloads)
-        for (room_code, _targets) in &room_targets {
-            if let Some(room) = rooms.get_mut(room_code) {
-                match encrypt_message(&mut room.encrypt_cipher, msg) {
-                    Ok(encrypted) => {
-                        if let Err(e) = send_maybe_chunked(
-                            &room.sender,
-                            &my_device_id,
-                            None,
-                            encrypted,
-                        )
-                        .await
-                        {
-                            eprintln!("[Relay] Send to room {} failed: {}", room_code, e);
+            let mut result = Vec::new();
+            for (room_code, _targets) in &room_targets {
+                if let Some(room) = rooms.get_mut(room_code) {
+                    match encrypt_message(&mut room.encrypt_cipher, msg) {
+                        Ok(encrypted) => {
+                            result.push((room.sender.clone(), encrypted, room_code.clone()));
+                        }
+                        Err(e) => {
+                            eprintln!("[Relay] Encrypt for room {} failed: {}", room_code, e);
                         }
                     }
-                    Err(e) => {
-                        eprintln!("[Relay] Encrypt for room {} failed: {}", room_code, e);
-                    }
                 }
+            }
+            result
+        };
+        // Lock released — safe to await
+        for (sender, encrypted, room_code) in sends {
+            if let Err(e) = send_maybe_chunked(&sender, &my_device_id, None, encrypted).await {
+                eprintln!("[Relay] Send to room {} failed: {}", room_code, e);
             }
         }
     }
@@ -1495,19 +1497,23 @@ impl RelaySyncManager {
     /// Send a broadcast message to a specific room.
     /// Large payloads are automatically chunked.
     pub async fn send_to_room(&self, room_code: &str, msg: &SyncMessage) -> Result<(), String> {
-        let mut rooms = self.rooms.write().await;
-        let room = rooms
-            .get_mut(room_code)
-            .ok_or_else(|| format!("Room {} not connected", room_code))?;
+        let (sender, encrypted) = {
+            let mut rooms = self.rooms.write().await;
+            let room = rooms
+                .get_mut(room_code)
+                .ok_or_else(|| format!("Room {} not connected", room_code))?;
 
-        // No other peers in the room — skip encryption and send
-        if room.member_names.is_empty() {
-            return Ok(());
-        }
+            // No other peers in the room — skip encryption and send
+            if room.member_names.is_empty() {
+                return Ok(());
+            }
 
+            let encrypted = encrypt_message(&mut room.encrypt_cipher, msg)?;
+            (room.sender.clone(), encrypted)
+        };
+        // Lock released — safe to await
         let my_device_id = self.pairing_manager.device_id().to_string();
-        let encrypted = encrypt_message(&mut room.encrypt_cipher, msg)?;
-        send_maybe_chunked(&room.sender, &my_device_id, None, encrypted).await
+        send_maybe_chunked(&sender, &my_device_id, None, encrypted).await
     }
 
     /// Send a message to a room, but skip peers that are already reachable via LAN.
@@ -1519,39 +1525,47 @@ impl RelaySyncManager {
         msg: &SyncMessage,
         exclude_device_ids: &std::collections::HashSet<String>,
     ) -> Result<(), String> {
-        let mut rooms = self.rooms.write().await;
-        let room = rooms
-            .get_mut(room_code)
-            .ok_or_else(|| format!("Room {} not connected", room_code))?;
-
         let my_device_id = self.pairing_manager.device_id().to_string();
 
-        // Figure out which room members need the relay copy
-        let relay_only_targets: Vec<String> = room
-            .member_names
-            .keys()
-            .filter(|id| *id != &my_device_id && !exclude_device_ids.contains(id.as_str()))
-            .cloned()
-            .collect();
+        // Encrypt and extract send info under lock, then release before async sends
+        let (sender, encrypted, relay_only_targets, is_broadcast) = {
+            let mut rooms = self.rooms.write().await;
+            let room = rooms
+                .get_mut(room_code)
+                .ok_or_else(|| format!("Room {} not connected", room_code))?;
 
-        if relay_only_targets.is_empty() {
-            // All room members are reachable via LAN — skip relay entirely
-            return Ok(());
-        }
+            // Figure out which room members need the relay copy
+            let relay_only_targets: Vec<String> = room
+                .member_names
+                .keys()
+                .filter(|id| *id != &my_device_id && !exclude_device_ids.contains(id.as_str()))
+                .cloned()
+                .collect();
 
-        let encrypted = encrypt_message(&mut room.encrypt_cipher, msg)?;
+            if relay_only_targets.is_empty() {
+                // All room members are reachable via LAN — skip relay entirely
+                return Ok(());
+            }
 
-        // Check if we can use a broadcast (no exclusions apply)
-        let total_other_members = room.member_names.keys().filter(|id| *id != &my_device_id).count();
-        if relay_only_targets.len() == total_other_members {
+            let encrypted = encrypt_message(&mut room.encrypt_cipher, msg)?;
+
+            // Check if we can use a broadcast (no exclusions apply)
+            let total_other_members = room.member_names.keys().filter(|id| *id != &my_device_id).count();
+            let is_broadcast = relay_only_targets.len() == total_other_members;
+
+            (room.sender.clone(), encrypted, relay_only_targets, is_broadcast)
+        };
+        // Lock released — safe to await
+
+        if is_broadcast {
             // No exclusions — broadcast to whole room
-            return send_maybe_chunked(&room.sender, &my_device_id, None, encrypted).await;
+            return send_maybe_chunked(&sender, &my_device_id, None, encrypted).await;
         }
 
         // Send targeted frames to each relay-only peer (reuse same encrypted bytes)
         for target_id in &relay_only_targets {
             if let Err(e) =
-                send_maybe_chunked(&room.sender, &my_device_id, Some(target_id), encrypted.clone())
+                send_maybe_chunked(&sender, &my_device_id, Some(target_id), encrypted.clone())
                     .await
             {
                 eprintln!("[Relay] Targeted send to {} failed: {}", target_id, e);

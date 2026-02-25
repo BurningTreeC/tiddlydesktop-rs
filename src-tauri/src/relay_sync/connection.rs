@@ -17,6 +17,7 @@ pub enum RelayFrame {
 }
 
 /// Sender half — used by RelaySyncManager to send encrypted frames
+#[derive(Clone)]
 pub struct RelaySender {
     ws_tx: Arc<Mutex<Option<futures_util::stream::SplitSink<
         tokio_tungstenite::WebSocketStream<

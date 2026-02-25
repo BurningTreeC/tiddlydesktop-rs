@@ -463,7 +463,7 @@ async fn handle_connection(
 
     let (mut ws_sender, mut ws_receiver) = ws_stream.split();
 
-    // Step 1: Receive RoomAuthInit
+    // Step 1: Receive RoomAuthInit with SPAKE2 message A
     let first_msg = ws_receiver
         .next()
         .await
@@ -478,74 +478,114 @@ async fn handle_connection(
     let auth_msg: RoomAuthMessage = serde_json::from_str(&first_text)
         .map_err(|e| format!("Invalid room auth message: {}", e))?;
 
-    let (peer_device_id, peer_device_name, group_key, auth_room_code) = match auth_msg {
+    let (peer_device_id, peer_device_name, auth_room_code, shared_secret) = match auth_msg {
         RoomAuthMessage::RoomAuthInit {
             device_id,
             device_name,
-            room_code,
-            room_token,
+            room_hash,
+            spake_msg,
         } => {
-            // Look up the group key for this room
+            use base64::{engine::general_purpose::STANDARD, Engine};
+            use spake2::{Ed25519Group, Identity, Password, Spake2};
+
+            // Look up group_key by hashing each room code to find match
             let keys = room_keys.read().await;
-            let group_key = match keys.get(&room_code) {
-                Some(key) => *key,
+            let mut found: Option<(String, [u8; 32])> = None;
+            for (code, key) in keys.iter() {
+                if crate::lan_sync::discovery::hash_room_code(code) == room_hash {
+                    found = Some((code.clone(), *key));
+                    break;
+                }
+            }
+            drop(keys);
+
+            let (matched_room_code, group_key) = match found {
+                Some(pair) => pair,
                 None => {
                     let reject = RoomAuthMessage::RoomAuthReject {
-                        message: format!("Unknown room: {}", room_code),
+                        message: "Unknown room".to_string(),
                     };
                     let _ = ws_sender.send(Message::Text(
                         serde_json::to_string(&reject).unwrap().into(),
                     )).await;
-                    return Err(format!("Unknown room code: {}", room_code));
+                    return Err("No room matches the provided hash".to_string());
                 }
             };
-            drop(keys);
 
-            // Verify the room token
-            let expected_token = crate::relay_sync::RelaySyncManager::derive_room_token_from_key(&group_key);
-            if room_token != expected_token {
-                let reject = RoomAuthMessage::RoomAuthReject {
-                    message: "Invalid room credentials".to_string(),
-                };
-                let _ = ws_sender.send(Message::Text(
-                    serde_json::to_string(&reject).unwrap().into(),
-                )).await;
-                return Err("Room token verification failed".to_string());
-            }
+            // Decode client's SPAKE2 message A
+            let msg_a_bytes = STANDARD.decode(&spake_msg)
+                .map_err(|e| format!("Invalid base64 in spake_msg: {}", e))?;
 
-            eprintln!(
-                "[LAN Sync] Room auth accepted: {} ({}) for room {}",
-                device_name, device_id, room_code
+            // Start SPAKE2 side B with group_key as password
+            let (spake_state, msg_b) = Spake2::<Ed25519Group>::start_b(
+                &Password::new(&group_key),
+                &Identity::new(b"client"),
+                &Identity::new(b"server"),
             );
 
-            // Send RoomAuthAccept
-            let accept = RoomAuthMessage::RoomAuthAccept {
+            // Complete SPAKE2 with client's message A → shared secret
+            let shared_secret = spake_state.finish(&msg_a_bytes)
+                .map_err(|e| format!("SPAKE2 finish failed: {:?}", e))?;
+
+            // Compute server key confirmation and send challenge
+            let server_confirm = spake2_server_confirm(&shared_secret);
+
+            let challenge = RoomAuthMessage::RoomAuthChallenge {
                 device_id: our_device_id.to_string(),
                 device_name: our_device_name.to_string(),
+                spake_msg: STANDARD.encode(&msg_b),
+                key_confirm: server_confirm,
             };
-            let accept_json = serde_json::to_string(&accept)
+            let challenge_json = serde_json::to_string(&challenge)
                 .map_err(|e| format!("Serialize failed: {}", e))?;
-            ws_sender.send(Message::Text(accept_json.into()))
+            ws_sender.send(Message::Text(challenge_json.into()))
                 .await
                 .map_err(|e| format!("Send failed: {}", e))?;
 
-            (device_id, device_name, group_key, room_code)
+            // Step 2: Receive RoomAuthConfirm from client
+            let confirm_frame = ws_receiver
+                .next()
+                .await
+                .ok_or_else(|| "Connection closed before key confirmation".to_string())?
+                .map_err(|e| format!("WebSocket error: {}", e))?;
+
+            let confirm_text = match confirm_frame {
+                Message::Text(t) => t.to_string(),
+                _ => return Err("Expected text message for key confirmation".to_string()),
+            };
+
+            let confirm_msg: RoomAuthMessage = serde_json::from_str(&confirm_text)
+                .map_err(|e| format!("Invalid key confirmation message: {}", e))?;
+
+            match confirm_msg {
+                RoomAuthMessage::RoomAuthConfirm { key_confirm } => {
+                    let expected_client_confirm = spake2_client_confirm(&shared_secret);
+                    if key_confirm != expected_client_confirm {
+                        let reject = RoomAuthMessage::RoomAuthReject {
+                            message: "Key confirmation failed".to_string(),
+                        };
+                        let _ = ws_sender.send(Message::Text(
+                            serde_json::to_string(&reject).unwrap().into(),
+                        )).await;
+                        return Err("Client key confirmation mismatch".to_string());
+                    }
+                }
+                _ => return Err("Expected RoomAuthConfirm message".to_string()),
+            }
+
+            eprintln!(
+                "[LAN Sync] SPAKE2 auth completed: {} ({}) for room {}",
+                device_name, device_id, matched_room_code
+            );
+
+            (device_id, device_name, matched_room_code, shared_secret)
         }
         _ => return Err("Expected RoomAuthInit message".to_string()),
     };
 
-    let long_term_key = group_key.to_vec();
-
-    // Step 2: Establish encrypted session
-    let session_nonce: [u8; 32] = rand::random();
-    // Send session nonce as binary frame
-    ws_sender
-        .send(Message::Binary(session_nonce.to_vec().into()))
-        .await
-        .map_err(|e| format!("Send session nonce failed: {}", e))?;
-
-    let cipher = SessionCipher::new(&long_term_key, &session_nonce)?;
-    let send_cipher = SessionCipher::new(&long_term_key, &session_nonce)?;
+    // Step 3: Derive session cipher from SPAKE2 shared secret
+    let cipher = SessionCipher::from_spake2_secret(&shared_secret)?;
+    let send_cipher = SessionCipher::from_spake2_secret(&shared_secret)?;
 
     // High-priority channel for tiddler sync messages
     let (tx, mut rx) = mpsc::channel::<Vec<u8>>(PEER_CHANNEL_BOUND);

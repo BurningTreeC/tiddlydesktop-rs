@@ -27,22 +27,34 @@ pub const LAN_SYNC_PORT_START: u16 = 45700;
 pub const LAN_SYNC_PORT_END: u16 = 45710;
 
 // ── Room Auth Messages (cleartext, for LAN connections) ──────────────────────
+// Uses SPAKE2 password-authenticated key exchange — never transmits room code
+// or password material. Provides mutual authentication and forward secrecy.
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum RoomAuthMessage {
-    /// Initiator sends room credentials proof
+    /// Client → Server: initiate SPAKE2 key exchange
     RoomAuthInit {
         device_id: String,
         device_name: String,
-        room_code: String,
-        /// HMAC proof of knowing the room password (derived from group key)
-        room_token: String,
+        /// Hash of room code (for routing only — same hash used in discovery)
+        room_hash: String,
+        /// Base64-encoded SPAKE2 message A (Ed25519 curve point)
+        spake_msg: String,
     },
-    /// Server accepts the auth
-    RoomAuthAccept {
+    /// Server → Client: SPAKE2 response + server key confirmation
+    RoomAuthChallenge {
         device_id: String,
         device_name: String,
+        /// Base64-encoded SPAKE2 message B (Ed25519 curve point)
+        spake_msg: String,
+        /// HMAC-SHA256(shared_secret, server_label)[..16] as hex
+        key_confirm: String,
+    },
+    /// Client → Server: client key confirmation
+    RoomAuthConfirm {
+        /// HMAC-SHA256(shared_secret, client_label)[..16] as hex
+        key_confirm: String,
     },
     /// Server rejects the auth
     RoomAuthReject {
@@ -454,6 +466,24 @@ impl SessionCipher {
         })
     }
 
+    /// Derive a session cipher directly from a SPAKE2 shared secret.
+    /// Uses HKDF-SHA256 with a fixed salt (no random nonce needed — SPAKE2
+    /// already provides a unique shared secret per session).
+    pub fn from_spake2_secret(shared_secret: &[u8]) -> Result<Self, String> {
+        let hk = Hkdf::<Sha256>::new(Some(b"tiddlydesktop-spake2-session"), shared_secret);
+        let mut session_key = [0u8; 32];
+        hk.expand(b"tiddlydesktop-lan-sync-session-key", &mut session_key)
+            .map_err(|e| format!("HKDF expand failed: {}", e))?;
+
+        let cipher = ChaCha20Poly1305::new_from_slice(&session_key)
+            .map_err(|e| format!("ChaCha20 init failed: {}", e))?;
+
+        Ok(Self {
+            cipher,
+            send_counter: 0,
+        })
+    }
+
     /// Encrypt a message for sending
     pub fn encrypt(&mut self, plaintext: &[u8]) -> Result<Vec<u8>, String> {
         let nonce_bytes = self.send_counter.to_le_bytes();
@@ -493,6 +523,33 @@ impl SessionCipher {
             .decrypt(&nonce, ciphertext)
             .map_err(|e| format!("Decryption failed: {}", e))
     }
+}
+
+// ── SPAKE2 Key Confirmation ──────────────────────────────────────────────────
+
+const SPAKE2_SERVER_CONFIRM_LABEL: &[u8] = b"tiddlydesktop-spake2-server-confirm";
+const SPAKE2_CLIENT_CONFIRM_LABEL: &[u8] = b"tiddlydesktop-spake2-client-confirm";
+
+/// Compute a key confirmation tag: HMAC-SHA256(shared_secret, label)[..16] as hex.
+/// Different labels for server vs client ensure both sides prove knowledge independently.
+pub fn spake2_key_confirm(shared_secret: &[u8], label: &[u8]) -> String {
+    use hmac::Mac;
+    type HmacSha256 = hmac::Hmac<Sha256>;
+    let mut mac = <HmacSha256 as Mac>::new_from_slice(shared_secret)
+        .expect("HMAC can take key of any size");
+    Mac::update(&mut mac, label);
+    let result = mac.finalize().into_bytes();
+    result[..16].iter().map(|b| format!("{:02x}", b)).collect()
+}
+
+/// Compute server-side key confirmation tag
+pub fn spake2_server_confirm(shared_secret: &[u8]) -> String {
+    spake2_key_confirm(shared_secret, SPAKE2_SERVER_CONFIRM_LABEL)
+}
+
+/// Compute client-side key confirmation tag
+pub fn spake2_client_confirm(shared_secret: &[u8]) -> String {
+    spake2_key_confirm(shared_secret, SPAKE2_CLIENT_CONFIRM_LABEL)
 }
 
 /// Encrypt a SyncMessage for sending over WebSocket

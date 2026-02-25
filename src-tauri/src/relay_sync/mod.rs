@@ -711,7 +711,8 @@ impl RelaySyncManager {
                 first_connect = false;
 
                 // Try to connect
-                let url = format!("{}/room/{}", relay_url, room_code);
+                let room_hash = crate::lan_sync::discovery::hash_room_code(&room_code);
+                let url = format!("{}/room/{}", relay_url, room_hash);
                 let (sender, receiver) = match connection::connect(
                     &url,
                     &my_device_id,

@@ -113,6 +113,20 @@ RelaySync/NoRoom: Geen
 RelaySync/Save: Opslaan
 RelaySync/Cancel: Annuleren
 RelaySync/RoomDetails: Details
+RelaySync/GitHub: GitHub
+RelaySync/SignedInAs: Ingelogd als
+RelaySync/Logout: Uitloggen
+RelaySync/LoginWithGitHub: Inloggen met GitHub
+RelaySync/GitHubHint: GitHub-login vereist voor toegang tot de relay-server en kamerbeheer.
+RelaySync/LoggingIn: Inloggen met GitHub...
+RelaySync/Members: Leden:
+RelaySync/LoadMembers: Laden/Vernieuwen
+RelaySync/AddMember: Toevoegen
+RelaySync/RelayServer: Relay:
+RelaySync/RegisterOnRelay: Registreren op Relay
+RelaySync/RegisteredOnRelay: Geregistreerd
+RelaySync/Registering: Registreren...
+RelaySync/RegisterFailed: Registratie mislukt
 Tooltips/SelectRelayRoom: Wijs deze wiki toe aan een relay-kamer
 Buttons/Plugins: plugins
 PluginInstaller/Title: Plugins beheren

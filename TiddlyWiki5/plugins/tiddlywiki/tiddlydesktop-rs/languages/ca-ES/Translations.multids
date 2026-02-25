@@ -113,6 +113,20 @@ RelaySync/NoRoom: Cap
 RelaySync/Save: Desar
 RelaySync/Cancel: Cancel·lar
 RelaySync/RoomDetails: Detalls
+RelaySync/GitHub: GitHub
+RelaySync/SignedInAs: Connectat com a
+RelaySync/Logout: Tancar sessió
+RelaySync/LoginWithGitHub: Iniciar sessió amb GitHub
+RelaySync/GitHubHint: Cal iniciar sessió a GitHub per accedir al servidor de retransmissió i gestionar les sales.
+RelaySync/LoggingIn: Iniciant sessió amb GitHub...
+RelaySync/Members: Membres:
+RelaySync/LoadMembers: Carregar/Actualitzar
+RelaySync/AddMember: Afegir
+RelaySync/RelayServer: Retransmissió:
+RelaySync/RegisterOnRelay: Registrar al Relay
+RelaySync/RegisteredOnRelay: Registrat
+RelaySync/Registering: Registrant...
+RelaySync/RegisterFailed: Error de registre
 Tooltips/SelectRelayRoom: Assignar aquest wiki a una sala de retransmissió
 Buttons/Plugins: connectors
 PluginInstaller/Title: Gestió de connectors

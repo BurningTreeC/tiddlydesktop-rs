@@ -113,6 +113,20 @@ RelaySync/NoRoom: بدون
 RelaySync/Save: حفظ
 RelaySync/Cancel: إلغاء
 RelaySync/RoomDetails: تفاصيل
+RelaySync/GitHub: GitHub
+RelaySync/SignedInAs: تم تسجيل الدخول كـ
+RelaySync/Logout: تسجيل الخروج
+RelaySync/LoginWithGitHub: تسجيل الدخول بـ GitHub
+RelaySync/GitHubHint: تسجيل الدخول إلى GitHub مطلوب للوصول إلى خادم الترحيل وإدارة الغرف.
+RelaySync/LoggingIn: جاري تسجيل الدخول عبر GitHub...
+RelaySync/Members: الأعضاء:
+RelaySync/LoadMembers: تحميل/تحديث
+RelaySync/AddMember: إضافة
+RelaySync/RelayServer: الترحيل:
+RelaySync/RegisterOnRelay: تسجيل على الترحيل
+RelaySync/RegisteredOnRelay: مُسجّل
+RelaySync/Registering: جاري التسجيل...
+RelaySync/RegisterFailed: فشل التسجيل
 Tooltips/SelectRelayRoom: تعيين هذا الويكي إلى غرفة ترحيل
 Buttons/Plugins: إضافات
 PluginInstaller/Title: إدارة الإضافات

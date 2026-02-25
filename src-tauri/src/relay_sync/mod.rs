@@ -11,6 +11,7 @@
 //! - `ServerEvent`s are emitted into the same channel as LAN sync
 
 pub mod connection;
+pub mod github_auth;
 
 use crate::lan_sync::pairing::PairingManager;
 use crate::lan_sync::protocol::{
@@ -240,7 +241,7 @@ fn decrypt_password(device_key: &[u8; 32], encrypted: &str) -> Option<String> {
 /// This is a sync function so it can be called from the constructor.
 /// Returns an error if serialization or writing fails.
 fn save_config_sync(config_path: &std::path::Path, device_key: &[u8; 32], config: &RelayConfig) -> Result<(), String> {
-    // Clone config, encrypt passwords for serialization
+    // Clone config, encrypt passwords and tokens for serialization
     let mut disk_config = config.clone();
     for room in &mut disk_config.rooms {
         if !room.password.is_empty() {
@@ -248,6 +249,11 @@ fn save_config_sync(config_path: &std::path::Path, device_key: &[u8; 32], config
         }
         // password has skip_serializing so it won't appear in output
     }
+    // Encrypt GitHub token for disk storage
+    if !disk_config.github_token.is_empty() {
+        disk_config.encrypted_github_token = Some(encrypt_password(device_key, &disk_config.github_token));
+    }
+    // github_token has skip_serializing so it won't appear in output
     let json = serde_json::to_string_pretty(&disk_config)
         .map_err(|e| format!("Failed to serialize relay config: {}", e))?;
     std::fs::write(config_path, json)
@@ -297,6 +303,18 @@ pub struct RelayConfig {
     /// User-defined rooms
     #[serde(default)]
     pub rooms: Vec<RoomDefinition>,
+    /// GitHub token (in-memory only — never serialized to disk)
+    #[serde(default, skip_serializing)]
+    pub github_token: String,
+    /// Encrypted GitHub token (written to disk)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub encrypted_github_token: Option<String>,
+    /// GitHub username (for display)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub github_login: Option<String>,
+    /// GitHub user ID
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub github_id: Option<i64>,
 }
 
 impl Default for RelayConfig {
@@ -305,6 +323,10 @@ impl Default for RelayConfig {
             relay_url: DEFAULT_RELAY_URL.to_string(),
             auto_connect: false,
             rooms: Vec::new(),
+            github_token: String::new(),
+            encrypted_github_token: None,
+            github_login: None,
+            github_id: None,
         }
     }
 }
@@ -446,6 +468,19 @@ impl RelaySyncManager {
             }
         }
 
+        // Decrypt GitHub token
+        if let Some(ref enc) = config.encrypted_github_token {
+            if let Some(token) = decrypt_password(&device_key, enc) {
+                config.github_token = token;
+            } else {
+                eprintln!("[Relay] Warning: failed to decrypt GitHub token");
+                config.encrypted_github_token = None;
+                config.github_login = None;
+                config.github_id = None;
+                needs_save = true;
+            }
+        }
+
         let mgr = Self {
             config: RwLock::new(config),
             config_path,
@@ -566,7 +601,12 @@ impl RelaySyncManager {
             .ok_or_else(|| format!("Room '{}' not found in config", room_code))?
             .clone();
 
-        self.spawn_room_task(config.relay_url.clone(), room_def);
+        // GitHub token is required for relay connection
+        if config.github_token.is_empty() {
+            return Err("GitHub authentication required. Please login with GitHub first.".to_string());
+        }
+
+        self.spawn_room_task(config.relay_url.clone(), room_def, config.github_token.clone());
         Ok(())
     }
 
@@ -601,10 +641,17 @@ impl RelaySyncManager {
     pub async fn start_all(&self) -> Result<(), String> {
         let config = self.config.read().await.clone();
         eprintln!("[Relay] Starting auto-connect rooms (url: {})", config.relay_url);
+
+        // GitHub token required for relay — skip if not authenticated
+        if config.github_token.is_empty() {
+            eprintln!("[Relay] Skipping relay auto-connect — no GitHub token (LAN sync still works)");
+            return Ok(());
+        }
+
         for room_def in &config.rooms {
             if room_def.auto_connect {
                 if !self.rooms.read().await.contains_key(&room_def.room_code) {
-                    self.spawn_room_task(config.relay_url.clone(), room_def.clone());
+                    self.spawn_room_task(config.relay_url.clone(), room_def.clone(), config.github_token.clone());
                 }
             }
         }
@@ -672,14 +719,13 @@ impl RelaySyncManager {
 
     // ── Spawn a long-lived task for one room ────────────────────────
 
-    fn spawn_room_task(&self, relay_url: String, room_def: RoomDefinition) {
+    fn spawn_room_task(&self, relay_url: String, room_def: RoomDefinition, github_token: String) {
         let event_tx = self.event_tx.clone();
         let rooms = self.rooms.clone();
         let room_running = self.room_running.clone();
         let my_device_id = self.pairing_manager.device_id().to_string();
         let my_device_name = self.pairing_manager.device_name().to_string();
         let room_code = room_def.room_code.clone();
-        let app_token = derive_app_token(&self.device_key);
 
         // Create a per-room running flag
         let running = Arc::new(AtomicBool::new(true));
@@ -729,7 +775,7 @@ impl RelaySyncManager {
                 let (sender, receiver) = match connection::connect(
                     &url,
                     &my_device_id,
-                    &app_token,
+                    &github_token,
                     Some(&room_token),
                 )
                 .await
@@ -1547,6 +1593,156 @@ impl RelaySyncManager {
         None
     }
 
+    // ── GitHub authentication ───────────────────────────────────────
+
+    /// Start GitHub OAuth login flow
+    pub async fn github_login(&self) -> Result<github_auth::OAuthResult, String> {
+        let relay_url = self.config.read().await.relay_url.clone();
+        let result = github_auth::start_auth_flow(&relay_url).await?;
+
+        // Store the token in config
+        {
+            let mut config = self.config.write().await;
+            config.github_token = result.access_token.clone();
+            config.github_login = Some(result.github_login.clone());
+            config.github_id = Some(result.github_id);
+        }
+        self.save_config().await;
+        Ok(result)
+    }
+
+    /// Log out of GitHub (clear stored token)
+    pub async fn github_logout(&self) {
+        {
+            let mut config = self.config.write().await;
+            config.github_token.clear();
+            config.encrypted_github_token = None;
+            config.github_login = None;
+            config.github_id = None;
+        }
+        self.save_config().await;
+    }
+
+    /// Get GitHub auth status
+    pub async fn github_status(&self) -> (Option<String>, Option<i64>, bool) {
+        let config = self.config.read().await;
+        let has_token = !config.github_token.is_empty();
+        (config.github_login.clone(), config.github_id, has_token)
+    }
+
+    // ── Server-side room management API ──────────────────────────────
+
+    /// Generic relay API call helper
+    async fn relay_api<T: serde::de::DeserializeOwned>(
+        &self,
+        method: reqwest::Method,
+        path: &str,
+        body: Option<&serde_json::Value>,
+    ) -> Result<T, String> {
+        let config = self.config.read().await;
+        if config.github_token.is_empty() {
+            return Err("GitHub authentication required".to_string());
+        }
+        let api_base = github_auth::relay_ws_to_https(&config.relay_url);
+        let token = config.github_token.clone();
+        drop(config);
+
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(30))
+            .build()
+            .map_err(|e| format!("HTTP client error: {}", e))?;
+
+        let mut req = client.request(method, format!("{}{}", api_base, path))
+            .header("Authorization", format!("Bearer {}", token));
+
+        if let Some(body) = body {
+            req = req.json(body);
+        }
+
+        let resp = req.send().await
+            .map_err(|e| format!("API request failed: {}", e))?;
+
+        if resp.status() == reqwest::StatusCode::NO_CONTENT {
+            // For 204 responses, return empty JSON
+            return serde_json::from_str("null")
+                .map_err(|e| format!("Unexpected response: {}", e));
+        }
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            return Err(format!("API error ({}): {}", status, body));
+        }
+
+        resp.json::<T>().await
+            .map_err(|e| format!("Invalid API response: {}", e))
+    }
+
+    /// Register a room on the server (with existing room_code from local creation)
+    pub async fn create_server_room(&self, name: &str, room_code: &str) -> Result<(String, String), String> {
+        let body = serde_json::json!({"name": name, "room_code": room_code});
+        let result: serde_json::Value = self.relay_api(
+            reqwest::Method::POST,
+            "/api/rooms",
+            Some(&body),
+        ).await?;
+        let room_code = result["room_code"].as_str()
+            .ok_or("No room_code in response")?
+            .to_string();
+        let name = result["name"].as_str()
+            .unwrap_or("")
+            .to_string();
+        Ok((room_code, name))
+    }
+
+    /// Delete a room on the server (owner only)
+    pub async fn delete_server_room(&self, room_code: &str) -> Result<(), String> {
+        let _: serde_json::Value = self.relay_api(
+            reqwest::Method::DELETE,
+            &format!("/api/rooms/{}", room_code),
+            None,
+        ).await?;
+        Ok(())
+    }
+
+    /// Add a member to a server room (owner only)
+    pub async fn add_room_member(&self, room_code: &str, github_login: &str) -> Result<(), String> {
+        let body = serde_json::json!({"github_login": github_login});
+        let _: serde_json::Value = self.relay_api(
+            reqwest::Method::POST,
+            &format!("/api/rooms/{}/members", room_code),
+            Some(&body),
+        ).await?;
+        Ok(())
+    }
+
+    /// Remove a member from a server room (owner only)
+    pub async fn remove_room_member(&self, room_code: &str, github_login: &str) -> Result<(), String> {
+        let _: serde_json::Value = self.relay_api(
+            reqwest::Method::DELETE,
+            &format!("/api/rooms/{}/members/{}", room_code, github_login),
+            None,
+        ).await?;
+        Ok(())
+    }
+
+    /// List members of a server room
+    pub async fn list_room_members(&self, room_code: &str) -> Result<Vec<serde_json::Value>, String> {
+        self.relay_api(
+            reqwest::Method::GET,
+            &format!("/api/rooms/{}/members", room_code),
+            None,
+        ).await
+    }
+
+    /// List server rooms the user owns or is a member of
+    pub async fn list_server_rooms(&self) -> Result<Vec<serde_json::Value>, String> {
+        self.relay_api(
+            reqwest::Method::GET,
+            "/api/rooms",
+            None,
+        ).await
+    }
 }
 
 // ── Frame building helpers ──────────────────────────────────────────

@@ -113,6 +113,20 @@ RelaySync/NoRoom: 없음
 RelaySync/Save: 저장
 RelaySync/Cancel: 취소
 RelaySync/RoomDetails: 상세
+RelaySync/GitHub: GitHub
+RelaySync/SignedInAs: 로그인됨:
+RelaySync/Logout: 로그아웃
+RelaySync/LoginWithGitHub: GitHub로 로그인
+RelaySync/GitHubHint: 릴레이 서버 접근 및 방 관리를 위해 GitHub 로그인이 필요합니다.
+RelaySync/LoggingIn: GitHub로 로그인 중...
+RelaySync/Members: 멤버:
+RelaySync/LoadMembers: 불러오기/새로고침
+RelaySync/AddMember: 추가
+RelaySync/RelayServer: 릴레이:
+RelaySync/RegisterOnRelay: 릴레이에 등록
+RelaySync/RegisteredOnRelay: 등록됨
+RelaySync/Registering: 등록 중...
+RelaySync/RegisterFailed: 등록 실패
 Tooltips/SelectRelayRoom: 이 위키를 릴레이 방에 할당
 Buttons/Plugins: 플러그인
 PluginInstaller/Title: 플러그인 관리

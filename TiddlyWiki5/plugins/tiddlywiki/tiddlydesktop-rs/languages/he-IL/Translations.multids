@@ -113,6 +113,20 @@ RelaySync/NoRoom: ללא
 RelaySync/Save: שמור
 RelaySync/Cancel: ביטול
 RelaySync/RoomDetails: פרטים
+RelaySync/GitHub: GitHub
+RelaySync/SignedInAs: מחובר כ
+RelaySync/Logout: התנתק
+RelaySync/LoginWithGitHub: התחבר עם GitHub
+RelaySync/GitHubHint: נדרשת התחברות ל-GitHub לגישה לשרת הממסר ולניהול חדרים.
+RelaySync/LoggingIn: מתחבר עם GitHub...
+RelaySync/Members: חברים:
+RelaySync/LoadMembers: טען/רענן
+RelaySync/AddMember: הוסף
+RelaySync/RelayServer: ממסר:
+RelaySync/RegisterOnRelay: רשום ב-Relay
+RelaySync/RegisteredOnRelay: רשום
+RelaySync/Registering: רושם...
+RelaySync/RegisterFailed: הרישום נכשל
 Tooltips/SelectRelayRoom: שייך ויקי זה לחדר ממסר
 Buttons/Plugins: תוספים
 PluginInstaller/Title: ניהול תוספים

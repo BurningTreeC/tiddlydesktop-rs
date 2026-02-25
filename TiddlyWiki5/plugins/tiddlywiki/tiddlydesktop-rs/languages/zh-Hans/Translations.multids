@@ -113,6 +113,20 @@ RelaySync/NoRoom: 无
 RelaySync/Save: 保存
 RelaySync/Cancel: 取消
 RelaySync/RoomDetails: 详情
+RelaySync/GitHub: GitHub
+RelaySync/SignedInAs: 已登录为
+RelaySync/Logout: 退出登录
+RelaySync/LoginWithGitHub: 使用 GitHub 登录
+RelaySync/GitHubHint: 访问中继服务器和管理房间需要 GitHub 登录。
+RelaySync/LoggingIn: 正在使用 GitHub 登录...
+RelaySync/Members: 成员：
+RelaySync/LoadMembers: 加载/刷新
+RelaySync/AddMember: 添加
+RelaySync/RelayServer: 中继：
+RelaySync/RegisterOnRelay: 注册到中继
+RelaySync/RegisteredOnRelay: 已注册
+RelaySync/Registering: 注册中...
+RelaySync/RegisterFailed: 注册失败
 Tooltips/SelectRelayRoom: 将此维基分配到中继房间
 Buttons/Plugins: 插件
 PluginInstaller/Title: 管理插件

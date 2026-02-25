@@ -113,6 +113,20 @@ RelaySync/NoRoom: Κανένα
 RelaySync/Save: Αποθήκευση
 RelaySync/Cancel: Ακύρωση
 RelaySync/RoomDetails: Λεπτομέρειες
+RelaySync/GitHub: GitHub
+RelaySync/SignedInAs: Συνδεδεμένος ως
+RelaySync/Logout: Αποσύνδεση
+RelaySync/LoginWithGitHub: Σύνδεση με GitHub
+RelaySync/GitHubHint: Απαιτείται σύνδεση GitHub για πρόσβαση στον διακομιστή αναμετάδοσης και διαχείριση δωματίων.
+RelaySync/LoggingIn: Σύνδεση μέσω GitHub...
+RelaySync/Members: Μέλη:
+RelaySync/LoadMembers: Φόρτωση/Ανανέωση
+RelaySync/AddMember: Προσθήκη
+RelaySync/RelayServer: Αναμετάδοση:
+RelaySync/RegisterOnRelay: Εγγραφή στο Relay
+RelaySync/RegisteredOnRelay: Εγγεγραμμένο
+RelaySync/Registering: Εγγραφή...
+RelaySync/RegisterFailed: Η εγγραφή απέτυχε
 Tooltips/SelectRelayRoom: Αντιστοίχιση αυτού του wiki σε δωμάτιο αναμετάδοσης
 Buttons/Plugins: πρόσθετα
 PluginInstaller/Title: Διαχείριση προσθέτων

@@ -113,6 +113,20 @@ RelaySync/NoRoom: Nobena
 RelaySync/Save: Shrani
 RelaySync/Cancel: Prekliči
 RelaySync/RoomDetails: Podrobnosti
+RelaySync/GitHub: GitHub
+RelaySync/SignedInAs: Prijavljen kot
+RelaySync/Logout: Odjava
+RelaySync/LoginWithGitHub: Prijava z GitHub
+RelaySync/GitHubHint: Za dostop do strežnika za posredovanje in upravljanje sob je potrebna prijava z GitHub.
+RelaySync/LoggingIn: Prijava z GitHub...
+RelaySync/Members: Člani:
+RelaySync/LoadMembers: Naloži/Osveži
+RelaySync/AddMember: Dodaj
+RelaySync/RelayServer: Posredovalnik:
+RelaySync/RegisterOnRelay: Registriraj na Relay
+RelaySync/RegisteredOnRelay: Registrirano
+RelaySync/Registering: Registracija...
+RelaySync/RegisterFailed: Registracija ni uspela
 Tooltips/SelectRelayRoom: Dodeli ta wiki prenosni sobi
 Buttons/Plugins: vtičniki
 PluginInstaller/Title: Upravljanje vtičnikov

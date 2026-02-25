@@ -113,6 +113,20 @@ RelaySync/NoRoom: Нема
 RelaySync/Save: Зачувај
 RelaySync/Cancel: Откажи
 RelaySync/RoomDetails: Детали
+RelaySync/GitHub: GitHub
+RelaySync/SignedInAs: Најавен како
+RelaySync/Logout: Одјава
+RelaySync/LoginWithGitHub: Најави се со GitHub
+RelaySync/GitHubHint: Потребна е GitHub најава за пристап до релејниот сервер и управување со соби.
+RelaySync/LoggingIn: Најавување преку GitHub...
+RelaySync/Members: Членови:
+RelaySync/LoadMembers: Вчитај/Освежи
+RelaySync/AddMember: Додај
+RelaySync/RelayServer: Релеј:
+RelaySync/RegisterOnRelay: Регистрирај на Relay
+RelaySync/RegisteredOnRelay: Регистрирано
+RelaySync/Registering: Регистрирање...
+RelaySync/RegisterFailed: Регистрацијата не успеа
 Tooltips/SelectRelayRoom: Додели го ова вики на соба за пренос
 Buttons/Plugins: додатоци
 PluginInstaller/Title: Управување со додатоци

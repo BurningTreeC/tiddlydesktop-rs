@@ -113,6 +113,20 @@ RelaySync/NoRoom: Ingen
 RelaySync/Save: Gem
 RelaySync/Cancel: Annuller
 RelaySync/RoomDetails: Detaljer
+RelaySync/GitHub: GitHub
+RelaySync/SignedInAs: Logget ind som
+RelaySync/Logout: Log ud
+RelaySync/LoginWithGitHub: Log ind med GitHub
+RelaySync/GitHubHint: GitHub-login kræves for adgang til relay-serveren og rumstyring.
+RelaySync/LoggingIn: Logger ind med GitHub...
+RelaySync/Members: Medlemmer:
+RelaySync/LoadMembers: Indlæs/Opdater
+RelaySync/AddMember: Tilføj
+RelaySync/RelayServer: Relay:
+RelaySync/RegisterOnRelay: Registrer på Relay
+RelaySync/RegisteredOnRelay: Registreret
+RelaySync/Registering: Registrerer...
+RelaySync/RegisterFailed: Registrering mislykkedes
 Tooltips/SelectRelayRoom: Tildel denne wiki til et relay-rum
 Buttons/Plugins: plugins
 PluginInstaller/Title: Administrer plugins

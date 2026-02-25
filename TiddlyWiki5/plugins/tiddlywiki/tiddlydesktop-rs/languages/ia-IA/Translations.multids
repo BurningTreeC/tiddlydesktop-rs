@@ -113,6 +113,20 @@ RelaySync/NoRoom: None
 RelaySync/Save: Save
 RelaySync/Cancel: Cancellar
 RelaySync/RoomDetails: Details
+RelaySync/GitHub: GitHub
+RelaySync/SignedInAs: Authenticate como
+RelaySync/Logout: Disconnecter
+RelaySync/LoginWithGitHub: Authenticar con GitHub
+RelaySync/GitHubHint: Le authentication GitHub es requirite pro acceder al servitor de releo e gerer le cameras.
+RelaySync/LoggingIn: Authentication con GitHub...
+RelaySync/Members: Membros:
+RelaySync/LoadMembers: Cargar/Refrescar
+RelaySync/AddMember: Adder
+RelaySync/RelayServer: Releo:
+RelaySync/RegisterOnRelay: Registrar in Relay
+RelaySync/RegisteredOnRelay: Registrate
+RelaySync/Registering: Registration...
+RelaySync/RegisterFailed: Registration fallite
 Tooltips/SelectRelayRoom: Assign this wiki to a relay room
 Buttons/Plugins: plugins
 PluginInstaller/Title: Gerer plugins

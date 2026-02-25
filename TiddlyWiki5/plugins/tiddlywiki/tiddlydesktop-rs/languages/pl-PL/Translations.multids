@@ -113,6 +113,20 @@ RelaySync/NoRoom: Brak
 RelaySync/Save: Zapisz
 RelaySync/Cancel: Anuluj
 RelaySync/RoomDetails: Szczegóły
+RelaySync/GitHub: GitHub
+RelaySync/SignedInAs: Zalogowano jako
+RelaySync/Logout: Wyloguj
+RelaySync/LoginWithGitHub: Zaloguj przez GitHub
+RelaySync/GitHubHint: Logowanie przez GitHub jest wymagane do dostępu do serwera przekaźnikowego i zarządzania pokojami.
+RelaySync/LoggingIn: Logowanie przez GitHub...
+RelaySync/Members: Członkowie:
+RelaySync/LoadMembers: Załaduj/Odśwież
+RelaySync/AddMember: Dodaj
+RelaySync/RelayServer: Relay:
+RelaySync/RegisterOnRelay: Zarejestruj w Relay
+RelaySync/RegisteredOnRelay: Zarejestrowano
+RelaySync/Registering: Rejestrowanie...
+RelaySync/RegisterFailed: Rejestracja nie powiodła się
 Tooltips/SelectRelayRoom: Przypisz to wiki do pokoju przekaźnikowego
 Buttons/Plugins: wtyczki
 PluginInstaller/Title: Zarządzaj wtyczkami

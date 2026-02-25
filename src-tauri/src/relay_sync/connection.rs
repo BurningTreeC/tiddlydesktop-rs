@@ -73,18 +73,21 @@ impl RelayReceiver {
 
 /// Connect to a relay room.
 ///
-/// Sends the join message immediately after connecting (with optional room token).
+/// Uses GitHub Bearer token for server authentication (replaces X-App-Token).
+/// Room token (derived from E2E password) is still sent in the join message for
+/// end-to-end verification.
+///
 /// Returns a sender (for outbound) and receiver (for inbound).
 pub async fn connect(
     url: &str,
     device_id: &str,
-    app_token: &str,
+    github_token: &str,
     room_token: Option<&str>,
 ) -> Result<(RelaySender, RelayReceiver), String> {
-    // Build WebSocket request with app token header
+    // Build WebSocket request with GitHub Bearer token
     let request = http::Request::builder()
         .uri(url)
-        .header("X-App-Token", app_token)
+        .header("Authorization", format!("Bearer {}", github_token))
         .header("Host", extract_host(url))
         .header("Connection", "Upgrade")
         .header("Upgrade", "websocket")
@@ -103,7 +106,7 @@ pub async fn connect(
     let (ws_tx, mut ws_rx) = ws_stream.split();
     let ws_tx = Arc::new(Mutex::new(Some(ws_tx)));
 
-    // Send join message (with optional room token for authenticated rooms)
+    // Send join message with room token (for E2E key verification)
     {
         let mut guard = ws_tx.lock().await;
         if let Some(ref mut tx) = *guard {

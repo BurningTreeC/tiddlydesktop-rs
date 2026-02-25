@@ -113,6 +113,20 @@ RelaySync/NoRoom: ਕੋਈ ਨਹੀਂ
 RelaySync/Save: ਸੰਭਾਲੋ
 RelaySync/Cancel: ਰੱਦ ਕਰੋ
 RelaySync/RoomDetails: ਵੇਰਵੇ
+RelaySync/GitHub: GitHub
+RelaySync/SignedInAs: ਇਸ ਰੂਪ ਵਿੱਚ ਸਾਈਨ ਇਨ ਕੀਤਾ
+RelaySync/Logout: ਲੌਗ ਆਊਟ
+RelaySync/LoginWithGitHub: GitHub ਨਾਲ ਲੌਗ ਇਨ ਕਰੋ
+RelaySync/GitHubHint: ਰੀਲੇਅ ਸਰਵਰ ਪਹੁੰਚ ਅਤੇ ਕਮਰਾ ਪ੍ਰਬੰਧਨ ਲਈ GitHub ਲੌਗਇਨ ਲੋੜੀਂਦਾ ਹੈ।
+RelaySync/LoggingIn: GitHub ਨਾਲ ਲੌਗ ਇਨ ਹੋ ਰਿਹਾ ਹੈ...
+RelaySync/Members: ਮੈਂਬਰ:
+RelaySync/LoadMembers: ਲੋਡ/ਰਿਫ਼੍ਰੈਸ਼
+RelaySync/AddMember: ਜੋੜੋ
+RelaySync/RelayServer: ਰੀਲੇਅ:
+RelaySync/RegisterOnRelay: ਰੀਲੇਅ 'ਤੇ ਰਜਿਸਟਰ ਕਰੋ
+RelaySync/RegisteredOnRelay: ਰਜਿਸਟਰਡ
+RelaySync/Registering: ਰਜਿਸਟਰ ਹੋ ਰਿਹਾ ਹੈ...
+RelaySync/RegisterFailed: ਰਜਿਸਟ੍ਰੇਸ਼ਨ ਅਸਫਲ
 Tooltips/SelectRelayRoom: ਇਸ ਵਿਕੀ ਨੂੰ ਰਿਲੇ ਕਮਰੇ ਵਿੱਚ ਅਸਾਈਨ ਕਰੋ
 Buttons/Plugins: ਪਲੱਗਇਨ
 PluginInstaller/Title: ਪਲੱਗਇਨ ਪ੍ਰਬੰਧਿਤ ਕਰੋ

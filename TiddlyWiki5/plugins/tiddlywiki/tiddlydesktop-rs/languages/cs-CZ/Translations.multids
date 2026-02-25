@@ -113,6 +113,20 @@ RelaySync/NoRoom: Žádná
 RelaySync/Save: Uložit
 RelaySync/Cancel: Zrušit
 RelaySync/RoomDetails: Podrobnosti
+RelaySync/GitHub: GitHub
+RelaySync/SignedInAs: Přihlášen jako
+RelaySync/Logout: Odhlásit se
+RelaySync/LoginWithGitHub: Přihlásit se přes GitHub
+RelaySync/GitHubHint: Pro přístup k přenosovému serveru a správu místností je nutné přihlášení přes GitHub.
+RelaySync/LoggingIn: Přihlašování přes GitHub...
+RelaySync/Members: Členové:
+RelaySync/LoadMembers: Načíst/Obnovit
+RelaySync/AddMember: Přidat
+RelaySync/RelayServer: Relay:
+RelaySync/RegisterOnRelay: Registrovat na Relay
+RelaySync/RegisteredOnRelay: Registrováno
+RelaySync/Registering: Registrace...
+RelaySync/RegisterFailed: Registrace se nezdařila
 Tooltips/SelectRelayRoom: Přiřadit toto wiki k přenosové místnosti
 Buttons/Plugins: pluginy
 PluginInstaller/Title: Správa pluginů

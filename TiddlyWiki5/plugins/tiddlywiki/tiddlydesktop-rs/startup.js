@@ -1790,6 +1790,93 @@ exports.startup = function(callback) {
 
 	// ── Relay Sync message handlers ─────────────────────────────────────
 
+	// GitHub OAuth login
+	$tw.rootWidget.addEventListener("tm-tiddlydesktop-rs-relay-github-login", function(event) {
+		$tw.wiki.setText("$:/temp/tiddlydesktop-rs/github-auth-status", "text", null, "logging-in");
+		invoke("relay_sync_github_login").then(function(result) {
+			$tw.wiki.setText("$:/temp/tiddlydesktop-rs/github-login", "text", null, result.github_login || "");
+			$tw.wiki.setText("$:/temp/tiddlydesktop-rs/github-auth-status", "text", null, "authenticated");
+			updateRelayRoomList();
+		}).catch(function(err) {
+			console.error("[Relay] GitHub login failed:", err);
+			$tw.wiki.setText("$:/temp/tiddlydesktop-rs/github-auth-status", "text", null, "");
+		});
+	});
+
+	// GitHub OAuth logout
+	$tw.rootWidget.addEventListener("tm-tiddlydesktop-rs-relay-github-logout", function(event) {
+		invoke("relay_sync_github_logout").then(function() {
+			$tw.wiki.setText("$:/temp/tiddlydesktop-rs/github-login", "text", null, "");
+			$tw.wiki.setText("$:/temp/tiddlydesktop-rs/github-auth-status", "text", null, "");
+			updateRelayRoomList();
+		});
+	});
+
+	// Register an existing local room on the relay server (enables relay sync for that room)
+	$tw.rootWidget.addEventListener("tm-tiddlydesktop-rs-relay-register-room", function(event) {
+		var p = event.paramObject || {};
+		if (!p.roomCode || !p.name) return;
+		var statusTiddler = "$:/temp/tiddlydesktop-rs/relay-room-register-status/" + p.roomCode;
+		$tw.wiki.setText(statusTiddler, "text", null, "registering");
+		invoke("relay_sync_create_room", { name: p.name, roomCode: p.roomCode }).then(function(result) {
+			console.log("[Relay] Room registered on server:", result.room_code);
+			$tw.wiki.setText(statusTiddler, "text", null, "registered");
+			updateRelayRoomList();
+		}).catch(function(err) {
+			var errStr = "" + err;
+			if (errStr.indexOf("409") !== -1 || errStr.indexOf("already exists") !== -1) {
+				console.log("[Relay] Room already registered on server:", p.roomCode);
+				$tw.wiki.setText(statusTiddler, "text", null, "already-registered");
+			} else {
+				console.error("[Relay] Register room failed:", err);
+				$tw.wiki.setText(statusTiddler, "text", null, "error");
+			}
+		});
+	});
+
+	// Add a member to a server room
+	$tw.rootWidget.addEventListener("tm-tiddlydesktop-rs-relay-add-member", function(event) {
+		var p = event.paramObject || {};
+		if (!p.roomCode || !p.githubLogin) return;
+		invoke("relay_sync_add_member", { roomCode: p.roomCode, githubLogin: p.githubLogin }).then(function() {
+			// Refresh member list
+			$tw.rootWidget.dispatchEvent({
+				type: "tm-tiddlydesktop-rs-relay-load-members",
+				paramObject: { roomCode: p.roomCode }
+			});
+		}).catch(function(err) {
+			console.error("[Relay] Add member failed:", err);
+		});
+	});
+
+	// Remove a member from a server room
+	$tw.rootWidget.addEventListener("tm-tiddlydesktop-rs-relay-remove-member", function(event) {
+		var p = event.paramObject || {};
+		if (!p.roomCode || !p.githubLogin) return;
+		invoke("relay_sync_remove_member", { roomCode: p.roomCode, githubLogin: p.githubLogin }).then(function() {
+			// Refresh member list
+			$tw.rootWidget.dispatchEvent({
+				type: "tm-tiddlydesktop-rs-relay-load-members",
+				paramObject: { roomCode: p.roomCode }
+			});
+		}).catch(function(err) {
+			console.error("[Relay] Remove member failed:", err);
+		});
+	});
+
+	// Load members of a server room
+	$tw.rootWidget.addEventListener("tm-tiddlydesktop-rs-relay-load-members", function(event) {
+		var p = event.paramObject || {};
+		if (!p.roomCode) return;
+		invoke("relay_sync_list_members", { roomCode: p.roomCode }).then(function(members) {
+			var tiddler = "$:/temp/tiddlydesktop-rs/relay-room-members/" + p.roomCode;
+			$tw.wiki.setText(tiddler, "text", null, JSON.stringify(members));
+			$tw.wiki.setText(tiddler, "type", null, "application/json");
+		}).catch(function(err) {
+			console.error("[Relay] Load members failed:", err);
+		});
+	});
+
 	// Add a relay room
 	$tw.rootWidget.addEventListener("tm-tiddlydesktop-rs-relay-add-room", function(event) {
 		var p = event.paramObject || {};
@@ -2008,6 +2095,9 @@ exports.startup = function(callback) {
 					$tw.wiki.setText("$:/temp/tiddlydesktop-rs/relay-sync-url", "text", null, relayStatus.relay_url);
 					$tw.wiki.setText("$:/temp/tiddlydesktop-rs/relay-sync-url-input", "text", null, relayStatus.relay_url);
 				}
+				// Update GitHub auth status tiddlers
+				$tw.wiki.setText("$:/temp/tiddlydesktop-rs/github-login", "text", null, relayStatus.github_login || "");
+				$tw.wiki.setText("$:/temp/tiddlydesktop-rs/github-auth-status", "text", null, relayStatus.github_authenticated ? "authenticated" : "");
 				updateRelayRoomList(rooms);
 			}).catch(function(err) {
 				console.error("relay_sync_get_status failed (inner):", err);
@@ -2027,6 +2117,9 @@ exports.startup = function(callback) {
 					$tw.wiki.setText("$:/temp/tiddlydesktop-rs/relay-sync-url", "text", null, relayStatus.relay_url);
 					$tw.wiki.setText("$:/temp/tiddlydesktop-rs/relay-sync-url-input", "text", null, relayStatus.relay_url);
 				}
+				// Update GitHub auth status tiddlers
+				$tw.wiki.setText("$:/temp/tiddlydesktop-rs/github-login", "text", null, relayStatus.github_login || "");
+				$tw.wiki.setText("$:/temp/tiddlydesktop-rs/github-auth-status", "text", null, relayStatus.github_authenticated ? "authenticated" : "");
 				updateRelayRoomList(rooms);
 			}).catch(function(err) {
 				console.error("relay_sync_get_status failed (outer):", err);

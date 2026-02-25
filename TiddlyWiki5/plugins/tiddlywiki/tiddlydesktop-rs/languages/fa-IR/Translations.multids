@@ -113,6 +113,20 @@ RelaySync/NoRoom: هیچکدام
 RelaySync/Save: ذخیره
 RelaySync/Cancel: لغو
 RelaySync/RoomDetails: جزئیات
+RelaySync/GitHub: GitHub
+RelaySync/SignedInAs: وارد شده به عنوان
+RelaySync/Logout: خروج
+RelaySync/LoginWithGitHub: ورود با GitHub
+RelaySync/GitHubHint: برای دسترسی به سرور رله و مدیریت اتاق‌ها، ورود به GitHub لازم است.
+RelaySync/LoggingIn: در حال ورود با GitHub...
+RelaySync/Members: اعضا:
+RelaySync/LoadMembers: بارگذاری/بازخوانی
+RelaySync/AddMember: افزودن
+RelaySync/RelayServer: رله:
+RelaySync/RegisterOnRelay: ثبت در رله
+RelaySync/RegisteredOnRelay: ثبت شده
+RelaySync/Registering: در حال ثبت...
+RelaySync/RegisterFailed: ثبت ناموفق بود
 Tooltips/SelectRelayRoom: اختصاص این ویکی به یک اتاق رله
 Buttons/Plugins: افزونه‌ها
 PluginInstaller/Title: مدیریت افزونه‌ها

@@ -6752,6 +6752,9 @@ pub fn lan_sync_get_collab_port() -> Result<u16, String> {
 pub struct RelaySyncStatus {
     pub relay_url: String,
     pub rooms: Vec<crate::relay_sync::RoomStatus>,
+    pub github_login: Option<String>,
+    pub github_id: Option<i64>,
+    pub github_authenticated: bool,
 }
 
 #[tauri::command]
@@ -6760,14 +6763,21 @@ pub async fn relay_sync_get_status() -> Result<RelaySyncStatus, String> {
     if let Some(relay) = &mgr.relay_manager {
         let config = relay.get_config().await;
         let rooms = relay.get_rooms().await;
+        let github_authenticated = !config.github_token.is_empty();
         Ok(RelaySyncStatus {
             relay_url: config.relay_url,
             rooms,
+            github_login: config.github_login,
+            github_id: config.github_id,
+            github_authenticated,
         })
     } else {
         Ok(RelaySyncStatus {
             relay_url: String::new(),
             rooms: vec![],
+            github_login: None,
+            github_id: None,
+            github_authenticated: false,
         })
     }
 }
@@ -6948,6 +6958,122 @@ pub async fn relay_sync_generate_credentials() -> Result<serde_json::Value, Stri
         "room_code": crate::relay_sync::generate_room_code(),
         "password": crate::relay_sync::generate_room_password(),
     }))
+}
+
+// ── GitHub Authentication Commands ──────────────────────────────────
+
+#[tauri::command]
+pub async fn relay_sync_github_login() -> Result<serde_json::Value, String> {
+    let mgr = get_sync_manager().ok_or("Sync not initialized")?;
+    if let Some(relay) = &mgr.relay_manager {
+        let result = relay.github_login().await?;
+        Ok(serde_json::json!({
+            "github_login": result.github_login,
+            "github_id": result.github_id,
+        }))
+    } else {
+        Err("Relay sync not available".to_string())
+    }
+}
+
+#[tauri::command]
+pub async fn relay_sync_github_logout() -> Result<(), String> {
+    let mgr = get_sync_manager().ok_or("Sync not initialized")?;
+    if let Some(relay) = &mgr.relay_manager {
+        // Disconnect all rooms first (tokens will be invalid after logout)
+        relay.stop_all().await;
+        relay.github_logout().await;
+        Ok(())
+    } else {
+        Err("Relay sync not available".to_string())
+    }
+}
+
+#[tauri::command]
+pub async fn relay_sync_github_status() -> Result<serde_json::Value, String> {
+    let mgr = get_sync_manager().ok_or("Sync not initialized")?;
+    if let Some(relay) = &mgr.relay_manager {
+        let (login, id, has_token) = relay.github_status().await;
+        Ok(serde_json::json!({
+            "github_login": login,
+            "github_id": id,
+            "authenticated": has_token,
+        }))
+    } else {
+        Ok(serde_json::json!({
+            "github_login": null,
+            "github_id": null,
+            "authenticated": false,
+        }))
+    }
+}
+
+// ── Server-Side Room Management Commands ────────────────────────────
+
+#[tauri::command]
+pub async fn relay_sync_create_room(name: String, room_code: String) -> Result<serde_json::Value, String> {
+    let mgr = get_sync_manager().ok_or("Sync not initialized")?;
+    if let Some(relay) = &mgr.relay_manager {
+        let (room_code, name) = relay.create_server_room(&name, &room_code).await?;
+        Ok(serde_json::json!({
+            "room_code": room_code,
+            "name": name,
+        }))
+    } else {
+        Err("Relay sync not available".to_string())
+    }
+}
+
+#[tauri::command]
+pub async fn relay_sync_delete_server_room(room_code: String) -> Result<(), String> {
+    let mgr = get_sync_manager().ok_or("Sync not initialized")?;
+    if let Some(relay) = &mgr.relay_manager {
+        relay.delete_server_room(&room_code).await
+    } else {
+        Err("Relay sync not available".to_string())
+    }
+}
+
+#[tauri::command]
+pub async fn relay_sync_add_member(room_code: String, github_login: String) -> Result<(), String> {
+    let mgr = get_sync_manager().ok_or("Sync not initialized")?;
+    if let Some(relay) = &mgr.relay_manager {
+        relay.add_room_member(&room_code, &github_login).await
+    } else {
+        Err("Relay sync not available".to_string())
+    }
+}
+
+#[tauri::command]
+pub async fn relay_sync_remove_member(room_code: String, github_login: String) -> Result<(), String> {
+    let mgr = get_sync_manager().ok_or("Sync not initialized")?;
+    if let Some(relay) = &mgr.relay_manager {
+        relay.remove_room_member(&room_code, &github_login).await
+    } else {
+        Err("Relay sync not available".to_string())
+    }
+}
+
+#[tauri::command]
+pub async fn relay_sync_list_members(room_code: String) -> Result<serde_json::Value, String> {
+    let mgr = get_sync_manager().ok_or("Sync not initialized")?;
+    if let Some(relay) = &mgr.relay_manager {
+        let members = relay.list_room_members(&room_code).await?;
+        Ok(serde_json::json!(members))
+    } else {
+        Err("Relay sync not available".to_string())
+    }
+}
+
+#[tauri::command]
+pub async fn relay_sync_list_server_rooms() -> Result<serde_json::Value, String> {
+    let mgr = get_sync_manager().ok_or("Sync not initialized")?;
+    if let Some(relay) = &mgr.relay_manager {
+        let rooms = relay.list_server_rooms().await?;
+        Ok(serde_json::json!(rooms))
+    } else {
+        Err("Relay sync not available".to_string())
+    }
 }
 
 #[tauri::command]

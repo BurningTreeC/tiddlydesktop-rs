@@ -113,6 +113,20 @@ RelaySync/NoRoom: Нет
 RelaySync/Save: Сохранить
 RelaySync/Cancel: Отмена
 RelaySync/RoomDetails: Подробности
+RelaySync/GitHub: GitHub
+RelaySync/SignedInAs: Вы вошли как
+RelaySync/Logout: Выйти
+RelaySync/LoginWithGitHub: Войти через GitHub
+RelaySync/GitHubHint: Для доступа к серверу ретрансляции и управления комнатами необходим вход через GitHub.
+RelaySync/LoggingIn: Вход через GitHub...
+RelaySync/Members: Участники:
+RelaySync/LoadMembers: Загрузить/Обновить
+RelaySync/AddMember: Добавить
+RelaySync/RelayServer: Ретранслятор:
+RelaySync/RegisterOnRelay: Зарегистрировать в Relay
+RelaySync/RegisteredOnRelay: Зарегистрировано
+RelaySync/Registering: Регистрация...
+RelaySync/RegisterFailed: Ошибка регистрации
 Tooltips/SelectRelayRoom: Назначить эту вики комнате ретрансляции
 Buttons/Plugins: плагины
 PluginInstaller/Title: Управление плагинами

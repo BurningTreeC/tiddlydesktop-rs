@@ -113,6 +113,20 @@ RelaySync/NoRoom: Aucune
 RelaySync/Save: Enregistrer
 RelaySync/Cancel: Annuler
 RelaySync/RoomDetails: Détails
+RelaySync/GitHub: GitHub
+RelaySync/SignedInAs: Connecté en tant que
+RelaySync/Logout: Déconnexion
+RelaySync/LoginWithGitHub: Se connecter avec GitHub
+RelaySync/GitHubHint: La connexion GitHub est requise pour accéder au serveur relais et gérer les salons.
+RelaySync/LoggingIn: Connexion avec GitHub...
+RelaySync/Members: Membres :
+RelaySync/LoadMembers: Charger/Actualiser
+RelaySync/AddMember: Ajouter
+RelaySync/RelayServer: Relais :
+RelaySync/RegisterOnRelay: Enregistrer sur le Relay
+RelaySync/RegisteredOnRelay: Enregistré
+RelaySync/Registering: Enregistrement...
+RelaySync/RegisterFailed: Échec de l'enregistrement
 Tooltips/SelectRelayRoom: Assigner ce wiki à une salle relais
 Buttons/Plugins: plugins
 PluginInstaller/Title: Gérer les plugins

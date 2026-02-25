@@ -8439,6 +8439,17 @@ fn run_wiki_mode(args: WikiModeArgs) {
             lan_sync::relay_sync_get_room_credentials,
             lan_sync::relay_sync_set_url,
             lan_sync::relay_sync_generate_credentials,
+            // Relay GitHub auth commands
+            lan_sync::relay_sync_github_login,
+            lan_sync::relay_sync_github_logout,
+            lan_sync::relay_sync_github_status,
+            // Relay server-side room management commands
+            lan_sync::relay_sync_create_room,
+            lan_sync::relay_sync_delete_server_room,
+            lan_sync::relay_sync_add_member,
+            lan_sync::relay_sync_remove_member,
+            lan_sync::relay_sync_list_members,
+            lan_sync::relay_sync_list_server_rooms,
             // Per-wiki relay room assignment
             wiki_storage::set_wiki_relay_room,
             get_wiki_installed_plugins,
@@ -8891,6 +8902,17 @@ fn run_wiki_folder_mode(args: WikiFolderModeArgs) {
             lan_sync::relay_sync_get_room_credentials,
             lan_sync::relay_sync_set_url,
             lan_sync::relay_sync_generate_credentials,
+            // Relay GitHub auth commands
+            lan_sync::relay_sync_github_login,
+            lan_sync::relay_sync_github_logout,
+            lan_sync::relay_sync_github_status,
+            // Relay server-side room management commands
+            lan_sync::relay_sync_create_room,
+            lan_sync::relay_sync_delete_server_room,
+            lan_sync::relay_sync_add_member,
+            lan_sync::relay_sync_remove_member,
+            lan_sync::relay_sync_list_members,
+            lan_sync::relay_sync_list_server_rooms,
             // Per-wiki relay room assignment
             wiki_storage::set_wiki_relay_room,
             get_wiki_installed_plugins,
@@ -9609,6 +9631,17 @@ pub fn run() {
             lan_sync::relay_sync_get_room_credentials,
             lan_sync::relay_sync_set_url,
             lan_sync::relay_sync_generate_credentials,
+            // Relay GitHub auth commands
+            lan_sync::relay_sync_github_login,
+            lan_sync::relay_sync_github_logout,
+            lan_sync::relay_sync_github_status,
+            // Relay server-side room management commands
+            lan_sync::relay_sync_create_room,
+            lan_sync::relay_sync_delete_server_room,
+            lan_sync::relay_sync_add_member,
+            lan_sync::relay_sync_remove_member,
+            lan_sync::relay_sync_list_members,
+            lan_sync::relay_sync_list_server_rooms,
             // Per-wiki relay room assignment
             wiki_storage::set_wiki_relay_room,
             get_wiki_installed_plugins,

@@ -113,6 +113,20 @@ RelaySync/NoRoom: Keiner
 RelaySync/Save: Speichern
 RelaySync/Cancel: Abbrechen
 RelaySync/RoomDetails: Details
+RelaySync/GitHub: GitHub
+RelaySync/SignedInAs: Angemeldet als
+RelaySync/Logout: Abmelden
+RelaySync/LoginWithGitHub: Mit GitHub anmelden
+RelaySync/GitHubHint: GitHub-Anmeldung erforderlich für den Zugang zum Relay-Server und die Raumverwaltung.
+RelaySync/LoggingIn: Anmeldung über GitHub...
+RelaySync/Members: Mitglieder:
+RelaySync/LoadMembers: Laden/Aktualisieren
+RelaySync/AddMember: Hinzufügen
+RelaySync/RelayServer: Relay:
+RelaySync/RegisterOnRelay: Am Relay registrieren
+RelaySync/RegisteredOnRelay: Registriert
+RelaySync/Registering: Registrierung...
+RelaySync/RegisterFailed: Registrierung fehlgeschlagen
 Tooltips/SelectRelayRoom: Dieses Wiki einem Relay-Raum zuweisen
 Buttons/Plugins: Plugins
 PluginInstaller/Title: Plugins verwalten

@@ -7093,7 +7093,9 @@ pub async fn relay_sync_github_status() -> Result<serde_json::Value, String> {
 pub async fn relay_sync_create_room(name: String, room_code: String) -> Result<serde_json::Value, String> {
     let mgr = get_sync_manager().ok_or("Sync not initialized")?;
     if let Some(relay) = &mgr.relay_manager {
-        let (room_code, name) = relay.create_server_room(&name, &room_code).await?;
+        // Server receives hashed room code and no name (privacy)
+        let _returned_code = relay.create_server_room(&room_code).await?;
+        // Return local name — server doesn't store it
         Ok(serde_json::json!({
             "room_code": room_code,
             "name": name,

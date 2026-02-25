@@ -1759,65 +1759,69 @@ impl RelaySyncManager {
             .map_err(|e| format!("Invalid API response: {}", e))
     }
 
-    /// Register a room on the server (with existing room_code from local creation)
-    pub async fn create_server_room(&self, name: &str, room_code: &str) -> Result<(String, String), String> {
-        let body = serde_json::json!({"name": name, "room_code": room_code});
+    /// Register a room on the server (with existing room_code from local creation).
+    /// Sends a hashed room code — the server never sees the raw code or room name.
+    pub async fn create_server_room(&self, room_code: &str) -> Result<String, String> {
+        let room_hash = crate::lan_sync::discovery::hash_room_code(room_code);
+        let body = serde_json::json!({"room_code": room_hash});
         let result: serde_json::Value = self.relay_api(
             reqwest::Method::POST,
             "/api/rooms",
             Some(&body),
         ).await?;
-        let room_code = result["room_code"].as_str()
+        let returned_code = result["room_code"].as_str()
             .ok_or("No room_code in response")?
             .to_string();
-        let name = result["name"].as_str()
-            .unwrap_or("")
-            .to_string();
-        Ok((room_code, name))
+        Ok(returned_code)
     }
 
-    /// Delete a room on the server (owner only)
+    /// Delete a room on the server (owner only). Sends hashed room code.
     pub async fn delete_server_room(&self, room_code: &str) -> Result<(), String> {
+        let room_hash = crate::lan_sync::discovery::hash_room_code(room_code);
         let _: serde_json::Value = self.relay_api(
             reqwest::Method::DELETE,
-            &format!("/api/rooms/{}", room_code),
+            &format!("/api/rooms/{}", room_hash),
             None,
         ).await?;
         Ok(())
     }
 
-    /// Add a member to a server room (owner only)
+    /// Add a member to a server room (owner only). Sends hashed room code.
     pub async fn add_room_member(&self, room_code: &str, username: &str, provider: Option<&str>) -> Result<(), String> {
+        let room_hash = crate::lan_sync::discovery::hash_room_code(room_code);
         let provider = provider.unwrap_or("github");
         let body = serde_json::json!({"username": username, "provider": provider, "github_login": username});
         let _: serde_json::Value = self.relay_api(
             reqwest::Method::POST,
-            &format!("/api/rooms/{}/members", room_code),
+            &format!("/api/rooms/{}/members", room_hash),
             Some(&body),
         ).await?;
         Ok(())
     }
 
-    /// Remove a member from a server room (owner only)
+    /// Remove a member from a server room (owner only). Sends hashed room code.
     pub async fn remove_room_member(&self, room_code: &str, user_id: &str) -> Result<(), String> {
+        let room_hash = crate::lan_sync::discovery::hash_room_code(room_code);
         let _: serde_json::Value = self.relay_api(
             reqwest::Method::DELETE,
-            &format!("/api/rooms/{}/members/{}", room_code, urlencoding::encode(user_id)),
+            &format!("/api/rooms/{}/members/{}", room_hash, urlencoding::encode(user_id)),
             None,
         ).await?;
         Ok(())
     }
 
-    /// List members of a server room
+    /// List members of a server room. Sends hashed room code.
     pub async fn list_room_members(&self, room_code: &str) -> Result<Vec<serde_json::Value>, String> {
+        let room_hash = crate::lan_sync::discovery::hash_room_code(room_code);
         self.relay_api(
             reqwest::Method::GET,
-            &format!("/api/rooms/{}/members", room_code),
+            &format!("/api/rooms/{}/members", room_hash),
             None,
         ).await
     }
 
-    /// List server rooms the user owns or is a member of
+    /// List server rooms the user owns or is a member of.
+    /// Returns hashed room codes — caller matches against local rooms.
     pub async fn list_server_rooms(&self) -> Result<Vec<serde_json::Value>, String> {
         self.relay_api(
             reqwest::Method::GET,

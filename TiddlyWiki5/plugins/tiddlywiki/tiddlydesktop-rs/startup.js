@@ -1790,26 +1790,115 @@ exports.startup = function(callback) {
 
 	// ── Relay Sync message handlers ─────────────────────────────────────
 
-	// GitHub OAuth login
-	$tw.rootWidget.addEventListener("tm-tiddlydesktop-rs-relay-github-login", function(event) {
-		$tw.wiki.setText("$:/temp/tiddlydesktop-rs/github-auth-status", "text", null, "logging-in");
-		invoke("relay_sync_github_login").then(function(result) {
-			$tw.wiki.setText("$:/temp/tiddlydesktop-rs/github-login", "text", null, result.github_login || "");
-			$tw.wiki.setText("$:/temp/tiddlydesktop-rs/github-auth-status", "text", null, "authenticated");
-			updateRelayRoomList();
+	// Sign in — fetch providers, then start auth flow
+	$tw.rootWidget.addEventListener("tm-tiddlydesktop-rs-relay-signin", function(event) {
+		invoke("relay_sync_fetch_providers").then(function(providers) {
+			if (!providers || providers.length === 0) {
+				console.error("[Relay] No auth providers available");
+				return;
+			}
+			if (providers.length === 1) {
+				// Only one provider — go directly to auth
+				startLoginForProvider(providers[0]);
+			} else {
+				// Multiple providers — show picker
+				showProviderPicker(providers);
+			}
 		}).catch(function(err) {
-			console.error("[Relay] GitHub login failed:", err);
-			$tw.wiki.setText("$:/temp/tiddlydesktop-rs/github-auth-status", "text", null, "");
+			console.error("[Relay] Failed to fetch providers:", err);
 		});
 	});
 
-	// GitHub OAuth logout
-	$tw.rootWidget.addEventListener("tm-tiddlydesktop-rs-relay-github-logout", function(event) {
-		invoke("relay_sync_github_logout").then(function() {
+	// Login with a specific provider (from picker or direct)
+	$tw.rootWidget.addEventListener("tm-tiddlydesktop-rs-relay-login", function(event) {
+		var p = event.paramObject || {};
+		if (!p.provider || !p.clientId) return;
+		startLoginForProvider({
+			name: p.provider,
+			client_id: p.clientId,
+			url: p.authUrl || null,
+			discovery_url: p.discoveryUrl || null,
+			display_name: p.displayName || p.provider,
+			scope: p.scope || null
+		});
+	});
+
+	function startLoginForProvider(provider) {
+		$tw.wiki.setText("$:/temp/tiddlydesktop-rs/auth-status", "text", null, "logging-in");
+		// Also set legacy tiddler
+		$tw.wiki.setText("$:/temp/tiddlydesktop-rs/github-auth-status", "text", null, "logging-in");
+
+		// Resolve auth URL for the provider
+		var authUrl = null;
+		if (provider.name === "github") {
+			authUrl = "https://github.com/login/oauth/authorize";
+		} else if (provider.name === "gitlab") {
+			authUrl = (provider.url || "https://gitlab.com") + "/oauth/authorize";
+		}
+		// For OIDC, discovery_url is used instead
+
+		invoke("relay_sync_login", {
+			provider: provider.name,
+			clientId: provider.client_id,
+			authUrl: authUrl,
+			discoveryUrl: provider.discovery_url || null,
+			scope: provider.scope || null
+		}).then(function(result) {
+			$tw.wiki.setText("$:/temp/tiddlydesktop-rs/auth-username", "text", null, result.username || "");
+			$tw.wiki.setText("$:/temp/tiddlydesktop-rs/auth-provider", "text", null, result.provider || "");
+			$tw.wiki.setText("$:/temp/tiddlydesktop-rs/auth-status", "text", null, "authenticated");
+			// Legacy tiddlers
+			$tw.wiki.setText("$:/temp/tiddlydesktop-rs/github-login", "text", null, result.username || "");
+			$tw.wiki.setText("$:/temp/tiddlydesktop-rs/github-auth-status", "text", null, "authenticated");
+			updateRelayRoomList();
+		}).catch(function(err) {
+			console.error("[Relay] Login failed:", err);
+			$tw.wiki.setText("$:/temp/tiddlydesktop-rs/auth-status", "text", null, "");
+			$tw.wiki.setText("$:/temp/tiddlydesktop-rs/github-auth-status", "text", null, "");
+		});
+	}
+
+	function showProviderPicker(providers) {
+		// Store providers as tiddlers for the UI to enumerate
+		var providerTitles = [];
+		providers.forEach(function(prov) {
+			var title = "$:/temp/tiddlydesktop-rs/relay-provider/" + prov.name;
+			providerTitles.push(title);
+			$tw.wiki.addTiddler(new $tw.Tiddler({
+				title: title,
+				name: prov.name,
+				client_id: prov.client_id,
+				url: prov.url || "",
+				discovery_url: prov.discovery_url || "",
+				display_name: prov.display_name || {"github":"GitHub","gitlab":"GitLab","oidc":"SSO"}[prov.name] || prov.name,
+				auth_url: "",
+				scope: ""
+			}));
+		});
+		$tw.wiki.setText("$:/temp/tiddlydesktop-rs/relay-provider-list", "text", null, providerTitles.join(" "));
+		// Show the provider picker inline
+		$tw.wiki.setText("$:/temp/tiddlydesktop-rs/auth-status", "text", null, "picking");
+	}
+
+	// Sign out
+	$tw.rootWidget.addEventListener("tm-tiddlydesktop-rs-relay-logout", function(event) {
+		invoke("relay_sync_logout").then(function() {
+			$tw.wiki.setText("$:/temp/tiddlydesktop-rs/auth-username", "text", null, "");
+			$tw.wiki.setText("$:/temp/tiddlydesktop-rs/auth-provider", "text", null, "");
+			$tw.wiki.setText("$:/temp/tiddlydesktop-rs/auth-status", "text", null, "");
+			// Legacy tiddlers
 			$tw.wiki.setText("$:/temp/tiddlydesktop-rs/github-login", "text", null, "");
 			$tw.wiki.setText("$:/temp/tiddlydesktop-rs/github-auth-status", "text", null, "");
 			updateRelayRoomList();
 		});
+	});
+
+	// Legacy message handlers for backward compat
+	$tw.rootWidget.addEventListener("tm-tiddlydesktop-rs-relay-github-login", function(event) {
+		$tw.rootWidget.dispatchEvent({type: "tm-tiddlydesktop-rs-relay-signin"});
+	});
+	$tw.rootWidget.addEventListener("tm-tiddlydesktop-rs-relay-github-logout", function(event) {
+		$tw.rootWidget.dispatchEvent({type: "tm-tiddlydesktop-rs-relay-logout"});
 	});
 
 	// Register an existing local room on the relay server (enables relay sync for that room)
@@ -1837,8 +1926,9 @@ exports.startup = function(callback) {
 	// Add a member to a server room
 	$tw.rootWidget.addEventListener("tm-tiddlydesktop-rs-relay-add-member", function(event) {
 		var p = event.paramObject || {};
-		if (!p.roomCode || !p.githubLogin) return;
-		invoke("relay_sync_add_member", { roomCode: p.roomCode, githubLogin: p.githubLogin }).then(function() {
+		var memberName = p.username || p.githubLogin;
+		if (!p.roomCode || !memberName) return;
+		invoke("relay_sync_add_member", { roomCode: p.roomCode, username: memberName, provider: p.provider || null }).then(function() {
 			// Refresh member list
 			$tw.rootWidget.dispatchEvent({
 				type: "tm-tiddlydesktop-rs-relay-load-members",
@@ -1852,8 +1942,9 @@ exports.startup = function(callback) {
 	// Remove a member from a server room
 	$tw.rootWidget.addEventListener("tm-tiddlydesktop-rs-relay-remove-member", function(event) {
 		var p = event.paramObject || {};
-		if (!p.roomCode || !p.githubLogin) return;
-		invoke("relay_sync_remove_member", { roomCode: p.roomCode, githubLogin: p.githubLogin }).then(function() {
+		var memberId = p.userId || p.githubLogin;
+		if (!p.roomCode || !memberId) return;
+		invoke("relay_sync_remove_member", { roomCode: p.roomCode, userId: memberId }).then(function() {
 			// Refresh member list
 			$tw.rootWidget.dispatchEvent({
 				type: "tm-tiddlydesktop-rs-relay-load-members",
@@ -2095,9 +2186,13 @@ exports.startup = function(callback) {
 					$tw.wiki.setText("$:/temp/tiddlydesktop-rs/relay-sync-url", "text", null, relayStatus.relay_url);
 					$tw.wiki.setText("$:/temp/tiddlydesktop-rs/relay-sync-url-input", "text", null, relayStatus.relay_url);
 				}
-				// Update GitHub auth status tiddlers
-				$tw.wiki.setText("$:/temp/tiddlydesktop-rs/github-login", "text", null, relayStatus.github_login || "");
-				$tw.wiki.setText("$:/temp/tiddlydesktop-rs/github-auth-status", "text", null, relayStatus.github_authenticated ? "authenticated" : "");
+				// Update auth status tiddlers
+				$tw.wiki.setText("$:/temp/tiddlydesktop-rs/auth-username", "text", null, relayStatus.username || relayStatus.github_login || "");
+				$tw.wiki.setText("$:/temp/tiddlydesktop-rs/auth-provider", "text", null, relayStatus.auth_provider || "");
+				$tw.wiki.setText("$:/temp/tiddlydesktop-rs/auth-status", "text", null, (relayStatus.authenticated || relayStatus.github_authenticated) ? "authenticated" : "");
+				// Legacy tiddlers
+				$tw.wiki.setText("$:/temp/tiddlydesktop-rs/github-login", "text", null, relayStatus.username || relayStatus.github_login || "");
+				$tw.wiki.setText("$:/temp/tiddlydesktop-rs/github-auth-status", "text", null, (relayStatus.authenticated || relayStatus.github_authenticated) ? "authenticated" : "");
 				updateRelayRoomList(rooms);
 			}).catch(function(err) {
 				console.error("relay_sync_get_status failed (inner):", err);
@@ -2117,9 +2212,13 @@ exports.startup = function(callback) {
 					$tw.wiki.setText("$:/temp/tiddlydesktop-rs/relay-sync-url", "text", null, relayStatus.relay_url);
 					$tw.wiki.setText("$:/temp/tiddlydesktop-rs/relay-sync-url-input", "text", null, relayStatus.relay_url);
 				}
-				// Update GitHub auth status tiddlers
-				$tw.wiki.setText("$:/temp/tiddlydesktop-rs/github-login", "text", null, relayStatus.github_login || "");
-				$tw.wiki.setText("$:/temp/tiddlydesktop-rs/github-auth-status", "text", null, relayStatus.github_authenticated ? "authenticated" : "");
+				// Update auth status tiddlers
+				$tw.wiki.setText("$:/temp/tiddlydesktop-rs/auth-username", "text", null, relayStatus.username || relayStatus.github_login || "");
+				$tw.wiki.setText("$:/temp/tiddlydesktop-rs/auth-provider", "text", null, relayStatus.auth_provider || "");
+				$tw.wiki.setText("$:/temp/tiddlydesktop-rs/auth-status", "text", null, (relayStatus.authenticated || relayStatus.github_authenticated) ? "authenticated" : "");
+				// Legacy tiddlers
+				$tw.wiki.setText("$:/temp/tiddlydesktop-rs/github-login", "text", null, relayStatus.username || relayStatus.github_login || "");
+				$tw.wiki.setText("$:/temp/tiddlydesktop-rs/github-auth-status", "text", null, (relayStatus.authenticated || relayStatus.github_authenticated) ? "authenticated" : "");
 				updateRelayRoomList(rooms);
 			}).catch(function(err) {
 				console.error("relay_sync_get_status failed (outer):", err);

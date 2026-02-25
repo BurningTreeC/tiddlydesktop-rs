@@ -113,6 +113,12 @@ RelaySync/NoRoom: بدون
 RelaySync/Save: حفظ
 RelaySync/Cancel: إلغاء
 RelaySync/RoomDetails: تفاصيل
+RelaySync/Account: الحساب
+RelaySync/SignIn: تسجيل الدخول
+RelaySync/SignOut: تسجيل الخروج
+RelaySync/SignInHint: سجّل الدخول للوصول إلى خادم الترحيل وإدارة الغرف.
+RelaySync/SigningIn: جاري تسجيل الدخول...
+RelaySync/ChooseProvider: اختر طريقة تسجيل الدخول
 RelaySync/GitHub: GitHub
 RelaySync/SignedInAs: تم تسجيل الدخول كـ
 RelaySync/Logout: تسجيل الخروج

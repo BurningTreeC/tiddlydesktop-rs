@@ -113,6 +113,12 @@ RelaySync/NoRoom: Nenhuma
 RelaySync/Save: Guardar
 RelaySync/Cancel: Cancelar
 RelaySync/RoomDetails: Detalhes
+RelaySync/Account: Conta
+RelaySync/SignIn: Iniciar sessão
+RelaySync/SignOut: Terminar sessão
+RelaySync/SignInHint: Inicie sessão para aceder ao servidor de retransmissão e gerir as salas.
+RelaySync/SigningIn: A iniciar sessão...
+RelaySync/ChooseProvider: Escolha o método de início de sessão
 RelaySync/GitHub: GitHub
 RelaySync/SignedInAs: Autenticado como
 RelaySync/Logout: Terminar sessão

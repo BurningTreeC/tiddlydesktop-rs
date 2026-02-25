@@ -113,6 +113,12 @@ RelaySync/NoRoom: Geen
 RelaySync/Save: Opslaan
 RelaySync/Cancel: Annuleren
 RelaySync/RoomDetails: Details
+RelaySync/Account: Account
+RelaySync/SignIn: Aanmelden
+RelaySync/SignOut: Afmelden
+RelaySync/SignInHint: Meld u aan voor toegang tot de relayserver en ruimtebeheer.
+RelaySync/SigningIn: Aanmelden...
+RelaySync/ChooseProvider: Kies aanmeldmethode
 RelaySync/GitHub: GitHub
 RelaySync/SignedInAs: Ingelogd als
 RelaySync/Logout: Uitloggen

@@ -113,6 +113,12 @@ RelaySync/NoRoom: なし
 RelaySync/Save: 保存
 RelaySync/Cancel: キャンセル
 RelaySync/RoomDetails: 詳細
+RelaySync/Account: アカウント
+RelaySync/SignIn: サインイン
+RelaySync/SignOut: サインアウト
+RelaySync/SignInHint: リレーサーバーへのアクセスとルーム管理のためにサインインしてください。
+RelaySync/SigningIn: サインイン中...
+RelaySync/ChooseProvider: サインイン方法を選択
 RelaySync/GitHub: GitHub
 RelaySync/SignedInAs: ログイン中:
 RelaySync/Logout: ログアウト

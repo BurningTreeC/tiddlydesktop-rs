@@ -113,6 +113,12 @@ RelaySync/NoRoom: Nobena
 RelaySync/Save: Shrani
 RelaySync/Cancel: Prekliči
 RelaySync/RoomDetails: Podrobnosti
+RelaySync/Account: Račun
+RelaySync/SignIn: Prijava
+RelaySync/SignOut: Odjava
+RelaySync/SignInHint: Prijavite se za dostop do posredovalnega strežnika in upravljanje sob.
+RelaySync/SigningIn: Prijavljanje...
+RelaySync/ChooseProvider: Izberite način prijave
 RelaySync/GitHub: GitHub
 RelaySync/SignedInAs: Prijavljen kot
 RelaySync/Logout: Odjava

@@ -113,6 +113,12 @@ RelaySync/NoRoom: Нет
 RelaySync/Save: Сохранить
 RelaySync/Cancel: Отмена
 RelaySync/RoomDetails: Подробности
+RelaySync/Account: Аккаунт
+RelaySync/SignIn: Войти
+RelaySync/SignOut: Выйти
+RelaySync/SignInHint: Войдите для доступа к релейному серверу и управления комнатами.
+RelaySync/SigningIn: Вход...
+RelaySync/ChooseProvider: Выберите способ входа
 RelaySync/GitHub: GitHub
 RelaySync/SignedInAs: Вы вошли как
 RelaySync/Logout: Выйти

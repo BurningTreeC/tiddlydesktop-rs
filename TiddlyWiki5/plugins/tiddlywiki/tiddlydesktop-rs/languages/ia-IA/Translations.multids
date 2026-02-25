@@ -113,6 +113,12 @@ RelaySync/NoRoom: None
 RelaySync/Save: Save
 RelaySync/Cancel: Cancellar
 RelaySync/RoomDetails: Details
+RelaySync/Account: Conto
+RelaySync/SignIn: Aperir session
+RelaySync/SignOut: Clauder session
+RelaySync/SignInHint: Aperi session pro acceder al server de releo e gerer le cameras.
+RelaySync/SigningIn: Aperiente session...
+RelaySync/ChooseProvider: Elige le methodo de authentication
 RelaySync/GitHub: GitHub
 RelaySync/SignedInAs: Authenticate como
 RelaySync/Logout: Disconnecter

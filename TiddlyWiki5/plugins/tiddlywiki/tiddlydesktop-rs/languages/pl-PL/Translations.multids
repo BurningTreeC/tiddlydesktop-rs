@@ -113,6 +113,12 @@ RelaySync/NoRoom: Brak
 RelaySync/Save: Zapisz
 RelaySync/Cancel: Anuluj
 RelaySync/RoomDetails: Szczegóły
+RelaySync/Account: Konto
+RelaySync/SignIn: Zaloguj się
+RelaySync/SignOut: Wyloguj się
+RelaySync/SignInHint: Zaloguj się, aby uzyskać dostęp do serwera przekaźnikowego i zarządzać pokojami.
+RelaySync/SigningIn: Logowanie...
+RelaySync/ChooseProvider: Wybierz metodę logowania
 RelaySync/GitHub: GitHub
 RelaySync/SignedInAs: Zalogowano jako
 RelaySync/Logout: Wyloguj

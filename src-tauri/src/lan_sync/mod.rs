@@ -6752,6 +6752,12 @@ pub fn lan_sync_get_collab_port() -> Result<u16, String> {
 pub struct RelaySyncStatus {
     pub relay_url: String,
     pub rooms: Vec<crate::relay_sync::RoomStatus>,
+    // New generic auth fields
+    pub username: Option<String>,
+    pub user_id: Option<String>,
+    pub auth_provider: Option<String>,
+    pub authenticated: bool,
+    // Legacy fields for backward compat with old landing pages
     pub github_login: Option<String>,
     pub github_id: Option<i64>,
     pub github_authenticated: bool,
@@ -6763,18 +6769,31 @@ pub async fn relay_sync_get_status() -> Result<RelaySyncStatus, String> {
     if let Some(relay) = &mgr.relay_manager {
         let config = relay.get_config().await;
         let rooms = relay.get_rooms().await;
-        let github_authenticated = !config.github_token.is_empty();
+        let authenticated = !config.auth_token.is_empty();
+        // Extract legacy github_id from user_id if it's a github: prefixed ID
+        let legacy_github_id = config.user_id.as_deref()
+            .and_then(|uid| uid.strip_prefix("github:"))
+            .and_then(|id| id.parse::<i64>().ok());
         Ok(RelaySyncStatus {
             relay_url: config.relay_url,
             rooms,
-            github_login: config.github_login,
-            github_id: config.github_id,
-            github_authenticated,
+            username: config.username.clone(),
+            user_id: config.user_id.clone(),
+            auth_provider: config.auth_provider.clone(),
+            authenticated,
+            // Legacy fields
+            github_login: config.username.clone(),
+            github_id: legacy_github_id,
+            github_authenticated: authenticated,
         })
     } else {
         Ok(RelaySyncStatus {
             relay_url: String::new(),
             rooms: vec![],
+            username: None,
+            user_id: None,
+            auth_provider: None,
+            authenticated: false,
             github_login: None,
             github_id: None,
             github_authenticated: false,
@@ -6960,16 +6979,98 @@ pub async fn relay_sync_generate_credentials() -> Result<serde_json::Value, Stri
     }))
 }
 
-// ── GitHub Authentication Commands ──────────────────────────────────
+// ── Authentication Commands ─────────────────────────────────────────
 
 #[tauri::command]
-pub async fn relay_sync_github_login() -> Result<serde_json::Value, String> {
+pub async fn relay_sync_login(
+    provider: String,
+    client_id: String,
+    auth_url: Option<String>,
+    discovery_url: Option<String>,
+    scope: Option<String>,
+) -> Result<serde_json::Value, String> {
     let mgr = get_sync_manager().ok_or("Sync not initialized")?;
     if let Some(relay) = &mgr.relay_manager {
-        let result = relay.github_login().await?;
+        let result = relay.login(
+            &provider,
+            &client_id,
+            auth_url.as_deref(),
+            discovery_url.as_deref(),
+            scope.as_deref(),
+        ).await?;
         Ok(serde_json::json!({
-            "github_login": result.github_login,
-            "github_id": result.github_id,
+            "username": result.username,
+            "user_id": result.user_id,
+            "provider": result.provider,
+            // Legacy fields
+            "github_login": result.username,
+        }))
+    } else {
+        Err("Relay sync not available".to_string())
+    }
+}
+
+#[tauri::command]
+pub async fn relay_sync_logout() -> Result<(), String> {
+    let mgr = get_sync_manager().ok_or("Sync not initialized")?;
+    if let Some(relay) = &mgr.relay_manager {
+        // Disconnect all rooms first (tokens will be invalid after logout)
+        relay.stop_all().await;
+        relay.logout().await;
+        Ok(())
+    } else {
+        Err("Relay sync not available".to_string())
+    }
+}
+
+#[tauri::command]
+pub async fn relay_sync_auth_status() -> Result<serde_json::Value, String> {
+    let mgr = get_sync_manager().ok_or("Sync not initialized")?;
+    if let Some(relay) = &mgr.relay_manager {
+        let (username, user_id, provider, has_token) = relay.auth_status().await;
+        Ok(serde_json::json!({
+            "username": username,
+            "user_id": user_id,
+            "auth_provider": provider,
+            "authenticated": has_token,
+            // Legacy
+            "github_login": username,
+        }))
+    } else {
+        Ok(serde_json::json!({
+            "username": null,
+            "user_id": null,
+            "auth_provider": null,
+            "authenticated": false,
+            "github_login": null,
+        }))
+    }
+}
+
+#[tauri::command]
+pub async fn relay_sync_fetch_providers() -> Result<serde_json::Value, String> {
+    let mgr = get_sync_manager().ok_or("Sync not initialized")?;
+    if let Some(relay) = &mgr.relay_manager {
+        let providers = relay.fetch_providers().await?;
+        Ok(serde_json::to_value(providers).map_err(|e| format!("Serialize error: {}", e))?)
+    } else {
+        Err("Relay sync not available".to_string())
+    }
+}
+
+// Legacy aliases — kept for backward compat with old landing pages
+#[tauri::command]
+pub async fn relay_sync_github_login() -> Result<serde_json::Value, String> {
+    // Old-style GitHub-only login: fetch providers, find GitHub, and use it
+    let mgr = get_sync_manager().ok_or("Sync not initialized")?;
+    if let Some(relay) = &mgr.relay_manager {
+        let providers = relay.fetch_providers().await.unwrap_or_default();
+        let github = providers.iter().find(|p| p.name == "github");
+        let client_id = github.map(|p| p.client_id.as_str()).unwrap_or("");
+        let result = relay.login("github", client_id, None, None, None).await?;
+        Ok(serde_json::json!({
+            "github_login": result.username,
+            "github_id": result.user_id,
         }))
     } else {
         Err("Relay sync not available".to_string())
@@ -6978,34 +7079,12 @@ pub async fn relay_sync_github_login() -> Result<serde_json::Value, String> {
 
 #[tauri::command]
 pub async fn relay_sync_github_logout() -> Result<(), String> {
-    let mgr = get_sync_manager().ok_or("Sync not initialized")?;
-    if let Some(relay) = &mgr.relay_manager {
-        // Disconnect all rooms first (tokens will be invalid after logout)
-        relay.stop_all().await;
-        relay.github_logout().await;
-        Ok(())
-    } else {
-        Err("Relay sync not available".to_string())
-    }
+    relay_sync_logout().await
 }
 
 #[tauri::command]
 pub async fn relay_sync_github_status() -> Result<serde_json::Value, String> {
-    let mgr = get_sync_manager().ok_or("Sync not initialized")?;
-    if let Some(relay) = &mgr.relay_manager {
-        let (login, id, has_token) = relay.github_status().await;
-        Ok(serde_json::json!({
-            "github_login": login,
-            "github_id": id,
-            "authenticated": has_token,
-        }))
-    } else {
-        Ok(serde_json::json!({
-            "github_login": null,
-            "github_id": null,
-            "authenticated": false,
-        }))
-    }
+    relay_sync_auth_status().await
 }
 
 // ── Server-Side Room Management Commands ────────────────────────────
@@ -7035,20 +7114,33 @@ pub async fn relay_sync_delete_server_room(room_code: String) -> Result<(), Stri
 }
 
 #[tauri::command]
-pub async fn relay_sync_add_member(room_code: String, github_login: String) -> Result<(), String> {
+pub async fn relay_sync_add_member(
+    room_code: String,
+    username: Option<String>,
+    provider: Option<String>,
+    github_login: Option<String>,  // legacy param
+) -> Result<(), String> {
     let mgr = get_sync_manager().ok_or("Sync not initialized")?;
     if let Some(relay) = &mgr.relay_manager {
-        relay.add_room_member(&room_code, &github_login).await
+        // Support both new (username) and legacy (github_login) params
+        let name = username.or(github_login).ok_or("username is required")?;
+        relay.add_room_member(&room_code, &name, provider.as_deref()).await
     } else {
         Err("Relay sync not available".to_string())
     }
 }
 
 #[tauri::command]
-pub async fn relay_sync_remove_member(room_code: String, github_login: String) -> Result<(), String> {
+pub async fn relay_sync_remove_member(
+    room_code: String,
+    user_id: Option<String>,
+    github_login: Option<String>,  // legacy param
+) -> Result<(), String> {
     let mgr = get_sync_manager().ok_or("Sync not initialized")?;
     if let Some(relay) = &mgr.relay_manager {
-        relay.remove_room_member(&room_code, &github_login).await
+        // Support both new (user_id) and legacy (github_login) params
+        let id = user_id.or(github_login).ok_or("user_id is required")?;
+        relay.remove_room_member(&room_code, &id).await
     } else {
         Err("Relay sync not available".to_string())
     }

@@ -113,6 +113,12 @@ RelaySync/NoRoom: Ingen
 RelaySync/Save: Gem
 RelaySync/Cancel: Annuller
 RelaySync/RoomDetails: Detaljer
+RelaySync/Account: Konto
+RelaySync/SignIn: Log ind
+RelaySync/SignOut: Log ud
+RelaySync/SignInHint: Log ind for adgang til relay-serveren og rumstyring.
+RelaySync/SigningIn: Logger ind...
+RelaySync/ChooseProvider: Vælg login-metode
 RelaySync/GitHub: GitHub
 RelaySync/SignedInAs: Logget ind som
 RelaySync/Logout: Log ud

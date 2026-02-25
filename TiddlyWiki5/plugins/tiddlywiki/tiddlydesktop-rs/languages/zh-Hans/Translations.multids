@@ -113,6 +113,12 @@ RelaySync/NoRoom: 无
 RelaySync/Save: 保存
 RelaySync/Cancel: 取消
 RelaySync/RoomDetails: 详情
+RelaySync/Account: 账户
+RelaySync/SignIn: 登录
+RelaySync/SignOut: 退出登录
+RelaySync/SignInHint: 登录以访问中继服务器和管理房间。
+RelaySync/SigningIn: 正在登录...
+RelaySync/ChooseProvider: 选择登录方式
 RelaySync/GitHub: GitHub
 RelaySync/SignedInAs: 已登录为
 RelaySync/Logout: 退出登录

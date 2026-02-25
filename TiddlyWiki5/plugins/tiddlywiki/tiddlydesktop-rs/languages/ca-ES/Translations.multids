@@ -113,6 +113,12 @@ RelaySync/NoRoom: Cap
 RelaySync/Save: Desar
 RelaySync/Cancel: Cancel·lar
 RelaySync/RoomDetails: Detalls
+RelaySync/Account: Compte
+RelaySync/SignIn: Iniciar sessió
+RelaySync/SignOut: Tancar sessió
+RelaySync/SignInHint: Inicieu sessió per accedir al servidor de retransmissió i gestionar les sales.
+RelaySync/SigningIn: Iniciant sessió...
+RelaySync/ChooseProvider: Trieu el mètode d'inici de sessió
 RelaySync/GitHub: GitHub
 RelaySync/SignedInAs: Connectat com a
 RelaySync/Logout: Tancar sessió

@@ -1,43 +1,116 @@
-//! GitHub OAuth Authorization Code flow for relay sync.
+//! Multi-provider OAuth Authorization Code flow for relay sync.
 //!
-//! Flow:
+//! Supports GitHub, GitLab, and OIDC providers. Flow:
 //! 1. Bind a temporary HTTP server on localhost (random port)
-//! 2. Open browser to GitHub authorize URL with redirect_uri = http://localhost:{port}/callback
-//! 3. User authorizes → GitHub redirects to localhost with ?code=...
+//! 2. Open browser to provider's authorize URL with redirect_uri = http://localhost:{port}/callback
+//! 3. User authorizes → provider redirects to localhost with ?code=...
 //! 4. Capture the code, serve a "success" HTML page
-//! 5. POST /api/auth/exchange on the relay server to exchange code for access_token
+//! 5. POST /api/auth/exchange/{provider} on the relay server to exchange code for access_token
 //! 6. Return the token + user info
-
-/// GitHub OAuth App client ID (public — safe to embed in client code).
-/// This must be filled in after creating the OAuth App at https://github.com/settings/developers
-pub const GITHUB_CLIENT_ID: &str = "Ov23lik6vmfOgknQ13hg";
-
-const GITHUB_AUTH_URL: &str = "https://github.com/login/oauth/authorize";
 
 /// Timeout for the OAuth flow (user must authorize within this time)
 const OAUTH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300); // 5 minutes
 
+/// Generic auth result returned by all providers
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct OAuthResult {
+pub struct AuthResult {
     pub access_token: String,
-    pub github_login: String,
-    pub github_id: i64,
+    pub username: String,
+    /// Prefixed user ID: "github:12345", "gitlab:67890", "oidc:sub"
+    pub user_id: String,
+    /// Provider name: "github", "gitlab", "oidc"
+    pub provider: String,
 }
 
-/// Start the OAuth Authorization Code flow.
+/// Provider info returned by GET /api/auth/providers
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ProviderInfo {
+    pub name: String,
+    #[serde(default)]
+    pub client_id: String,
+    /// Provider-specific base URL (e.g. GitLab instance URL)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    /// OIDC discovery URL
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub discovery_url: Option<String>,
+    /// Human-readable name (e.g. "GitHub", "GitLab", "Company SSO")
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
+}
+
+/// Fetch available auth providers from the relay server.
+pub async fn fetch_providers(relay_url: &str) -> Result<Vec<ProviderInfo>, String> {
+    let api_base = relay_ws_to_https(relay_url);
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .map_err(|e| format!("HTTP client error: {}", e))?;
+
+    let resp = client
+        .get(format!("{}/api/auth/providers", api_base))
+        .send()
+        .await
+        .map_err(|e| format!("Failed to fetch providers: {}", e))?;
+
+    if !resp.status().is_success() {
+        // Old servers don't have this endpoint — return GitHub as default
+        return Ok(vec![ProviderInfo {
+            name: "github".to_string(),
+            client_id: String::new(),
+            url: None,
+            discovery_url: None,
+            display_name: Some("GitHub".to_string()),
+        }]);
+    }
+
+    let body: serde_json::Value = resp.json().await
+        .map_err(|e| format!("Invalid providers response: {}", e))?;
+
+    // Handle both {"providers": [...]} (wrapped) and [...] (bare array)
+    let arr = if let Some(arr) = body.get("providers") {
+        arr.clone()
+    } else {
+        body
+    };
+
+    let providers: Vec<ProviderInfo> = serde_json::from_value(arr)
+        .map_err(|e| format!("Invalid providers list: {}", e))?;
+
+    Ok(providers)
+}
+
+/// Start the OAuth Authorization Code flow for a given provider.
 ///
-/// 1. Binds a temporary TCP listener on 127.0.0.1:0 (random port)
-/// 2. Opens the browser to GitHub's authorization page
-/// 3. Waits for the callback with the authorization code
-/// 4. Exchanges the code via the relay server's /api/auth/exchange endpoint
-/// 5. Returns the access token and user info
-pub async fn start_auth_flow(relay_url: &str) -> Result<OAuthResult, String> {
-    if GITHUB_CLIENT_ID.is_empty() {
-        return Err("GitHub OAuth not configured (no client ID)".to_string());
+/// - `provider`: "github", "gitlab", or "oidc"
+/// - `client_id`: OAuth client ID from the relay server's provider config
+/// - `auth_url`: The provider's authorization endpoint (for GitHub/GitLab)
+/// - `discovery_url`: OIDC discovery URL (for OIDC providers — used to fetch auth endpoint)
+/// - `scope`: OAuth scope string (defaults per-provider if None)
+pub async fn start_auth_flow(
+    relay_url: &str,
+    provider: &str,
+    client_id: &str,
+    auth_url: Option<&str>,
+    discovery_url: Option<&str>,
+    scope: Option<&str>,
+) -> Result<AuthResult, String> {
+    if client_id.is_empty() {
+        return Err(format!("OAuth not configured for {} (no client ID)", provider));
     }
 
     // Convert wss:// relay URL to https:// for REST API calls
     let api_base = relay_ws_to_https(relay_url);
+
+    // Resolve the authorization URL
+    let resolved_auth_url = resolve_auth_url(provider, auth_url, discovery_url).await?;
+
+    // Resolve scope
+    let resolved_scope = match scope {
+        Some(s) if !s.is_empty() => s.to_string(),
+        _ => default_scope(provider).to_string(),
+    };
 
     // Step 1: Bind temporary HTTP server on random port
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
@@ -49,18 +122,19 @@ pub async fn start_auth_flow(relay_url: &str) -> Result<OAuthResult, String> {
     let port = local_addr.port();
     let redirect_uri = format!("http://localhost:{}/callback", port);
 
-    eprintln!("[GitHub Auth] OAuth callback server on port {}", port);
+    eprintln!("[Auth] OAuth callback server on port {} for {}", port, provider);
 
     // Step 2: Build authorization URL and open browser
-    let auth_url = format!(
-        "{}?client_id={}&redirect_uri={}&scope=read:user",
-        GITHUB_AUTH_URL,
-        GITHUB_CLIENT_ID,
+    let full_auth_url = format!(
+        "{}?client_id={}&redirect_uri={}&scope={}&response_type=code",
+        resolved_auth_url,
+        urlencoding::encode(client_id),
         urlencoding::encode(&redirect_uri),
+        urlencoding::encode(&resolved_scope),
     );
 
-    // Open browser using the opener crate or platform-specific method
-    open_browser(&auth_url)?;
+    // Open browser using platform-specific method
+    open_browser(&full_auth_url)?;
 
     // Step 3: Wait for the callback (with timeout)
     let code = tokio::time::timeout(OAUTH_TIMEOUT, wait_for_callback(listener))
@@ -68,7 +142,7 @@ pub async fn start_auth_flow(relay_url: &str) -> Result<OAuthResult, String> {
         .map_err(|_| "OAuth flow timed out (5 minutes). Please try again.".to_string())?
         .map_err(|e| format!("OAuth callback failed: {}", e))?;
 
-    eprintln!("[GitHub Auth] Received authorization code");
+    eprintln!("[Auth] Received authorization code for {}", provider);
 
     // Step 4: Exchange code for token via relay server
     let client = reqwest::Client::builder()
@@ -77,7 +151,7 @@ pub async fn start_auth_flow(relay_url: &str) -> Result<OAuthResult, String> {
         .map_err(|e| format!("HTTP client error: {}", e))?;
 
     let resp = client
-        .post(format!("{}/api/auth/exchange", api_base))
+        .post(format!("{}/api/auth/exchange/{}", api_base, provider))
         .json(&serde_json::json!({
             "code": code,
             "redirect_uri": redirect_uri,
@@ -92,11 +166,112 @@ pub async fn start_auth_flow(relay_url: &str) -> Result<OAuthResult, String> {
         return Err(format!("Token exchange failed ({}): {}", status, body));
     }
 
-    let result: OAuthResult = resp.json().await
+    let body: serde_json::Value = resp.json().await
         .map_err(|e| format!("Invalid token exchange response: {}", e))?;
 
-    eprintln!("[GitHub Auth] Authenticated as @{}", result.github_login);
+    let result = parse_auth_response(&body, provider);
+    eprintln!("[Auth] Authenticated as @{} via {}", result.username, result.provider);
     Ok(result)
+}
+
+/// Resolve the authorization URL based on provider type.
+async fn resolve_auth_url(
+    provider: &str,
+    auth_url: Option<&str>,
+    discovery_url: Option<&str>,
+) -> Result<String, String> {
+    // If auth_url is explicitly provided, use it
+    if let Some(url) = auth_url {
+        if !url.is_empty() {
+            return Ok(url.to_string());
+        }
+    }
+
+    // For OIDC, fetch from discovery document
+    if provider == "oidc" {
+        if let Some(disc_url) = discovery_url {
+            return fetch_oidc_authorization_endpoint(disc_url).await;
+        }
+        return Err("OIDC provider requires a discovery URL or authorization URL".to_string());
+    }
+
+    // Default auth URLs for well-known providers
+    match provider {
+        "github" => Ok("https://github.com/login/oauth/authorize".to_string()),
+        "gitlab" => Ok("https://gitlab.com/oauth/authorize".to_string()),
+        _ => Err(format!("No authorization URL configured for provider '{}'", provider)),
+    }
+}
+
+/// Default OAuth scopes per provider
+fn default_scope(provider: &str) -> &'static str {
+    match provider {
+        "github" => "read:user",
+        "gitlab" => "read_user",
+        "oidc" => "openid profile email",
+        _ => "read:user",
+    }
+}
+
+/// Fetch the authorization_endpoint from an OIDC discovery document.
+async fn fetch_oidc_authorization_endpoint(discovery_url: &str) -> Result<String, String> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .map_err(|e| format!("HTTP client error: {}", e))?;
+
+    let resp = client
+        .get(discovery_url)
+        .send()
+        .await
+        .map_err(|e| format!("Failed to fetch OIDC discovery document: {}", e))?;
+
+    if !resp.status().is_success() {
+        return Err(format!("OIDC discovery failed ({})", resp.status()));
+    }
+
+    let doc: serde_json::Value = resp.json().await
+        .map_err(|e| format!("Invalid OIDC discovery document: {}", e))?;
+
+    doc["authorization_endpoint"]
+        .as_str()
+        .map(|s| s.to_string())
+        .ok_or_else(|| "OIDC discovery document missing authorization_endpoint".to_string())
+}
+
+/// Parse auth response from relay server, handling both new and legacy formats.
+fn parse_auth_response(body: &serde_json::Value, provider: &str) -> AuthResult {
+    // Try new generic fields first
+    let username = body["username"].as_str()
+        .or_else(|| body["github_login"].as_str())  // legacy fallback
+        .unwrap_or("")
+        .to_string();
+
+    let user_id = body["user_id"].as_str()
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| {
+            // Legacy fallback: construct from github_id
+            if let Some(id) = body["github_id"].as_i64() {
+                format!("github:{}", id)
+            } else {
+                String::new()
+            }
+        });
+
+    let provider_from_server = body["provider"].as_str()
+        .unwrap_or(provider)
+        .to_string();
+
+    let access_token = body["access_token"].as_str()
+        .unwrap_or("")
+        .to_string();
+
+    AuthResult {
+        access_token,
+        username,
+        user_id,
+        provider: provider_from_server,
+    }
 }
 
 /// Wait for the OAuth callback on the temporary HTTP server.
@@ -128,8 +303,7 @@ async fn wait_for_callback(listener: tokio::net::TcpListener) -> Result<String, 
             ("200 OK", "<html><body style=\"font-family:system-ui;text-align:center;padding:60px\"><h1>Authentication Successful!</h1><p>You can close this tab and return to TiddlyDesktop.</p></body></html>")
         }
     } else {
-        // Check for error parameter
-        ("400 Bad Request", "<html><body><h1>Authentication Failed</h1><p>GitHub did not return an authorization code. Please try again.</p></body></html>")
+        ("400 Bad Request", "<html><body><h1>Authentication Failed</h1><p>The provider did not return an authorization code. Please try again.</p></body></html>")
     };
 
     let response = format!(
@@ -194,16 +368,20 @@ fn open_browser(url: &str) -> Result<(), String> {
     }
     #[cfg(target_os = "android")]
     {
-        // On Android, use Tauri's shell open or JNI
-        // For now, this is handled at the Tauri command level
-        let _ = url;
+        // Use tauri-plugin-opener via the global app handle
+        use tauri_plugin_opener::OpenerExt;
+        let app = crate::get_global_app_handle()
+            .ok_or("App handle not available")?;
+        app.opener()
+            .open_url(url, None::<&str>)
+            .map_err(|e| format!("Failed to open browser: {}", e))?;
     }
     Ok(())
 }
 
-/// Validate a stored GitHub token by calling the relay server's /api/auth/user endpoint.
+/// Validate a stored auth token by calling the relay server's /api/auth/user endpoint.
 /// Returns the user info if valid, or an error if expired/invalid.
-pub async fn validate_token(relay_url: &str, token: &str) -> Result<OAuthResult, String> {
+pub async fn validate_token(relay_url: &str, token: &str, provider: &str) -> Result<AuthResult, String> {
     let api_base = relay_ws_to_https(relay_url);
 
     let client = reqwest::Client::builder()
@@ -214,6 +392,7 @@ pub async fn validate_token(relay_url: &str, token: &str) -> Result<OAuthResult,
     let resp = client
         .get(format!("{}/api/auth/user", api_base))
         .header("Authorization", format!("Bearer {}", token))
+        .header("X-Auth-Provider", provider)
         .send()
         .await
         .map_err(|e| format!("Token validation request failed: {}", e))?;
@@ -228,9 +407,7 @@ pub async fn validate_token(relay_url: &str, token: &str) -> Result<OAuthResult,
     let body: serde_json::Value = resp.json().await
         .map_err(|e| format!("Invalid response: {}", e))?;
 
-    Ok(OAuthResult {
-        access_token: token.to_string(),
-        github_login: body["github_login"].as_str().unwrap_or("").to_string(),
-        github_id: body["github_id"].as_i64().unwrap_or(0),
-    })
+    let mut result = parse_auth_response(&body, provider);
+    result.access_token = token.to_string();
+    Ok(result)
 }

@@ -113,6 +113,12 @@ RelaySync/NoRoom: None
 RelaySync/Save: Save
 RelaySync/Cancel: Cancel
 RelaySync/RoomDetails: Details
+RelaySync/Account: Account
+RelaySync/SignIn: Sign In
+RelaySync/SignOut: Sign Out
+RelaySync/SignInHint: Sign in for relay server access and room management.
+RelaySync/SigningIn: Signing in...
+RelaySync/ChooseProvider: Choose sign-in method
 RelaySync/GitHub: GitHub
 RelaySync/SignedInAs: Signed in as
 RelaySync/Logout: Logout

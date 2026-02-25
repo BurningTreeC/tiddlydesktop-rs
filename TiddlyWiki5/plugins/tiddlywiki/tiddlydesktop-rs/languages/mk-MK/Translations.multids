@@ -113,6 +113,12 @@ RelaySync/NoRoom: Нема
 RelaySync/Save: Зачувај
 RelaySync/Cancel: Откажи
 RelaySync/RoomDetails: Детали
+RelaySync/Account: Сметка
+RelaySync/SignIn: Најава
+RelaySync/SignOut: Одјава
+RelaySync/SignInHint: Најавете се за пристап до релејниот сервер и управување со соби.
+RelaySync/SigningIn: Најавување...
+RelaySync/ChooseProvider: Изберете метод за најава
 RelaySync/GitHub: GitHub
 RelaySync/SignedInAs: Најавен како
 RelaySync/Logout: Одјава

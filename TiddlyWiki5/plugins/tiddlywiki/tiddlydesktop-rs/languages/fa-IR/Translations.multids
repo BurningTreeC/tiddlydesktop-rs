@@ -113,6 +113,12 @@ RelaySync/NoRoom: هیچکدام
 RelaySync/Save: ذخیره
 RelaySync/Cancel: لغو
 RelaySync/RoomDetails: جزئیات
+RelaySync/Account: حساب کاربری
+RelaySync/SignIn: ورود
+RelaySync/SignOut: خروج
+RelaySync/SignInHint: برای دسترسی به سرور رله و مدیریت اتاق‌ها وارد شوید.
+RelaySync/SigningIn: در حال ورود...
+RelaySync/ChooseProvider: روش ورود را انتخاب کنید
 RelaySync/GitHub: GitHub
 RelaySync/SignedInAs: وارد شده به عنوان
 RelaySync/Logout: خروج

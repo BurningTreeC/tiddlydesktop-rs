@@ -113,6 +113,12 @@ RelaySync/NoRoom: Keiner
 RelaySync/Save: Speichern
 RelaySync/Cancel: Abbrechen
 RelaySync/RoomDetails: Details
+RelaySync/Account: Konto
+RelaySync/SignIn: Anmelden
+RelaySync/SignOut: Abmelden
+RelaySync/SignInHint: Melden Sie sich an, um auf den Relay-Server zuzugreifen und Räume zu verwalten.
+RelaySync/SigningIn: Anmeldung läuft...
+RelaySync/ChooseProvider: Anmeldemethode wählen
 RelaySync/GitHub: GitHub
 RelaySync/SignedInAs: Angemeldet als
 RelaySync/Logout: Abmelden

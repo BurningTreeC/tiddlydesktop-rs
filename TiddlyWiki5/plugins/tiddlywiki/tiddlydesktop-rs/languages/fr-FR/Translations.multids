@@ -113,6 +113,12 @@ RelaySync/NoRoom: Aucune
 RelaySync/Save: Enregistrer
 RelaySync/Cancel: Annuler
 RelaySync/RoomDetails: Détails
+RelaySync/Account: Compte
+RelaySync/SignIn: Se connecter
+RelaySync/SignOut: Se déconnecter
+RelaySync/SignInHint: Connectez-vous pour accéder au serveur relais et gérer les salons.
+RelaySync/SigningIn: Connexion en cours...
+RelaySync/ChooseProvider: Choisir la méthode de connexion
 RelaySync/GitHub: GitHub
 RelaySync/SignedInAs: Connecté en tant que
 RelaySync/Logout: Déconnexion

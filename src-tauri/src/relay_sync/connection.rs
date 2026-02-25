@@ -73,7 +73,7 @@ impl RelayReceiver {
 
 /// Connect to a relay room.
 ///
-/// Uses GitHub Bearer token for server authentication (replaces X-App-Token).
+/// Uses Bearer token for server authentication.
 /// Room token (derived from E2E password) is still sent in the join message for
 /// end-to-end verification.
 ///
@@ -81,13 +81,15 @@ impl RelayReceiver {
 pub async fn connect(
     url: &str,
     device_id: &str,
-    github_token: &str,
+    auth_token: &str,
+    auth_provider: &str,
     room_token: Option<&str>,
 ) -> Result<(RelaySender, RelayReceiver), String> {
-    // Build WebSocket request with GitHub Bearer token
+    // Build WebSocket request with Bearer token + provider header
     let request = http::Request::builder()
         .uri(url)
-        .header("Authorization", format!("Bearer {}", github_token))
+        .header("Authorization", format!("Bearer {}", auth_token))
+        .header("X-Auth-Provider", auth_provider)
         .header("Host", extract_host(url))
         .header("Connection", "Upgrade")
         .header("Upgrade", "websocket")

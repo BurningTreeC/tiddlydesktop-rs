@@ -113,6 +113,12 @@ RelaySync/NoRoom: Nessuna
 RelaySync/Save: Salva
 RelaySync/Cancel: Annulla
 RelaySync/RoomDetails: Dettagli
+RelaySync/Account: Account
+RelaySync/SignIn: Accedi
+RelaySync/SignOut: Esci
+RelaySync/SignInHint: Accedi per utilizzare il server relay e gestire le stanze.
+RelaySync/SigningIn: Accesso in corso...
+RelaySync/ChooseProvider: Scegli il metodo di accesso
 RelaySync/GitHub: GitHub
 RelaySync/SignedInAs: Connesso come
 RelaySync/Logout: Disconnetti

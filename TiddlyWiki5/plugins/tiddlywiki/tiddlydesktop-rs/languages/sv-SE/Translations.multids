@@ -113,6 +113,12 @@ RelaySync/NoRoom: Inget
 RelaySync/Save: Spara
 RelaySync/Cancel: Avbryt
 RelaySync/RoomDetails: Detaljer
+RelaySync/Account: Konto
+RelaySync/SignIn: Logga in
+RelaySync/SignOut: Logga ut
+RelaySync/SignInHint: Logga in för åtkomst till relä-servern och rumshantering.
+RelaySync/SigningIn: Loggar in...
+RelaySync/ChooseProvider: Välj inloggningsmetod
 RelaySync/GitHub: GitHub
 RelaySync/SignedInAs: Inloggad som
 RelaySync/Logout: Logga ut

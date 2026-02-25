@@ -113,6 +113,12 @@ RelaySync/NoRoom: Žádná
 RelaySync/Save: Uložit
 RelaySync/Cancel: Zrušit
 RelaySync/RoomDetails: Podrobnosti
+RelaySync/Account: Účet
+RelaySync/SignIn: Přihlásit se
+RelaySync/SignOut: Odhlásit se
+RelaySync/SignInHint: Přihlaste se pro přístup k relay serveru a správu místností.
+RelaySync/SigningIn: Přihlašování...
+RelaySync/ChooseProvider: Vyberte způsob přihlášení
 RelaySync/GitHub: GitHub
 RelaySync/SignedInAs: Přihlášen jako
 RelaySync/Logout: Odhlásit se

@@ -581,32 +581,49 @@ title: $:/plugins/tiddlywiki/tiddlydesktop-rs/WikiList
 </div>
 </div>
 
-<!-- GitHub Authentication -->
+<!-- Authentication -->
 <div class="td-sync-section">
-<$list filter="[{$:/temp/tiddlydesktop-rs/github-auth-status}match[authenticated]]" variable="ignore">
+<!-- Authenticated state: show username + sign out -->
+<$list filter="[{$:/temp/tiddlydesktop-rs/auth-status}match[authenticated]]" variable="ignore">
 <div class="td-sync-info-row">
-<span class="td-sync-label"><<td-lingo RelaySync/GitHub>></span>
-<span class="td-sync-value"><<td-lingo RelaySync/SignedInAs>> @<$text text={{$:/temp/tiddlydesktop-rs/github-login}}/></span>
+<span class="td-sync-label"><<td-lingo RelaySync/Account>></span>
+<span class="td-sync-value"><<td-lingo RelaySync/SignedInAs>> @<$text text={{$:/temp/tiddlydesktop-rs/auth-username}}/></span>
 <$button class="tc-btn-invisible td-button td-button-danger td-button-small">
-<$action-sendmessage $message="tm-tiddlydesktop-rs-relay-github-logout"/>
-<<td-lingo RelaySync/Logout>>
+<$action-sendmessage $message="tm-tiddlydesktop-rs-relay-logout"/>
+<<td-lingo RelaySync/SignOut>>
 </$button>
 </div>
 </$list>
-<$list filter="[{$:/temp/tiddlydesktop-rs/github-auth-status}!match[authenticated]!match[logging-in]]" variable="ignore">
+<!-- Not authenticated: show sign in button or provider picker -->
+<$list filter="[{$:/temp/tiddlydesktop-rs/auth-status}!match[authenticated]!match[logging-in]]" variable="ignore">
 <div class="td-sync-info-row">
-<span class="td-sync-label"><<td-lingo RelaySync/GitHub>></span>
+<span class="td-sync-label"><<td-lingo RelaySync/Account>></span>
+<$list filter="[{$:/temp/tiddlydesktop-rs/auth-status}!match[picking]]" variable="ignore">
 <$button class="tc-btn-invisible td-button td-button-primary td-button-small">
-<$action-sendmessage $message="tm-tiddlydesktop-rs-relay-github-login"/>
-{{$:/core/images/globe}} <<td-lingo RelaySync/LoginWithGitHub>>
+<$action-sendmessage $message="tm-tiddlydesktop-rs-relay-signin"/>
+{{$:/core/images/globe}} <<td-lingo RelaySync/SignIn>>
 </$button>
-<span class="td-sync-hint"><<td-lingo RelaySync/GitHubHint>></span>
+<span class="td-sync-hint"><<td-lingo RelaySync/SignInHint>></span>
+</$list>
+</div>
+<!-- Provider picker (shown when multiple providers available) -->
+<$list filter="[{$:/temp/tiddlydesktop-rs/auth-status}match[picking]]" variable="ignore">
+<div class="td-sync-info-row" style="flex-direction:column;align-items:flex-start;">
+<div class="td-sync-label" style="margin-bottom:4px;"><<td-lingo RelaySync/ChooseProvider>></div>
+<$list filter="[enlist{$:/temp/tiddlydesktop-rs/relay-provider-list}]">
+<$button class="tc-btn-invisible td-button td-button-primary td-button-small" style="margin:2px 4px 2px 0;">
+<$action-sendmessage $message="tm-tiddlydesktop-rs-relay-login" provider={{!!name}} clientId={{!!client_id}} authUrl={{!!auth_url}} discoveryUrl={{!!discovery_url}} scope={{!!scope}} displayName={{!!display_name}}/>
+{{$:/core/images/globe}} <$text text={{!!display_name}}/>
+</$button>
+</$list>
 </div>
 </$list>
-<$list filter="[{$:/temp/tiddlydesktop-rs/github-auth-status}match[logging-in]]" variable="ignore">
+</$list>
+<!-- Logging in state -->
+<$list filter="[{$:/temp/tiddlydesktop-rs/auth-status}match[logging-in]]" variable="ignore">
 <div class="td-sync-info-row">
-<span class="td-sync-label"><<td-lingo RelaySync/GitHub>></span>
-<span class="td-sync-value"><<td-lingo RelaySync/LoggingIn>></span>
+<span class="td-sync-label"><<td-lingo RelaySync/Account>></span>
+<span class="td-sync-value"><<td-lingo RelaySync/SigningIn>></span>
 </div>
 </$list>
 </div>
@@ -706,8 +723,8 @@ title: $:/plugins/tiddlywiki/tiddlydesktop-rs/WikiList
 <<td-lingo RelaySync/Save>>
 </$button>
 </div>
-<!-- Relay registration & members section (only shown when GitHub authenticated) -->
-<$list filter="[{$:/temp/tiddlydesktop-rs/github-auth-status}match[authenticated]]" variable="ignore">
+<!-- Relay registration & members section (only shown when authenticated) -->
+<$list filter="[{$:/temp/tiddlydesktop-rs/auth-status}match[authenticated]]" variable="ignore">
 <$let registerStatusTiddler={{{ [<roomCode>addprefix[$:/temp/tiddlydesktop-rs/relay-room-register-status/]] }}}>
 <div class="td-relay-pairing-code-row">
 <span class="td-relay-pairing-label"><<td-lingo RelaySync/RelayServer>></span>
@@ -740,13 +757,13 @@ title: $:/plugins/tiddlywiki/tiddlydesktop-rs/WikiList
 <$list filter="[<membersTiddler>has[text]]" variable="ignore">
 <$let membersJson={{{ [<membersTiddler>get[text]] }}}>
 <$list filter="[<membersJson>jsonindexes[]]">
-<$let memberLogin={{{ [<membersJson>jsonget<currentTiddler>,[github_login]] }}} memberRole={{{ [<membersJson>jsonget<currentTiddler>,[role]] }}}>
+<$let memberName={{{ [<membersJson>jsonget<currentTiddler>,[username]] ~[<membersJson>jsonget<currentTiddler>,[github_login]] }}} memberId={{{ [<membersJson>jsonget<currentTiddler>,[user_id]] ~[<membersJson>jsonget<currentTiddler>,[github_login]] }}} memberRole={{{ [<membersJson>jsonget<currentTiddler>,[role]] }}}>
 <div class="td-relay-member-item">
-<span class="td-relay-member-name">@<$text text=<<memberLogin>>/></span>
+<span class="td-relay-member-name">@<$text text=<<memberName>>/></span>
 <span class="td-relay-member-role">(<$text text=<<memberRole>>/>)</span>
 <$list filter="[<memberRole>!match[owner]]" variable="ignore">
 <$button class="tc-btn-invisible td-button td-button-danger td-button-small">
-<$action-sendmessage $message="tm-tiddlydesktop-rs-relay-remove-member" roomCode=<<roomCode>> githubLogin=<<memberLogin>>/>
+<$action-sendmessage $message="tm-tiddlydesktop-rs-relay-remove-member" roomCode=<<roomCode>> userId=<<memberId>>/>
 {{$:/core/images/close-button}}
 </$button>
 </$list>
@@ -758,9 +775,9 @@ title: $:/plugins/tiddlywiki/tiddlydesktop-rs/WikiList
 </$let>
 <!-- Add member form -->
 <div class="td-relay-pairing-code-row">
-<$edit-text tiddler={{{ [<roomCode>addprefix[$:/temp/tiddlydesktop-rs/relay-add-member/]] }}} tag="input" placeholder="GitHub username" class="td-relay-pairing-input"/>
+<$edit-text tiddler={{{ [<roomCode>addprefix[$:/temp/tiddlydesktop-rs/relay-add-member/]] }}} tag="input" placeholder="Username" class="td-relay-pairing-input"/>
 <$button class="tc-btn-invisible td-button td-button-primary td-button-small">
-<$action-sendmessage $message="tm-tiddlydesktop-rs-relay-add-member" roomCode=<<roomCode>> githubLogin={{{ [<roomCode>addprefix[$:/temp/tiddlydesktop-rs/relay-add-member/]get[text]] }}}/>
+<$action-sendmessage $message="tm-tiddlydesktop-rs-relay-add-member" roomCode=<<roomCode>> username={{{ [<roomCode>addprefix[$:/temp/tiddlydesktop-rs/relay-add-member/]get[text]] }}}/>
 <$action-setfield $tiddler={{{ [<roomCode>addprefix[$:/temp/tiddlydesktop-rs/relay-add-member/]] }}} text=""/>
 {{$:/core/images/new-button}} <<td-lingo RelaySync/AddMember>>
 </$button>

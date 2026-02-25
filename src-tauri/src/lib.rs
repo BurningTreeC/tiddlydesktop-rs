@@ -6343,7 +6343,7 @@ async fn check_for_updates() -> Result<UpdateCheckResult, String> {
 
 /// Android version - separate from desktop versioning (must match build.gradle.kts versionName)
 #[cfg(target_os = "android")]
-const ANDROID_VERSION: &str = "0.0.54";
+const ANDROID_VERSION: &str = "0.0.55";
 
 /// Check for updates on Android via version file on GitHub, linking to Play Store
 #[cfg(target_os = "android")]
@@ -8439,7 +8439,12 @@ fn run_wiki_mode(args: WikiModeArgs) {
             lan_sync::relay_sync_get_room_credentials,
             lan_sync::relay_sync_set_url,
             lan_sync::relay_sync_generate_credentials,
-            // Relay GitHub auth commands
+            // Relay auth commands (multi-provider)
+            lan_sync::relay_sync_login,
+            lan_sync::relay_sync_logout,
+            lan_sync::relay_sync_auth_status,
+            lan_sync::relay_sync_fetch_providers,
+            // Legacy aliases
             lan_sync::relay_sync_github_login,
             lan_sync::relay_sync_github_logout,
             lan_sync::relay_sync_github_status,
@@ -8902,7 +8907,12 @@ fn run_wiki_folder_mode(args: WikiFolderModeArgs) {
             lan_sync::relay_sync_get_room_credentials,
             lan_sync::relay_sync_set_url,
             lan_sync::relay_sync_generate_credentials,
-            // Relay GitHub auth commands
+            // Relay auth commands (multi-provider)
+            lan_sync::relay_sync_login,
+            lan_sync::relay_sync_logout,
+            lan_sync::relay_sync_auth_status,
+            lan_sync::relay_sync_fetch_providers,
+            // Legacy aliases
             lan_sync::relay_sync_github_login,
             lan_sync::relay_sync_github_logout,
             lan_sync::relay_sync_github_status,
@@ -9631,7 +9641,12 @@ pub fn run() {
             lan_sync::relay_sync_get_room_credentials,
             lan_sync::relay_sync_set_url,
             lan_sync::relay_sync_generate_credentials,
-            // Relay GitHub auth commands
+            // Relay auth commands (multi-provider)
+            lan_sync::relay_sync_login,
+            lan_sync::relay_sync_logout,
+            lan_sync::relay_sync_auth_status,
+            lan_sync::relay_sync_fetch_providers,
+            // Legacy aliases
             lan_sync::relay_sync_github_login,
             lan_sync::relay_sync_github_logout,
             lan_sync::relay_sync_github_status,

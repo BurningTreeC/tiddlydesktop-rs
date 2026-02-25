@@ -113,6 +113,12 @@ RelaySync/NoRoom: ਕੋਈ ਨਹੀਂ
 RelaySync/Save: ਸੰਭਾਲੋ
 RelaySync/Cancel: ਰੱਦ ਕਰੋ
 RelaySync/RoomDetails: ਵੇਰਵੇ
+RelaySync/Account: ਖਾਤਾ
+RelaySync/SignIn: ਸਾਈਨ ਇਨ
+RelaySync/SignOut: ਸਾਈਨ ਆਊਟ
+RelaySync/SignInHint: ਰਿਲੇ ਸਰਵਰ ਪਹੁੰਚ ਅਤੇ ਕਮਰੇ ਦੇ ਪ੍ਰਬੰਧਨ ਲਈ ਸਾਈਨ ਇਨ ਕਰੋ।
+RelaySync/SigningIn: ਸਾਈਨ ਇਨ ਹੋ ਰਿਹਾ ਹੈ...
+RelaySync/ChooseProvider: ਸਾਈਨ-ਇਨ ਤਰੀਕਾ ਚੁਣੋ
 RelaySync/GitHub: GitHub
 RelaySync/SignedInAs: ਇਸ ਰੂਪ ਵਿੱਚ ਸਾਈਨ ਇਨ ਕੀਤਾ
 RelaySync/Logout: ਲੌਗ ਆਊਟ

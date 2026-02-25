@@ -113,6 +113,12 @@ RelaySync/NoRoom: ללא
 RelaySync/Save: שמור
 RelaySync/Cancel: ביטול
 RelaySync/RoomDetails: פרטים
+RelaySync/Account: חשבון
+RelaySync/SignIn: התחברות
+RelaySync/SignOut: התנתקות
+RelaySync/SignInHint: התחבר לגישה לשרת הממסר ולניהול חדרים.
+RelaySync/SigningIn: מתחבר...
+RelaySync/ChooseProvider: בחר שיטת התחברות
 RelaySync/GitHub: GitHub
 RelaySync/SignedInAs: מחובר כ
 RelaySync/Logout: התנתק

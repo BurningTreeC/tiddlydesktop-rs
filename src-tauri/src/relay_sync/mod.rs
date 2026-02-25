@@ -249,11 +249,11 @@ fn save_config_sync(config_path: &std::path::Path, device_key: &[u8; 32], config
         }
         // password has skip_serializing so it won't appear in output
     }
-    // Encrypt GitHub token for disk storage
-    if !disk_config.github_token.is_empty() {
-        disk_config.encrypted_github_token = Some(encrypt_password(device_key, &disk_config.github_token));
+    // Encrypt auth token for disk storage
+    if !disk_config.auth_token.is_empty() {
+        disk_config.encrypted_auth_token = Some(encrypt_password(device_key, &disk_config.auth_token));
     }
-    // github_token has skip_serializing so it won't appear in output
+    // auth_token has skip_serializing so it won't appear in output
     let json = serde_json::to_string_pretty(&disk_config)
         .map_err(|e| format!("Failed to serialize relay config: {}", e))?;
     std::fs::write(config_path, json)
@@ -303,18 +303,68 @@ pub struct RelayConfig {
     /// User-defined rooms
     #[serde(default)]
     pub rooms: Vec<RoomDefinition>,
-    /// GitHub token (in-memory only — never serialized to disk)
+    /// Auth token (in-memory only — never serialized to disk)
     #[serde(default, skip_serializing)]
-    pub github_token: String,
-    /// Encrypted GitHub token (written to disk)
+    pub auth_token: String,
+    /// Encrypted auth token (written to disk)
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub encrypted_github_token: Option<String>,
-    /// GitHub username (for display)
+    pub encrypted_auth_token: Option<String>,
+    /// Auth provider name: "github", "gitlab", "oidc"
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub github_login: Option<String>,
-    /// GitHub user ID
+    pub auth_provider: Option<String>,
+    /// Username (for display)
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub github_id: Option<i64>,
+    pub username: Option<String>,
+    /// User ID (e.g. "github:12345", "gitlab:67890", "oidc:sub")
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub user_id: Option<String>,
+    // Legacy fields for deserializing old config files — never written back
+    #[serde(default, skip_serializing, alias = "github_token")]
+    _legacy_github_token: String,
+    #[serde(default, skip_serializing, alias = "encrypted_github_token")]
+    _legacy_encrypted_github_token: Option<String>,
+    #[serde(default, skip_serializing, alias = "github_login")]
+    _legacy_github_login: Option<String>,
+    #[serde(default, skip_serializing, alias = "github_id")]
+    _legacy_github_id: Option<i64>,
+}
+
+impl RelayConfig {
+    /// Migrate legacy GitHub fields to the new generic auth fields.
+    /// Called after deserialization to handle old config files.
+    fn migrate_legacy_fields(&mut self) {
+        // Migrate encrypted token
+        if self.encrypted_auth_token.is_none() {
+            if let Some(ref enc) = self._legacy_encrypted_github_token {
+                self.encrypted_auth_token = Some(enc.clone());
+            }
+        }
+        // Migrate in-memory token
+        if self.auth_token.is_empty() && !self._legacy_github_token.is_empty() {
+            self.auth_token = self._legacy_github_token.clone();
+        }
+        // Migrate username
+        if self.username.is_none() {
+            if let Some(ref login) = self._legacy_github_login {
+                self.username = Some(login.clone());
+            }
+        }
+        // Migrate user ID
+        if self.user_id.is_none() {
+            if let Some(id) = self._legacy_github_id {
+                self.user_id = Some(format!("github:{}", id));
+            }
+        }
+        // Default provider to github if we have a token but no provider
+        if self.auth_provider.is_none() && (self.encrypted_auth_token.is_some() || !self.auth_token.is_empty()) {
+            self.auth_provider = Some("github".to_string());
+        }
+        // Clear legacy fields
+        self._legacy_github_token.clear();
+        self._legacy_encrypted_github_token = None;
+        self._legacy_github_login = None;
+        self._legacy_github_id = None;
+    }
 }
 
 impl Default for RelayConfig {
@@ -323,10 +373,15 @@ impl Default for RelayConfig {
             relay_url: DEFAULT_RELAY_URL.to_string(),
             auto_connect: false,
             rooms: Vec::new(),
-            github_token: String::new(),
-            encrypted_github_token: None,
-            github_login: None,
-            github_id: None,
+            auth_token: String::new(),
+            encrypted_auth_token: None,
+            auth_provider: None,
+            username: None,
+            user_id: None,
+            _legacy_github_token: String::new(),
+            _legacy_encrypted_github_token: None,
+            _legacy_github_login: None,
+            _legacy_github_id: None,
         }
     }
 }
@@ -468,15 +523,19 @@ impl RelaySyncManager {
             }
         }
 
-        // Decrypt GitHub token
-        if let Some(ref enc) = config.encrypted_github_token {
+        // Migrate legacy GitHub fields to new generic auth fields
+        config.migrate_legacy_fields();
+
+        // Decrypt auth token
+        if let Some(ref enc) = config.encrypted_auth_token {
             if let Some(token) = decrypt_password(&device_key, enc) {
-                config.github_token = token;
+                config.auth_token = token;
             } else {
-                eprintln!("[Relay] Warning: failed to decrypt GitHub token");
-                config.encrypted_github_token = None;
-                config.github_login = None;
-                config.github_id = None;
+                eprintln!("[Relay] Warning: failed to decrypt auth token");
+                config.encrypted_auth_token = None;
+                config.username = None;
+                config.user_id = None;
+                config.auth_provider = None;
                 needs_save = true;
             }
         }
@@ -601,12 +660,13 @@ impl RelaySyncManager {
             .ok_or_else(|| format!("Room '{}' not found in config", room_code))?
             .clone();
 
-        // GitHub token is required for relay connection
-        if config.github_token.is_empty() {
-            return Err("GitHub authentication required. Please login with GitHub first.".to_string());
+        // Auth token is required for relay connection
+        if config.auth_token.is_empty() {
+            return Err("Authentication required. Please sign in first.".to_string());
         }
 
-        self.spawn_room_task(config.relay_url.clone(), room_def, config.github_token.clone());
+        let provider = config.auth_provider.clone().unwrap_or_else(|| "github".to_string());
+        self.spawn_room_task(config.relay_url.clone(), room_def, config.auth_token.clone(), provider);
         Ok(())
     }
 
@@ -642,16 +702,17 @@ impl RelaySyncManager {
         let config = self.config.read().await.clone();
         eprintln!("[Relay] Starting auto-connect rooms (url: {})", config.relay_url);
 
-        // GitHub token required for relay — skip if not authenticated
-        if config.github_token.is_empty() {
-            eprintln!("[Relay] Skipping relay auto-connect — no GitHub token (LAN sync still works)");
+        // Auth token required for relay — skip if not authenticated
+        if config.auth_token.is_empty() {
+            eprintln!("[Relay] Skipping relay auto-connect — no auth token (LAN sync still works)");
             return Ok(());
         }
 
+        let provider = config.auth_provider.clone().unwrap_or_else(|| "github".to_string());
         for room_def in &config.rooms {
             if room_def.auto_connect {
                 if !self.rooms.read().await.contains_key(&room_def.room_code) {
-                    self.spawn_room_task(config.relay_url.clone(), room_def.clone(), config.github_token.clone());
+                    self.spawn_room_task(config.relay_url.clone(), room_def.clone(), config.auth_token.clone(), provider.clone());
                 }
             }
         }
@@ -719,7 +780,7 @@ impl RelaySyncManager {
 
     // ── Spawn a long-lived task for one room ────────────────────────
 
-    fn spawn_room_task(&self, relay_url: String, room_def: RoomDefinition, github_token: String) {
+    fn spawn_room_task(&self, relay_url: String, room_def: RoomDefinition, auth_token: String, auth_provider: String) {
         let event_tx = self.event_tx.clone();
         let rooms = self.rooms.clone();
         let room_running = self.room_running.clone();
@@ -775,7 +836,8 @@ impl RelaySyncManager {
                 let (sender, receiver) = match connection::connect(
                     &url,
                     &my_device_id,
-                    &github_token,
+                    &auth_token,
+                    &auth_provider,
                     Some(&room_token),
                 )
                 .await
@@ -1593,41 +1655,58 @@ impl RelaySyncManager {
         None
     }
 
-    // ── GitHub authentication ───────────────────────────────────────
+    // ── Authentication ─────────────────────────────────────────────
 
-    /// Start GitHub OAuth login flow
-    pub async fn github_login(&self) -> Result<github_auth::OAuthResult, String> {
+    /// Start OAuth login flow for a given provider
+    pub async fn login(
+        &self,
+        provider: &str,
+        client_id: &str,
+        auth_url: Option<&str>,
+        discovery_url: Option<&str>,
+        scope: Option<&str>,
+    ) -> Result<github_auth::AuthResult, String> {
         let relay_url = self.config.read().await.relay_url.clone();
-        let result = github_auth::start_auth_flow(&relay_url).await?;
+        let result = github_auth::start_auth_flow(
+            &relay_url, provider, client_id, auth_url, discovery_url, scope,
+        ).await?;
 
         // Store the token in config
         {
             let mut config = self.config.write().await;
-            config.github_token = result.access_token.clone();
-            config.github_login = Some(result.github_login.clone());
-            config.github_id = Some(result.github_id);
+            config.auth_token = result.access_token.clone();
+            config.auth_provider = Some(result.provider.clone());
+            config.username = Some(result.username.clone());
+            config.user_id = Some(result.user_id.clone());
         }
         self.save_config().await;
         Ok(result)
     }
 
-    /// Log out of GitHub (clear stored token)
-    pub async fn github_logout(&self) {
+    /// Log out (clear stored auth token and user info)
+    pub async fn logout(&self) {
         {
             let mut config = self.config.write().await;
-            config.github_token.clear();
-            config.encrypted_github_token = None;
-            config.github_login = None;
-            config.github_id = None;
+            config.auth_token.clear();
+            config.encrypted_auth_token = None;
+            config.auth_provider = None;
+            config.username = None;
+            config.user_id = None;
         }
         self.save_config().await;
     }
 
-    /// Get GitHub auth status
-    pub async fn github_status(&self) -> (Option<String>, Option<i64>, bool) {
+    /// Get auth status: (username, user_id, provider, has_token)
+    pub async fn auth_status(&self) -> (Option<String>, Option<String>, Option<String>, bool) {
         let config = self.config.read().await;
-        let has_token = !config.github_token.is_empty();
-        (config.github_login.clone(), config.github_id, has_token)
+        let has_token = !config.auth_token.is_empty();
+        (config.username.clone(), config.user_id.clone(), config.auth_provider.clone(), has_token)
+    }
+
+    /// Fetch available auth providers from the relay server
+    pub async fn fetch_providers(&self) -> Result<Vec<github_auth::ProviderInfo>, String> {
+        let relay_url = self.config.read().await.relay_url.clone();
+        github_auth::fetch_providers(&relay_url).await
     }
 
     // ── Server-side room management API ──────────────────────────────
@@ -1640,11 +1719,12 @@ impl RelaySyncManager {
         body: Option<&serde_json::Value>,
     ) -> Result<T, String> {
         let config = self.config.read().await;
-        if config.github_token.is_empty() {
-            return Err("GitHub authentication required".to_string());
+        if config.auth_token.is_empty() {
+            return Err("Authentication required".to_string());
         }
         let api_base = github_auth::relay_ws_to_https(&config.relay_url);
-        let token = config.github_token.clone();
+        let token = config.auth_token.clone();
+        let provider = config.auth_provider.clone().unwrap_or_else(|| "github".to_string());
         drop(config);
 
         let client = reqwest::Client::builder()
@@ -1653,7 +1733,8 @@ impl RelaySyncManager {
             .map_err(|e| format!("HTTP client error: {}", e))?;
 
         let mut req = client.request(method, format!("{}{}", api_base, path))
-            .header("Authorization", format!("Bearer {}", token));
+            .header("Authorization", format!("Bearer {}", token))
+            .header("X-Auth-Provider", &provider);
 
         if let Some(body) = body {
             req = req.json(body);
@@ -1706,8 +1787,9 @@ impl RelaySyncManager {
     }
 
     /// Add a member to a server room (owner only)
-    pub async fn add_room_member(&self, room_code: &str, github_login: &str) -> Result<(), String> {
-        let body = serde_json::json!({"github_login": github_login});
+    pub async fn add_room_member(&self, room_code: &str, username: &str, provider: Option<&str>) -> Result<(), String> {
+        let provider = provider.unwrap_or("github");
+        let body = serde_json::json!({"username": username, "provider": provider, "github_login": username});
         let _: serde_json::Value = self.relay_api(
             reqwest::Method::POST,
             &format!("/api/rooms/{}/members", room_code),
@@ -1717,10 +1799,10 @@ impl RelaySyncManager {
     }
 
     /// Remove a member from a server room (owner only)
-    pub async fn remove_room_member(&self, room_code: &str, github_login: &str) -> Result<(), String> {
+    pub async fn remove_room_member(&self, room_code: &str, user_id: &str) -> Result<(), String> {
         let _: serde_json::Value = self.relay_api(
             reqwest::Method::DELETE,
-            &format!("/api/rooms/{}/members/{}", room_code, github_login),
+            &format!("/api/rooms/{}/members/{}", room_code, urlencoding::encode(user_id)),
             None,
         ).await?;
         Ok(())

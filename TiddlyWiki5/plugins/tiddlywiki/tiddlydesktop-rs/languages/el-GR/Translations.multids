@@ -113,6 +113,12 @@ RelaySync/NoRoom: Κανένα
 RelaySync/Save: Αποθήκευση
 RelaySync/Cancel: Ακύρωση
 RelaySync/RoomDetails: Λεπτομέρειες
+RelaySync/Account: Λογαριασμός
+RelaySync/SignIn: Σύνδεση
+RelaySync/SignOut: Αποσύνδεση
+RelaySync/SignInHint: Συνδεθείτε για πρόσβαση στον διακομιστή αναμετάδοσης και διαχείριση δωματίων.
+RelaySync/SigningIn: Σύνδεση σε εξέλιξη...
+RelaySync/ChooseProvider: Επιλέξτε μέθοδο σύνδεσης
 RelaySync/GitHub: GitHub
 RelaySync/SignedInAs: Συνδεδεμένος ως
 RelaySync/Logout: Αποσύνδεση

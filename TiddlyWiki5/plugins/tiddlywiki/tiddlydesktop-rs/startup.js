@@ -29,6 +29,7 @@ exports.startup = function(callback) {
 	// Detect if running on Android
 	var isAndroid = /android/i.test(navigator.userAgent);
 
+
 	// Convert Android SAF content:// URIs to human-readable paths for display.
 	// Handles both plain URIs and JSON-wrapped URIs ({"uri":"content://..."}).
 	// On desktop, returns the path unchanged.
@@ -1929,6 +1930,16 @@ exports.startup = function(callback) {
 		}
 	});
 
+	// Set device display name
+	$tw.rootWidget.addEventListener("tm-tiddlydesktop-rs-set-display-name", function(event) {
+		var name = event.paramObject && event.paramObject.name || "";
+		invoke("lan_sync_set_display_name", { name: name }).then(function() {
+			refreshSyncStatus();
+		}).catch(function(err) {
+			console.error("Failed to set display name:", err);
+		});
+	});
+
 	// Prepare add room form with auto-generated credentials
 	$tw.rootWidget.addEventListener("tm-tiddlydesktop-rs-relay-prepare-add-room", function(event) {
 		invoke("relay_sync_generate_credentials").then(function(creds) {
@@ -1981,8 +1992,8 @@ exports.startup = function(callback) {
 	function _doRefreshSyncStatus() {
 		invoke("lan_sync_get_status").then(function(status) {
 			$tw.wiki.setText("$:/temp/tiddlydesktop-rs/lan-sync-running", "text", null, status.running ? "yes" : "no");
-			var displayName = status.device_name + (status.device_id ? " (" + status.device_id + ")" : "");
-			$tw.wiki.setText("$:/temp/tiddlydesktop-rs/lan-sync-device-name", "text", null, displayName);
+			$tw.wiki.setText("$:/temp/tiddlydesktop-rs/lan-sync-device-name", "text", null, status.device_name);
+			$tw.wiki.setText("$:/temp/tiddlydesktop-rs/lan-sync-device-id", "text", null, status.device_id);
 
 			// Fetch relay status to update rooms and determine any-sync-running
 			invoke("relay_sync_get_status").then(function(relayStatus) {
@@ -2160,6 +2171,13 @@ exports.startup = function(callback) {
 
 	// Initial status check
 	refreshSyncStatus();
+
+	// Pre-populate display name input from saved setting
+	invoke("lan_sync_get_display_name_setting").then(function(name) {
+		if (name) {
+			$tw.wiki.setText("$:/temp/tiddlydesktop-rs/device-display-name-input", "text", null, name);
+		}
+	}).catch(function() {});
 
 	callback();
 };

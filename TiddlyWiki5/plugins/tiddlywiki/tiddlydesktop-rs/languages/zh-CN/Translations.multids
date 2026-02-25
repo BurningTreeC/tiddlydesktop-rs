@@ -94,6 +94,8 @@ Labels/Both: 局域网 + 中继
 Tooltips/RelayAutoConnectOn: 中继自动连接已启用 - 点击禁用
 Tooltips/RelayAutoConnectOff: 中继自动连接已禁用 - 点击启用
 LanSync/NoUnsyncedWikis: 没有未同步的Wiki
+LanSync/SaveDeviceName: 保存设备名称
+LanSync/DeviceId: 设备 ID:
 
 RelaySync/ServerUrl: 服务器 URL:
 RelaySync/SaveUrl: 保存 URL

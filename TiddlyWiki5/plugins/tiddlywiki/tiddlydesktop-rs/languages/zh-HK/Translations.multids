@@ -94,6 +94,8 @@ Labels/Both: 區域網路 + 中繼
 Tooltips/RelayAutoConnectOn: 中繼自動連線已啟用 - 點擊停用
 Tooltips/RelayAutoConnectOff: 中繼自動連線已停用 - 點擊啟用
 LanSync/NoUnsyncedWikis: 沒有未同步的Wiki
+LanSync/SaveDeviceName: 儲存裝置名稱
+LanSync/DeviceId: 裝置 ID:
 
 RelaySync/ServerUrl: 伺服器 URL:
 RelaySync/SaveUrl: 儲存 URL

@@ -567,7 +567,17 @@ title: $:/plugins/tiddlywiki/tiddlydesktop-rs/WikiList
 <div class="td-sync-section">
 <div class="td-sync-info-row">
 <span class="td-sync-label"><<td-lingo LanSync/DeviceName>></span>
-<span class="td-sync-value"><$text text={{$:/temp/tiddlydesktop-rs/lan-sync-device-name}}/></span>
+<div class="td-relay-server-input">
+<$edit-text tiddler="$:/temp/tiddlydesktop-rs/device-display-name-input" tag="input" placeholder={{$:/temp/tiddlydesktop-rs/lan-sync-device-name}} class="td-relay-url-input"/>
+<$button class="tc-btn-invisible td-button td-button-small" tooltip=<<td-lingo LanSync/SaveDeviceName>>>
+<$action-sendmessage $message="tm-tiddlydesktop-rs-set-display-name" name={{$:/temp/tiddlydesktop-rs/device-display-name-input}}/>
+{{$:/core/images/done-button}}
+</$button>
+</div>
+</div>
+<div class="td-sync-info-row">
+<span class="td-sync-label"><<td-lingo LanSync/DeviceId>></span>
+<span class="td-sync-value td-sync-fingerprint"><$text text={{$:/temp/tiddlydesktop-rs/lan-sync-device-id}}/></span>
 </div>
 </div>
 

@@ -94,6 +94,8 @@ Labels/Both: LAN + रिले
 Tooltips/RelayAutoConnectOn: रिले स्वतः-कनेक्ट सक्षम - अक्षम करने के लिए क्लिक करें
 Tooltips/RelayAutoConnectOff: रिले स्वतः-कनेक्ट अक्षम - सक्षम करने के लिए क्लिक करें
 LanSync/NoUnsyncedWikis: कोई असिंक्रोनाइज़्ड विकी उपलब्ध नहीं
+LanSync/SaveDeviceName: डिवाइस का नाम सहेजें
+LanSync/DeviceId: डिवाइस ID:
 
 RelaySync/ServerUrl: सर्वर URL:
 RelaySync/SaveUrl: URL सहेजें

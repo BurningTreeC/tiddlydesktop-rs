@@ -5,24 +5,42 @@
 
 use rand::Rng;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::path::PathBuf;
+use std::sync::RwLock;
+
+/// Hash a device name (hostname / Build.MODEL) so raw hostnames never leave
+/// this module. Uses SHA-256 with domain separation, returns first 12 hex chars.
+fn hash_device_name(raw: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(b"device_name:");
+    hasher.update(raw.as_bytes());
+    let result = hasher.finalize();
+    result[..6]
+        .iter()
+        .map(|b| format!("{:02x}", b))
+        .collect()
+}
 
 /// Device identity manager — provides device_id and device_name for sync.
 pub struct PairingManager {
     /// This device's unique ID
     device_id: String,
-    /// This device's display name
-    device_name: String,
-    /// Path to data directory (for future use)
-    _data_dir: PathBuf,
+    /// This device's hashed hostname (fallback when no display_name is set)
+    hashed_hostname: String,
+    /// User-chosen display name (overrides hashed_hostname when set)
+    display_name: RwLock<Option<String>>,
+    /// Path to data directory (for persisting display_name)
+    data_dir: PathBuf,
 }
 
 impl PairingManager {
-    pub fn new(device_id: String, device_name: String, data_dir: PathBuf) -> Self {
+    pub fn new(device_id: String, hashed_hostname: String, display_name: Option<String>, data_dir: PathBuf) -> Self {
         Self {
             device_id,
-            device_name,
-            _data_dir: data_dir,
+            hashed_hostname,
+            display_name: RwLock::new(display_name),
+            data_dir,
         }
     }
 
@@ -31,9 +49,42 @@ impl PairingManager {
         &self.device_id
     }
 
-    /// Get this device's display name
-    pub fn device_name(&self) -> &str {
-        &self.device_name
+    /// Get this device's display name: custom name if set, else hashed hostname.
+    pub fn device_name(&self) -> String {
+        let guard = self.display_name.read().unwrap();
+        if let Some(ref name) = *guard {
+            if !name.is_empty() {
+                return name.clone();
+            }
+        }
+        self.hashed_hostname.clone()
+    }
+
+    /// Set a custom display name. Pass None or empty to revert to hashed hostname.
+    /// Persists the change to device_identity.json.
+    pub fn set_display_name(&self, name: Option<String>) {
+        let clean = name.and_then(|n| {
+            let trimmed = n.trim().to_string();
+            if trimmed.is_empty() { None } else { Some(trimmed) }
+        });
+        *self.display_name.write().unwrap() = clean.clone();
+
+        // Persist to disk
+        let path = self.data_dir.join("device_identity.json");
+        if let Ok(content) = std::fs::read_to_string(&path) {
+            if let Ok(mut identity) = serde_json::from_str::<DeviceIdentity>(&content) {
+                identity.display_name = clean;
+                if let Ok(json) = serde_json::to_string_pretty(&identity) {
+                    let _ = std::fs::write(&path, json);
+                }
+            }
+        }
+    }
+
+    /// Get the current custom display name setting (for pre-populating the UI input).
+    /// Returns None if no custom name is set (user sees hashed hostname).
+    pub fn get_display_name_setting(&self) -> Option<String> {
+        self.display_name.read().unwrap().clone()
     }
 }
 
@@ -56,6 +107,8 @@ pub fn generate_random_id() -> String {
 pub struct DeviceIdentity {
     pub device_id: String,
     pub device_name: String,
+    #[serde(default)]
+    pub display_name: Option<String>,
 }
 
 // ── Stable device ID (MAC address on desktop, ANDROID_ID on Android) ────
@@ -209,6 +262,20 @@ fn get_stable_device_id() -> Option<String> {
     }
 }
 
+/// Hash a raw hardware identifier (MAC address, ANDROID_ID) with SHA-256 so the
+/// raw value never leaves this module. Returns the first 16 hex chars (64 bits)
+/// which is enough for unique device identification without exposing the original.
+fn hash_hardware_id(raw: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(raw.as_bytes());
+    let result = hasher.finalize();
+    // First 8 bytes → 16 hex chars
+    result[..8]
+        .iter()
+        .map(|b| format!("{:02x}", b))
+        .collect()
+}
+
 // ── Device name ─────────────────────────────────────────────────────────
 
 /// Get the device name for this platform
@@ -260,16 +327,29 @@ fn get_android_device_name() -> Option<String> {
 /// Uses a stable hardware ID (MAC address on desktop, ANDROID_ID on Android)
 /// so the device_id survives app data clears and reinstalls. Falls back to
 /// a persisted random UUID only if no stable ID is available.
+///
+/// The device_name field is always the hashed hostname (never the raw hostname).
+/// The display_name field is preserved from disk if it exists.
 pub fn load_or_create_device_identity(data_dir: &std::path::Path) -> DeviceIdentity {
     let path = data_dir.join("device_identity.json");
     let stable_id = get_stable_device_id();
-    let device_name = get_device_name();
+    let raw_name = get_device_name();
+    let hashed_name = hash_device_name(&raw_name);
 
-    // If we have a stable hardware ID, always use it (even if file says something different)
+    // Try to load existing display_name from disk
+    let existing_display_name = std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|content| serde_json::from_str::<DeviceIdentity>(&content).ok())
+        .and_then(|id| id.display_name);
+
+    // If we have a stable hardware ID, hash it so the raw MAC/ANDROID_ID
+    // never leaves this module, then use the hash as the device_id.
     if let Some(ref stable) = stable_id {
+        let hashed = hash_hardware_id(stable);
         let identity = DeviceIdentity {
-            device_id: stable.clone(),
-            device_name: device_name.clone(),
+            device_id: hashed.clone(),
+            device_name: hashed_name.clone(),
+            display_name: existing_display_name,
         };
         // Save/update on disk
         if let Some(parent) = path.parent() {
@@ -278,14 +358,14 @@ pub fn load_or_create_device_identity(data_dir: &std::path::Path) -> DeviceIdent
         if let Ok(json) = serde_json::to_string_pretty(&identity) {
             let _ = std::fs::write(&path, json);
         }
-        eprintln!("[LAN Sync] Device ID (stable): {}", stable);
+        eprintln!("[LAN Sync] Device ID (stable, hashed): {}", hashed);
         return identity;
     }
 
     // No stable ID available — fall back to persisted random UUID
     if let Ok(content) = std::fs::read_to_string(&path) {
         if let Ok(mut identity) = serde_json::from_str::<DeviceIdentity>(&content) {
-            identity.device_name = device_name;
+            identity.device_name = hashed_name;
             if let Ok(json) = serde_json::to_string_pretty(&identity) {
                 let _ = std::fs::write(&path, json);
             }
@@ -297,7 +377,8 @@ pub fn load_or_create_device_identity(data_dir: &std::path::Path) -> DeviceIdent
     // Create new random identity as last resort
     let identity = DeviceIdentity {
         device_id: generate_random_id(),
-        device_name,
+        device_name: hashed_name,
+        display_name: None,
     };
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);

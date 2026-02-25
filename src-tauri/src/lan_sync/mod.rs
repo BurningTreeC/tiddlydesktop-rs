@@ -240,6 +240,7 @@ impl SyncManager {
         let pairing_manager = Arc::new(PairingManager::new(
             identity.device_id.clone(),
             identity.device_name.clone(),
+            identity.display_name.clone(),
             data_dir.to_path_buf(),
         ));
 
@@ -562,9 +563,10 @@ impl SyncManager {
 
         // Start UDP broadcast discovery (non-fatal — sync works without it, just no auto-discovery)
         let (discovery_tx, mut discovery_rx) = mpsc::unbounded_channel();
+        let our_name_for_discovery = self.pairing_manager.device_name();
         match DiscoveryManager::new(
             self.pairing_manager.device_id(),
-            self.pairing_manager.device_name(),
+            &our_name_for_discovery,
             port,
             discovery_tx,
             self.connected_peer_ids.clone(),
@@ -6906,6 +6908,20 @@ pub async fn relay_sync_generate_credentials() -> Result<serde_json::Value, Stri
     }))
 }
 
+#[tauri::command]
+pub async fn lan_sync_set_display_name(name: String) -> Result<(), String> {
+    let mgr = get_sync_manager().ok_or("Sync not initialized")?;
+    let clean = name.trim().to_string();
+    let val = if clean.is_empty() { None } else { Some(clean) };
+    mgr.pairing_manager.set_display_name(val);
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn lan_sync_get_display_name_setting() -> Result<Option<String>, String> {
+    let mgr = get_sync_manager().ok_or("Sync not initialized")?;
+    Ok(mgr.pairing_manager.get_display_name_setting())
+}
 
 /// A tiddler in a full sync batch from JS
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]

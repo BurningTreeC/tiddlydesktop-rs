@@ -94,6 +94,8 @@ Labels/Both: LAN + Relay
 Tooltips/RelayAutoConnectOn: Relay samodejno povezovanje omogočeno - klikni za onemogočenje
 Tooltips/RelayAutoConnectOff: Relay samodejno povezovanje onemogočeno - klikni za omogočenje
 LanSync/NoUnsyncedWikis: Ni nesinhroniziranih wikijev na voljo
+LanSync/SaveDeviceName: Shrani ime naprave
+LanSync/DeviceId: ID naprave:
 
 RelaySync/ServerUrl: URL strežnika:
 RelaySync/SaveUrl: Shrani URL

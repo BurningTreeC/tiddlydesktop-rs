@@ -6343,7 +6343,7 @@ async fn check_for_updates() -> Result<UpdateCheckResult, String> {
 
 /// Android version - separate from desktop versioning (must match build.gradle.kts versionName)
 #[cfg(target_os = "android")]
-const ANDROID_VERSION: &str = "0.0.49";
+const ANDROID_VERSION: &str = "0.0.50";
 
 /// Check for updates on Android via version file on GitHub, linking to Play Store
 #[cfg(target_os = "android")]
@@ -8425,6 +8425,8 @@ fn run_wiki_mode(args: WikiModeArgs) {
             lan_sync::lan_sync_collab_awareness,
             lan_sync::lan_sync_get_remote_editors,
             lan_sync::lan_sync_get_collab_port,
+            lan_sync::lan_sync_set_display_name,
+            lan_sync::lan_sync_get_display_name_setting,
             // Relay sync commands
             lan_sync::relay_sync_get_status,
             lan_sync::relay_sync_add_room,
@@ -8875,6 +8877,8 @@ fn run_wiki_folder_mode(args: WikiFolderModeArgs) {
             lan_sync::lan_sync_collab_awareness,
             lan_sync::lan_sync_get_remote_editors,
             lan_sync::lan_sync_get_collab_port,
+            lan_sync::lan_sync_set_display_name,
+            lan_sync::lan_sync_get_display_name_setting,
             // Relay sync commands
             lan_sync::relay_sync_get_status,
             lan_sync::relay_sync_add_room,
@@ -9589,6 +9593,8 @@ pub fn run() {
             lan_sync::lan_sync_collab_awareness,
             lan_sync::lan_sync_get_remote_editors,
             lan_sync::lan_sync_get_collab_port,
+            lan_sync::lan_sync_set_display_name,
+            lan_sync::lan_sync_get_display_name_setting,
             // Relay sync commands
             lan_sync::relay_sync_get_status,
             lan_sync::relay_sync_add_room,

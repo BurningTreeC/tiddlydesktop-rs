@@ -94,6 +94,8 @@ Labels/Both: LAN + 릴레이
 Tooltips/RelayAutoConnectOn: 릴레이 자동 연결 활성화 - 클릭하여 비활성화
 Tooltips/RelayAutoConnectOff: 릴레이 자동 연결 비활성화 - 클릭하여 활성화
 LanSync/NoUnsyncedWikis: 동기화되지 않은 위키가 없습니다
+LanSync/SaveDeviceName: 기기 이름 저장
+LanSync/DeviceId: 기기 ID:
 
 RelaySync/ServerUrl: 서버 URL:
 RelaySync/SaveUrl: URL 저장

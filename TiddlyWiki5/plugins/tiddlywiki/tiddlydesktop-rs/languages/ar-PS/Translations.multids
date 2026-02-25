@@ -94,6 +94,8 @@ Labels/Both: الشبكة المحلية + الترحيل
 Tooltips/RelayAutoConnectOn: الاتصال التلقائي بالترحيل مفعّل - انقر للتعطيل
 Tooltips/RelayAutoConnectOff: الاتصال التلقائي بالترحيل معطّل - انقر للتفعيل
 LanSync/NoUnsyncedWikis: لا توجد ويكيات غير مزامنة متاحة
+LanSync/SaveDeviceName: حفظ اسم الجهاز
+LanSync/DeviceId: معرّف الجهاز:
 
 RelaySync/ServerUrl: عنوان URL للخادم:
 RelaySync/SaveUrl: حفظ عنوان URL

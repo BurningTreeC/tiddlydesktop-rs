@@ -94,6 +94,8 @@ Labels/Both: LAN + リレー
 Tooltips/RelayAutoConnectOn: リレー自動接続有効 - クリックで無効化
 Tooltips/RelayAutoConnectOff: リレー自動接続無効 - クリックで有効化
 LanSync/NoUnsyncedWikis: 未同期のWikiはありません
+LanSync/SaveDeviceName: デバイス名を保存
+LanSync/DeviceId: デバイスID:
 
 RelaySync/ServerUrl: サーバーURL:
 RelaySync/SaveUrl: URL を保存

@@ -94,6 +94,8 @@ Labels/Both: רשת מקומית + ממסר
 Tooltips/RelayAutoConnectOn: חיבור אוטומטי ממסר מופעל - לחץ לכיבוי
 Tooltips/RelayAutoConnectOff: חיבור אוטומטי ממסר כבוי - לחץ להפעלה
 LanSync/NoUnsyncedWikis: אין ויקי לא מסונכרנים זמינים
+LanSync/SaveDeviceName: שמור שם מכשיר
+LanSync/DeviceId: מזהה מכשיר:
 
 RelaySync/ServerUrl: כתובת שרת:
 RelaySync/SaveUrl: שמור כתובת

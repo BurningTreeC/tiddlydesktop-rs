@@ -94,6 +94,8 @@ Labels/Both: LAN + Relay
 Tooltips/RelayAutoConnectOn: Relay auto-connect enabled - click to disable
 Tooltips/RelayAutoConnectOff: Relay auto-connect disabled - click to enable
 LanSync/NoUnsyncedWikis: No unsynced wikis available
+LanSync/SaveDeviceName: Save device name
+LanSync/DeviceId: Device ID:
 
 RelaySync/ServerUrl: Server URL:
 RelaySync/SaveUrl: Save URL

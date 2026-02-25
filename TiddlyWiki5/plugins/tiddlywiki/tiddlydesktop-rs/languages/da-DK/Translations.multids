@@ -94,6 +94,8 @@ Labels/Both: LAN + Relay
 Tooltips/RelayAutoConnectOn: Relay auto-tilslutning aktiveret - klik for at deaktivere
 Tooltips/RelayAutoConnectOff: Relay auto-tilslutning deaktiveret - klik for at aktivere
 LanSync/NoUnsyncedWikis: Ingen ikke-synkroniserede wikier tilgængelige
+LanSync/SaveDeviceName: Gem enhedsnavn
+LanSync/DeviceId: Enheds-ID:
 
 RelaySync/ServerUrl: Server-URL:
 RelaySync/SaveUrl: Gem URL

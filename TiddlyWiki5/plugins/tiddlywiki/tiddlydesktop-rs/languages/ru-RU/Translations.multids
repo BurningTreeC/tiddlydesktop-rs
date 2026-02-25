@@ -94,6 +94,8 @@ Labels/Both: LAN + Relay
 Tooltips/RelayAutoConnectOn: Автоподключение Relay включено - нажмите для отключения
 Tooltips/RelayAutoConnectOff: Автоподключение Relay отключено - нажмите для включения
 LanSync/NoUnsyncedWikis: Нет несинхронизированных вики
+LanSync/SaveDeviceName: Сохранить имя устройства
+LanSync/DeviceId: ID устройства:
 
 RelaySync/ServerUrl: URL сервера:
 RelaySync/SaveUrl: Сохранить URL

@@ -94,6 +94,8 @@ Labels/Both: شبکه محلی + رله
 Tooltips/RelayAutoConnectOn: اتصال خودکار رله فعال - برای غیرفعال کردن کلیک کنید
 Tooltips/RelayAutoConnectOff: اتصال خودکار رله غیرفعال - برای فعال کردن کلیک کنید
 LanSync/NoUnsyncedWikis: هیچ ویکی همگام‌نشده‌ای موجود نیست
+LanSync/SaveDeviceName: ذخیره نام دستگاه
+LanSync/DeviceId: شناسه دستگاه:
 
 RelaySync/ServerUrl: آدرس سرور:
 RelaySync/SaveUrl: ذخیره آدرس

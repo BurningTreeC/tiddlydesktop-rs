@@ -94,6 +94,8 @@ Labels/Both: LAN + Relay
 Tooltips/RelayAutoConnectOn: Relay automatisk anslutning aktiverad - klicka för att inaktivera
 Tooltips/RelayAutoConnectOff: Relay automatisk anslutning inaktiverad - klicka för att aktivera
 LanSync/NoUnsyncedWikis: Inga osynkroniserade wikis tillgängliga
+LanSync/SaveDeviceName: Spara enhetsnamn
+LanSync/DeviceId: Enhets-ID:
 
 RelaySync/ServerUrl: Server-URL:
 RelaySync/SaveUrl: Spara URL

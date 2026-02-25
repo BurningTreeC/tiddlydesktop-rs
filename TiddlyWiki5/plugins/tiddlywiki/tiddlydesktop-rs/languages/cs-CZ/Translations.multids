@@ -94,6 +94,8 @@ Labels/Both: LAN + Relay
 Tooltips/RelayAutoConnectOn: Automatické připojení Relay povoleno - klikněte pro zakázání
 Tooltips/RelayAutoConnectOff: Automatické připojení Relay zakázáno - klikněte pro povolení
 LanSync/NoUnsyncedWikis: Žádné nesynchronizované wiki nejsou k dispozici
+LanSync/SaveDeviceName: Uložit název zařízení
+LanSync/DeviceId: ID zařízení:
 
 RelaySync/ServerUrl: URL serveru:
 RelaySync/SaveUrl: Uložit URL

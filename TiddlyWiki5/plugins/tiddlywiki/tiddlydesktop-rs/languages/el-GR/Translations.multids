@@ -94,6 +94,8 @@ Labels/Both: LAN + Relay
 Tooltips/RelayAutoConnectOn: Αυτόματη σύνδεση Relay ενεργοποιημένη - κάντε κλικ για απενεργοποίηση
 Tooltips/RelayAutoConnectOff: Αυτόματη σύνδεση Relay απενεργοποιημένη - κάντε κλικ για ενεργοποίηση
 LanSync/NoUnsyncedWikis: Δεν υπάρχουν μη συγχρονισμένα wiki
+LanSync/SaveDeviceName: Αποθήκευση ονόματος συσκευής
+LanSync/DeviceId: ID συσκευής:
 
 RelaySync/ServerUrl: URL διακομιστή:
 RelaySync/SaveUrl: Αποθήκευση URL

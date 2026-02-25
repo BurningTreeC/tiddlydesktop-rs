@@ -94,6 +94,8 @@ Labels/Both: LAN + ਰੀਲੇ
 Tooltips/RelayAutoConnectOn: ਰੀਲੇ ਆਟੋ-ਕਨੈਕਟ ਸਮਰੱਥ - ਅਯੋਗ ਕਰਨ ਲਈ ਕਲਿੱਕ ਕਰੋ
 Tooltips/RelayAutoConnectOff: ਰੀਲੇ ਆਟੋ-ਕਨੈਕਟ ਅਯੋਗ - ਸਮਰੱਥ ਕਰਨ ਲਈ ਕਲਿੱਕ ਕਰੋ
 LanSync/NoUnsyncedWikis: ਕੋਈ ਅਣ-ਸਿੰਕ ਵਿਕੀ ਉਪਲਬਧ ਨਹੀਂ
+LanSync/SaveDeviceName: ਡਿਵਾਈਸ ਨਾਮ ਸੰਭਾਲੋ
+LanSync/DeviceId: ਡਿਵਾਈਸ ID:
 
 RelaySync/ServerUrl: ਸਰਵਰ URL:
 RelaySync/SaveUrl: URL ਸੰਭਾਲੋ

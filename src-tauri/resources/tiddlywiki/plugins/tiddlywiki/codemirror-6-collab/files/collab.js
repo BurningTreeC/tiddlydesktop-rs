@@ -681,12 +681,14 @@ function _buildRemoteSelectionsPlugin(core, collabState, fieldState) {
 				}
 			});
 			if(otherFieldItems.length > 0) {
+				// Use line decoration on line 1 to show the indicator bar.
+				// CM6 ViewPlugins cannot provide block widget decorations,
+				// but line decorations with a DOM wrapper work fine.
 				decorations.push({
 					from: 0,
 					to: 0,
 					value: Decoration.widget({
 						side: -1,
-						block: true,
 						widget: new OtherFieldIndicator(otherFieldItems)
 					})
 				});

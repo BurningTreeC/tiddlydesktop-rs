@@ -10,7 +10,7 @@
 
 /// GitHub OAuth App client ID (public — safe to embed in client code).
 /// This must be filled in after creating the OAuth App at https://github.com/settings/developers
-pub const GITHUB_CLIENT_ID: &str = ""; // TODO: fill in after creating GitHub OAuth App
+pub const GITHUB_CLIENT_ID: &str = "Ov23lik6vmfOgknQ13hg";
 
 const GITHUB_AUTH_URL: &str = "https://github.com/login/oauth/authorize";
 

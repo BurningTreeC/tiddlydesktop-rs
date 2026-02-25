@@ -1500,6 +1500,11 @@ impl RelaySyncManager {
             .get_mut(room_code)
             .ok_or_else(|| format!("Room {} not connected", room_code))?;
 
+        // No other peers in the room — skip encryption and send
+        if room.member_names.is_empty() {
+            return Ok(());
+        }
+
         let my_device_id = self.pairing_manager.device_id().to_string();
         let encrypted = encrypt_message(&mut room.encrypt_cipher, msg)?;
         send_maybe_chunked(&room.sender, &my_device_id, None, encrypted).await

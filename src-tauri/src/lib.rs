@@ -6343,7 +6343,7 @@ async fn check_for_updates() -> Result<UpdateCheckResult, String> {
 
 /// Android version - separate from desktop versioning (must match build.gradle.kts versionName)
 #[cfg(target_os = "android")]
-const ANDROID_VERSION: &str = "0.0.52";
+const ANDROID_VERSION: &str = "0.0.53";
 
 /// Check for updates on Android via version file on GitHub, linking to Play Store
 #[cfg(target_os = "android")]
@@ -9291,9 +9291,11 @@ pub fn run() {
 
                 // Start background event loop and auto-connect relay rooms
                 // (independent of LAN sync — relay rooms can run without LAN sync)
-                tauri::async_runtime::spawn(async {
+                // Passes app handle so configs can be persisted before sync starts.
+                let app_for_sync = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
                     if let Some(mgr) = lan_sync::get_sync_manager() {
-                        mgr.start_background().await;
+                        mgr.start_background(Some(app_for_sync)).await;
                     }
                 });
 

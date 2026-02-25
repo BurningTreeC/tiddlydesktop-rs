@@ -463,7 +463,9 @@ impl SyncManager {
 
     /// Start the background event loop and auto-connect relay rooms.
     /// Called once at init time — does NOT start LAN sync server/discovery.
-    pub async fn start_background(&self) {
+    /// Persists in-memory config to disk before starting sync to ensure
+    /// on-disk state is authoritative (guards against stale config after crash).
+    pub async fn start_background(&self, app: Option<tauri::AppHandle>) {
         // Start the event processing loop (only once — takes ownership of receivers)
         let event_rx = self.event_rx.lock().await.take();
         let wiki_rx = self.wiki_rx.lock().await.take();
@@ -498,6 +500,46 @@ impl SyncManager {
                     }
                 }
             }
+        }
+
+        // Persist in-memory state to disk before starting sync.
+        // This ensures the JSON config files are the source of truth — if the app
+        // crashed after a UI change but before the file was written, re-saving now
+        // makes the persisted state match what was loaded into memory.
+        let config_persisted = if let Some(relay) = &self.relay_manager {
+            match relay.persist_and_verify_config().await {
+                Ok(()) => {
+                    eprintln!("[LAN Sync] Relay config persisted to disk — OK");
+                    true
+                }
+                Err(e) => {
+                    eprintln!("[LAN Sync] FATAL: Failed to persist relay config — sync will NOT start: {}", e);
+                    false
+                }
+            }
+        } else {
+            true // No relay manager = nothing to persist
+        };
+
+        let wikis_persisted = if let Some(ref app) = app {
+            let entries = crate::wiki_storage::load_recent_files_from_disk(app);
+            match crate::wiki_storage::save_recent_files_to_disk(app, &entries) {
+                Ok(()) => {
+                    eprintln!("[LAN Sync] Wiki list persisted to disk — OK ({} entries)", entries.len());
+                    true
+                }
+                Err(e) => {
+                    eprintln!("[LAN Sync] FATAL: Failed to persist wiki list — sync will NOT start: {}", e);
+                    false
+                }
+            }
+        } else {
+            true // No app handle provided = skip wiki list persistence
+        };
+
+        if !config_persisted || !wikis_persisted {
+            eprintln!("[LAN Sync] Aborting sync startup — config persistence failed");
+            return;
         }
 
         // Auto-connect relay rooms

@@ -238,7 +238,8 @@ fn decrypt_password(device_key: &[u8; 32], encrypted: &str) -> Option<String> {
 
 /// Save config to disk, encrypting all passwords before writing.
 /// This is a sync function so it can be called from the constructor.
-fn save_config_sync(config_path: &std::path::Path, device_key: &[u8; 32], config: &RelayConfig) {
+/// Returns an error if serialization or writing fails.
+fn save_config_sync(config_path: &std::path::Path, device_key: &[u8; 32], config: &RelayConfig) -> Result<(), String> {
     // Clone config, encrypt passwords for serialization
     let mut disk_config = config.clone();
     for room in &mut disk_config.rooms {
@@ -247,9 +248,10 @@ fn save_config_sync(config_path: &std::path::Path, device_key: &[u8; 32], config
         }
         // password has skip_serializing so it won't appear in output
     }
-    if let Ok(json) = serde_json::to_string_pretty(&disk_config) {
-        let _ = std::fs::write(config_path, json);
-    }
+    let json = serde_json::to_string_pretty(&disk_config)
+        .map_err(|e| format!("Failed to serialize relay config: {}", e))?;
+    std::fs::write(config_path, json)
+        .map_err(|e| format!("Failed to write relay config to {}: {}", config_path.display(), e))
 }
 
 /// Normalize a relay URL: ensure it has a `wss://` scheme and `:8443` port.
@@ -459,7 +461,9 @@ impl RelaySyncManager {
             let config_path = mgr.config_path.clone();
             let device_key = mgr.device_key;
             let config = mgr.config.blocking_read().clone();
-            save_config_sync(&config_path, &device_key, &config);
+            if let Err(e) = save_config_sync(&config_path, &device_key, &config) {
+                eprintln!("[Relay] Warning: Failed to save migrated config: {}", e);
+            }
         }
 
         mgr
@@ -468,7 +472,16 @@ impl RelaySyncManager {
     /// Save config to disk (passwords are encrypted before writing)
     async fn save_config(&self) {
         let config = self.config.read().await.clone();
-        save_config_sync(&self.config_path, &self.device_key, &config);
+        if let Err(e) = save_config_sync(&self.config_path, &self.device_key, &config) {
+            eprintln!("[Relay] Failed to save config: {}", e);
+        }
+    }
+
+    /// Persist current config to disk and verify the write succeeded.
+    /// Used at startup to ensure on-disk state matches in-memory state before sync begins.
+    pub async fn persist_and_verify_config(&self) -> Result<(), String> {
+        let config = self.config.read().await.clone();
+        save_config_sync(&self.config_path, &self.device_key, &config)
     }
 
     // ── Key derivation for shared rooms ──────────────────────────────

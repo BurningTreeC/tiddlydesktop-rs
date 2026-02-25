@@ -543,7 +543,7 @@ function _buildRemoteSelectionsPlugin(core, collabState, fieldState) {
 						break;
 					}
 				}
-				if(hasRemote) {
+				if(hasRemote && !view.composing) {
 					view.dispatch({ annotations: [yRemoteSelectionsAnnotation.of([])] });
 				}
 			};
@@ -577,9 +577,10 @@ function _buildRemoteSelectionsPlugin(core, collabState, fieldState) {
 							head: head
 						});
 					}
+				} else if(currentCursor != null) {
+					// Clear cursor when field loses focus so peers stop seeing it
+					awareness.setLocalStateField(cursorKey, null);
 				}
-				// Don't clear cursor on focus loss — keep it at last position so
-				// peers still see it. Cleaned up by Awareness 30s timeout on destroy.
 			}
 
 			// Build decorations for remote selections
@@ -1022,7 +1023,7 @@ function _connectTransport(engine, collab) {
 	state._onDocUpdate = onDocUpdate;
 
 	var onAwarenessUpdate = function(changes, origin) {
-		if(state.destroyed) return;
+		if(state.destroyed && origin !== "local-destroy") return;
 		// Don't echo back awareness updates that came from remote peers
 		if(origin === "remote") return;
 		try {
@@ -1558,6 +1559,12 @@ exports.plugin = {
 		// Notify peers and unregister listeners (only if transport was connected)
 		var collab = window.TiddlyDesktop && window.TiddlyDesktop.collab;
 		if(collab && state._transportConnected) {
+			// Send awareness removal to peers BEFORE unregistering the handler.
+			// Uses "local-destroy" origin to bypass the state.destroyed check.
+			try {
+				removeAwarenessStates(state.awareness, [state.doc.clientID], "local-destroy");
+			} catch(_e) {}
+
 			try {
 				collab.stopEditing(state.collabTitle);
 			} catch(_e) {}
@@ -1586,10 +1593,6 @@ exports.plugin = {
 		if(state._onAwarenessUpdate) {
 			state.awareness.off("update", state._onAwarenessUpdate);
 		}
-
-		try {
-			removeAwarenessStates(state.awareness, [state.doc.clientID], "destroy");
-		} catch(_e) {}
 
 		try {
 			state.awareness.destroy();

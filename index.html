@@ -23,6 +23,10 @@
             color: #34495e;
             margin-top: 30px;
         }
+        h3 {
+            color: #34495e;
+            margin-top: 20px;
+        }
         p, ul {
             margin-bottom: 15px;
         }
@@ -41,20 +45,20 @@
 </head>
 <body>
     <h1>Privacy Policy for TiddlyDesktop-RS</h1>
-    <p class="last-updated">Last updated: February 6, 2026</p>
+    <p class="last-updated">Last updated: February 25, 2026</p>
 
     <h2>Introduction</h2>
     <p>TiddlyDesktop-RS ("we", "our", or "the app") is an open-source application for viewing and editing TiddlyWiki files. We are committed to protecting your privacy. This Privacy Policy explains how we handle your data.</p>
 
     <h2>Data Collection</h2>
-    <p><strong>We do not collect any personal data.</strong></p>
-    <p>TiddlyDesktop-RS is designed to work entirely offline and locally on your device. The app:</p>
+    <p><strong>We do not collect any personal data. No data is ever transmitted to any server unless you explicitly opt in to the optional sync features described below.</strong></p>
+    <p>TiddlyDesktop-RS is designed to work locally on your device. The app:</p>
     <ul>
         <li>Does not collect personal information</li>
         <li>Does not track your usage</li>
         <li>Does not use analytics services</li>
         <li>Does not use advertising</li>
-        <li>Does not transmit any data to external servers</li>
+        <li>Does not transmit any data to external servers unless you explicitly enable optional sync features</li>
     </ul>
 
     <h2>Local Data Storage</h2>
@@ -62,27 +66,56 @@
     <ul>
         <li><strong>Wiki Files:</strong> Your TiddlyWiki files are stored in locations you choose on your device's storage.</li>
         <li><strong>Recent Wikis List:</strong> A list of recently opened wikis is stored locally to provide quick access.</li>
-        <li><strong>Favicon Cache:</strong> Extracted favicon images from your wikis are cached locally for display in the app and home screen widget.</li>
+        <li><strong>Favicon Cache:</strong> Extracted favicon images from your wikis are cached locally for display in the app.</li>
         <li><strong>Backup Files:</strong> If backups are enabled, copies of your wiki files are stored locally.</li>
+        <li><strong>Sync Configuration:</strong> If you enable sync features, connection settings (device name, room codes, encrypted passwords, and encrypted authentication tokens) are stored locally on your device.</li>
     </ul>
-    <p>All this data remains on your device and is never transmitted elsewhere.</p>
+    <p>All locally stored data remains on your device and is never transmitted elsewhere unless you explicitly enable sync features.</p>
+
+    <h2>Optional Sync Features (Opt-In Only)</h2>
+    <p><strong>The following features are entirely optional and disabled by default. No data leaves your device unless you explicitly choose to enable them.</strong></p>
+
+    <h3>LAN Sync</h3>
+    <p>When you enable LAN Sync, the app discovers and communicates with other TiddlyDesktop-RS devices on your local network to synchronize wiki content. All communication stays within your local network and does not pass through any external servers. Wiki content is encrypted end-to-end between devices.</p>
+
+    <h3>Relay Sync</h3>
+    <p>When you enable Relay Sync, the app can synchronize wiki content between devices over the internet via a relay server. This feature requires you to log in with a GitHub account and involves the following:</p>
+    <ul>
+        <li><strong>GitHub Authentication:</strong> When you choose to log in with GitHub, the app initiates a standard OAuth authorization flow. Your GitHub username and user ID are shared with the relay server to verify your identity and manage room membership. We only request the <code>read:user</code> scope and do not access your repositories, email, or any other GitHub data beyond your public username and ID.</li>
+        <li><strong>Relay Server:</strong> The relay server (<code>relay.tiddlydesktop-rs.com</code>) facilitates message passing between your devices. Room membership data (GitHub usernames associated with rooms) is stored on the relay server.</li>
+        <li><strong>End-to-End Encryption:</strong> All wiki content transmitted through the relay server is end-to-end encrypted using a password-derived key that only you and your room members know. The relay server cannot read your wiki content.</li>
+        <li><strong>Token Storage:</strong> Your GitHub access token is stored locally on your device, encrypted at rest using a device-specific key. It is never stored in plaintext.</li>
+    </ul>
 
     <h2>Network Access</h2>
-    <p>The app requires the INTERNET permission solely to:</p>
+    <p>The app uses network access for:</p>
     <ul>
-        <li>Run a local web server for folder-based TiddlyWiki wikis (Node.js server running on localhost)</li>
-        <li>Load local wiki content in the WebView component</li>
+        <li>Running a local web server for folder-based TiddlyWiki wikis (localhost only)</li>
+        <li>Loading local wiki content in the WebView component (localhost only)</li>
+        <li>Checking for app updates (a single request to GitHub to compare version numbers)</li>
+        <li>LAN Sync device discovery and communication (local network only, opt-in)</li>
+        <li>Relay Sync communication with the relay server (internet, opt-in)</li>
+        <li>GitHub OAuth authentication (internet, opt-in)</li>
     </ul>
-    <p>No data is sent to external servers. All network activity is strictly local (localhost).</p>
 
     <h2>Third-Party Services</h2>
-    <p>TiddlyDesktop-RS does not integrate with any third-party services, analytics platforms, or advertising networks.</p>
+    <p>TiddlyDesktop-RS does not use any analytics platforms or advertising networks. The following third-party services are used only when you explicitly opt in:</p>
+    <ul>
+        <li><strong>GitHub OAuth:</strong> Used for authentication with the relay server. Subject to <a href="https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement" target="_blank" rel="noopener">GitHub's Privacy Statement</a>.</li>
+        <li><strong>Relay Server:</strong> Operated by the TiddlyDesktop-RS project. Stores room membership data only. Cannot access your wiki content (end-to-end encrypted).</li>
+    </ul>
+
+    <h2>Data Retention</h2>
+    <ul>
+        <li><strong>Local data:</strong> Stored until you delete it or uninstall the app.</li>
+        <li><strong>Relay server data:</strong> Room membership records are stored until a room owner deletes the room. GitHub authentication tokens are cached on the relay server for up to 5 minutes for validation purposes.</li>
+    </ul>
 
     <h2>Children's Privacy</h2>
-    <p>Our app does not collect any personal information from anyone, including children under the age of 13.</p>
+    <p>Our app does not knowingly collect any personal information from anyone, including children under the age of 13.</p>
 
     <h2>Open Source</h2>
-    <p>TiddlyDesktop-RS is open-source software. You can review the source code to verify our privacy practices at: <a href="https://github.com/BurningTreeC/tiddlydesktop-rs" target="_blank" rel="noopener">https://github.com/BurningTreeC/tiddlydesktop-rs</a></p>
+    <p>TiddlyDesktop-RS is open-source software. You can review the source code to verify our privacy practices at: <a href="https://github.com/BurningTreeC/TiddlyDesktopRust" target="_blank" rel="noopener">https://github.com/BurningTreeC/TiddlyDesktopRust</a></p>
 
     <h2>Changes to This Policy</h2>
     <p>We may update this Privacy Policy from time to time. Any changes will be posted on this page with an updated revision date.</p>

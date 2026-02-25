@@ -414,6 +414,34 @@ function _buildRemoteSelectionsTheme(EditorView) {
 			fontSize: ".65em",
 			lineHeight: "1",
 			borderRadius: "2px"
+		},
+		// Cross-field indicator: shows peers editing other fields
+		".cm-yOtherFieldBar": {
+			display: "flex",
+			flexWrap: "wrap",
+			gap: "4px",
+			padding: "1px 4px",
+			fontSize: ".72em",
+			lineHeight: "1.4",
+			fontFamily: "sans-serif",
+			userSelect: "none",
+			opacity: 0.85
+		},
+		".cm-yOtherFieldItem": {
+			display: "inline-flex",
+			alignItems: "center",
+			gap: "3px",
+			whiteSpace: "nowrap"
+		},
+		".cm-yOtherFieldDot": {
+			width: "6px",
+			height: "6px",
+			borderRadius: "50%",
+			display: "inline-block",
+			flexShrink: "0"
+		},
+		".cm-yOtherFieldLabel": {
+			color: "#666"
 		}
 	});
 }
@@ -457,6 +485,44 @@ function _buildRemoteSelectionsPlugin(core, collabState, fieldState) {
 		}
 
 		get estimatedHeight() { return -1; }
+
+		ignoreEvent() {
+			return true;
+		}
+	}
+
+	// Widget showing peers editing OTHER fields of the same tiddler
+	class OtherFieldIndicator extends WidgetType {
+		constructor(items) {
+			super();
+			// items: [{name, color, field}, ...]
+			this.items = items;
+			this._key = items.map(function(i) { return i.name + ":" + i.field + ":" + i.color; }).join("|");
+		}
+
+		toDOM() {
+			var bar = document.createElement("div");
+			bar.className = "cm-yOtherFieldBar";
+			for(var i = 0; i < this.items.length; i++) {
+				var item = this.items[i];
+				var span = document.createElement("span");
+				span.className = "cm-yOtherFieldItem";
+				var dot = document.createElement("span");
+				dot.className = "cm-yOtherFieldDot";
+				dot.style.backgroundColor = item.color;
+				span.appendChild(dot);
+				var label = document.createElement("span");
+				label.className = "cm-yOtherFieldLabel";
+				label.textContent = item.name + " \u2192 " + item.field;
+				span.appendChild(label);
+				bar.appendChild(span);
+			}
+			return bar;
+		}
+
+		eq(other) {
+			return other._key === this._key;
+		}
 
 		ignoreEvent() {
 			return true;
@@ -511,11 +577,9 @@ function _buildRemoteSelectionsPlugin(core, collabState, fieldState) {
 							head: head
 						});
 					}
-				} else if(currentCursor != null) {
-					// Clear cursor when editor loses focus (sel is null)
-					// so peers don't see a stale cursor position
-					awareness.setLocalStateField(cursorKey, null);
 				}
+				// Don't clear cursor on focus loss — keep it at last position so
+				// peers still see it. Cleaned up by Awareness 30s timeout on destroy.
 			}
 
 			// Build decorations for remote selections
@@ -597,6 +661,36 @@ function _buildRemoteSelectionsPlugin(core, collabState, fieldState) {
 					})
 				});
 			});
+
+			// Second pass: cross-field indicators — show peers editing OTHER fields
+			var otherFieldItems = [];
+			awareness.getStates().forEach(function(state, clientid) {
+				if(clientid === awareness.doc.clientID) return;
+				var userName = (state.user && state.user.name) || "Anonymous";
+				var color = (state.user && state.user.color) || "#30bced";
+				// Check all cursor_* keys for cursors in fields other than ours
+				var keys = Object.keys(state);
+				for(var k = 0; k < keys.length; k++) {
+					var key = keys[k];
+					if(key.indexOf("cursor_") !== 0) continue;
+					if(key === cursorKey) continue; // same field — handled above
+					var otherCursor = state[key];
+					if(otherCursor == null || otherCursor.anchor == null) continue;
+					var otherField = key.substring(7); // strip "cursor_" prefix
+					otherFieldItems.push({ name: userName, color: color, field: otherField });
+				}
+			});
+			if(otherFieldItems.length > 0) {
+				decorations.push({
+					from: 0,
+					to: 0,
+					value: Decoration.widget({
+						side: -1,
+						block: true,
+						widget: new OtherFieldIndicator(otherFieldItems)
+					})
+				});
+			}
 
 			this.decorations = Decoration.set(decorations, true);
 		}
@@ -1166,24 +1260,14 @@ function _connectTransport(engine, collab) {
 		}
 	};
 
-	// When a peer stops editing, clean up their awareness (stale cursors)
+	// When a peer stops editing, log it but let Yjs Awareness's built-in
+	// 30-second timeout handle stale peer cleanup naturally. The old code
+	// removed ALL remote awareness states when ANY peer disconnected, which
+	// caused user A to lose user B's cursor when user C disconnected.
 	state.listeners["editing-stopped"] = function(data) {
 		if(state.destroyed) return;
 		if(data.tiddler_title !== collabTitle) return;
 		_clog("[Collab] editing-stopped for " + collabTitle + " from " + (data.device_id || "?"));
-		try {
-			var states = awareness.getStates();
-			var remoteClientIds = [];
-			states.forEach(function(_s, clientId) {
-				if(clientId !== doc.clientID) {
-					remoteClientIds.push(clientId);
-				}
-			});
-			if(remoteClientIds.length > 0) {
-				_clog("[Collab] Removing " + remoteClientIds.length + " stale awareness states");
-				removeAwarenessStates(awareness, remoteClientIds, "peer-disconnected");
-			}
-		} catch(_e) {}
 	};
 
 	// When a peer saves the tiddler: update draft.of/draft.title, show banner, continue editing

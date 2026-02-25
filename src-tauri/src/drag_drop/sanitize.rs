@@ -316,6 +316,75 @@ pub fn sanitize_file_paths(paths: Vec<String>) -> Vec<String> {
         .collect()
 }
 
+/// Check if a UNC path uses an admin or system share.
+/// Admin shares give direct access to entire drives (\\server\C$) or system
+/// resources (\\server\ADMIN$), bypassing normal share permissions.
+/// Blocks: drive-letter shares (C$, D$, ...), ADMIN$, IPC$, PRINT$.
+#[cfg(target_os = "windows")]
+fn is_unc_admin_share(path_lower: &str) -> bool {
+    // UNC path format: \\server\share\...
+    if !path_lower.starts_with("\\\\") {
+        return false;
+    }
+    // Skip past \\server\ to get to the share name
+    let after_prefix = &path_lower[2..];
+    let server_end = match after_prefix.find('\\') {
+        Some(pos) => pos,
+        None => return false, // Just \\server with no share component
+    };
+    let after_server = &after_prefix[server_end + 1..];
+    // Extract share name (up to next \ or end of string)
+    let share_name = match after_server.find('\\') {
+        Some(pos) => &after_server[..pos],
+        None => after_server,
+    };
+    if share_name.is_empty() {
+        return false;
+    }
+    // Block drive-letter admin shares: a$ through z$
+    if share_name.len() == 2
+        && share_name.ends_with('$')
+        && share_name.as_bytes()[0].is_ascii_alphabetic()
+    {
+        eprintln!("[TiddlyDesktop] Security: Blocked admin drive share: {}", share_name);
+        return true;
+    }
+    // Block well-known system admin shares
+    if matches!(share_name, "admin$" | "ipc$" | "print$") {
+        eprintln!("[TiddlyDesktop] Security: Blocked system admin share: {}", share_name);
+        return true;
+    }
+    false
+}
+
+/// Verify the user has actual filesystem permissions to access a path.
+/// For existing paths, checks metadata directly.
+/// For non-existing paths (new file creation), walks up to the nearest
+/// existing ancestor directory and checks that.
+#[cfg(not(target_os = "android"))]
+fn verify_path_permissions(path: &std::path::Path) -> bool {
+    use std::io::ErrorKind;
+    let mut current = path.to_path_buf();
+    loop {
+        match std::fs::metadata(&current) {
+            Ok(_) => return true,
+            Err(e) if e.kind() == ErrorKind::NotFound => {
+                // File doesn't exist yet — walk up to parent
+                match current.parent() {
+                    Some(parent) if parent != current.as_path() && !parent.as_os_str().is_empty() => {
+                        current = parent.to_path_buf();
+                    }
+                    _ => return false, // Reached filesystem root without finding accessible ancestor
+                }
+            }
+            Err(_) => {
+                // Permission denied, network error, or other access failure
+                return false;
+            }
+        }
+    }
+}
+
 /// Check if a path is within the current user's accessible directories
 /// This is more restrictive than just blocking system directories - it only allows:
 /// 1. The current user's home directory
@@ -340,78 +409,92 @@ pub fn is_user_accessible_path(path: &std::path::Path) -> bool {
         let path_lower = path_str.to_lowercase();
         let home_lower = home_dir.to_string_lossy().to_lowercase();
 
-        // Allow: current user's home directory
-        if path_lower.starts_with(&home_lower) {
-            return true;
+        let location_allowed =
+            // Allow: current user's home directory
+            path_lower.starts_with(&home_lower)
+            // Allow: UNC paths (\\server\share\...) — network shares the user connected to.
+            // Mapped network drives (e.g. I:) resolve to UNC paths after canonicalization.
+            // But NOT admin/system shares (\\*\C$, \\*\ADMIN$, etc.)
+            || (path_lower.starts_with("\\\\") && !is_unc_admin_share(&path_lower))
+            // Allow: other drives (D:\, E:\, etc.) for external storage
+            // But not C:\Windows, C:\Program Files, etc.
+            || (path_lower.len() >= 3
+                && &path_lower[0..1] != "c"
+                && path_lower.chars().nth(1) == Some(':'))
+            // Allow: user's temp directory
+            || dirs::cache_dir()
+                .map(|d| path_lower.starts_with(&d.to_string_lossy().to_lowercase()))
+                .unwrap_or(false);
+
+        if !location_allowed {
+            return false;
         }
 
-        // Allow: other drives (D:\, E:\, etc.) for external storage
-        // But not C:\Windows, C:\Program Files, etc.
-        if path_lower.len() >= 3 {
-            let drive_letter = &path_lower[0..1];
-            if drive_letter != "c" && path_lower.chars().nth(1) == Some(':') {
-                return true;
-            }
+        // Location is in an allowed category — now verify the user has actual
+        // filesystem permissions (checks the path or nearest existing ancestor)
+        if !verify_path_permissions(path) {
+            eprintln!(
+                "[TiddlyDesktop] Security: Path in allowed location but user lacks permissions: {}",
+                path.display()
+            );
+            return false;
         }
 
-        // Allow: user's temp directory
-        if let Some(temp_dir) = dirs::cache_dir() {
-            if path_lower.starts_with(&temp_dir.to_string_lossy().to_lowercase()) {
-                return true;
-            }
-        }
-
-        false
+        true
     }
 
     #[cfg(target_os = "macos")]
     {
-        // Allow: current user's home directory
-        if path.starts_with(&home_dir) {
-            return true;
+        let location_allowed =
+            // Allow: current user's home directory
+            path.starts_with(&home_dir)
+            // Allow: /tmp and /private/tmp for temporary files
+            || path_str.starts_with("/tmp") || path_str.starts_with("/private/tmp")
+            // Allow: /Volumes for external drives and mounted volumes
+            || path_str.starts_with("/Volumes")
+            // Allow: /Applications for app resources (read-only typically)
+            || path_str.starts_with("/Applications");
+
+        if !location_allowed {
+            return false;
         }
 
-        // Allow: /tmp and /private/tmp for temporary files
-        if path_str.starts_with("/tmp") || path_str.starts_with("/private/tmp") {
-            return true;
+        if !verify_path_permissions(path) {
+            eprintln!(
+                "[TiddlyDesktop] Security: Path in allowed location but user lacks permissions: {}",
+                path.display()
+            );
+            return false;
         }
 
-        // Allow: /Volumes for external drives and mounted volumes
-        if path_str.starts_with("/Volumes") {
-            return true;
-        }
-
-        // Allow: /Applications for app resources (read-only typically)
-        if path_str.starts_with("/Applications") {
-            return true;
-        }
-
-        false
+        true
     }
 
     #[cfg(target_os = "linux")]
     {
-        // Allow: current user's home directory
-        if path.starts_with(&home_dir) {
-            return true;
+        let location_allowed =
+            // Allow: current user's home directory
+            path.starts_with(&home_dir)
+            // Allow: /tmp for temporary files
+            || path_str.starts_with("/tmp")
+            // Allow: /media and /mnt for mounted drives
+            || path_str.starts_with("/media") || path_str.starts_with("/mnt")
+            // Allow: /run/media for user-mounted drives (common on modern distros)
+            || path_str.starts_with("/run/media");
+
+        if !location_allowed {
+            return false;
         }
 
-        // Allow: /tmp for temporary files
-        if path_str.starts_with("/tmp") {
-            return true;
+        if !verify_path_permissions(path) {
+            eprintln!(
+                "[TiddlyDesktop] Security: Path in allowed location but user lacks permissions: {}",
+                path.display()
+            );
+            return false;
         }
 
-        // Allow: /media and /mnt for mounted drives
-        if path_str.starts_with("/media") || path_str.starts_with("/mnt") {
-            return true;
-        }
-
-        // Allow: /run/media for user-mounted drives (common on modern distros)
-        if path_str.starts_with("/run/media") {
-            return true;
-        }
-
-        false
+        true
     }
 
     #[cfg(target_os = "android")]

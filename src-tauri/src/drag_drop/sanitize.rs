@@ -409,22 +409,23 @@ pub fn is_user_accessible_path(path: &std::path::Path) -> bool {
         let path_lower = path_str.to_lowercase();
         let home_lower = home_dir.to_string_lossy().to_lowercase();
 
-        let location_allowed =
-            // Allow: current user's home directory
-            path_lower.starts_with(&home_lower)
+        // Block known Windows system directories on any drive
+        let is_system_path =
+            path_lower.starts_with("c:\\windows")
+            || path_lower.starts_with("c:\\program files")
+            || path_lower.starts_with("c:\\program files (x86)")
+            || path_lower.starts_with("c:\\programdata")
+            || path_lower.starts_with("c:\\system volume information")
+            || path_lower.starts_with("c:\\$recycle.bin");
+
+        let location_allowed = !is_system_path && (
+            // Allow: any local drive path (C:\data, D:\wikis, etc.)
+            (path_lower.len() >= 3 && path_lower.as_bytes()[1] == b':')
             // Allow: UNC paths (\\server\share\...) — network shares the user connected to.
             // Mapped network drives (e.g. I:) resolve to UNC paths after canonicalization.
             // But NOT admin/system shares (\\*\C$, \\*\ADMIN$, etc.)
             || (path_lower.starts_with("\\\\") && !is_unc_admin_share(&path_lower))
-            // Allow: other drives (D:\, E:\, etc.) for external storage
-            // But not C:\Windows, C:\Program Files, etc.
-            || (path_lower.len() >= 3
-                && &path_lower[0..1] != "c"
-                && path_lower.chars().nth(1) == Some(':'))
-            // Allow: user's temp directory
-            || dirs::cache_dir()
-                .map(|d| path_lower.starts_with(&d.to_string_lossy().to_lowercase()))
-                .unwrap_or(false);
+        );
 
         if !location_allowed {
             return false;

@@ -672,8 +672,26 @@ impl SyncManager {
                                     if peers.contains_key(&device_id) {
                                         // Already connected — update room codes with any newly shared rooms
                                         drop(peers);
-                                        if let Some(ref server) = *get_sync_manager().unwrap().server.read().await {
-                                            server.add_peer_room_codes(&device_id, &shared_rooms).await;
+                                        if let Some(mgr) = get_sync_manager() {
+                                            let old_codes = if let Some(ref server) = *mgr.server.read().await {
+                                                let old = server.peer_room_codes(&device_id).await;
+                                                server.add_peer_room_codes(&device_id, &shared_rooms).await;
+                                                old
+                                            } else {
+                                                vec![]
+                                            };
+                                            // If room codes changed, re-send manifests in both directions
+                                            let mut new_rooms_added = false;
+                                            for r in &shared_rooms {
+                                                if !old_codes.contains(r) {
+                                                    new_rooms_added = true;
+                                                    break;
+                                                }
+                                            }
+                                            if new_rooms_added {
+                                                eprintln!("[LAN Sync] New shared rooms discovered for {}, re-sending manifest", &device_id[..8.min(device_id.len())]);
+                                                mgr.send_wiki_manifest_to_peer(&device_id).await;
+                                            }
                                         }
                                         waiting_since.remove(&device_id);
                                         continue;
@@ -1703,9 +1721,9 @@ impl SyncManager {
                     return true;
                 }
             }
-            // Check relay room
+            // Check relay rooms
             if let Some(relay) = &self.relay_manager {
-                if relay.find_device_room(device_id).await.as_deref() == Some(room_code.as_str()) {
+                if relay.find_all_device_rooms(device_id).await.iter().any(|rc| rc == &room_code) {
                     return true;
                 }
             }
@@ -3480,7 +3498,7 @@ impl SyncManager {
                 if !lan_rooms.is_empty() {
                     lan_rooms
                 } else if let Some(relay) = &self.relay_manager {
-                    relay.find_device_room(device_id).await.into_iter().collect()
+                    relay.find_all_device_rooms(device_id).await
                 } else {
                     vec![]
                 }
@@ -3595,17 +3613,24 @@ impl SyncManager {
         }
     }
 
-    /// Handle an incoming WikiManifest from a peer
+    /// Handle an incoming WikiManifest from a peer.
+    /// Merges with existing wikis for this peer (relay sends per-room manifests
+    /// that arrive separately, so we must union rather than replace).
     async fn handle_wiki_manifest(&self, from_device_id: &str, wikis: &[protocol::WikiInfo]) {
         eprintln!(
             "[LAN Sync] Received WikiManifest from {} with {} wikis",
             from_device_id,
             wikis.len()
         );
-        self.remote_wikis
-            .write()
-            .await
-            .insert(from_device_id.to_string(), wikis.to_vec());
+        {
+            let mut remote = self.remote_wikis.write().await;
+            let entry = remote.entry(from_device_id.to_string()).or_insert_with(Vec::new);
+            for wiki in wikis {
+                if !entry.iter().any(|w| w.wiki_id == wiki.wiki_id) {
+                    entry.push(wiki.clone());
+                }
+            }
+        }
 
         // Emit updated available wikis to the UI
         if let Some(app) = GLOBAL_APP_HANDLE.get() {

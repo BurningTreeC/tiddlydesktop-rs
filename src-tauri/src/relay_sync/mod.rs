@@ -1674,6 +1674,15 @@ impl RelaySyncManager {
         None
     }
 
+    /// Find all rooms a device is connected in
+    pub async fn find_all_device_rooms(&self, device_id: &str) -> Vec<String> {
+        let rooms = self.rooms.read().await;
+        rooms.iter()
+            .filter(|(_, room)| room.decrypt_ciphers.contains_key(device_id))
+            .map(|(room_code, _)| room_code.clone())
+            .collect()
+    }
+
     // ── Authentication ─────────────────────────────────────────────
 
     /// Start OAuth login flow for a given provider

@@ -554,12 +554,14 @@ pub fn get_wiki_sync_id(app: tauri::AppHandle, path: String) -> String {
 /// The user selects which local wiki corresponds to a remote wiki from the peer's manifest.
 /// Also auto-assigns the wiki to the peer's room so sync permission checks pass.
 #[tauri::command]
-pub async fn lan_sync_link_wiki(app: tauri::AppHandle, path: String, sync_id: String, from_device_id: Option<String>) -> Result<(), String> {
+pub async fn lan_sync_link_wiki(app: tauri::AppHandle, path: String, sync_id: String, from_device_id: Option<String>, room_code: Option<String>) -> Result<(), String> {
     let mut entries = load_recent_files_from_disk(&app);
     let mut found = false;
 
-    // Determine the room from the peer's connection (if provided)
-    let room_code = if let Some(ref device_id) = from_device_id {
+    // Use room_code from UI if provided, otherwise look up from peer connection
+    let resolved_room = if room_code.is_some() {
+        room_code
+    } else if let Some(ref device_id) = from_device_id {
         crate::lan_sync::find_peer_room(device_id).await
     } else {
         None
@@ -569,9 +571,9 @@ pub async fn lan_sync_link_wiki(app: tauri::AppHandle, path: String, sync_id: St
         if utils::paths_equal(&entry.path, &path) {
             entry.sync_enabled = true;
             entry.sync_id = Some(sync_id.clone());
-            // Auto-assign room from the peer we're linking with
-            if room_code.is_some() && entry.relay_room.is_none() {
-                entry.relay_room = room_code.clone();
+            // Always set relay_room when linking (not just when None)
+            if resolved_room.is_some() {
+                entry.relay_room = resolved_room.clone();
             }
             found = true;
             break;
@@ -605,7 +607,7 @@ pub async fn lan_sync_link_wiki(app: tauri::AppHandle, path: String, sync_id: St
         }
     }
 
-    eprintln!("[LAN Sync] Linked wiki for sync: {} -> {} (room: {:?})", path, sync_id, room_code);
+    eprintln!("[LAN Sync] Linked wiki for sync: {} -> {} (room: {:?})", path, sync_id, resolved_room);
 
     // Broadcast updated wiki manifest so peers know we now have this wiki
     if let Some(mgr) = crate::lan_sync::get_sync_manager() {

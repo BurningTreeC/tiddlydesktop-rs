@@ -902,6 +902,16 @@ impl RelaySyncManager {
                     }));
                 }
 
+                // Broadcast wiki manifest so existing peers in this room learn our wikis
+                if let Some(mgr) = crate::lan_sync::get_sync_manager() {
+                    let mgr = mgr.clone();
+                    tokio::spawn(async move {
+                        // Small delay so session_init handshakes with existing room members complete first
+                        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                        mgr.broadcast_wiki_manifest().await;
+                    });
+                }
+
                 // Reset backoff on successful connect
                 delay = std::time::Duration::from_secs(2);
 

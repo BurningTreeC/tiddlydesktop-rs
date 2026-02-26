@@ -849,7 +849,7 @@ title: $:/plugins/tiddlywiki/tiddlydesktop-rs/WikiList
 <h3><<td-lingo LanSync/AvailableWikis>></h3>
 <$list filter="[prefix[$:/temp/tiddlydesktop-rs/remote-wikis/]limit[1]]" emptyMessage="""<div class="td-sync-empty"><<td-lingo LanSync/NoRemoteWikis>></div>""" variable="ignore">
 <$list filter="[prefix[$:/temp/tiddlydesktop-rs/remote-wikis/]]">
-<$let remoteWikiId={{!!wiki_id}} remoteWikiName={{!!wiki_name}} remoteIsFolder={{!!is_folder}} remoteFromDevice={{!!from_device_name}} remoteFromDeviceId={{!!from_device_id}}>
+<$let remoteWikiId={{!!wiki_id}} remoteWikiName={{!!wiki_name}} remoteIsFolder={{!!is_folder}} remoteFromDevice={{!!from_device_name}} remoteFromDeviceId={{!!from_device_id}} remoteRoomCode={{!!room_code}}>
 <div class="td-sync-remote-wiki">
 <div class="td-sync-remote-wiki-info">
 <div class="td-sync-remote-wiki-name">
@@ -861,7 +861,7 @@ title: $:/plugins/tiddlywiki/tiddlydesktop-rs/WikiList
 </div>
 <div class="td-sync-remote-wiki-actions">
 <$button class="tc-btn-invisible td-button td-button-primary td-button-small">
-<$action-sendmessage $message="tm-tiddlydesktop-rs-request-wiki" wikiId=<<remoteWikiId>> fromDeviceId=<<remoteFromDeviceId>> wikiName=<<remoteWikiName>>/>
+<$action-sendmessage $message="tm-tiddlydesktop-rs-request-wiki" wikiId=<<remoteWikiId>> fromDeviceId=<<remoteFromDeviceId>> wikiName=<<remoteWikiName>> roomCode=<<remoteRoomCode>>/>
 {{$:/core/images/download-button}} <<td-lingo LanSync/GetWiki>>
 </$button>
 <$let linkPopupState=<<qualify "$:/state/link-wiki-popup">>>
@@ -873,7 +873,7 @@ title: $:/plugins/tiddlywiki/tiddlydesktop-rs/WikiList
 <div class="td-link-wiki-dropdown-content">
 <$list filter="[prefix[$:/temp/tiddlydesktop-rs/link-candidate/]sort[title]]" emptyMessage="""<div class='td-link-wiki-empty'><<td-lingo LanSync/NoUnsyncedWikis>></div>""">
 <$button class="tc-btn-invisible td-link-wiki-option">
-<$action-sendmessage $message="tm-tiddlydesktop-rs-do-link-wiki" wikiId=<<remoteWikiId>> path={{!!candidate-path}} fromDeviceId=<<remoteFromDeviceId>>/>
+<$action-sendmessage $message="tm-tiddlydesktop-rs-do-link-wiki" wikiId=<<remoteWikiId>> path={{!!candidate-path}} fromDeviceId=<<remoteFromDeviceId>> roomCode=<<remoteRoomCode>>/>
 <$action-deletetiddler $tiddler=<<linkPopupState>>/>
 <$text text={{!!text}}/>
 </$button>

@@ -440,22 +440,23 @@ impl SyncBridge {
                     let lan_peers = server.lan_connected_peers().await;
                     for (peer_id, _) in &lan_peers {
                         let room_codes = server.peer_room_codes(peer_id).await;
-                        // Union wikis from all shared rooms
+                        // Union wikis from all shared rooms, tracking which room each wiki belongs to
                         let mut seen_wiki_ids = std::collections::HashSet::new();
                         let mut all_sync_wikis = Vec::new();
                         for rc in &room_codes {
                             for wiki in crate::wiki_storage::get_sync_wikis_for_room(app, rc) {
                                 if seen_wiki_ids.insert(wiki.0.clone()) {
-                                    all_sync_wikis.push(wiki);
+                                    all_sync_wikis.push((wiki, rc.clone()));
                                 }
                             }
                         }
                         let wikis: Vec<super::protocol::WikiInfo> = all_sync_wikis
                             .into_iter()
-                            .map(|(sync_id, name, is_folder)| super::protocol::WikiInfo {
+                            .map(|((sync_id, name, is_folder), rc)| super::protocol::WikiInfo {
                                 wiki_id: sync_id,
                                 wiki_name: name,
                                 is_folder,
+                                room_code: Some(rc),
                             })
                             .collect();
                         let _ = server.send_to_peer(peer_id, &SyncMessage::WikiManifest { wikis }).await;

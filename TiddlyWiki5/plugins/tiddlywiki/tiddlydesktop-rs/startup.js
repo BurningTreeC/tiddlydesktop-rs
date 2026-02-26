@@ -1691,6 +1691,7 @@ exports.startup = function(callback) {
 		var wikiId = event.paramObject ? event.paramObject.wikiId : "";
 		var fromDeviceId = event.paramObject ? event.paramObject.fromDeviceId : "";
 		var wikiName = event.paramObject ? event.paramObject.wikiName : "";
+		var roomCode = event.paramObject ? event.paramObject.roomCode : "";
 		if (!wikiId || !fromDeviceId) return;
 
 		function doRequest(targetDir) {
@@ -1698,7 +1699,8 @@ exports.startup = function(callback) {
 			invoke("lan_sync_request_wiki", {
 				wikiId: wikiId,
 				fromDeviceId: fromDeviceId,
-				targetDir: targetDir
+				targetDir: targetDir,
+				roomCode: roomCode || null
 			}).then(function() {
 				console.log("[LAN Sync] Requested wiki " + wikiName + " from peer");
 			}).catch(function(err) {
@@ -1756,12 +1758,13 @@ exports.startup = function(callback) {
 		var wikiId = event.paramObject ? event.paramObject.wikiId : "";
 		var path = event.paramObject ? event.paramObject.path : "";
 		var fromDeviceId = event.paramObject ? event.paramObject.fromDeviceId : "";
+		var roomCode = event.paramObject ? event.paramObject.roomCode : "";
 		if (!wikiId || !path) {
 			console.error("[LAN Sync] do-link-wiki: missing wikiId=" + wikiId + " or path=" + path);
 			return;
 		}
 
-		invoke("lan_sync_link_wiki", { path: path, syncId: wikiId, fromDeviceId: fromDeviceId || null }).then(function() {
+		invoke("lan_sync_link_wiki", { path: path, syncId: wikiId, fromDeviceId: fromDeviceId || null, roomCode: roomCode || null }).then(function() {
 			console.log("[LAN Sync] Linked wiki to sync ID " + wikiId);
 			try {
 				// Update the wiki list tiddler to reflect the new sync state
@@ -2301,7 +2304,8 @@ exports.startup = function(callback) {
 					wiki_name: wiki.wiki_name,
 					is_folder: wiki.is_folder ? "true" : "false",
 					from_device_id: wiki.from_device_id,
-					from_device_name: wiki.from_device_name
+					from_device_name: wiki.from_device_name,
+					room_code: wiki.room_code || ""
 				}));
 			});
 		}

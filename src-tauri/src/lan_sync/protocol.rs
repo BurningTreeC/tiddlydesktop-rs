@@ -366,6 +366,8 @@ pub struct WikiInfo {
     pub wiki_id: String,
     pub wiki_name: String,
     pub is_folder: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub room_code: Option<String>,
 }
 
 /// A tiddler being sent in a full sync batch

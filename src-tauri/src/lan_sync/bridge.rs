@@ -439,13 +439,18 @@ impl SyncBridge {
                 if let Some(app) = super::GLOBAL_APP_HANDLE.get() {
                     let lan_peers = server.lan_connected_peers().await;
                     for (peer_id, _) in &lan_peers {
-                        let room_code = server.peer_room_code(peer_id).await;
-                        let sync_wikis = if let Some(ref rc) = room_code {
-                            crate::wiki_storage::get_sync_wikis_for_room(app, rc)
-                        } else {
-                            vec![]
-                        };
-                        let wikis: Vec<super::protocol::WikiInfo> = sync_wikis
+                        let room_codes = server.peer_room_codes(peer_id).await;
+                        // Union wikis from all shared rooms
+                        let mut seen_wiki_ids = std::collections::HashSet::new();
+                        let mut all_sync_wikis = Vec::new();
+                        for rc in &room_codes {
+                            for wiki in crate::wiki_storage::get_sync_wikis_for_room(app, rc) {
+                                if seen_wiki_ids.insert(wiki.0.clone()) {
+                                    all_sync_wikis.push(wiki);
+                                }
+                            }
+                        }
+                        let wikis: Vec<super::protocol::WikiInfo> = all_sync_wikis
                             .into_iter()
                             .map(|(sync_id, name, is_folder)| super::protocol::WikiInfo {
                                 wiki_id: sync_id,

@@ -664,13 +664,17 @@ impl SyncManager {
                                     vec![]
                                 };
                                 // Match rooms by comparing hashes (never uses cleartext codes)
-                                let shared_room = protocol::select_shared_room_by_hash(&our_rooms, &peer_room_hashes);
+                                let shared_rooms = protocol::select_all_shared_rooms_by_hash(&our_rooms, &peer_room_hashes);
 
-                                if let Some(room_code) = shared_room {
-                                    // We share a room — auto-connect via LAN
+                                if let Some(room_code) = shared_rooms.first().cloned() {
+                                    // We share at least one room — auto-connect via LAN
                                     let peers = mgr_peers.read().await;
                                     if peers.contains_key(&device_id) {
-                                        // Already connected — clean up waiting state
+                                        // Already connected — update room codes with any newly shared rooms
+                                        drop(peers);
+                                        if let Some(ref server) = *get_sync_manager().unwrap().server.read().await {
+                                            server.add_peer_room_codes(&device_id, &shared_rooms).await;
+                                        }
                                         waiting_since.remove(&device_id);
                                         continue;
                                     }
@@ -1135,7 +1139,7 @@ impl SyncManager {
                 if let Some(room_code) = crate::wiki_storage::get_wiki_relay_room_by_sync_id(app, wiki_id) {
                     // LAN peers authenticated for this room
                     for (did, pc) in self.peers.read().await.iter() {
-                        if pc.auth_room_code.as_deref() == Some(room_code.as_str()) {
+                        if pc.auth_room_codes.iter().any(|rc| rc == &room_code) {
                             peers.insert(did.clone());
                         }
                     }
@@ -1642,7 +1646,7 @@ impl SyncManager {
             if let Some(ref server) = *self.server.read().await {
                 for (id, name, user_name) in server.connected_peers().await {
                     if let Some(pc) = peers_guard.get(&id) {
-                        if pc.auth_room_code.as_deref() == Some(rc.as_str()) {
+                        if pc.auth_room_codes.iter().any(|r| r == rc.as_str()) {
                             if seen.insert(id.clone()) {
                                 result.push(PeerInfo { device_id: id, device_name: name, user_name });
                             }
@@ -1695,7 +1699,7 @@ impl SyncManager {
         if let Some(room_code) = crate::wiki_storage::get_wiki_relay_room_by_sync_id(app, wiki_id) {
             // Check LAN peer room
             if let Some(pc) = self.peers.read().await.get(device_id) {
-                if pc.auth_room_code.as_deref() == Some(room_code.as_str()) {
+                if pc.auth_room_codes.iter().any(|rc| rc == &room_code) {
                     return true;
                 }
             }
@@ -3467,29 +3471,36 @@ impl SyncManager {
     /// Send our WikiManifest to a specific peer (filtered to wikis in shared rooms)
     async fn send_wiki_manifest_to_peer(&self, device_id: &str) {
         if let Some(app) = GLOBAL_APP_HANDLE.get() {
-            // Find the room this peer is in (LAN auth_room_code or relay room)
-            let room_code = {
-                // Check LAN connection's auth_room_code
-                let lan_room = self.peers.read().await
+            // Find all rooms this peer shares with us (LAN auth_room_codes + relay room)
+            let room_codes: Vec<String> = {
+                let lan_rooms = self.peers.read().await
                     .get(device_id)
-                    .and_then(|pc| pc.auth_room_code.clone());
-                if let Some(rc) = lan_room {
-                    Some(rc)
+                    .map(|pc| pc.auth_room_codes.clone())
+                    .unwrap_or_default();
+                if !lan_rooms.is_empty() {
+                    lan_rooms
                 } else if let Some(relay) = &self.relay_manager {
-                    relay.find_device_room(device_id).await
+                    relay.find_device_room(device_id).await.into_iter().collect()
                 } else {
-                    None
+                    vec![]
                 }
             };
 
-            let sync_wikis = if let Some(ref rc) = room_code {
-                crate::wiki_storage::get_sync_wikis_for_room(app, rc)
-            } else {
+            // Union wikis from all shared rooms
+            let mut seen_wiki_ids = std::collections::HashSet::new();
+            let mut all_sync_wikis = Vec::new();
+            for rc in &room_codes {
+                for wiki in crate::wiki_storage::get_sync_wikis_for_room(app, rc) {
+                    if seen_wiki_ids.insert(wiki.0.clone()) {
+                        all_sync_wikis.push(wiki);
+                    }
+                }
+            }
+            if room_codes.is_empty() {
                 eprintln!("[Manifest] Device {} not found in any room", &device_id[..8.min(device_id.len())]);
-                vec![]
-            };
+            }
 
-            let wikis: Vec<protocol::WikiInfo> = sync_wikis
+            let wikis: Vec<protocol::WikiInfo> = all_sync_wikis
                 .into_iter()
                 .map(|(sync_id, name, is_folder)| protocol::WikiInfo {
                     wiki_id: sync_id,
@@ -3497,7 +3508,7 @@ impl SyncManager {
                     is_folder,
                 })
                 .collect();
-            eprintln!("[Manifest] Sending {} wikis to {} (room {:?})", wikis.len(), &device_id[..8.min(device_id.len())], room_code);
+            eprintln!("[Manifest] Sending {} wikis to {} (rooms {:?})", wikis.len(), &device_id[..8.min(device_id.len())], room_codes);
 
             let msg = SyncMessage::WikiManifest { wikis };
             if let Err(e) = self.send_to_peer_any(device_id, &msg).await {
@@ -3517,19 +3528,25 @@ impl SyncManager {
 
         if let Some(app) = GLOBAL_APP_HANDLE.get() {
             if let Some(ref server) = *self.server.read().await {
-                // Send per-peer manifests to LAN peers (filtered by auth room)
+                // Send per-peer manifests to LAN peers (filtered by auth rooms)
                 let lan_peers = server.lan_connected_peers().await;
                 for (peer_id, _) in &lan_peers {
-                    // Get the room this LAN peer authenticated with
-                    let room_code = self.peers.read().await
+                    // Get all rooms this LAN peer shares with us
+                    let room_codes = self.peers.read().await
                         .get(peer_id.as_str())
-                        .and_then(|pc| pc.auth_room_code.clone());
-                    let sync_wikis = if let Some(ref rc) = room_code {
-                        crate::wiki_storage::get_sync_wikis_for_room(app, rc)
-                    } else {
-                        vec![]
-                    };
-                    let wikis: Vec<protocol::WikiInfo> = sync_wikis
+                        .map(|pc| pc.auth_room_codes.clone())
+                        .unwrap_or_default();
+                    // Union wikis from all shared rooms
+                    let mut seen_wiki_ids = std::collections::HashSet::new();
+                    let mut all_sync_wikis = Vec::new();
+                    for rc in &room_codes {
+                        for wiki in crate::wiki_storage::get_sync_wikis_for_room(app, rc) {
+                            if seen_wiki_ids.insert(wiki.0.clone()) {
+                                all_sync_wikis.push(wiki);
+                            }
+                        }
+                    }
+                    let wikis: Vec<protocol::WikiInfo> = all_sync_wikis
                         .into_iter()
                         .map(|(sync_id, name, is_folder)| protocol::WikiInfo {
                             wiki_id: sync_id,
@@ -4785,7 +4802,7 @@ impl SyncManager {
                             let relay_room = if let Some(mgr) = get_sync_manager() {
                                 mgr.peers.read().await
                                     .get(from_device_id)
-                                    .and_then(|pc| pc.auth_room_code.clone())
+                                    .and_then(|pc| pc.auth_room_codes.first().cloned())
                                     .or_else(|| {
                                         // Try relay room
                                         None // Will be set later when full transfer completes
@@ -5011,10 +5028,10 @@ impl SyncManager {
         if let Some(app) = GLOBAL_APP_HANDLE.get() {
             // Determine the relay room from the sending peer's connection
             let relay_room = {
-                // Check LAN peer's auth room
+                // Check LAN peer's auth rooms (use first shared room)
                 let lan_room = self.peers.read().await
                     .get(from_device_id)
-                    .and_then(|pc| pc.auth_room_code.clone());
+                    .and_then(|pc| pc.auth_room_codes.first().cloned());
                 if let Some(rc) = lan_room {
                     Some(rc)
                 } else if let Some(relay) = self.relay_manager.as_ref() {
@@ -6218,7 +6235,7 @@ pub async fn find_peer_room(device_id: &str) -> Option<String> {
     let mgr = get_sync_manager()?;
     // Check LAN peer rooms
     if let Some(pc) = mgr.peers.read().await.get(device_id) {
-        if let Some(ref room) = pc.auth_room_code {
+        if let Some(room) = pc.auth_room_codes.first() {
             return Some(room.clone());
         }
     }

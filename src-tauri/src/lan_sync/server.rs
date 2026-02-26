@@ -67,8 +67,9 @@ pub struct PeerConnection {
     pub bulk_tx: mpsc::Sender<Vec<u8>>,
     /// Encryption state for this connection
     pub cipher: SessionCipher,
-    /// Room code this peer authenticated with (for LAN connections)
-    pub auth_room_code: Option<String>,
+    /// Room codes this peer shares with us (for LAN connections).
+    /// A peer may share multiple rooms with us — each room can have different wikis.
+    pub auth_room_codes: Vec<String>,
     /// TiddlyWiki username of this peer (from UserNameAnnounce)
     pub user_name: Option<String>,
 }
@@ -373,7 +374,7 @@ impl SyncServer {
         {
             let peers = self.peers.read().await;
             for (id, p) in peers.iter() {
-                if p.auth_room_code.as_deref() == Some(room_code) {
+                if p.auth_room_codes.iter().any(|rc| rc == room_code) {
                     result.push(id.clone());
                 }
             }
@@ -390,11 +391,24 @@ impl SyncServer {
         result
     }
 
-    /// Get the room code a LAN peer authenticated with.
-    pub async fn peer_room_code(&self, device_id: &str) -> Option<String> {
+    /// Get all room codes a LAN peer shares with us.
+    pub async fn peer_room_codes(&self, device_id: &str) -> Vec<String> {
         self.peers.read().await
             .get(device_id)
-            .and_then(|pc| pc.auth_room_code.clone())
+            .map(|pc| pc.auth_room_codes.clone())
+            .unwrap_or_default()
+    }
+
+    /// Add room codes to a peer's auth_room_codes (deduplicating).
+    pub async fn add_peer_room_codes(&self, device_id: &str, new_codes: &[String]) {
+        let mut peers = self.peers.write().await;
+        if let Some(peer) = peers.get_mut(device_id) {
+            for code in new_codes {
+                if !peer.auth_room_codes.contains(code) {
+                    peer.auth_room_codes.push(code.clone());
+                }
+            }
+        }
     }
 
     /// Get list of connected peer device IDs (LAN + relay)
@@ -605,7 +619,7 @@ async fn handle_connection(
                 tx,
                 bulk_tx,
                 cipher: send_cipher,
-                auth_room_code: Some(auth_room_code),
+                auth_room_codes: vec![auth_room_code],
                 user_name: None,
             },
         );

@@ -135,7 +135,7 @@ pub async fn connect_to_room_peer(
                 tx,
                 bulk_tx,
                 cipher: send_cipher,
-                auth_room_code: Some(room_code.to_string()),
+                auth_room_codes: vec![room_code.to_string()],
                 user_name: None,
             },
         );

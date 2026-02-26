@@ -134,6 +134,12 @@ RelaySync/RegisteredOnRelay: Registrerad
 RelaySync/Registering: Registrerar...
 RelaySync/RegisterFailed: Registrering misslyckades
 Tooltips/SelectRelayRoom: Tilldela denna wiki till ett relay-rum
+RelaySync/ServerRooms: Dina rum på servern
+RelaySync/ServerRoomsEmpty: Inga rum hittades på servern. Registrera ett rum från dess detaljpanel.
+RelaySync/Configured: Konfigurerad
+RelaySync/NotConfigured: Inte konfigurerad lokalt
+RelaySync/DeleteServerRoom: Ta bort från servern
+RelaySync/ConfirmDeleteServerRoom: Är du säker på att du vill ta bort detta rum från servern? Detta kan inte ångras.
 Buttons/Plugins: plugins
 PluginInstaller/Title: Hantera plugins
 PluginInstaller/For: för:

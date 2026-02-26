@@ -134,6 +134,12 @@ RelaySync/RegisteredOnRelay: Registriert
 RelaySync/Registering: Registrierung...
 RelaySync/RegisterFailed: Registrierung fehlgeschlagen
 Tooltips/SelectRelayRoom: Dieses Wiki einem Relay-Raum zuweisen
+RelaySync/ServerRooms: Ihre Räume auf dem Server
+RelaySync/ServerRoomsEmpty: Keine Räume auf dem Server gefunden. Registrieren Sie einen Raum über sein Detailpanel.
+RelaySync/Configured: Konfiguriert
+RelaySync/NotConfigured: Lokal nicht konfiguriert
+RelaySync/DeleteServerRoom: Vom Server löschen
+RelaySync/ConfirmDeleteServerRoom: Sind Sie sicher, dass Sie diesen Raum vom Server löschen möchten? Dies kann nicht rückgängig gemacht werden.
 Buttons/Plugins: Plugins
 PluginInstaller/Title: Plugins verwalten
 PluginInstaller/For: für:

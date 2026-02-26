@@ -134,6 +134,12 @@ RelaySync/RegisteredOnRelay: Registered
 RelaySync/Registering: Registering...
 RelaySync/RegisterFailed: Registration failed
 Tooltips/SelectRelayRoom: Assign this wiki to a relay room
+RelaySync/ServerRooms: Your Rooms on Server
+RelaySync/ServerRoomsEmpty: No rooms found on server. Register a room from its details panel.
+RelaySync/Configured: Configured
+RelaySync/NotConfigured: Not configured locally
+RelaySync/DeleteServerRoom: Delete from server
+RelaySync/ConfirmDeleteServerRoom: Are you sure you want to delete this room from the server? This cannot be undone.
 Buttons/Plugins: plugins
 PluginInstaller/Title: Manage Plugins
 PluginInstaller/For: for:

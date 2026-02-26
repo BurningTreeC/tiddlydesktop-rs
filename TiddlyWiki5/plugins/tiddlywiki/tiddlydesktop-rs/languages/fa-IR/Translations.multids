@@ -134,6 +134,12 @@ RelaySync/RegisteredOnRelay: ثبت شده
 RelaySync/Registering: در حال ثبت...
 RelaySync/RegisterFailed: ثبت ناموفق بود
 Tooltips/SelectRelayRoom: اختصاص این ویکی به یک اتاق رله
+RelaySync/ServerRooms: اتاق‌های شما روی سرور
+RelaySync/ServerRoomsEmpty: اتاقی روی سرور یافت نشد. یک اتاق را از پنل جزئیات آن ثبت کنید.
+RelaySync/Configured: پیکربندی شده
+RelaySync/NotConfigured: به صورت محلی پیکربندی نشده
+RelaySync/DeleteServerRoom: حذف از سرور
+RelaySync/ConfirmDeleteServerRoom: آیا مطمئن هستید که می‌خواهید این اتاق را از سرور حذف کنید؟ این عمل قابل بازگشت نیست.
 Buttons/Plugins: افزونه‌ها
 PluginInstaller/Title: مدیریت افزونه‌ها
 PluginInstaller/For: برای:

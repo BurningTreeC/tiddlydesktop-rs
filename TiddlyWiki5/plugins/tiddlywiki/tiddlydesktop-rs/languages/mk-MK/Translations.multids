@@ -134,6 +134,12 @@ RelaySync/RegisteredOnRelay: Регистрирано
 RelaySync/Registering: Регистрирање...
 RelaySync/RegisterFailed: Регистрацијата не успеа
 Tooltips/SelectRelayRoom: Додели го ова вики на соба за пренос
+RelaySync/ServerRooms: Вашите соби на серверот
+RelaySync/ServerRoomsEmpty: Не се пронајдени соби на серверот. Регистрирајте соба од нејзиниот панел за детали.
+RelaySync/Configured: Конфигурирано
+RelaySync/NotConfigured: Не е конфигурирано локално
+RelaySync/DeleteServerRoom: Избриши од серверот
+RelaySync/ConfirmDeleteServerRoom: Дали сте сигурни дека сакате да ја избришете оваа соба од серверот? Ова не може да се поврати.
 Buttons/Plugins: додатоци
 PluginInstaller/Title: Управување со додатоци
 PluginInstaller/For: за:

@@ -134,6 +134,12 @@ RelaySync/RegisteredOnRelay: רשום
 RelaySync/Registering: רושם...
 RelaySync/RegisterFailed: הרישום נכשל
 Tooltips/SelectRelayRoom: שייך ויקי זה לחדר ממסר
+RelaySync/ServerRooms: החדרים שלך בשרת
+RelaySync/ServerRoomsEmpty: לא נמצאו חדרים בשרת. רשום חדר מלוח הפרטים שלו.
+RelaySync/Configured: מוגדר
+RelaySync/NotConfigured: לא מוגדר מקומית
+RelaySync/DeleteServerRoom: מחק מהשרת
+RelaySync/ConfirmDeleteServerRoom: האם אתה בטוח שברצונך למחוק חדר זה מהשרת? לא ניתן לבטל פעולה זו.
 Buttons/Plugins: תוספים
 PluginInstaller/Title: ניהול תוספים
 PluginInstaller/For: עבור:

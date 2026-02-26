@@ -1824,6 +1824,16 @@ impl RelaySyncManager {
         Ok(())
     }
 
+    /// Delete a server room by its hash directly (owner only).
+    pub async fn delete_server_room_by_hash(&self, room_hash: &str) -> Result<(), String> {
+        let _: serde_json::Value = self.relay_api(
+            reqwest::Method::DELETE,
+            &format!("/api/rooms/{}", room_hash),
+            None,
+        ).await?;
+        Ok(())
+    }
+
     /// Add a member to a server room (owner only). Sends hashed room code.
     pub async fn add_room_member(&self, room_code: &str, username: &str, provider: Option<&str>) -> Result<(), String> {
         let room_hash = crate::lan_sync::discovery::hash_room_code(room_code);

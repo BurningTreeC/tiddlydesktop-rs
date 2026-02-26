@@ -1854,6 +1854,7 @@ exports.startup = function(callback) {
 			$tw.wiki.setText("$:/temp/tiddlydesktop-rs/github-login", "text", null, result.username || "");
 			$tw.wiki.setText("$:/temp/tiddlydesktop-rs/github-auth-status", "text", null, "authenticated");
 			refreshSyncStatus();
+			fetchServerRooms();
 		}).catch(function(err) {
 			console.error("[Relay] Login failed:", err);
 			$tw.wiki.setText("$:/temp/tiddlydesktop-rs/auth-status", "text", null, "");
@@ -1882,6 +1883,57 @@ exports.startup = function(callback) {
 		// Show the provider picker inline
 		$tw.wiki.setText("$:/temp/tiddlydesktop-rs/auth-status", "text", null, "picking");
 	}
+
+	// Fetch and display server rooms
+	function fetchServerRooms() {
+		invoke("relay_sync_list_server_rooms").then(function(serverRooms) {
+			updateServerRoomList(serverRooms);
+		}).catch(function(err) {
+			console.error("[Relay] Failed to fetch server rooms:", err);
+		});
+	}
+
+	function updateServerRoomList(serverRooms) {
+		var titles = [];
+		var currentTitles = {};
+		(serverRooms || []).forEach(function(sr) {
+			var title = "$:/temp/tiddlydesktop-rs/relay-server-room/" + sr.room_hash;
+			titles.push(title);
+			currentTitles[title] = true;
+			$tw.wiki.addTiddler(new $tw.Tiddler({
+				title: title,
+				room_hash: sr.room_hash,
+				role: sr.role,
+				member_count: "" + (sr.member_count || 0),
+				owner_username: sr.owner_username || "",
+				local_room_code: sr.local_room_code || "",
+				local_room_name: sr.local_room_name || ""
+			}));
+		});
+		// Clean stale tiddlers
+		$tw.wiki.each(function(tiddler, title) {
+			if(title.indexOf("$:/temp/tiddlydesktop-rs/relay-server-room/") === 0 && !currentTitles[title]) {
+				$tw.wiki.deleteTiddler(title);
+			}
+		});
+		$tw.wiki.setText("$:/temp/tiddlydesktop-rs/relay-server-room-list", "text", null, titles.join(" "));
+	}
+
+	$tw.rootWidget.addEventListener("tm-tiddlydesktop-rs-relay-fetch-server-rooms", function() {
+		fetchServerRooms();
+	});
+
+	$tw.rootWidget.addEventListener("tm-tiddlydesktop-rs-relay-delete-server-room", function(event) {
+		var roomHash = event.paramObject && event.paramObject.roomHash;
+		if(!roomHash) return;
+		if(!confirm($tw.wiki.renderText("text/plain", "text/vnd.tiddlywiki", "<<td-lingo RelaySync/ConfirmDeleteServerRoom>>") || "Are you sure you want to delete this room from the server? This cannot be undone.")) return;
+		invoke("relay_sync_delete_server_room_by_hash", { roomHash: roomHash }).then(function() {
+			fetchServerRooms();
+		}).catch(function(err) {
+			console.error("[Relay] Failed to delete server room:", err);
+			alert("Failed to delete room: " + err);
+		});
+	});
 
 	// Sign out
 	$tw.rootWidget.addEventListener("tm-tiddlydesktop-rs-relay-logout", function(event) {
@@ -2164,6 +2216,9 @@ exports.startup = function(callback) {
 		}
 	});
 
+	// Track auth state transitions to fetch server rooms once on initial detection
+	var _lastKnownAuthState = false;
+
 	// Refresh sync status and update tiddlers (debounced to avoid races)
 	var _refreshSyncTimer = null;
 	function refreshSyncStatus() {
@@ -2196,6 +2251,12 @@ exports.startup = function(callback) {
 				// Legacy tiddlers
 				$tw.wiki.setText("$:/temp/tiddlydesktop-rs/github-login", "text", null, relayStatus.username || relayStatus.github_login || "");
 				$tw.wiki.setText("$:/temp/tiddlydesktop-rs/github-auth-status", "text", null, (relayStatus.authenticated || relayStatus.github_authenticated) ? "authenticated" : "");
+				// Fetch server rooms on auth transition
+				var isAuth = !!(relayStatus.authenticated || relayStatus.github_authenticated);
+				if(isAuth && !_lastKnownAuthState) {
+					fetchServerRooms();
+				}
+				_lastKnownAuthState = isAuth;
 				updateRelayRoomList(rooms);
 			}).catch(function(err) {
 				console.error("relay_sync_get_status failed (inner):", err);
@@ -2222,6 +2283,12 @@ exports.startup = function(callback) {
 				// Legacy tiddlers
 				$tw.wiki.setText("$:/temp/tiddlydesktop-rs/github-login", "text", null, relayStatus.username || relayStatus.github_login || "");
 				$tw.wiki.setText("$:/temp/tiddlydesktop-rs/github-auth-status", "text", null, (relayStatus.authenticated || relayStatus.github_authenticated) ? "authenticated" : "");
+				// Fetch server rooms on auth transition
+				var isAuth2 = !!(relayStatus.authenticated || relayStatus.github_authenticated);
+				if(isAuth2 && !_lastKnownAuthState) {
+					fetchServerRooms();
+				}
+				_lastKnownAuthState = isAuth2;
 				updateRelayRoomList(rooms);
 			}).catch(function(err) {
 				console.error("relay_sync_get_status failed (outer):", err);

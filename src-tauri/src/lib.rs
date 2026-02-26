@@ -6343,7 +6343,7 @@ async fn check_for_updates() -> Result<UpdateCheckResult, String> {
 
 /// Android version - separate from desktop versioning (must match build.gradle.kts versionName)
 #[cfg(target_os = "android")]
-const ANDROID_VERSION: &str = "0.0.65";
+const ANDROID_VERSION: &str = "0.0.66";
 
 /// Check for updates on Android via version file on GitHub, linking to Play Store
 #[cfg(target_os = "android")]
@@ -8451,6 +8451,7 @@ fn run_wiki_mode(args: WikiModeArgs) {
             // Relay server-side room management commands
             lan_sync::relay_sync_create_room,
             lan_sync::relay_sync_delete_server_room,
+            lan_sync::relay_sync_delete_server_room_by_hash,
             lan_sync::relay_sync_add_member,
             lan_sync::relay_sync_remove_member,
             lan_sync::relay_sync_list_members,
@@ -8919,6 +8920,7 @@ fn run_wiki_folder_mode(args: WikiFolderModeArgs) {
             // Relay server-side room management commands
             lan_sync::relay_sync_create_room,
             lan_sync::relay_sync_delete_server_room,
+            lan_sync::relay_sync_delete_server_room_by_hash,
             lan_sync::relay_sync_add_member,
             lan_sync::relay_sync_remove_member,
             lan_sync::relay_sync_list_members,
@@ -9653,6 +9655,7 @@ pub fn run() {
             // Relay server-side room management commands
             lan_sync::relay_sync_create_room,
             lan_sync::relay_sync_delete_server_room,
+            lan_sync::relay_sync_delete_server_room_by_hash,
             lan_sync::relay_sync_add_member,
             lan_sync::relay_sync_remove_member,
             lan_sync::relay_sync_list_members,

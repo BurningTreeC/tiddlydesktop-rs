@@ -2378,6 +2378,64 @@ body.td-is-android.td-main-wiki .td-wikilist {
 	width: 140px;
 }
 
+/* Server room list */
+.td-relay-server-room-list {
+	margin-top: 12px;
+	margin-bottom: 8px;
+}
+
+.td-relay-server-room-list h4 {
+	margin: 0 0 8px 0;
+	font-size: 0.9em;
+	color: <<colour muted-foreground>>;
+	display: flex;
+	align-items: center;
+	gap: 4px;
+}
+
+.td-relay-server-room-item {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	padding: 6px 12px;
+	border: 1px solid <<colour tiddler-border>>;
+	border-radius: 6px;
+	margin-bottom: 4px;
+	background: <<colour page-background>>;
+	font-size: 0.9em;
+	flex-wrap: wrap;
+}
+
+.td-relay-room-name-unknown {
+	font-family: monospace;
+	font-size: 0.85em;
+	opacity: 0.7;
+}
+
+.td-relay-server-room-role {
+	padding: 1px 6px;
+	border-radius: 4px;
+	font-size: 0.8em;
+	background: <<colour tag-background>>;
+	color: <<colour tag-foreground>>;
+}
+
+.td-relay-server-room-members {
+	font-size: 0.85em;
+	color: <<colour muted-foreground>>;
+}
+
+.td-relay-server-room-configured {
+	color: #2da44e;
+	font-size: 0.85em;
+}
+
+.td-relay-server-room-not-configured {
+	color: <<colour muted-foreground>>;
+	font-size: 0.85em;
+	font-style: italic;
+}
+
 /* Relay Pairing */
 .td-relay-pairing {
 	margin-top: 12px;

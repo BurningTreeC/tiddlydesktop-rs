@@ -134,6 +134,12 @@ RelaySync/RegisteredOnRelay: 登録済み
 RelaySync/Registering: 登録中...
 RelaySync/RegisterFailed: 登録に失敗しました
 Tooltips/SelectRelayRoom: このウィキをリレールームに割り当てる
+RelaySync/ServerRooms: サーバー上のルーム
+RelaySync/ServerRoomsEmpty: サーバーにルームが見つかりません。詳細パネルからルームを登録してください。
+RelaySync/Configured: 設定済み
+RelaySync/NotConfigured: ローカル未設定
+RelaySync/DeleteServerRoom: サーバーから削除
+RelaySync/ConfirmDeleteServerRoom: このルームをサーバーから削除してもよろしいですか？この操作は取り消せません。
 Buttons/Plugins: プラグイン
 PluginInstaller/Title: プラグインの管理
 PluginInstaller/For: 対象:

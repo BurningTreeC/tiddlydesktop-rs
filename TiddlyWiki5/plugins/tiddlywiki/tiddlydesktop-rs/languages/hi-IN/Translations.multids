@@ -134,6 +134,12 @@ RelaySync/RegisteredOnRelay: पंजीकृत
 RelaySync/Registering: पंजीकरण हो रहा है...
 RelaySync/RegisterFailed: पंजीकरण विफल
 Tooltips/SelectRelayRoom: इस विकी को एक रिले कमरे में असाइन करें
+RelaySync/ServerRooms: सर्वर पर आपके कमरे
+RelaySync/ServerRoomsEmpty: सर्वर पर कोई कमरा नहीं मिला। विवरण पैनल से कमरा पंजीकृत करें।
+RelaySync/Configured: कॉन्फ़िगर किया गया
+RelaySync/NotConfigured: स्थानीय रूप से कॉन्फ़िगर नहीं किया गया
+RelaySync/DeleteServerRoom: सर्वर से हटाएं
+RelaySync/ConfirmDeleteServerRoom: क्या आप वाकई इस कमरे को सर्वर से हटाना चाहते हैं? यह क्रिया पूर्ववत नहीं की जा सकती।
 Buttons/Plugins: प्लगइन
 PluginInstaller/Title: प्लगइन प्रबंधित करें
 PluginInstaller/For: के लिए:

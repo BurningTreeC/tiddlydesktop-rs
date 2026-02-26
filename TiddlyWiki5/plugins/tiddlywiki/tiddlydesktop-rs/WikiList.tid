@@ -792,6 +792,43 @@ title: $:/plugins/tiddlywiki/tiddlydesktop-rs/WikiList
 </$list>
 </div>
 
+<!-- Server rooms (only when authenticated) -->
+<$list filter="[{$:/temp/tiddlydesktop-rs/auth-status}match[authenticated]]" variable="ignore">
+<div class="td-relay-server-room-list">
+<h4><<td-lingo RelaySync/ServerRooms>> <$button class="tc-btn-invisible td-button td-button-small">
+<$action-sendmessage $message="tm-tiddlydesktop-rs-relay-fetch-server-rooms"/>
+{{$:/core/images/refresh-button}}
+</$button></h4>
+<$list filter="[enlist{$:/temp/tiddlydesktop-rs/relay-server-room-list}]" emptyMessage=<<td-lingo RelaySync/ServerRoomsEmpty>>>
+<$let roomHash={{!!room_hash}} role={{!!role}} memberCount={{!!member_count}} ownerUsername={{!!owner_username}} localCode={{!!local_room_code}} localName={{!!local_room_name}}>
+<div class="td-relay-server-room-item">
+<$list filter="[<localName>!is[blank]]" variable="ignore">
+<span class="td-relay-room-name"><$text text=<<localName>>/></span>
+<span class="td-sync-fingerprint">(<$text text=<<localCode>>/>)</span>
+</$list>
+<$list filter="[<localName>is[blank]]" variable="ignore">
+<span class="td-relay-room-name td-relay-room-name-unknown"><$text text=<<roomHash>>/></span>
+</$list>
+<span class="td-relay-server-room-role"><$text text=<<role>>/></span>
+<span class="td-relay-server-room-members"><$text text=<<memberCount>>/> <<td-lingo RelaySync/Members>></span>
+<$list filter="[<localCode>!is[blank]]" variable="ignore">
+<span class="td-relay-server-room-status td-relay-server-room-configured"><<td-lingo RelaySync/Configured>></span>
+</$list>
+<$list filter="[<localCode>is[blank]]" variable="ignore">
+<span class="td-relay-server-room-status td-relay-server-room-not-configured"><<td-lingo RelaySync/NotConfigured>></span>
+</$list>
+<$list filter="[<role>match[owner]]" variable="ignore">
+<$button class="tc-btn-invisible td-button td-button-danger td-button-small">
+<$action-sendmessage $message="tm-tiddlydesktop-rs-relay-delete-server-room" roomHash=<<roomHash>>/>
+<<td-lingo RelaySync/DeleteServerRoom>>
+</$button>
+</$list>
+</div>
+</$let>
+</$list>
+</div>
+</$list>
+
 <!-- Create Room / Join Room -->
 <$list filter="[{$:/temp/tiddlydesktop-rs/relay-adding-room}!match[create]!match[join]]" variable="ignore">
 <$button class="tc-btn-invisible td-button td-button-primary td-button-small">

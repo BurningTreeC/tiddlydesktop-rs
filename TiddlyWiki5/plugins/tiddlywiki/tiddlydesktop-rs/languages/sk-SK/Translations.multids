@@ -134,6 +134,12 @@ RelaySync/RegisteredOnRelay: Zaregistrované
 RelaySync/Registering: Registrácia...
 RelaySync/RegisterFailed: Registrácia zlyhala
 Tooltips/SelectRelayRoom: Priradiť toto wiki k prenosovej miestnosti
+RelaySync/ServerRooms: Vaše miestnosti na serveri
+RelaySync/ServerRoomsEmpty: Na serveri sa nenašli žiadne miestnosti. Zaregistrujte miestnosť z jej panela podrobností.
+RelaySync/Configured: Nakonfigurované
+RelaySync/NotConfigured: Lokálne nenakonfigurované
+RelaySync/DeleteServerRoom: Odstrániť zo servera
+RelaySync/ConfirmDeleteServerRoom: Ste si istí, že chcete odstrániť túto miestnosť zo servera? Túto akciu nie je možné vrátiť späť.
 Buttons/Plugins: pluginy
 PluginInstaller/Title: Správa pluginov
 PluginInstaller/For: pre:

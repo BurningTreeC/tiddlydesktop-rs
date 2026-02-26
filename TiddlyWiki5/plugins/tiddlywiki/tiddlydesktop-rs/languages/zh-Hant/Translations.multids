@@ -134,6 +134,12 @@ RelaySync/RegisteredOnRelay: 已註冊
 RelaySync/Registering: 註冊中...
 RelaySync/RegisterFailed: 註冊失敗
 Tooltips/SelectRelayRoom: 將此維基分配到中繼房間
+RelaySync/ServerRooms: 您在伺服器上的房間
+RelaySync/ServerRoomsEmpty: 伺服器上未找到房間。請從詳情面板註冊房間。
+RelaySync/Configured: 已設定
+RelaySync/NotConfigured: 本機未設定
+RelaySync/DeleteServerRoom: 從伺服器刪除
+RelaySync/ConfirmDeleteServerRoom: 您確定要從伺服器刪除此房間嗎？此操作無法撤銷。
 Buttons/Plugins: 外掛
 PluginInstaller/Title: 管理外掛
 PluginInstaller/For: 適用於：

@@ -134,6 +134,12 @@ RelaySync/RegisteredOnRelay: Registrado
 RelaySync/Registering: Registrando...
 RelaySync/RegisterFailed: Falha no registro
 Tooltips/SelectRelayRoom: Atribuir este wiki a uma sala de retransmissão
+RelaySync/ServerRooms: Suas salas no servidor
+RelaySync/ServerRoomsEmpty: Nenhuma sala encontrada no servidor. Registre uma sala a partir do painel de detalhes.
+RelaySync/Configured: Configurado
+RelaySync/NotConfigured: Não configurado localmente
+RelaySync/DeleteServerRoom: Excluir do servidor
+RelaySync/ConfirmDeleteServerRoom: Tem certeza de que deseja excluir esta sala do servidor? Esta ação não pode ser desfeita.
 Buttons/Plugins: plugins
 PluginInstaller/Title: Gerenciar plugins
 PluginInstaller/For: para:

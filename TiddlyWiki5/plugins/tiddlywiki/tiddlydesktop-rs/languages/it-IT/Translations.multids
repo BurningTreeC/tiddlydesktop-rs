@@ -134,6 +134,12 @@ RelaySync/RegisteredOnRelay: Registrato
 RelaySync/Registering: Registrazione...
 RelaySync/RegisterFailed: Registrazione fallita
 Tooltips/SelectRelayRoom: Assegna questo wiki a una stanza relay
+RelaySync/ServerRooms: Le tue stanze sul server
+RelaySync/ServerRoomsEmpty: Nessuna stanza trovata sul server. Registra una stanza dal suo pannello dei dettagli.
+RelaySync/Configured: Configurato
+RelaySync/NotConfigured: Non configurato localmente
+RelaySync/DeleteServerRoom: Elimina dal server
+RelaySync/ConfirmDeleteServerRoom: Sei sicuro di voler eliminare questa stanza dal server? Questa azione non può essere annullata.
 Buttons/Plugins: plugin
 PluginInstaller/Title: Gestisci plugin
 PluginInstaller/For: per:

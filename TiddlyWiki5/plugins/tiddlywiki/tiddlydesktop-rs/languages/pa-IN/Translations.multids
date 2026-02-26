@@ -134,6 +134,12 @@ RelaySync/RegisteredOnRelay: ਰਜਿਸਟਰਡ
 RelaySync/Registering: ਰਜਿਸਟਰ ਹੋ ਰਿਹਾ ਹੈ...
 RelaySync/RegisterFailed: ਰਜਿਸਟ੍ਰੇਸ਼ਨ ਅਸਫਲ
 Tooltips/SelectRelayRoom: ਇਸ ਵਿਕੀ ਨੂੰ ਰਿਲੇ ਕਮਰੇ ਵਿੱਚ ਅਸਾਈਨ ਕਰੋ
+RelaySync/ServerRooms: ਸਰਵਰ 'ਤੇ ਤੁਹਾਡੇ ਕਮਰੇ
+RelaySync/ServerRoomsEmpty: ਸਰਵਰ 'ਤੇ ਕੋਈ ਕਮਰਾ ਨਹੀਂ ਮਿਲਿਆ। ਵੇਰਵਿਆਂ ਪੈਨਲ ਤੋਂ ਕਮਰਾ ਰਜਿਸਟਰ ਕਰੋ।
+RelaySync/Configured: ਸੰਰਚਿਤ
+RelaySync/NotConfigured: ਸਥਾਨਕ ਤੌਰ 'ਤੇ ਸੰਰਚਿਤ ਨਹੀਂ
+RelaySync/DeleteServerRoom: ਸਰਵਰ ਤੋਂ ਮਿਟਾਓ
+RelaySync/ConfirmDeleteServerRoom: ਕੀ ਤੁਸੀਂ ਯਕੀਨੀ ਹੋ ਕਿ ਤੁਸੀਂ ਇਸ ਕਮਰੇ ਨੂੰ ਸਰਵਰ ਤੋਂ ਮਿਟਾਉਣਾ ਚਾਹੁੰਦੇ ਹੋ? ਇਹ ਕਾਰਵਾਈ ਵਾਪਸ ਨਹੀਂ ਕੀਤੀ ਜਾ ਸਕਦੀ।
 Buttons/Plugins: ਪਲੱਗਇਨ
 PluginInstaller/Title: ਪਲੱਗਇਨ ਪ੍ਰਬੰਧਿਤ ਕਰੋ
 PluginInstaller/For: ਲਈ:

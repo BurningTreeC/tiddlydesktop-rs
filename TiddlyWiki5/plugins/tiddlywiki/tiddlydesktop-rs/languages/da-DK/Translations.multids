@@ -134,6 +134,12 @@ RelaySync/RegisteredOnRelay: Registreret
 RelaySync/Registering: Registrerer...
 RelaySync/RegisterFailed: Registrering mislykkedes
 Tooltips/SelectRelayRoom: Tildel denne wiki til et relay-rum
+RelaySync/ServerRooms: Dine rum på serveren
+RelaySync/ServerRoomsEmpty: Ingen rum fundet på serveren. Registrer et rum fra dets detaljepanel.
+RelaySync/Configured: Konfigureret
+RelaySync/NotConfigured: Ikke konfigureret lokalt
+RelaySync/DeleteServerRoom: Slet fra serveren
+RelaySync/ConfirmDeleteServerRoom: Er du sikker på, at du vil slette dette rum fra serveren? Dette kan ikke fortrydes.
 Buttons/Plugins: plugins
 PluginInstaller/Title: Administrer plugins
 PluginInstaller/For: for:

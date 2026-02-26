@@ -7212,6 +7212,16 @@ pub async fn relay_sync_delete_server_room(room_code: String) -> Result<(), Stri
 }
 
 #[tauri::command]
+pub async fn relay_sync_delete_server_room_by_hash(room_hash: String) -> Result<(), String> {
+    let mgr = get_sync_manager().ok_or("Sync not initialized")?;
+    if let Some(relay) = &mgr.relay_manager {
+        relay.delete_server_room_by_hash(&room_hash).await
+    } else {
+        Err("Relay sync not available".to_string())
+    }
+}
+
+#[tauri::command]
 pub async fn relay_sync_add_member(
     room_code: String,
     username: Option<String>,
@@ -7259,8 +7269,32 @@ pub async fn relay_sync_list_members(room_code: String) -> Result<serde_json::Va
 pub async fn relay_sync_list_server_rooms() -> Result<serde_json::Value, String> {
     let mgr = get_sync_manager().ok_or("Sync not initialized")?;
     if let Some(relay) = &mgr.relay_manager {
-        let rooms = relay.list_server_rooms().await?;
-        Ok(serde_json::json!(rooms))
+        let server_rooms = relay.list_server_rooms().await?;
+        let local_rooms = relay.get_rooms().await;
+
+        // Build hash → local room mapping
+        let mut hash_to_local: HashMap<String, (String, String)> = HashMap::new();
+        for room in &local_rooms {
+            let hash = discovery::hash_room_code(&room.room_code);
+            hash_to_local.insert(hash, (room.room_code.clone(), room.name.clone()));
+        }
+
+        // Annotate each server room with local match info
+        let annotated: Vec<serde_json::Value> = server_rooms.iter().map(|sr| {
+            let room_hash = sr["room_code"].as_str().unwrap_or("");
+            let local = hash_to_local.get(room_hash);
+            serde_json::json!({
+                "room_hash": room_hash,
+                "role": sr["role"],
+                "member_count": sr["member_count"],
+                "owner_username": sr["owner_username"],
+                "owner_provider": sr["owner_provider"],
+                "local_room_code": local.map(|(code, _)| code.as_str()),
+                "local_room_name": local.map(|(_, name)| name.as_str()),
+            })
+        }).collect();
+
+        Ok(serde_json::json!(annotated))
     } else {
         Err("Relay sync not available".to_string())
     }

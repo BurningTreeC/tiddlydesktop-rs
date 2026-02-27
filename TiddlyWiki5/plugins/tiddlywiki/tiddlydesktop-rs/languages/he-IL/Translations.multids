@@ -138,6 +138,7 @@ RelaySync/ServerRooms: החדרים שלך בשרת
 RelaySync/ServerRoomsEmpty: לא נמצאו חדרים בשרת. רשום חדר מלוח הפרטים שלו.
 RelaySync/Configured: מוגדר
 RelaySync/NotConfigured: לא מוגדר מקומית
+RelaySync/RejoinRoom: הצטרף מחדש
 RelaySync/DeleteServerRoom: מחק מהשרת
 RelaySync/ConfirmDeleteServerRoom: האם אתה בטוח שברצונך למחוק חדר זה מהשרת? לא ניתן לבטל פעולה זו.
 Buttons/Plugins: תוספים

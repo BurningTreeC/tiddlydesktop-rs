@@ -391,6 +391,15 @@ impl SyncServer {
         result
     }
 
+    /// Get LAN peers in a specific room with their device names.
+    pub async fn lan_peers_for_room(&self, room_code: &str) -> Vec<(String, String)> {
+        let peers = self.peers.read().await;
+        peers.iter()
+            .filter(|(_, p)| p.auth_room_codes.iter().any(|rc| rc == room_code))
+            .map(|(id, p)| (id.clone(), p.device_name.clone()))
+            .collect()
+    }
+
     /// Get all room codes a LAN peer shares with us.
     pub async fn peer_room_codes(&self, device_id: &str) -> Vec<String> {
         self.peers.read().await

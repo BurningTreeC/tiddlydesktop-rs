@@ -138,6 +138,7 @@ RelaySync/ServerRooms: Vostre cameras sur le servitor
 RelaySync/ServerRoomsEmpty: Nulle camera trovate sur le servitor. Registra un camera ab su pannello de detalios.
 RelaySync/Configured: Configurate
 RelaySync/NotConfigured: Non configurate localmente
+RelaySync/RejoinRoom: Re-jungere
 RelaySync/DeleteServerRoom: Deler del servitor
 RelaySync/ConfirmDeleteServerRoom: Es tu secur que tu vole deler iste camera del servitor? Iste action non pote esser revocate.
 Buttons/Plugins: plugins

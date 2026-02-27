@@ -1907,7 +1907,9 @@ exports.startup = function(callback) {
 				member_count: "" + (sr.member_count || 0),
 				owner_username: sr.owner_username || "",
 				local_room_code: sr.local_room_code || "",
-				local_room_name: sr.local_room_name || ""
+				local_room_name: sr.local_room_name || "",
+				decrypted_room_code: sr.decrypted_room_code || "",
+				decrypted_password: sr.decrypted_password || ""
 			}));
 		});
 		// Clean stale tiddlers
@@ -1928,6 +1930,12 @@ exports.startup = function(callback) {
 		if(!roomHash) return;
 		if(!confirm($tw.wiki.renderText("text/plain", "text/vnd.tiddlywiki", "<<td-lingo RelaySync/ConfirmDeleteServerRoom>>") || "Are you sure you want to delete this room from the server? This cannot be undone.")) return;
 		invoke("relay_sync_delete_server_room_by_hash", { roomHash: roomHash }).then(function() {
+			// Immediately remove the tiddler from UI (don't wait for re-fetch)
+			var roomTitle = "$:/temp/tiddlydesktop-rs/relay-server-room/" + roomHash;
+			$tw.wiki.deleteTiddler(roomTitle);
+			var currentList = ($tw.wiki.getTiddlerText("$:/temp/tiddlydesktop-rs/relay-server-room-list") || "").split(" ").filter(function(t) { return t && t !== roomTitle; });
+			$tw.wiki.setText("$:/temp/tiddlydesktop-rs/relay-server-room-list", "text", null, currentList.join(" "));
+			// Then re-fetch to get authoritative state
 			fetchServerRooms();
 		}).catch(function(err) {
 			console.error("[Relay] Failed to delete server room:", err);

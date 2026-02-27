@@ -138,6 +138,7 @@ RelaySync/ServerRooms: Twoje pokoje na serwerze
 RelaySync/ServerRoomsEmpty: Nie znaleziono pokoi na serwerze. Zarejestruj pokój z jego panelu szczegółów.
 RelaySync/Configured: Skonfigurowany
 RelaySync/NotConfigured: Nie skonfigurowany lokalnie
+RelaySync/RejoinRoom: Dołącz ponownie
 RelaySync/DeleteServerRoom: Usuń z serwera
 RelaySync/ConfirmDeleteServerRoom: Czy na pewno chcesz usunąć ten pokój z serwera? Tej operacji nie można cofnąć.
 Buttons/Plugins: wtyczki

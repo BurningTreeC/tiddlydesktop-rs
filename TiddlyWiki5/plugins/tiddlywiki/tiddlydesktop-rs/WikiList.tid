@@ -800,7 +800,7 @@ title: $:/plugins/tiddlywiki/tiddlydesktop-rs/WikiList
 {{$:/core/images/refresh-button}}
 </$button></h4>
 <$list filter="[enlist{$:/temp/tiddlydesktop-rs/relay-server-room-list}]" emptyMessage=<<td-lingo RelaySync/ServerRoomsEmpty>>>
-<$let roomHash={{!!room_hash}} role={{!!role}} memberCount={{!!member_count}} ownerUsername={{!!owner_username}} localCode={{!!local_room_code}} localName={{!!local_room_name}}>
+<$let roomHash={{!!room_hash}} role={{!!role}} memberCount={{!!member_count}} ownerUsername={{!!owner_username}} localCode={{!!local_room_code}} localName={{!!local_room_name}} decryptedCode={{!!decrypted_room_code}} decryptedPassword={{!!decrypted_password}}>
 <div class="td-relay-server-room-item">
 <$list filter="[<localName>!is[blank]]" variable="ignore">
 <span class="td-relay-room-name"><$text text=<<localName>>/></span>
@@ -816,6 +816,23 @@ title: $:/plugins/tiddlywiki/tiddlydesktop-rs/WikiList
 </$list>
 <$list filter="[<localCode>is[blank]]" variable="ignore">
 <span class="td-relay-server-room-status td-relay-server-room-not-configured"><<td-lingo RelaySync/NotConfigured>></span>
+<!-- One-click re-join when decrypted credentials are available (same device that created the room) -->
+<$list filter="[<decryptedCode>!is[blank]]" variable="ignore">
+<$button class="tc-btn-invisible td-button td-button-primary td-button-small">
+<$action-sendmessage $message="tm-tiddlydesktop-rs-relay-add-room" name="" roomCode=<<decryptedCode>> password=<<decryptedPassword>>/>
+<<td-lingo RelaySync/RejoinRoom>>
+</$button>
+</$list>
+<!-- Manual re-join when credentials can't be decrypted (different device) -->
+<$list filter="[<decryptedCode>is[blank]]" variable="ignore">
+<$button class="tc-btn-invisible td-button td-button-primary td-button-small">
+<$action-setfield $tiddler="$:/temp/tiddlydesktop-rs/relay-adding-room" text="join"/>
+<$action-setfield $tiddler="$:/temp/tiddlydesktop-rs/relay-add-room-name" text=""/>
+<$action-setfield $tiddler="$:/temp/tiddlydesktop-rs/relay-add-room-code" text=""/>
+<$action-setfield $tiddler="$:/temp/tiddlydesktop-rs/relay-add-room-password" text=""/>
+<<td-lingo RelaySync/RejoinRoom>>
+</$button>
+</$list>
 </$list>
 <$list filter="[<role>match[owner]]" variable="ignore">
 <$button class="tc-btn-invisible td-button td-button-danger td-button-small">

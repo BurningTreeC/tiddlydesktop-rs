@@ -26,7 +26,7 @@ use connection::{RelayFrame, RelayReceiver, RelaySender};
 use hkdf::Hkdf;
 use hmac::{Hmac, Mac};
 use sha2::Sha256;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::time::Instant;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -475,6 +475,9 @@ pub struct RelaySyncManager {
     rooms: Arc<RwLock<HashMap<String, RoomConnection>>>,
     /// Per-room running flags (room_code → flag). Used to stop individual room tasks.
     room_running: Arc<RwLock<HashMap<String, Arc<AtomicBool>>>>,
+    /// Rooms the user has manually activated (clicked "Connect" on).
+    /// Used to report `connected = true` for LAN-only rooms where relay is unavailable.
+    manually_activated: RwLock<HashSet<String>>,
 }
 
 impl RelaySyncManager {
@@ -548,6 +551,7 @@ impl RelaySyncManager {
             event_tx,
             rooms: Arc::new(RwLock::new(HashMap::new())),
             room_running: Arc::new(RwLock::new(HashMap::new())),
+            manually_activated: RwLock::new(HashSet::new()),
         };
 
         // If we need to migrate plain-text passwords, encrypt and save now
@@ -697,10 +701,28 @@ impl RelaySyncManager {
         self.room_running.write().await.remove(room_code);
     }
 
+    /// Mark a room as manually activated (for LAN-only connect when relay is unavailable).
+    pub async fn activate_room(&self, room_code: &str) {
+        self.manually_activated.write().await.insert(room_code.to_string());
+    }
+
+    /// Remove manual activation flag (user clicked Disconnect).
+    pub async fn deactivate_room(&self, room_code: &str) {
+        self.manually_activated.write().await.remove(room_code);
+    }
+
     /// Connect all auto_connect rooms
     pub async fn start_all(&self) -> Result<(), String> {
         let config = self.config.read().await.clone();
         eprintln!("[Relay] Starting auto-connect rooms (url: {})", config.relay_url);
+
+        // Mark auto_connect rooms as activated so they show as connected in UI
+        // (even if relay auth is unavailable, LAN sync still works)
+        for room_def in &config.rooms {
+            if room_def.auto_connect {
+                self.activate_room(&room_def.room_code).await;
+            }
+        }
 
         // Auth token required for relay — skip if not authenticated
         if config.auth_token.is_empty() {
@@ -1602,6 +1624,15 @@ impl RelaySyncManager {
         self.config.read().await.clone()
     }
 
+    /// Try to decrypt an encrypted credentials blob (from server room list).
+    /// Returns `Some((room_code, password))` if decryption succeeds (same device),
+    /// or `None` if it was encrypted by a different device key.
+    pub fn decrypt_credentials(&self, encrypted: &str) -> Option<(String, String)> {
+        let plaintext = decrypt_password(&self.device_key, encrypted)?;
+        let (code, password) = plaintext.split_once(':')?;
+        Some((code.to_string(), password.to_string()))
+    }
+
     /// Update the relay URL
     pub async fn set_relay_url(&self, url: String) {
         self.config.write().await.relay_url = normalize_relay_url(&url);
@@ -1626,18 +1657,20 @@ impl RelaySyncManager {
     pub async fn get_rooms(&self) -> Vec<RoomStatus> {
         let config = self.config.read().await;
         let rooms = self.rooms.read().await;
+        let activated = self.manually_activated.read().await;
 
         config
             .rooms
             .iter()
             .map(|def| {
                 let connected_room = rooms.get(&def.room_code);
+                let is_activated = activated.contains(&def.room_code);
                 RoomStatus {
                     name: def.name.clone(),
                     room_code: def.room_code.clone(),
                     password: def.password.clone(),
                     auto_connect: def.auto_connect,
-                    connected: connected_room.is_some(),
+                    connected: connected_room.is_some() || is_activated,
                     connected_peers: connected_room
                         .map(|r| {
                             r.member_names
@@ -1801,7 +1834,22 @@ impl RelaySyncManager {
     /// Sends a hashed room code — the server never sees the raw code or room name.
     pub async fn create_server_room(&self, room_code: &str) -> Result<String, String> {
         let room_hash = crate::lan_sync::discovery::hash_room_code(room_code);
-        let body = serde_json::json!({"room_code": room_hash});
+
+        // Encrypt room credentials so the owner can re-join from this device
+        let encrypted_credentials = {
+            let config = self.config.read().await;
+            config.rooms.iter()
+                .find(|r| r.room_code == room_code)
+                .map(|r| {
+                    let plaintext = format!("{}:{}", r.room_code, r.password);
+                    encrypt_password(&self.device_key, &plaintext)
+                })
+        };
+
+        let body = serde_json::json!({
+            "room_code": room_hash,
+            "encrypted_credentials": encrypted_credentials,
+        });
         let result: serde_json::Value = self.relay_api(
             reqwest::Method::POST,
             "/api/rooms",

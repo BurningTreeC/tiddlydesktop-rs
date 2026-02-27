@@ -138,6 +138,7 @@ RelaySync/ServerRooms: सर्वर पर आपके कमरे
 RelaySync/ServerRoomsEmpty: सर्वर पर कोई कमरा नहीं मिला। विवरण पैनल से कमरा पंजीकृत करें।
 RelaySync/Configured: कॉन्फ़िगर किया गया
 RelaySync/NotConfigured: स्थानीय रूप से कॉन्फ़िगर नहीं किया गया
+RelaySync/RejoinRoom: पुनः जुड़ें
 RelaySync/DeleteServerRoom: सर्वर से हटाएं
 RelaySync/ConfirmDeleteServerRoom: क्या आप वाकई इस कमरे को सर्वर से हटाना चाहते हैं? यह क्रिया पूर्ववत नहीं की जा सकती।
 Buttons/Plugins: प्लगइन

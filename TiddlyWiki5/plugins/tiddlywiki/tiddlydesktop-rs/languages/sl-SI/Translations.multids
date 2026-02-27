@@ -138,6 +138,7 @@ RelaySync/ServerRooms: Vaše sobe na strežniku
 RelaySync/ServerRoomsEmpty: Na strežniku ni bilo najdenih sob. Registrirajte sobo iz njenega podrobnostnega panela.
 RelaySync/Configured: Nastavljeno
 RelaySync/NotConfigured: Lokalno ni nastavljeno
+RelaySync/RejoinRoom: Ponovno se pridruži
 RelaySync/DeleteServerRoom: Izbriši s strežnika
 RelaySync/ConfirmDeleteServerRoom: Ali ste prepričani, da želite izbrisati to sobo s strežnika? Tega dejanja ni mogoče razveljaviti.
 Buttons/Plugins: vtičniki

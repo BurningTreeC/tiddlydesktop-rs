@@ -138,6 +138,7 @@ RelaySync/ServerRooms: サーバー上のルーム
 RelaySync/ServerRoomsEmpty: サーバーにルームが見つかりません。詳細パネルからルームを登録してください。
 RelaySync/Configured: 設定済み
 RelaySync/NotConfigured: ローカル未設定
+RelaySync/RejoinRoom: 再参加
 RelaySync/DeleteServerRoom: サーバーから削除
 RelaySync/ConfirmDeleteServerRoom: このルームをサーバーから削除してもよろしいですか？この操作は取り消せません。
 Buttons/Plugins: プラグイン

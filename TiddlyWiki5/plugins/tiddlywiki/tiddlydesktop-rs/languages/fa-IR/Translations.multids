@@ -138,6 +138,7 @@ RelaySync/ServerRooms: اتاق‌های شما روی سرور
 RelaySync/ServerRoomsEmpty: اتاقی روی سرور یافت نشد. یک اتاق را از پنل جزئیات آن ثبت کنید.
 RelaySync/Configured: پیکربندی شده
 RelaySync/NotConfigured: به صورت محلی پیکربندی نشده
+RelaySync/RejoinRoom: پیوستن مجدد
 RelaySync/DeleteServerRoom: حذف از سرور
 RelaySync/ConfirmDeleteServerRoom: آیا مطمئن هستید که می‌خواهید این اتاق را از سرور حذف کنید؟ این عمل قابل بازگشت نیست.
 Buttons/Plugins: افزونه‌ها

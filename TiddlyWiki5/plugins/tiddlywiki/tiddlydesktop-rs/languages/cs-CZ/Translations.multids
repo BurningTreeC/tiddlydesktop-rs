@@ -138,6 +138,7 @@ RelaySync/ServerRooms: Vaše místnosti na serveru
 RelaySync/ServerRoomsEmpty: Na serveru nebyly nalezeny žádné místnosti. Zaregistrujte místnost z jejího panelu podrobností.
 RelaySync/Configured: Nakonfigurováno
 RelaySync/NotConfigured: Lokálně nenakonfigurováno
+RelaySync/RejoinRoom: Znovu se připojit
 RelaySync/DeleteServerRoom: Smazat ze serveru
 RelaySync/ConfirmDeleteServerRoom: Opravdu chcete smazat tuto místnost ze serveru? Tuto akci nelze vrátit zpět.
 Buttons/Plugins: pluginy

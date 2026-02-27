@@ -138,6 +138,7 @@ RelaySync/ServerRooms: 서버의 내 방
 RelaySync/ServerRoomsEmpty: 서버에서 방을 찾을 수 없습니다. 세부 정보 패널에서 방을 등록하세요.
 RelaySync/Configured: 구성됨
 RelaySync/NotConfigured: 로컬에서 구성되지 않음
+RelaySync/RejoinRoom: 다시 참가
 RelaySync/DeleteServerRoom: 서버에서 삭제
 RelaySync/ConfirmDeleteServerRoom: 이 방을 서버에서 삭제하시겠습니까? 이 작업은 되돌릴 수 없습니다.
 Buttons/Plugins: 플러그인

@@ -138,6 +138,7 @@ RelaySync/ServerRooms: ਸਰਵਰ 'ਤੇ ਤੁਹਾਡੇ ਕਮਰੇ
 RelaySync/ServerRoomsEmpty: ਸਰਵਰ 'ਤੇ ਕੋਈ ਕਮਰਾ ਨਹੀਂ ਮਿਲਿਆ। ਵੇਰਵਿਆਂ ਪੈਨਲ ਤੋਂ ਕਮਰਾ ਰਜਿਸਟਰ ਕਰੋ।
 RelaySync/Configured: ਸੰਰਚਿਤ
 RelaySync/NotConfigured: ਸਥਾਨਕ ਤੌਰ 'ਤੇ ਸੰਰਚਿਤ ਨਹੀਂ
+RelaySync/RejoinRoom: ਦੁਬਾਰਾ ਜੁੜੋ
 RelaySync/DeleteServerRoom: ਸਰਵਰ ਤੋਂ ਮਿਟਾਓ
 RelaySync/ConfirmDeleteServerRoom: ਕੀ ਤੁਸੀਂ ਯਕੀਨੀ ਹੋ ਕਿ ਤੁਸੀਂ ਇਸ ਕਮਰੇ ਨੂੰ ਸਰਵਰ ਤੋਂ ਮਿਟਾਉਣਾ ਚਾਹੁੰਦੇ ਹੋ? ਇਹ ਕਾਰਵਾਈ ਵਾਪਸ ਨਹੀਂ ਕੀਤੀ ਜਾ ਸਕਦੀ।
 Buttons/Plugins: ਪਲੱਗਇਨ

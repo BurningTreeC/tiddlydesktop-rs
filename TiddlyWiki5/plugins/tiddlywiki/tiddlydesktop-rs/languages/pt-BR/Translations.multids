@@ -138,6 +138,7 @@ RelaySync/ServerRooms: Suas salas no servidor
 RelaySync/ServerRoomsEmpty: Nenhuma sala encontrada no servidor. Registre uma sala a partir do painel de detalhes.
 RelaySync/Configured: Configurado
 RelaySync/NotConfigured: Não configurado localmente
+RelaySync/RejoinRoom: Reingressar
 RelaySync/DeleteServerRoom: Excluir do servidor
 RelaySync/ConfirmDeleteServerRoom: Tem certeza de que deseja excluir esta sala do servidor? Esta ação não pode ser desfeita.
 Buttons/Plugins: plugins

@@ -138,6 +138,7 @@ RelaySync/ServerRooms: Ваши комнаты на сервере
 RelaySync/ServerRoomsEmpty: Комнаты на сервере не найдены. Зарегистрируйте комнату через её панель подробностей.
 RelaySync/Configured: Настроено
 RelaySync/NotConfigured: Не настроено локально
+RelaySync/RejoinRoom: Присоединиться снова
 RelaySync/DeleteServerRoom: Удалить с сервера
 RelaySync/ConfirmDeleteServerRoom: Вы уверены, что хотите удалить эту комнату с сервера? Это действие невозможно отменить.
 Buttons/Plugins: плагины

@@ -138,6 +138,7 @@ RelaySync/ServerRooms: Le tue stanze sul server
 RelaySync/ServerRoomsEmpty: Nessuna stanza trovata sul server. Registra una stanza dal suo pannello dei dettagli.
 RelaySync/Configured: Configurato
 RelaySync/NotConfigured: Non configurato localmente
+RelaySync/RejoinRoom: Rientra
 RelaySync/DeleteServerRoom: Elimina dal server
 RelaySync/ConfirmDeleteServerRoom: Sei sicuro di voler eliminare questa stanza dal server? Questa azione non può essere annullata.
 Buttons/Plugins: plugin

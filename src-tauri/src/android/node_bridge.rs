@@ -97,6 +97,98 @@ fn android_temp_dir() -> PathBuf {
     PathBuf::from("/data/local/tmp")
 }
 
+/// Build a CA certificate bundle from Android's system certs.
+/// Android stores individual PEM certs in /system/etc/security/cacerts/.
+/// We concatenate them into a single file that OpenSSL can use.
+/// Returns the path to the bundle, or None if it can't be created.
+fn get_or_create_ca_bundle() -> Option<PathBuf> {
+    static CA_BUNDLE: std::sync::OnceLock<Option<PathBuf>> = std::sync::OnceLock::new();
+    CA_BUNDLE.get_or_init(|| {
+        let data_dir = get_app_data_dir().ok()?;
+        let bundle_path = data_dir.join("cacert.pem");
+
+        // Reuse if already built (survives across Node invocations)
+        if bundle_path.exists() {
+            if let Ok(meta) = std::fs::metadata(&bundle_path) {
+                if meta.len() > 1000 {
+                    return Some(bundle_path);
+                }
+            }
+        }
+
+        let certs_dir = std::path::Path::new("/system/etc/security/cacerts");
+        if !certs_dir.is_dir() {
+            eprintln!("[NodeBridge] System CA certs directory not found");
+            return None;
+        }
+
+        let mut bundle = String::new();
+        if let Ok(entries) = std::fs::read_dir(certs_dir) {
+            for entry in entries.flatten() {
+                if let Ok(contents) = std::fs::read_to_string(entry.path()) {
+                    // Only include PEM certificate blocks
+                    if contents.contains("-----BEGIN CERTIFICATE-----") {
+                        bundle.push_str(&contents);
+                        if !bundle.ends_with('\n') {
+                            bundle.push('\n');
+                        }
+                    }
+                }
+            }
+        }
+
+        if bundle.is_empty() {
+            eprintln!("[NodeBridge] No CA certificates found");
+            return None;
+        }
+
+        match std::fs::write(&bundle_path, &bundle) {
+            Ok(_) => {
+                eprintln!("[NodeBridge] Created CA bundle: {} ({} bytes)", bundle_path.display(), bundle.len());
+                Some(bundle_path)
+            }
+            Err(e) => {
+                eprintln!("[NodeBridge] Failed to write CA bundle: {}", e);
+                None
+            }
+        }
+    }).clone()
+}
+
+/// Apply Termux-override environment variables to a Command.
+///
+/// The bundled libnode.so is compiled in Termux and has hardcoded paths to
+/// Termux's data directory (/data/data/com.termux/files/usr/...) which are
+/// inaccessible from this app's sandbox. These env vars redirect Node.js /
+/// OpenSSL to use the correct paths.
+fn apply_termux_env_overrides(cmd: &mut Command) {
+    // 1. OpenSSL config — prevent loading Termux's openssl.cnf
+    cmd.env("OPENSSL_CONF", "/dev/null");
+
+    // 2. SSL/TLS CA certificates — point to our concatenated system CA bundle
+    if let Some(ca_bundle) = get_or_create_ca_bundle() {
+        let ca_str = ca_bundle.to_string_lossy().to_string();
+        cmd.env("SSL_CERT_FILE", &ca_str);
+        cmd.env("NODE_EXTRA_CA_CERTS", &ca_str);
+    }
+
+    // 3. HOME directory — prevent writes to Termux's home
+    if let Ok(data_dir) = get_app_data_dir() {
+        let home = data_dir.join("node_home");
+        let _ = std::fs::create_dir_all(&home);
+        cmd.env("HOME", home.to_string_lossy().to_string());
+    }
+
+    // 4. Temp directory — /tmp isn't writable on Android
+    let tmp = android_temp_dir();
+    let _ = std::fs::create_dir_all(&tmp);
+    cmd.env("TMPDIR", tmp.to_string_lossy().to_string());
+
+    // 5. Timezone — use Android's system timezone data
+    //    (Termux has its own zoneinfo at an inaccessible path)
+    cmd.env("TZDIR", "/system/usr/share/zoneinfo");
+}
+
 /// Active file sync watchers for SAF wikis
 /// Maps local_path -> SyncWatcher
 static SAF_SYNC_WATCHERS: std::sync::LazyLock<Mutex<HashMap<String, Arc<SyncWatcher>>>> =
@@ -768,6 +860,7 @@ pub fn run_tiddlywiki_command(args: &[&str]) -> Result<String, String> {
 
     let mut cmd = Command::new(&node_path);
     cmd.env("LD_LIBRARY_PATH", &ld_library_path);
+    apply_termux_env_overrides(&mut cmd);
 
     // Set TIDDLYWIKI_PLUGIN_PATH (plugins + custom_plugins from SAF)
     if let Some(plugin_path) = build_plugin_path() {
@@ -1082,6 +1175,7 @@ pub fn start_wiki_server(folder_path: &str, port: u16) -> Result<String, String>
 
     let mut cmd = Command::new(&node_path);
     cmd.env("LD_LIBRARY_PATH", &ld_library_path);
+    apply_termux_env_overrides(&mut cmd);
 
     // Set TIDDLYWIKI_PLUGIN_PATH (plugins + custom_plugins from SAF)
     if let Some(plugin_path) = build_plugin_path() {

@@ -1762,12 +1762,13 @@ impl SyncManager {
         }
     }
 
-    /// Update active_room_codes from connected relay rooms (for discovery beacons).
+    /// Update active_room_codes from ALL configured rooms (for discovery beacons).
+    /// Every configured room is included — LAN discovery works independently of
+    /// relay connection status. Removing a room from config stops LAN discovery.
     async fn update_active_room_codes(&self) {
         if let Some(relay) = &self.relay_manager {
             let rooms = relay.get_rooms().await;
             let codes: Vec<String> = rooms.iter()
-                .filter(|r| r.auto_connect || r.connected)
                 .map(|r| r.room_code.clone())
                 .collect();
             if let Ok(mut arc) = self.active_room_codes.write() {
@@ -6864,8 +6865,22 @@ pub async fn relay_sync_get_status() -> Result<RelaySyncStatus, String> {
     let mgr = get_sync_manager().ok_or("Sync not initialized")?;
     if let Some(relay) = &mgr.relay_manager {
         let config = relay.get_config().await;
-        let rooms = relay.get_rooms().await;
+        let mut rooms = relay.get_rooms().await;
         let authenticated = !config.auth_token.is_empty();
+        // Merge LAN peers into room connected_peers (dedup by device_id)
+        if let Some(ref server) = *mgr.server.read().await {
+            for room in &mut rooms {
+                let lan_peers = server.lan_peers_for_room(&room.room_code).await;
+                for (id, name) in lan_peers {
+                    if !room.connected_peers.iter().any(|p| p.device_id == id) {
+                        room.connected_peers.push(crate::relay_sync::RoomPeerInfo {
+                            device_id: id,
+                            device_name: name,
+                        });
+                    }
+                }
+            }
+        }
         // Extract legacy github_id from user_id if it's a github: prefixed ID
         let legacy_github_id = config.user_id.as_deref()
             .and_then(|uid| uid.strip_prefix("github:"))
@@ -6952,7 +6967,13 @@ pub async fn relay_sync_remove_room(room_code: String) -> Result<(), String> {
 pub async fn relay_sync_connect_room(room_code: String) -> Result<(), String> {
     let mgr = get_sync_manager().ok_or("Sync not initialized")?;
     if let Some(relay) = &mgr.relay_manager {
-        let result = relay.connect_room(&room_code).await;
+        // Try relay connection — log but don't fail if relay is unavailable
+        // (LAN-only sync should still work)
+        if let Err(e) = relay.connect_room(&room_code).await {
+            eprintln!("[LAN Sync] Relay connect failed (LAN still works): {}", e);
+        }
+        // Mark room as manually activated so UI shows it as connected
+        relay.activate_room(&room_code).await;
         // Refresh LAN room keys and discovery beacons
         mgr.update_room_keys().await;
         mgr.update_active_room_codes().await;
@@ -6966,7 +6987,7 @@ pub async fn relay_sync_connect_room(room_code: String) -> Result<(), String> {
         // Start foreground service to keep process alive (Android only)
         #[cfg(target_os = "android")]
         start_sync_foreground_service();
-        result
+        Ok(())
     } else {
         Err("Relay sync not available".to_string())
     }
@@ -6977,6 +6998,7 @@ pub async fn relay_sync_disconnect_room(room_code: String) -> Result<(), String>
     let mgr = get_sync_manager().ok_or("Sync not initialized")?;
     if let Some(relay) = &mgr.relay_manager {
         relay.disconnect_room(&room_code).await;
+        relay.deactivate_room(&room_code).await;
         // Refresh discovery beacons
         mgr.update_active_room_codes().await;
         mgr.update_room_keys().await;
@@ -7279,10 +7301,15 @@ pub async fn relay_sync_list_server_rooms() -> Result<serde_json::Value, String>
             hash_to_local.insert(hash, (room.room_code.clone(), room.name.clone()));
         }
 
-        // Annotate each server room with local match info
+        // Annotate each server room with local match info and decrypted credentials
         let annotated: Vec<serde_json::Value> = server_rooms.iter().map(|sr| {
             let room_hash = sr["room_code"].as_str().unwrap_or("");
             let local = hash_to_local.get(room_hash);
+
+            // Try to decrypt credentials for owned rooms (only works on same device)
+            let decrypted = sr["encrypted_credentials"].as_str()
+                .and_then(|enc| relay.decrypt_credentials(enc));
+
             serde_json::json!({
                 "room_hash": room_hash,
                 "role": sr["role"],
@@ -7291,6 +7318,8 @@ pub async fn relay_sync_list_server_rooms() -> Result<serde_json::Value, String>
                 "owner_provider": sr["owner_provider"],
                 "local_room_code": local.map(|(code, _)| code.as_str()),
                 "local_room_name": local.map(|(_, name)| name.as_str()),
+                "decrypted_room_code": decrypted.as_ref().map(|(c, _)| c.as_str()),
+                "decrypted_password": decrypted.as_ref().map(|(_, p)| p.as_str()),
             })
         }).collect();
 

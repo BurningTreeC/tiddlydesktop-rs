@@ -138,6 +138,7 @@ RelaySync/ServerRooms: Uw kamers op de server
 RelaySync/ServerRoomsEmpty: Geen kamers gevonden op de server. Registreer een kamer vanuit het detailpaneel.
 RelaySync/Configured: Geconfigureerd
 RelaySync/NotConfigured: Niet lokaal geconfigureerd
+RelaySync/RejoinRoom: Opnieuw deelnemen
 RelaySync/DeleteServerRoom: Verwijderen van server
 RelaySync/ConfirmDeleteServerRoom: Weet u zeker dat u deze kamer van de server wilt verwijderen? Dit kan niet ongedaan worden gemaakt.
 Buttons/Plugins: plugins

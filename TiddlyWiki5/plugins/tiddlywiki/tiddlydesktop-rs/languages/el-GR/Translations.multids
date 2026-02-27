@@ -138,6 +138,7 @@ RelaySync/ServerRooms: Τα δωμάτιά σας στον διακομιστή
 RelaySync/ServerRoomsEmpty: Δεν βρέθηκαν δωμάτια στον διακομιστή. Καταχωρίστε ένα δωμάτιο από τον πίνακα λεπτομερειών του.
 RelaySync/Configured: Ρυθμισμένο
 RelaySync/NotConfigured: Δεν έχει ρυθμιστεί τοπικά
+RelaySync/RejoinRoom: Επανασύνδεση
 RelaySync/DeleteServerRoom: Διαγραφή από τον διακομιστή
 RelaySync/ConfirmDeleteServerRoom: Είστε σίγουροι ότι θέλετε να διαγράψετε αυτό το δωμάτιο από τον διακομιστή; Αυτή η ενέργεια δεν μπορεί να αναιρεθεί.
 Buttons/Plugins: πρόσθετα

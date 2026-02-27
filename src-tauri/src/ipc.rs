@@ -219,6 +219,10 @@ pub enum IpcMessage {
         tiddler_title: String,
         saved_title: String,
     },
+    /// Wiki process → main process: announce local TiddlyWiki username
+    LanSyncAnnounceUsername {
+        user_name: String,
+    },
 }
 
 /// A connected wiki process
@@ -308,13 +312,12 @@ impl IpcServer {
             }
             let delivered = client_count - broken_pids.len();
 
-            // Same-process fallback: On Linux/macOS, wiki windows run inside
-            // the main process and never connect as TCP IPC clients. Push to
-            // IPC_SYNC_QUEUE so JS can poll via lan_sync_poll_ipc.
+            // In-process webview windows (Linux/macOS single-file wikis) don't
+            // connect as TCP IPC clients — they poll IPC_SYNC_QUEUE instead.
+            // Always queue so they receive messages even when TCP clients
+            // (folder wiki Node.js processes) are also connected.
             #[cfg(not(target_os = "android"))]
-            if delivered == 0 {
-                crate::lan_sync::queue_lan_sync_ipc(payload_json.to_string());
-            }
+            crate::lan_sync::queue_lan_sync_ipc(payload_json.to_string());
 
             return delivered;
         }
@@ -894,6 +897,22 @@ fn handle_client(
                                 }
                             }
 
+                            IpcMessage::LanSyncAnnounceUsername { ref user_name } => {
+                                if !client_authenticated {
+                                    continue;
+                                }
+                                #[cfg(not(target_os = "android"))]
+                                {
+                                    if let Some(mgr) = crate::lan_sync::get_sync_manager() {
+                                        let mgr = mgr.clone();
+                                        let name = user_name.clone();
+                                        tauri::async_runtime::spawn(async move {
+                                            mgr.announce_username(name).await;
+                                        });
+                                    }
+                                }
+                            }
+
                             _ => {}
                         }
                     }
@@ -1146,6 +1165,13 @@ impl IpcClient {
             wiki_id: wiki_id.to_string(),
             tiddler_title: tiddler_title.to_string(),
             saved_title: saved_title.to_string(),
+        })
+    }
+
+    /// Announce local TiddlyWiki username to main process for broadcast to peers
+    pub fn send_lan_sync_announce_username(&mut self, user_name: &str) -> std::io::Result<()> {
+        self.send(&IpcMessage::LanSyncAnnounceUsername {
+            user_name: user_name.to_string(),
         })
     }
 }

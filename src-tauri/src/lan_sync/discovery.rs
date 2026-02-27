@@ -79,6 +79,8 @@ pub fn hash_room_code(room_code: &str) -> String {
 /// The UDP broadcast discovery manager
 pub struct DiscoveryManager {
     shutdown: Arc<AtomicBool>,
+    /// Set to true to trigger an immediate beacon on the next recv loop iteration
+    force_beacon: Arc<AtomicBool>,
 }
 
 impl DiscoveryManager {
@@ -96,6 +98,7 @@ impl DiscoveryManager {
         active_room_codes: Arc<std::sync::RwLock<Vec<String>>>,
     ) -> Result<Self, String> {
         let shutdown = Arc::new(AtomicBool::new(false));
+        let force_beacon = Arc::new(AtomicBool::new(false));
 
         // Create UDP socket with SO_REUSEADDR + SO_BROADCAST
         let socket = Socket::new(Domain::IPV4, Type::DGRAM, Some(Protocol::UDP))
@@ -129,6 +132,7 @@ impl DiscoveryManager {
 
         let our_device_id = device_id.to_string();
         let shutdown_clone = shutdown.clone();
+        let force_beacon_clone = force_beacon.clone();
 
         eprintln!(
             "[LAN Sync] UDP discovery started on port {} (beacon every {}s, timeout {}s)",
@@ -144,6 +148,8 @@ impl DiscoveryManager {
             let mut peers: HashMap<String, Instant> = HashMap::new();
             // Track when we last emitted PeerDiscovered per peer, for throttled re-emission
             let mut last_emitted: HashMap<String, Instant> = HashMap::new();
+            // Track each peer's last-known room hashes so we re-emit when they change
+            let mut peer_room_hashes: HashMap<String, Vec<String>> = HashMap::new();
             let mut buf = [0u8; 2048]; // Larger buffer for room codes
 
             // Helper to serialize the beacon with current room codes + hashes
@@ -182,6 +188,20 @@ impl DiscoveryManager {
                         let _ = socket.send_to(&goodbye_data, broadcast_addr);
                     }
                     break;
+                }
+
+                // Check for forced beacon (triggered by room connect/disconnect)
+                // Send a burst of 3 beacons (UDP is unreliable — a single packet could be lost)
+                if force_beacon_clone.swap(false, Ordering::Relaxed) {
+                    let beacon_data = make_beacon_data(1);
+                    for i in 0..3u8 {
+                        let _ = socket.send_to(&beacon_data, broadcast_addr);
+                        if i < 2 {
+                            std::thread::sleep(Duration::from_millis(150));
+                        }
+                    }
+                    last_broadcast = Instant::now();
+                    eprintln!("[LAN Sync] Sent forced beacon burst (room change)");
                 }
 
                 // Send beacon periodically (re-serialize each time to pick up room changes)
@@ -239,10 +259,32 @@ impl DiscoveryManager {
                             let is_new = !peers.contains_key(&beacon.id);
                             peers.insert(beacon.id.clone(), Instant::now());
 
-                            // Emit PeerDiscovered for new peers, and re-emit
-                            // periodically for known peers that aren't connected
+                            // Check if room hashes changed (new room joined/left)
+                            let room_hashes_changed = {
+                                let prev = peer_room_hashes.get(&beacon.id);
+                                match prev {
+                                    Some(old) => {
+                                        let mut old_sorted = old.clone();
+                                        old_sorted.sort();
+                                        let mut new_sorted = beacon.room_hashes.clone();
+                                        new_sorted.sort();
+                                        old_sorted != new_sorted
+                                    }
+                                    None => !beacon.room_hashes.is_empty(),
+                                }
+                            };
+                            peer_room_hashes.insert(beacon.id.clone(), beacon.room_hashes.clone());
+
+                            // Emit PeerDiscovered for new peers, when room hashes change,
+                            // and periodically for known peers that aren't connected
                             // via WebSocket (so the sync manager can retry).
-                            let should_emit = if is_new {
+                            let should_emit = if is_new || room_hashes_changed {
+                                if room_hashes_changed && !is_new {
+                                    eprintln!(
+                                        "[LAN Sync] Peer {} room hashes changed — re-emitting discovery",
+                                        beacon.id
+                                    );
+                                }
                                 true
                             } else {
                                 let active = connected_peers.read()
@@ -296,7 +338,13 @@ impl DiscoveryManager {
             eprintln!("[LAN Sync] UDP discovery thread stopped");
         });
 
-        Ok(Self { shutdown })
+        Ok(Self { shutdown, force_beacon })
+    }
+
+    /// Trigger an immediate beacon on the next loop iteration (~100ms).
+    /// Used when room codes change to notify peers without waiting for the 2s interval.
+    pub fn force_beacon(&self) {
+        self.force_beacon.store(true, Ordering::Relaxed);
     }
 
     /// Stop discovery

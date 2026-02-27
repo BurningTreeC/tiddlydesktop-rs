@@ -440,7 +440,7 @@ class WikiActivity : AppCompatActivity() {
     @Volatile private var folderServerReady = false
     // Local filesystem path for SAF folder wikis (Node.js reads from here)
     private var folderLocalPath: String? = null
-    // Whether the sync foreground notification is currently started by this activity
+    // Whether the foreground notification is currently started by this activity
     private var notificationStarted = false
 
     // SyncWatcher — syncs local folder wiki changes back to SAF via FileObserver (inotify)
@@ -2410,21 +2410,9 @@ class WikiActivity : AppCompatActivity() {
 
         @JavascriptInterface
         fun setRelayConnected(connected: Boolean) {
-            this@WikiActivity.runOnUiThread {
-                if (connected && !notificationStarted) {
-                    try {
-                        WikiServerService.startService(applicationContext)
-                        notificationStarted = true
-                        Log.d(TAG, "Started foreground service (relay connected)")
-                    } catch (e: Exception) {
-                        Log.e(TAG, "Failed to start foreground service: ${e.message}")
-                    }
-                } else if (!connected && notificationStarted) {
-                    WikiServerService.wikiClosed(applicationContext)
-                    notificationStarted = false
-                    Log.d(TAG, "Stopped foreground service (relay disconnected)")
-                }
-            }
+            // Notification is now managed by wiki open/close lifecycle, not relay connection.
+            // This method is kept for JS compatibility but no longer affects the foreground service.
+            Log.d(TAG, "setRelayConnected($connected) — notification managed by wiki lifecycle")
         }
     }
 
@@ -3042,8 +3030,14 @@ class WikiActivity : AppCompatActivity() {
 
         Log.d(TAG, "WikiActivity onCreate - path: $wikiPath, title: $wikiTitle, isFolder: $isFolder, folderUrl: $folderServerUrl, localPath: $folderLocalPath, backupsEnabled: $backupsEnabled, backupCount: $backupCount")
 
-        // Foreground notification is started on-demand when relay sync connects
-        // (via SyncInterface.setRelayConnected called from JS polling)
+        // Start foreground notification to keep wiki alive in background
+        try {
+            WikiServerService.wikiOpened(applicationContext, wikiPath ?: "unknown", wikiTitle ?: "TiddlyWiki")
+            notificationStarted = true
+            Log.d(TAG, "Started foreground service for wiki: $wikiTitle")
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to start foreground service: ${e.message}")
+        }
 
         // Notify LAN sync service (main process) that a wiki is open — only if LAN sync is active
         if (LanSyncService.isLanSyncActive(applicationContext)) {
@@ -6254,15 +6248,24 @@ class WikiActivity : AppCompatActivity() {
             // Outbound methods queue until activate() sets syncActive=true.
             "var collabListeners={};" +
             "var _syncActive=false;var _syncId=null;var _localDeviceId=null;var _collabQueue=[];var rec={};" +
+            // Non-dirty tiddler helpers — suppress enqueueTiddlerEvent to avoid dirty/autosave
+            "function _addTemp(f){var o=\$tw.wiki.enqueueTiddlerEvent;\$tw.wiki.enqueueTiddlerEvent=function(){};\$tw.wiki.addTiddler(f);\$tw.wiki.enqueueTiddlerEvent=o;}" +
+            "function _delTemp(t){var o=\$tw.wiki.enqueueTiddlerEvent;\$tw.wiki.enqueueTiddlerEvent=function(){};\$tw.wiki.deleteTiddler(t);\$tw.wiki.enqueueTiddlerEvent=o;}" +
+            "function _addTempRefresh(f){_addTemp(f);var c={};c[f.title]={modified:true};\$tw.wiki.eventsTriggered=false;\$tw.wiki.dispatchEvent('change',c);}" +
+            "function _delTempRefresh(t){_delTemp(t);var c={};c[t]={deleted:true};\$tw.wiki.eventsTriggered=false;\$tw.wiki.dispatchEvent('change',c);}" +
             "function emitCollab(type,data){var ls=collabListeners[type];if(ls)for(var i=0;i<ls.length;i++){try{ls[i](data);}catch(e){}}}" +
-            "function updateET(tt){if(typeof \$tw==='undefined'||!\$tw.wiki)return;var eds=rec[tt]||[];var tid='\$:/temp/tiddlydesktop/editing/'+tt;if(eds.length>0){\$tw.wiki.addTiddler({title:tid,type:'application/json',text:JSON.stringify(eds)});}else{\$tw.wiki.deleteTiddler(tid);}}" +
-            "function clearAllET(){if(typeof \$tw==='undefined'||!\$tw.wiki)return;\$tw.wiki.each(function(td,t){if(t.indexOf('\$:/temp/tiddlydesktop/editing/')===0)\$tw.wiki.deleteTiddler(t);});}" +
+            "function updateET(tt){if(typeof \$tw==='undefined'||!\$tw.wiki)return;var eds=rec[tt]||[];var tid='\$:/temp/tiddlydesktop/editing/'+tt;if(eds.length>0){_addTempRefresh({title:tid,type:'application/json',text:JSON.stringify(eds)});}else{_delTempRefresh(tid);}}" +
+            "function clearAllET(){if(typeof \$tw==='undefined'||!\$tw.wiki)return;var toDel=[];var c={};\$tw.wiki.each(function(td,t){if(t.indexOf('\$:/temp/tiddlydesktop/editing/')===0){toDel.push(t);}});for(var i=0;i<toDel.length;i++){_delTemp(toDel[i]);c[toDel[i]]={deleted:true};}if(toDel.length>0){\$tw.wiki.eventsTriggered=false;\$tw.wiki.dispatchEvent('change',c);}}" +
+            "function isSyncExcluded(t){" +
+            "if(t==='\$:/StoryList'||t==='\$:/HistoryList'||t==='\$:/library/sjcl.js'||t==='\$:/Import'||t==='\$:/language'||t==='\$:/theme'||t==='\$:/palette'||t==='\$:/isEncrypted'||t==='\$:/view'||t==='\$:/layout'||t==='\$:/DefaultTiddlers'||t==='\$:/core')return true;" +
+            "if(t.indexOf('\$:/TiddlyDesktopRS/Conflicts/')===0||t.indexOf('\$:/state/')===0||t.indexOf('\$:/status/')===0||t.indexOf('\$:/temp/')===0||t.indexOf('\$:/language/')===0||t.indexOf('\$:/config/')===0||t.indexOf('\$:/plugins/tiddlydesktop-rs/')===0||t.indexOf('\$:/plugins/tiddlydesktop/')===0||t.indexOf('\$:/themes/tiddlywiki/vanilla/options/')===0||t.indexOf('\$:/themes/tiddlywiki/vanilla/metrics/')===0)return true;" +
+            "return false;}" +
             "if(!window.TiddlyDesktop)window.TiddlyDesktop={};" +
             "window.TiddlyDesktop.collab={" +
-            "startEditing:function(t){if(_syncActive){S.collabEditingStarted(_syncId,t);}else{_collabQueue.push(['startEditing',t]);}}," +
-            "stopEditing:function(t){if(_syncActive){S.collabEditingStopped(_syncId,t);}else{_collabQueue.push(['stopEditing',t]);}}," +
-            "sendUpdate:function(t,b){if(_syncActive){S.collabUpdate(_syncId,t,b);}else{_collabQueue.push(['sendUpdate',t,b]);}}," +
-            "sendAwareness:function(t,b){if(_syncActive){S.collabAwareness(_syncId,t,b);}else{_collabQueue.push(['sendAwareness',t,b]);}}," +
+            "startEditing:function(t){if(isSyncExcluded(t))return;if(_syncActive){S.collabEditingStarted(_syncId,t);}else{_collabQueue.push(['startEditing',t]);}}," +
+            "stopEditing:function(t){if(isSyncExcluded(t))return;if(_syncActive){S.collabEditingStopped(_syncId,t);}else{_collabQueue.push(['stopEditing',t]);}}," +
+            "sendUpdate:function(t,b){if(isSyncExcluded(t))return;if(_syncActive){S.collabUpdate(_syncId,t,b);}else{_collabQueue.push(['sendUpdate',t,b]);}}," +
+            "sendAwareness:function(t,b){if(isSyncExcluded(t))return;if(_syncActive){S.collabAwareness(_syncId,t,b);}else{_collabQueue.push(['sendAwareness',t,b]);}}," +
             "peerSaved:function(t,s){if(_syncActive){S.collabPeerSaved(_syncId,t,s);}else{_collabQueue.push(['peerSaved',t,s]);}}," +
             "getRemoteEditors:function(t){if(!_syncActive)return[];try{return JSON.parse(S.getRemoteEditors(_syncId,t)||'[]');}catch(e){return [];}}," +
             "getRemoteEditorsAsync:function(t){return Promise.resolve(this.getRemoteEditors(t));}," +
@@ -6333,6 +6336,7 @@ class WikiActivity : AppCompatActivity() {
             "if(t.indexOf('\$:/state/')==0)continue;" +
             "if(t.indexOf('\$:/status/')==0)continue;" +
             "if(t.indexOf('\$:/temp/')==0)continue;" +
+            "if(t.indexOf('\$:/language/')==0)continue;" +
             "if(t.indexOf('\$:/plugins/tiddlydesktop-rs/')==0)continue;" +
             "if(t.indexOf('\$:/plugins/tiddlydesktop/')==0)continue;" +
             "if(t.indexOf('\$:/config/')==0)continue;" +
@@ -6348,18 +6352,17 @@ class WikiActivity : AppCompatActivity() {
             "var queue=[];var batchTimer=null;" +
             // fieldToString: normalize field values (Date→TW date string, Array→TW list) for comparison
             "function fts(v){if(v instanceof Date)return \$tw.utils.stringifyDate(v);if(Array.isArray(v))return \$tw.utils.stringifyList(v);return String(v);}" +
-            // tiddlerDiffers: compare incoming fields with local (includes modified for convergence)
+            // tiddlerDiffers: compare incoming fields with local (ignores modified/modifier/created metadata)
             "function tiddlerDiffers(f){var ex=\$tw.wiki.getTiddler(f.title);if(!ex)return true;var ef=ex.fields;" +
-            "var rm=f.modified?String(f.modified):'';var lm=ef.modified?fts(ef.modified):'';if(rm!==lm)return true;" +
-            "var ks=Object.keys(f);for(var i=0;i<ks.length;i++){var k=ks[i];if(k==='created'||k==='modified')continue;if(ef[k]===undefined||String(f[k])!==fts(ef[k]))return true;}" +
-            "var eks=Object.keys(ef);for(var j=0;j<eks.length;j++){var ek=eks[j];if(ek==='created'||ek==='modified')continue;if(f[ek]===undefined)return true;}return false;}" +
+            "var ks=Object.keys(f);for(var i=0;i<ks.length;i++){var k=ks[i];if(k==='created'||k==='modified'||k==='modifier')continue;if(ef[k]===undefined||String(f[k])!==fts(ef[k]))return true;}" +
+            "var eks=Object.keys(ef);for(var j=0;j<eks.length;j++){var ek=eks[j];if(ek==='created'||ek==='modified'||ek==='modifier')continue;if(f[ek]===undefined)return true;}return false;}" +
             // collectFingerprints: includes knownSyncTitles for convergence
             "function cfps(){var all=\$tw.wiki.allTitles();var seen={};var fps=[];" +
             "for(var i=0;i<all.length;i++){var t=all[i];" +
             "if(t==='\$:/StoryList'||t==='\$:/HistoryList'||t==='\$:/library/sjcl.js'||t==='\$:/Import'||t==='\$:/language'||t==='\$:/theme'||t==='\$:/palette'||t==='\$:/isEncrypted'||t==='\$:/view'||t==='\$:/layout'||t==='\$:/DefaultTiddlers'||t==='\$:/core')continue;" +
             "if(isDraft(t))continue;" +
             "if(t.indexOf('\$:/TiddlyDesktopRS/Conflicts/')==0)continue;" +
-            "if(t.indexOf('\$:/state/')==0||t.indexOf('\$:/status/')==0||t.indexOf('\$:/temp/')==0)continue;" +
+            "if(t.indexOf('\$:/state/')==0||t.indexOf('\$:/status/')==0||t.indexOf('\$:/temp/')==0||t.indexOf('\$:/language/')==0)continue;" +
             "if(t.indexOf('\$:/plugins/tiddlydesktop-rs/')==0||t.indexOf('\$:/plugins/tiddlydesktop/')==0)continue;" +
             "if(t.indexOf('\$:/config/')==0)continue;" +
             "if(t.indexOf('\$:/themes/tiddlywiki/vanilla/options/')==0)continue;" +
@@ -6375,7 +6378,7 @@ class WikiActivity : AppCompatActivity() {
             "if(d.type==='send-fingerprints'){sendFingerprints(d.to_device_id);return;}" +
             "if(d.type==='compare-fingerprints'){compareFingerprints(d.from_device_id,d.fingerprints);return;}" +
             "if(d.type==='attachment-received'){reloadAttachment(d.filename);return;}" +
-            "if(d.type==='wiki-info-changed'){console.log('[LAN Sync] Wiki config changed from another device');\$tw.wiki.addTiddler(new \$tw.Tiddler({title:'\$:/temp/tiddlydesktop/config-reload-required',text:'yes'}));return;}" +
+            "if(d.type==='wiki-info-changed'){console.log('[LAN Sync] Wiki config changed from another device');_addTempRefresh({title:'\$:/temp/tiddlydesktop/config-reload-required',text:'yes'});return;}" +
             "if(_localDeviceId&&d.device_id&&d.device_id===_localDeviceId){console.log('[Collab] Skipping self-echoed '+d.type);return;}" +
             "if(d.type==='editing-started'){if(d.tiddler_title&&d.device_id){if(!rec[d.tiddler_title])rec[d.tiddler_title]=[];var ef=false;for(var ei=0;ei<rec[d.tiddler_title].length;ei++){if(rec[d.tiddler_title][ei].device_id===d.device_id){ef=true;rec[d.tiddler_title][ei].user_name=d.user_name||'';break;}}if(!ef){rec[d.tiddler_title].push({device_id:d.device_id,device_name:d.device_name||'',user_name:d.user_name||''});}updateET(d.tiddler_title);}emitCollab(d.type,d);return;}" +
             "if(d.type==='editing-stopped'){if(d.tiddler_title&&d.device_id&&rec[d.tiddler_title]){rec[d.tiddler_title]=rec[d.tiddler_title].filter(function(e){return e.device_id!==d.device_id;});if(rec[d.tiddler_title].length===0)delete rec[d.tiddler_title];updateET(d.tiddler_title);}emitCollab(d.type,d);return;}" +
@@ -6385,16 +6388,20 @@ class WikiActivity : AppCompatActivity() {
             "}" +
             "function applyBatch(){batchTimer=null;var b=queue;queue=[];if(!b.length)return;" +
             "console.log('[LAN Sync] Applying batch of '+b.length+' changes');" +
-            "var ns=false;var pc=false;" +
+            "var ns=false;var pc=false;var pendConf={};" +
             "for(var i=0;i<b.length;i++){var d=b[i];" +
             "if(d.type==='apply-change'){try{var f=JSON.parse(d.tiddler_json);" +
-            "if(f['plugin-type']&&f.version){var lp=\$tw.wiki.getTiddler(f.title);if(lp&&lp.fields.version&&cmpVer(f.version,lp.fields.version)<=0){kst[f.title]=f.modified?String(f.modified):'';continue;}}" +
-            "if(tomb[f.title])delete tomb[f.title];if(tiddlerDiffers(f)){if(f.created)f.created=\$tw.utils.parseDate(f.created);if(f.modified)f.modified=\$tw.utils.parseDate(f.modified);suppress.add(f.title);\$tw.wiki.addTiddler(new \$tw.Tiddler(f));ns=true;if(f.title.indexOf('\$:/plugins/')===0&&f['plugin-type'])pc=true;}else{kst[f.title]=f.modified?String(f.modified):'';}}catch(e){}}" +
+            "if(f['plugin-type']&&f.version){delete pendConf[f.title];var lp=\$tw.wiki.getTiddler(f.title);if(lp&&lp.fields.version&&cmpVer(f.version,lp.fields.version)<=0){kst[f.title]=f.modified?String(f.modified):'';continue;}}" +
+            "if(tomb[f.title])delete tomb[f.title];" +
+            "if(tiddlerDiffers(f)){" +
+            "if(pendConf[f.title]){var pcl=pendConf[f.title];var pct='\$:/TiddlyDesktopRS/Conflicts/'+f.title;conflicts[pct]=1;var pcf=Object.assign({},pcl.fields,{title:pct,'conflict-original-title':f.title,'conflict-timestamp':new Date().toISOString(),'conflict-source':'local'});\$tw.wiki.addTiddler(new \$tw.Tiddler(pcf));delete conflicts[pct];delete pendConf[f.title];}" +
+            "if(f.created)f.created=\$tw.utils.parseDate(f.created);if(f.modified)f.modified=\$tw.utils.parseDate(f.modified);suppress.add(f.title);\$tw.wiki.addTiddler(new \$tw.Tiddler(f));ns=true;if(f.title.indexOf('\$:/plugins/')===0&&f['plugin-type'])pc=true;" +
+            "}else{delete pendConf[f.title];kst[f.title]=f.modified?String(f.modified):'';}}catch(e){}}" +
             "else if(d.type==='apply-deletion'){try{if(\$tw.wiki.tiddlerExists(d.title)){suppress.add(d.title);\$tw.wiki.deleteTiddler(d.title);ns=true;}var ddm=\$tw.utils.stringifyDate(new Date());if(!tomb[d.title]||tomb[d.title].modified<ddm){tomb[d.title]={modified:ddm,time:Date.now()};S.saveTombstones(syncId,JSON.stringify(tomb));}}catch(e){}}" +
-            "else if(d.type==='conflict'){var lt=\$tw.wiki.getTiddler(d.title);if(lt){var ct='\$:/TiddlyDesktopRS/Conflicts/'+d.title;" +
-            "conflicts[ct]=1;var cf=Object.assign({},lt.fields,{title:ct,'conflict-original-title':d.title,'conflict-timestamp':new Date().toISOString(),'conflict-source':'local'});" +
-            "\$tw.wiki.addTiddler(new \$tw.Tiddler(cf));delete conflicts[ct];}}" +
+            "else if(d.type==='conflict'){if(d.title.indexOf('\$:/plugins/')===0)continue;var lt=\$tw.wiki.getTiddler(d.title);if(lt){pendConf[d.title]=lt;}}" +
             "}" +
+            // Flush any remaining pending conflicts without subsequent apply-change
+            "var pcks=Object.keys(pendConf);for(var pci=0;pci<pcks.length;pci++){var pck=pcks[pci];var pclt=pendConf[pck];var pctt='\$:/TiddlyDesktopRS/Conflicts/'+pck;conflicts[pctt]=1;var pcff=Object.assign({},pclt.fields,{title:pctt,'conflict-original-title':pck,'conflict-timestamp':new Date().toISOString(),'conflict-source':'local'});\$tw.wiki.addTiddler(new \$tw.Tiddler(pcff));delete conflicts[pctt];}" +
             "if(pc){try{\$tw.wiki.readPluginInfo();\$tw.wiki.registerPluginTiddlers('plugin');\$tw.wiki.unpackPluginTiddlers();}catch(e){}}" +
             "if(ns)scheduleSave();}" +
             // Fingerprint-based diff sync
@@ -6417,7 +6424,7 @@ class WikiActivity : AppCompatActivity() {
             "if(t==='\$:/StoryList'||t==='\$:/HistoryList'||t==='\$:/library/sjcl.js'||t==='\$:/Import'||t==='\$:/language'||t==='\$:/theme'||t==='\$:/palette'||t==='\$:/isEncrypted'||t==='\$:/view'||t==='\$:/layout'||t==='\$:/DefaultTiddlers'||t==='\$:/core')continue;" +
             "if(isDraft(t))continue;" +
             "if(t.indexOf('\$:/TiddlyDesktopRS/Conflicts/')==0)continue;" +
-            "if(t.indexOf('\$:/state/')==0||t.indexOf('\$:/status/')==0||t.indexOf('\$:/temp/')==0)continue;" +
+            "if(t.indexOf('\$:/state/')==0||t.indexOf('\$:/status/')==0||t.indexOf('\$:/temp/')==0||t.indexOf('\$:/language/')==0)continue;" +
             "if(t.indexOf('\$:/plugins/tiddlydesktop-rs/')==0||t.indexOf('\$:/plugins/tiddlydesktop/')==0)continue;" +
             "if(t.indexOf('\$:/config/')==0)continue;" +
             "if(t.indexOf('\$:/themes/tiddlywiki/vanilla/options/')==0)continue;" +
@@ -6451,7 +6458,7 @@ class WikiActivity : AppCompatActivity() {
             "if(t==='\$:/StoryList'||t==='\$:/HistoryList'||t==='\$:/library/sjcl.js'||t==='\$:/Import'||t==='\$:/language'||t==='\$:/theme'||t==='\$:/palette'||t==='\$:/isEncrypted'||t==='\$:/view'||t==='\$:/layout'||t==='\$:/DefaultTiddlers'||t==='\$:/core')continue;" +
             "if(isDraft(t))continue;" +
             "if(t.indexOf('\$:/TiddlyDesktopRS/Conflicts/')==0)continue;" +
-            "if(t.indexOf('\$:/state/')==0||t.indexOf('\$:/status/')==0||t.indexOf('\$:/temp/')==0)continue;" +
+            "if(t.indexOf('\$:/state/')==0||t.indexOf('\$:/status/')==0||t.indexOf('\$:/temp/')==0||t.indexOf('\$:/language/')==0)continue;" +
             "if(t.indexOf('\$:/plugins/tiddlydesktop-rs/')==0||t.indexOf('\$:/plugins/tiddlydesktop/')==0)continue;" +
             "if(t.indexOf('\$:/config/')==0)continue;" +
             "if(t.indexOf('\$:/themes/tiddlywiki/vanilla/options/')==0)continue;" +
@@ -6641,12 +6648,17 @@ class WikiActivity : AppCompatActivity() {
             "var EBT='\$:/temp/tiddlydesktop/EditingBadge';" +
             "var lastJ='';" +
             "var _lastRelay=false;" +
+            "var _syncId='';" +
+            // Temp tiddler helper — $:/temp/* excluded from TW5 save filter and dirty tracking
+            "function _aT(f){var o=\$tw.wiki.enqueueTiddlerEvent;\$tw.wiki.enqueueTiddlerEvent=function(){};\$tw.wiki.addTiddler(f);\$tw.wiki.enqueueTiddlerEvent=o;}" +
             "function waitTw(cb){if(typeof \$tw!=='undefined'&&\$tw.wiki&&\$tw.wiki.addTiddler){cb();}else{setTimeout(function(){waitTw(cb);},200);}}" +
-            "function fetch(cb){try{var j=S.getSyncStatus();cb(JSON.parse(j||'{}'));}catch(_){cb({});}}" +
+            "function getSId(){if(!_syncId){try{_syncId=S.getSyncId(window.__WIKI_PATH__||'');}catch(_){}}return _syncId;}" +
+            "function fetch(cb){try{var sid=getSId();var p=[];if(sid){try{p=JSON.parse(S.getWikiPeers(sid)||'[]');}catch(_){}}var st=JSON.parse(S.getSyncStatus()||'{}');cb({peers:p,relay_connected:st.relay_connected||false});}catch(_){cb({peers:[],relay_connected:false});}}" +
             "function announce(n){try{S.announceUsername(n);}catch(_){}}" +
-            "function update(st){var p=st.connected_peers||[];var o={};for(var i=0;i<p.length;i++){o[i]={user_name:p[i].user_name||'',device_name:p[i].device_name||''};}var j=JSON.stringify(o);if(j!==lastJ){lastJ=j;" +
-            "\$tw.wiki.addTiddler({title:PT,type:'application/json',text:j});" +
-            "\$tw.wiki.addTiddler({title:CT,text:String(p.length)});}" +
+            "function update(st){var p=st.peers||[];var o={};for(var i=0;i<p.length;i++){o[i]={user_name:p[i].user_name||'',device_name:p[i].device_name||''};}var j=JSON.stringify(o);if(j!==lastJ){lastJ=j;" +
+            "_aT({title:PT,type:'application/json',text:j});" +
+            "_aT({title:CT,text:String(p.length)});" +
+            "var ch={};ch[PT]={modified:true};ch[CT]={modified:true};\$tw.wiki.eventsTriggered=false;\$tw.wiki.dispatchEvent('change',ch);}" +
             "var rc=st.relay_connected||false;if(rc!==_lastRelay){_lastRelay=rc;try{S.setRelayConnected(rc);}catch(_){}}}" +
             "function createBadge(){if(\$tw.wiki.tiddlerExists(BT))return;" +
             "var wt=" +
@@ -6680,7 +6692,7 @@ class WikiActivity : AppCompatActivity() {
             "</\$list></div>\\n" +
             "</\$reveal></\$reveal></\$reveal>\\n" +
             "<style><<peer-badge-styles>></style>';" +
-            "\$tw.wiki.addTiddler({title:BT,tags:'\$:/tags/TopRightBar',text:wt});}" +
+            "_aT({title:BT,tags:'\$:/tags/TopRightBar',text:wt});}" +
             "function createEditBadge(){if(\$tw.wiki.tiddlerExists(EBT))return;" +
             "var eb=" +
             "'\\\\define editing-badge-styles()\\n" +
@@ -6702,10 +6714,10 @@ class WikiActivity : AppCompatActivity() {
             "</\$list>\\n" +
             "</\$set>\\n" +
             "<style><<editing-badge-styles>></style>';" +
-            "\$tw.wiki.addTiddler({title:EBT,tags:'\$:/tags/ViewTemplate','list-before':'\$:/core/ui/ViewTemplate/body',text:eb});}" +
+            "_aT({title:EBT,tags:'\$:/tags/ViewTemplate','list-before':'\$:/core/ui/ViewTemplate/body',text:eb});}" +
             "waitTw(function(){" +
-            "\$tw.wiki.addTiddler({title:PT,type:'application/json',text:'{}'});" +
-            "\$tw.wiki.addTiddler({title:CT,text:'0'});" +
+            "_aT({title:PT,type:'application/json',text:'{}'});" +
+            "_aT({title:CT,text:'0'});" +
             "createBadge();createEditBadge();" +
             "var un=\$tw.wiki.getTiddlerText('\$:/status/UserName')||'';" +
             "if(un)announce(un);" +
@@ -8109,7 +8121,7 @@ class WikiActivity : AppCompatActivity() {
 
         // Notify foreground service that wiki is closed (only if we started it)
         if (notificationStarted) {
-            WikiServerService.wikiClosed(applicationContext)
+            WikiServerService.wikiClosed(applicationContext, wikiPath ?: "unknown")
             notificationStarted = false
         }
 

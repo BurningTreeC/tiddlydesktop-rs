@@ -280,6 +280,8 @@ pub enum SyncMessage {
         tiddler_title: String,
         device_id: String,
         device_name: String,
+        #[serde(default)]
+        user_name: String,
     },
     /// A device stopped editing a tiddler
     EditingStopped {
@@ -312,6 +314,12 @@ pub enum SyncMessage {
     /// Announce this device's TiddlyWiki username to peers
     UserNameAnnounce {
         user_name: String,
+    },
+
+    /// Announce leaving a room — sent before disconnecting so peers
+    /// can update their UI immediately (instead of waiting for ping timeout).
+    RoomLeave {
+        room_code: String,
     },
 
     /// Keepalive
@@ -350,6 +358,11 @@ pub struct TiddlerFingerprint {
     /// deleted and peers should delete their copy if it is older.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub deleted: Option<bool>,
+    /// Plugin version string (only present for plugin tiddlers).
+    /// Used for version-aware comparison so plugins with matching
+    /// versions aren't resent on every fingerprint exchange.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
 }
 
 /// Info about a single file in an attachment manifest

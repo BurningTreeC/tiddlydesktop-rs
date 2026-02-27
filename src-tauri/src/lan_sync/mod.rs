@@ -206,6 +206,8 @@ pub struct SyncManager {
     local_collab_editors: std::sync::Mutex<HashSet<(String, String)>>,
     /// Local TiddlyWiki username (from JS UserNameAnnounce)
     local_user_name: std::sync::Mutex<Option<String>>,
+    /// Remote peer usernames: device_id → user_name (works for both LAN and relay peers)
+    peer_user_names: std::sync::Mutex<HashMap<String, String>>,
     /// Port of the local collab WebSocket server (0 if not running)
     collab_ws_port: std::sync::atomic::AtomicU16,
     /// Connected collab WebSocket clients: wiki_id → list of sender handles
@@ -321,6 +323,7 @@ impl SyncManager {
             #[cfg(target_os = "android")]
             android_bridge: std::sync::Mutex::new(None),
             local_user_name: std::sync::Mutex::new(None),
+            peer_user_names: std::sync::Mutex::new(HashMap::new()),
             collab_editors: std::sync::Mutex::new(HashMap::new()),
             local_collab_editors: std::sync::Mutex::new(HashSet::new()),
             collab_ws_port: std::sync::atomic::AtomicU16::new(0),
@@ -695,6 +698,12 @@ impl SyncManager {
                                             if new_rooms_added {
                                                 eprintln!("[LAN Sync] New shared rooms discovered for {}, re-sending manifest", &device_id[..8.min(device_id.len())]);
                                                 mgr.send_wiki_manifest_to_peer(&device_id).await;
+                                                // Push updated peer lists to wiki windows
+                                                if let Some(app) = GLOBAL_APP_HANDLE.get() {
+                                                    let _ = app.emit("lan-sync-peers-updated", serde_json::json!({}));
+                                                }
+                                                #[cfg(not(target_os = "android"))]
+                                                mgr.push_peer_updates_to_ipc().await;
                                             }
                                         }
                                         waiting_since.remove(&device_id);
@@ -730,7 +739,7 @@ impl SyncManager {
                                         let first_seen = waiting_since.entry(device_id.clone())
                                             .or_insert_with(std::time::Instant::now);
                                         let elapsed = first_seen.elapsed();
-                                        if elapsed >= std::time::Duration::from_secs(3) {
+                                        if elapsed >= std::time::Duration::from_secs(1) {
                                             let peers_clone = mgr_peers.clone();
                                             let etx = event_tx_for_discovery.clone();
                                             let did = device_id.clone();
@@ -960,11 +969,26 @@ impl SyncManager {
         };
 
         let sync_wikis = crate::wiki_storage::get_sync_enabled_wikis(app);
+        // Collect connected room codes for filtering
+        let connected_rooms: HashSet<String> = if let Some(relay) = &self.relay_manager {
+            relay.get_rooms().await.into_iter()
+                .filter(|r| r.connected)
+                .map(|r| r.room_code)
+                .collect()
+        } else {
+            HashSet::new()
+        };
         let mut wiki_dirs = Vec::new();
 
         for (sync_id, _name, is_folder) in &sync_wikis {
             if *is_folder {
                 continue; // Folder wikis don't have separate attachment directories
+            }
+            // Only watch wikis assigned to a connected room
+            let room = crate::wiki_storage::get_wiki_relay_room_by_sync_id(app, sync_id);
+            match room {
+                Some(ref rc) if connected_rooms.contains(rc) => {}
+                _ => continue, // No room or room not connected — skip
             }
             if let Some(wiki_path) = crate::wiki_storage::get_wiki_path_by_sync_id(app, sync_id) {
                 let wiki_file = std::path::Path::new(&wiki_path);
@@ -1007,6 +1031,7 @@ impl SyncManager {
 
     /// Store local username and broadcast to all connected peers
     pub async fn announce_username(&self, user_name: String) {
+        eprintln!("[LAN Sync] announce_username: storing and broadcasting '{}'", user_name);
         // Store locally
         if let Ok(mut guard) = self.local_user_name.lock() {
             *guard = Some(user_name.clone());
@@ -1015,6 +1040,8 @@ impl SyncManager {
         let msg = SyncMessage::UserNameAnnounce { user_name };
         if let Some(ref server) = *self.server.read().await {
             server.broadcast(&msg).await;
+        } else {
+            eprintln!("[LAN Sync] announce_username: no server to broadcast to");
         }
     }
 
@@ -1268,13 +1295,13 @@ impl SyncManager {
             WikiToSync::WikiClosed { wiki_id } => {
                 eprintln!("[Relay] Wiki closed: {}", wiki_id);
             }
-            WikiToSync::CollabEditingStarted { wiki_id, tiddler_title, device_id, device_name } => {
+            WikiToSync::CollabEditingStarted { wiki_id, tiddler_title, device_id, device_name, user_name } => {
                 let room_code = match crate::wiki_storage::get_wiki_relay_room_by_sync_id(app, &wiki_id) {
                     Some(rc) => rc,
                     None => return,
                 };
                 let _ = relay.send_to_room(&room_code, &SyncMessage::EditingStarted {
-                    wiki_id, tiddler_title, device_id, device_name,
+                    wiki_id, tiddler_title, device_id, device_name, user_name,
                 }).await;
             }
             WikiToSync::CollabEditingStopped { wiki_id, tiddler_title, device_id } => {
@@ -1389,7 +1416,7 @@ impl SyncManager {
                 // Send manifest to relay rooms too (bridge only sends to LAN peers)
                 self.broadcast_wiki_manifest().await;
             }
-            WikiToSync::CollabEditingStarted { wiki_id, tiddler_title, device_id, device_name } => {
+            WikiToSync::CollabEditingStarted { wiki_id, tiddler_title, device_id, device_name, user_name } => {
                 let room_code = match crate::wiki_storage::get_wiki_relay_room_by_sync_id(app, wiki_id) {
                     Some(rc) => rc,
                     None => return,
@@ -1397,6 +1424,7 @@ impl SyncManager {
                 let _ = relay.send_to_room_excluding(&room_code, &SyncMessage::EditingStarted {
                     wiki_id: wiki_id.clone(), tiddler_title: tiddler_title.clone(),
                     device_id: device_id.clone(), device_name: device_name.clone(),
+                    user_name: user_name.clone(),
                 }, lan_peer_ids).await;
             }
             WikiToSync::CollabEditingStopped { wiki_id, tiddler_title, device_id } => {
@@ -1653,8 +1681,6 @@ impl SyncManager {
     }
 
     /// Check if the relay is connected (any room joined with active WebSocket).
-    /// Used as a gate for all sync data exchange — if relay is not connected,
-    /// no sync messages should be sent or processed.
     async fn is_relay_connected(&self) -> bool {
         if let Some(relay) = &self.relay_manager {
             relay.any_room_connected().await
@@ -1663,7 +1689,57 @@ impl SyncManager {
         }
     }
 
+    /// Check if sync is active — either relay is connected OR we have LAN peers.
+    /// Used as a gate for sync data exchange.
+    async fn is_sync_active(&self) -> bool {
+        if self.is_relay_connected().await {
+            return true;
+        }
+        !self.peers.read().await.is_empty()
+    }
+
+    /// Push peer lists for all sync-enabled wikis to wiki processes via IPC.
+    /// Called immediately on peer connect/disconnect for instant UI updates.
+    #[cfg(not(target_os = "android"))]
+    async fn push_peer_updates_to_ipc(&self) {
+        let server = match crate::GLOBAL_IPC_SERVER.get() {
+            Some(s) => s,
+            None => {
+                eprintln!("[LAN Sync] push_peer_updates_to_ipc: no IPC server");
+                return;
+            }
+        };
+        let app = match GLOBAL_APP_HANDLE.get() {
+            Some(a) => a,
+            None => return,
+        };
+        let entries = crate::wiki_storage::load_recent_files_from_disk(app);
+        for entry in &entries {
+            if entry.sync_enabled {
+                if let Some(ref sync_id) = entry.sync_id {
+                    if !sync_id.is_empty() {
+                        let peers = self.get_wiki_peers(sync_id).await;
+                        eprintln!(
+                            "[LAN Sync] push_peer_updates_to_ipc: wiki={} room={:?} peers={}",
+                            sync_id,
+                            entry.relay_room.as_deref().unwrap_or("(none)"),
+                            peers.len()
+                        );
+                        let payload = serde_json::json!({
+                            "type": "peer-update",
+                            "wiki_id": sync_id,
+                            "peers": peers,
+                        }).to_string();
+                        server.send_lan_sync_to_all(sync_id, &payload);
+                    }
+                }
+            }
+        }
+    }
+
     /// Get peers connected to a specific wiki (both LAN and relay), with names.
+    /// Only includes peers that are in the same room AND have this wiki open
+    /// (announced in their WikiManifest). Excludes the local device.
     pub async fn get_wiki_peers(&self, wiki_id: &str) -> Vec<PeerInfo> {
         let mut seen = HashSet::new();
         let mut result = Vec::new();
@@ -1672,17 +1748,34 @@ impl SyncManager {
             None => return result,
         };
         let room_code = crate::wiki_storage::get_wiki_relay_room_by_sync_id(app, wiki_id);
+        let local_device_id = self.pairing_manager.device_id();
 
-        // LAN peers authenticated for this wiki's room
+        // Collect device_ids that have this wiki open (from WikiManifest announcements)
+        let peers_with_wiki: HashSet<String> = {
+            let remote = self.remote_wikis.read().await;
+            remote.iter()
+                .filter(|(_, wikis)| wikis.iter().any(|w| w.wiki_id == wiki_id))
+                .map(|(device_id, _)| device_id.clone())
+                .collect()
+        };
+
+        // LAN peers authenticated for this wiki's room AND having this wiki open
+        // NOTE: Collect connected_peers() BEFORE taking a read lock on self.peers
+        // to avoid potential deadlock (both reference the same Arc<RwLock>).
         if let Some(ref rc) = room_code {
+            let connected = if let Some(ref server) = *self.server.read().await {
+                server.connected_peers().await
+            } else {
+                vec![]
+            };
             let peers_guard = self.peers.read().await;
-            if let Some(ref server) = *self.server.read().await {
-                for (id, name, user_name) in server.connected_peers().await {
-                    if let Some(pc) = peers_guard.get(&id) {
-                        if pc.auth_room_codes.iter().any(|r| r == rc.as_str()) {
-                            if seen.insert(id.clone()) {
-                                result.push(PeerInfo { device_id: id, device_name: name, user_name });
-                            }
+            for (id, name, user_name) in connected {
+                if id == local_device_id { continue; }
+                if !peers_with_wiki.contains(&id) { continue; }
+                if let Some(pc) = peers_guard.get(&id) {
+                    if pc.auth_room_codes.iter().any(|r| r == rc.as_str()) {
+                        if seen.insert(id.clone()) {
+                            result.push(PeerInfo { device_id: id, device_name: name, user_name });
                         }
                     }
                 }
@@ -1690,12 +1783,14 @@ impl SyncManager {
             drop(peers_guard);
         }
 
-        // Relay peers in this wiki's room
+        // Relay peers in this wiki's room AND having this wiki open
         if let Some(ref rc) = room_code {
             if let Some(ref relay) = self.relay_manager {
                 for room in relay.get_rooms().await {
                     if room.room_code == *rc && room.connected {
                         for peer in room.connected_peers {
+                            if peer.device_id == local_device_id { continue; }
+                            if !peers_with_wiki.contains(&peer.device_id) { continue; }
                             if seen.insert(peer.device_id.clone()) {
                                 result.push(PeerInfo {
                                     device_id: peer.device_id.clone(),
@@ -1709,16 +1804,13 @@ impl SyncManager {
             }
         }
 
-        // Fallback: if no room_code is assigned, include all connected LAN peers.
-        // This covers LAN-only wikis that haven't been assigned to a relay room yet.
-        if room_code.is_none() {
-            let peers_guard = self.peers.read().await;
-            if let Some(ref server) = *self.server.read().await {
-                for (id, name, user_name) in server.connected_peers().await {
-                    if peers_guard.contains_key(&id) {
-                        if seen.insert(id.clone()) {
-                            result.push(PeerInfo { device_id: id, device_name: name, user_name });
-                        }
+        // Fill in missing user_names from the device-level peer_user_names map
+        // (handles relay peers and any LAN peers where the connection struct missed it)
+        if let Ok(names) = self.peer_user_names.lock() {
+            for peer in &mut result {
+                if peer.user_name.is_none() {
+                    if let Some(name) = names.get(&peer.device_id) {
+                        peer.user_name = Some(name.clone());
                     }
                 }
             }
@@ -1769,12 +1861,20 @@ impl SyncManager {
         if let Some(relay) = &self.relay_manager {
             let rooms = relay.get_rooms().await;
             let codes: Vec<String> = rooms.iter()
+                .filter(|r| r.connected)
                 .map(|r| r.room_code.clone())
                 .collect();
             if let Ok(mut arc) = self.active_room_codes.write() {
                 *arc = codes.clone();
             }
             eprintln!("[LAN Sync] Updated active room codes: {:?}", codes);
+        }
+    }
+
+    /// Trigger an immediate UDP discovery beacon so peers see room changes instantly.
+    async fn force_discovery_beacon(&self) {
+        if let Some(ref discovery) = *self.discovery.read().await {
+            discovery.force_beacon();
         }
     }
 
@@ -1802,9 +1902,17 @@ impl SyncManager {
             None => return,
         };
 
-        // Find all connected peers that have this wiki
+        // Find all connected peers that have this wiki AND are in the wiki's room
         for (device_id, wikis) in remote.iter() {
             if wikis.iter().any(|w| w.wiki_id == wiki_id) {
+                // Verify this peer is room-authenticated for this wiki
+                if !self.is_peer_allowed_for_wiki(app, wiki_id, device_id).await {
+                    eprintln!(
+                        "[LAN Sync] Wiki {} opened — skipping peer {} (not in room)",
+                        wiki_id, device_id
+                    );
+                    continue;
+                }
                 eprintln!(
                     "[LAN Sync] Wiki {} opened — requesting fingerprint sync from peer {}",
                     wiki_id, device_id
@@ -1891,6 +1999,28 @@ impl SyncManager {
                 }
             }
         }
+
+        // Push current peer list to the newly-connected wiki window.
+        // peer-update messages are NOT buffered (unlike apply-change/apply-deletion),
+        // so any peer-update sent before the wiki's IPC client connected was lost.
+        #[cfg(not(target_os = "android"))]
+        {
+            let peers = self.get_wiki_peers(wiki_id).await;
+            if !peers.is_empty() {
+                eprintln!(
+                    "[LAN Sync] Pushing {} peers to newly-opened wiki {}",
+                    peers.len(), wiki_id
+                );
+                let payload = serde_json::json!({
+                    "type": "peer-update",
+                    "wiki_id": wiki_id,
+                    "peers": peers,
+                }).to_string();
+                if let Some(server) = crate::GLOBAL_IPC_SERVER.get() {
+                    server.send_lan_sync_to_all(wiki_id, &payload);
+                }
+            }
+        }
     }
 
     /// Pre-request sync from peers before the wiki's JS has booted.
@@ -1918,7 +2048,13 @@ impl SyncManager {
         // tiddlers merged from FullSyncBatch while wiki JS was closed
         let cached_fps = self.get_accurate_cached_fingerprints(wiki_id);
 
+        // Only send to peers that are in the wiki's assigned room
+        let allowed_peers = self.get_all_peers_for_wiki(wiki_id).await;
+
         for (device_id, wikis) in remote.iter() {
+            if !allowed_peers.contains(device_id) {
+                continue;
+            }
             if wikis.iter().any(|w| w.wiki_id == wiki_id) {
                 eprintln!(
                     "[LAN Sync] Pre-requesting fingerprints for wiki {} from peer {}",
@@ -1978,17 +2114,26 @@ impl SyncManager {
     /// Notify peers that we started editing a tiddler
     pub fn notify_collab_editing_started(&self, wiki_id: &str, tiddler_title: &str) {
         eprintln!("[Collab] notify_collab_editing_started: wiki={}, tiddler={}", wiki_id, tiddler_title);
+        // Skip excluded tiddlers (defense-in-depth — JS also filters)
+        if !conflict::ConflictManager::should_sync_tiddler(tiddler_title) {
+            eprintln!("[Collab] Skipping excluded tiddler: {}", tiddler_title);
+            return;
+        }
         // Track locally so we can re-broadcast on peer reconnect
         if let Ok(mut local) = self.local_collab_editors.lock() {
             local.insert((wiki_id.to_string(), tiddler_title.to_string()));
         }
         let device_id = self.pairing_manager.device_id().to_string();
         let device_name = self.pairing_manager.device_name().to_string();
+        let user_name = self.local_user_name.lock().ok()
+            .and_then(|g| g.clone())
+            .unwrap_or_default();
         let _ = self.wiki_tx.send(WikiToSync::CollabEditingStarted {
             wiki_id: wiki_id.to_string(),
             tiddler_title: tiddler_title.to_string(),
             device_id,
             device_name,
+            user_name,
         });
     }
 
@@ -2023,6 +2168,7 @@ impl SyncManager {
 
     /// Send a Yjs document update to peers
     pub fn send_collab_update(&self, wiki_id: &str, tiddler_title: &str, update_base64: &str) {
+        if !conflict::ConflictManager::should_sync_tiddler(tiddler_title) { return; }
         eprintln!("[Collab] send_collab_update: wiki={}, tiddler={}, len={}", wiki_id, tiddler_title, update_base64.len());
         let _ = self.wiki_tx.send(WikiToSync::CollabUpdate {
             wiki_id: wiki_id.to_string(),
@@ -2033,6 +2179,7 @@ impl SyncManager {
 
     /// Send a Yjs awareness update to peers
     pub fn send_collab_awareness(&self, wiki_id: &str, tiddler_title: &str, update_base64: &str) {
+        if !conflict::ConflictManager::should_sync_tiddler(tiddler_title) { return; }
         eprintln!("[Collab] send_collab_awareness: wiki={}, tiddler={}, len={}", wiki_id, tiddler_title, update_base64.len());
         let _ = self.wiki_tx.send(WikiToSync::CollabAwareness {
             wiki_id: wiki_id.to_string(),
@@ -2344,8 +2491,8 @@ impl SyncManager {
                     self.handle_server_event(event).await;
                 }
                 Some(change) = wiki_rx.recv() => {
-                    // Skip all outbound sync if relay is not connected
-                    if !self.is_relay_connected().await {
+                    // Skip all outbound sync if no peers are connected
+                    if !self.is_sync_active().await {
                         continue;
                     }
                     // Check for _canonical_uri before consuming the change
@@ -2419,8 +2566,8 @@ impl SyncManager {
                     self.handle_server_event(event).await;
                 }
                 Some(change) = wiki_rx.recv() => {
-                    // Skip all outbound sync if relay is not connected
-                    if !self.is_relay_connected().await {
+                    // Skip all outbound sync if no peers are connected
+                    if !self.is_sync_active().await {
                         continue;
                     }
                     // Check for _canonical_uri before consuming the change
@@ -2670,8 +2817,8 @@ impl SyncManager {
     /// Handle an attachment event from the file watcher
     #[cfg(not(target_os = "android"))]
     async fn handle_attachment_event(&self, event: attachments::AttachmentEvent) {
-        // Allow attachment sync if relay is connected OR if we have LAN peers
-        if !self.is_relay_connected().await && self.peers.read().await.is_empty() {
+        // Allow attachment sync if we have any connected peers
+        if !self.is_sync_active().await {
             return;
         }
         match event {
@@ -2769,6 +2916,31 @@ impl SyncManager {
                 if let Ok(mut set) = self.connected_peer_ids.write() {
                     set.insert(device_id.clone());
                 }
+
+                // The initial connection authenticated for only one room, but
+                // we may share additional rooms with this peer.  Add all shared
+                // rooms to auth_room_codes now so manifests and peer counts
+                // are correct from the start.
+                {
+                    let our_rooms = self.active_room_codes.read()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .clone();
+                    let peer_hashes = self.peer_room_hashes.read().await;
+                    if let Some(hashes) = peer_hashes.get(&device_id) {
+                        let shared = protocol::select_all_shared_rooms_by_hash(&our_rooms, hashes);
+                        drop(peer_hashes);
+                        if shared.len() > 1 {
+                            if let Some(ref server) = *self.server.read().await {
+                                server.add_peer_room_codes(&device_id, &shared).await;
+                                eprintln!(
+                                    "[LAN Sync] Peer {} connected — set all {} shared room codes: {:?}",
+                                    &device_id[..8.min(device_id.len())], shared.len(), shared
+                                );
+                            }
+                        }
+                    }
+                }
+
                 if let Some(app) = GLOBAL_APP_HANDLE.get() {
                     let _ = app.emit("lan-sync-peer-connected", serde_json::json!({
                         "device_id": device_id,
@@ -2777,39 +2949,44 @@ impl SyncManager {
                     let _ = app.emit("lan-sync-peers-updated", serde_json::json!({}));
                 }
 
-                // Only send sync data if relay is connected
-                if self.is_relay_connected().await {
-                    // Send WikiManifest to the newly connected peer
-                    self.send_wiki_manifest_to_peer(&device_id).await;
+                // Immediately push updated peer lists to wiki processes via IPC
+                #[cfg(not(target_os = "android"))]
+                self.push_peer_updates_to_ipc().await;
 
-                    // Send cached tiddlywiki.info for folder wikis
-                    self.send_wiki_info_to_peer(&device_id).await;
+                // Send WikiManifest to the newly connected peer
+                self.send_wiki_manifest_to_peer(&device_id).await;
 
-                    // Send our username if we have one
-                    let local_name = self.local_user_name.lock().ok().and_then(|g| g.clone());
-                    if let Some(name) = local_name {
-                        let msg = SyncMessage::UserNameAnnounce {
-                            user_name: name,
-                        };
-                        if let Err(e) = self.send_to_peer_any(&device_id, &msg).await {
-                            eprintln!("[LAN Sync] Failed to send UserNameAnnounce to {}: {}", device_id, e);
-                        }
+                // Send cached tiddlywiki.info for folder wikis
+                self.send_wiki_info_to_peer(&device_id).await;
+
+                // Send our username if we have one
+                let local_name = self.local_user_name.lock().ok().and_then(|g| g.clone());
+                if let Some(name) = local_name {
+                    let msg = SyncMessage::UserNameAnnounce {
+                        user_name: name,
+                    };
+                    if let Err(e) = self.send_to_peer_any(&device_id, &msg).await {
+                        eprintln!("[LAN Sync] Failed to send UserNameAnnounce to {}: {}", device_id, e);
                     }
+                }
 
-                    // Re-broadcast local collab editing sessions so the peer knows what we're editing
-                    if let Ok(local) = self.local_collab_editors.lock() {
-                        if !local.is_empty() {
-                            eprintln!("[Collab] Re-broadcasting {} local editing sessions to reconnected peer {}", local.len(), device_id);
-                            let my_device_id = self.pairing_manager.device_id().to_string();
-                            let my_device_name = self.pairing_manager.device_name().to_string();
-                            for (wiki_id, tiddler_title) in local.iter() {
-                                let _ = self.wiki_tx.send(WikiToSync::CollabEditingStarted {
-                                    wiki_id: wiki_id.clone(),
-                                    tiddler_title: tiddler_title.clone(),
-                                    device_id: my_device_id.clone(),
-                                    device_name: my_device_name.clone(),
-                                });
-                            }
+                // Re-broadcast local collab editing sessions so the peer knows what we're editing
+                if let Ok(local) = self.local_collab_editors.lock() {
+                    if !local.is_empty() {
+                        eprintln!("[Collab] Re-broadcasting {} local editing sessions to reconnected peer {}", local.len(), device_id);
+                        let my_device_id = self.pairing_manager.device_id().to_string();
+                        let my_device_name = self.pairing_manager.device_name().to_string();
+                        let my_user_name = self.local_user_name.lock().ok()
+                            .and_then(|g| g.clone())
+                            .unwrap_or_default();
+                        for (wiki_id, tiddler_title) in local.iter() {
+                            let _ = self.wiki_tx.send(WikiToSync::CollabEditingStarted {
+                                wiki_id: wiki_id.clone(),
+                                tiddler_title: tiddler_title.clone(),
+                                device_id: my_device_id.clone(),
+                                device_name: my_device_name.clone(),
+                                user_name: my_user_name.clone(),
+                            });
                         }
                     }
                 }
@@ -2848,6 +3025,10 @@ impl SyncManager {
                         }
                     }
                 }
+
+                // Immediately push updated peer lists to wiki processes via IPC
+                #[cfg(not(target_os = "android"))]
+                self.push_peer_updates_to_ipc().await;
 
                 if let Some(app) = GLOBAL_APP_HANDLE.get() {
                     let _ = app.emit("lan-sync-peer-disconnected", serde_json::json!({
@@ -2945,13 +3126,48 @@ impl SyncManager {
                     SyncMessage::EditingStopped { ref tiddler_title, ref device_id, .. } => format!("EditingStopped({}, {})", tiddler_title, device_id),
                     SyncMessage::CollabUpdate { ref tiddler_title, .. } => format!("CollabUpdate({})", tiddler_title),
                     SyncMessage::CollabAwareness { ref tiddler_title, .. } => format!("CollabAwareness({})", tiddler_title),
+                    SyncMessage::RoomLeave { ref room_code } => format!("RoomLeave({})", room_code),
                     _ => "Other".to_string(),
                 };
                 eprintln!("[LAN Sync] << {} from {}", msg_type, from_device_id);
 
-                // Skip all sync messages if relay is not connected (room joined + WebSocket active).
-                if !self.is_relay_connected().await {
-                    eprintln!("[Sync] Ignoring {} — relay not connected", msg_type);
+                // Handle RoomLeave immediately (before is_sync_active check)
+                // — the peer is telling us they're leaving a room.
+                if let SyncMessage::RoomLeave { ref room_code } = message {
+                    eprintln!(
+                        "[LAN Sync] Peer {} leaving room {}",
+                        from_device_id, room_code
+                    );
+                    if let Some(ref server) = *self.server.read().await {
+                        let fully_disconnected = server.remove_room_from_peer(&from_device_id, room_code).await;
+                        if fully_disconnected {
+                            if let Ok(mut set) = self.connected_peer_ids.write() {
+                                set.remove(&from_device_id);
+                            }
+                            self.remote_wikis.write().await.remove(&from_device_id);
+                            if let Some(app) = GLOBAL_APP_HANDLE.get() {
+                                let _ = app.emit("lan-sync-peer-disconnected", serde_json::json!({
+                                    "device_id": &from_device_id,
+                                }));
+                                let _ = app.emit("lan-sync-peers-updated", serde_json::json!({}));
+                                let available = self.get_available_remote_wikis().await;
+                                let _ = app.emit("lan-sync-remote-wikis-updated", &available);
+                            }
+                        } else {
+                            // Peer still has other rooms — just refresh status
+                            if let Some(app) = GLOBAL_APP_HANDLE.get() {
+                                let _ = app.emit("lan-sync-peers-updated", serde_json::json!({}));
+                            }
+                        }
+                        #[cfg(not(target_os = "android"))]
+                        self.push_peer_updates_to_ipc().await;
+                    }
+                    return;
+                }
+
+                // Skip all sync messages if no peers are connected.
+                if !self.is_sync_active().await {
+                    eprintln!("[Sync] Ignoring {} — no active sync peers", msg_type);
                     return;
                 }
                 {
@@ -3094,16 +3310,26 @@ impl SyncManager {
                     }
                     SyncMessage::WikiInfoRequest { ref wiki_id } => {
                         // Peer is requesting our tiddlywiki.info — send cached version
-                        let cached = self.wiki_info_cache.lock().ok()
-                            .and_then(|c| c.get(wiki_id).cloned());
-                        if let Some((content, hash, ts)) = cached {
-                            let msg = SyncMessage::WikiInfoChanged {
-                                wiki_id: wiki_id.clone(),
-                                content_json: content,
-                                content_hash: hash,
-                                timestamp: ts,
-                            };
-                            let _ = self.send_to_peer_any(&from_device_id, &msg).await;
+                        // Only respond if peer is in the wiki's assigned room
+                        let wiki_req_allowed = if let Some(app) = GLOBAL_APP_HANDLE.get() {
+                            self.is_peer_allowed_for_wiki(app, wiki_id, &from_device_id).await
+                        } else {
+                            false
+                        };
+                        if !wiki_req_allowed {
+                            eprintln!("[Sync] Denied WikiInfoRequest for {} from {} — not in wiki's room", wiki_id, &from_device_id[..8.min(from_device_id.len())]);
+                        } else {
+                            let cached = self.wiki_info_cache.lock().ok()
+                                .and_then(|c| c.get(wiki_id).cloned());
+                            if let Some((content, hash, ts)) = cached {
+                                let msg = SyncMessage::WikiInfoChanged {
+                                    wiki_id: wiki_id.clone(),
+                                    content_json: content,
+                                    content_hash: hash,
+                                    timestamp: ts,
+                                };
+                                let _ = self.send_to_peer_any(&from_device_id, &msg).await;
+                            }
                         }
                     }
                     SyncMessage::PluginManifest {
@@ -3144,19 +3370,24 @@ impl SyncManager {
                         ref tiddler_title,
                         ref device_id,
                         ref device_name,
+                        ref user_name,
                     } => {
-                        eprintln!("[Collab] INBOUND EditingStarted: wiki={}, tiddler={}, from_device={}", wiki_id, tiddler_title, device_id);
+                        eprintln!("[Collab] INBOUND EditingStarted: wiki={}, tiddler={}, from_device={}, user={}", wiki_id, tiddler_title, device_id, user_name);
                         // Skip messages from our own device (self-echo guard)
                         let my_device_id = self.pairing_manager.device_id();
                         if device_id == my_device_id {
                             eprintln!("[Collab] Skipping self-echoed EditingStarted for {}", tiddler_title);
                             return;
                         }
-                        // Look up peer's user_name from peers map
-                        let peer_user_name = self.peers.read().await
-                            .get(&from_device_id)
-                            .and_then(|pc| pc.user_name.clone())
-                            .unwrap_or_default();
+                        // Use user_name from the message (reliable), fall back to peers map
+                        let peer_user_name = if !user_name.is_empty() {
+                            user_name.clone()
+                        } else {
+                            self.peers.read().await
+                                .get(&from_device_id)
+                                .and_then(|pc| pc.user_name.clone())
+                                .unwrap_or_default()
+                        };
                         // Track remote editor (with user_name)
                         let key = (wiki_id.clone(), tiddler_title.clone());
                         if let Ok(mut editors) = self.collab_editors.lock() {
@@ -3296,6 +3527,9 @@ impl SyncManager {
                                 if f.deleted == Some(true) {
                                     v["deleted"] = serde_json::json!(true);
                                 }
+                                if let Some(ref ver) = f.version {
+                                    v["version"] = serde_json::json!(ver);
+                                }
                                 v
                             }).collect();
                             Self::emit_to_wiki(
@@ -3366,14 +3600,21 @@ impl SyncManager {
                             "[LAN Sync] Peer {} announced username: {}",
                             from_device_id, user_name
                         );
-                        // Store user_name on the peer connection
+                        // Store user_name on the LAN peer connection
                         if let Some(ref server) = *self.server.read().await {
                             server.set_peer_user_name(&from_device_id, user_name.clone()).await;
+                        }
+                        // Also store in device-level map (works for relay peers too)
+                        if let Ok(mut names) = self.peer_user_names.lock() {
+                            names.insert(from_device_id.clone(), user_name.clone());
                         }
                         // Emit peers-updated event to all wiki windows
                         if let Some(app) = GLOBAL_APP_HANDLE.get() {
                             let _ = app.emit("lan-sync-peers-updated", serde_json::json!({}));
                         }
+                        // Push updated peer data (with new username) to wiki windows
+                        #[cfg(not(target_os = "android"))]
+                        self.push_peer_updates_to_ipc().await;
                     }
                     SyncMessage::RequestWikiFile { ref wiki_id, ref have_files } => {
                         self.handle_request_wiki_file(&from_device_id, wiki_id, have_files).await;
@@ -3404,15 +3645,18 @@ impl SyncManager {
                         // passing ownership to handle_remote_message.  Used to
                         // update our fingerprint cache so reciprocal/cached sends
                         // reflect received tiddlers (prevents re-sending).
-                        let batch_fps: Option<(String, Vec<(String, String)>)> = match &message {
+                        let batch_fps: Option<(String, Vec<(String, String, Option<String>)>)> = match &message {
                             SyncMessage::FullSyncBatch { wiki_id, tiddlers, .. } => {
-                                let fps: Vec<(String, String)> = tiddlers.iter().filter_map(|t| {
+                                let fps: Vec<(String, String, Option<String>)> = tiddlers.iter().filter_map(|t| {
                                     if let Ok(fields) = serde_json::from_str::<serde_json::Value>(&t.tiddler_json) {
                                         let modified = fields.get("modified")
                                             .and_then(|m| m.as_str())
                                             .unwrap_or("")
                                             .to_string();
-                                        Some((t.title.clone(), modified))
+                                        let version = fields.get("version")
+                                            .and_then(|v| v.as_str())
+                                            .map(|s| s.to_string());
+                                        Some((t.title.clone(), modified, version))
                                     } else {
                                         None
                                     }
@@ -3439,14 +3683,15 @@ impl SyncManager {
                         // that may not be in the wiki file yet (if JS isn't open).
                         if applied > 0 {
                             if let Some((wiki_id, fps)) = batch_fps {
-                                let titles: Vec<String> = fps.iter().map(|(t, _)| t.clone()).collect();
+                                let titles: Vec<String> = fps.iter().map(|(t, _, _)| t.clone()).collect();
                                 if let Ok(mut cache) = self.local_fingerprint_cache.lock() {
                                     let entry = cache.entry(wiki_id.clone()).or_insert_with(Vec::new);
-                                    for (title, modified) in fps {
+                                    for (title, modified, version) in fps {
                                         if let Some(existing) = entry.iter_mut().find(|f| f.title == title) {
                                             existing.modified = modified;
+                                            existing.version = version;
                                         } else {
-                                            entry.push(protocol::TiddlerFingerprint { title, modified, deleted: None });
+                                            entry.push(protocol::TiddlerFingerprint { title, modified, deleted: None, version });
                                         }
                                     }
                                 }
@@ -3885,6 +4130,15 @@ impl SyncManager {
         }
 
         for (wiki_id, content_json, content_hash, timestamp) in entries {
+            // Only send wiki info if peer is in the wiki's assigned room
+            let info_allowed = if let Some(app) = GLOBAL_APP_HANDLE.get() {
+                self.is_peer_allowed_for_wiki(app, &wiki_id, device_id).await
+            } else {
+                false
+            };
+            if !info_allowed {
+                continue;
+            }
             let msg = SyncMessage::WikiInfoChanged {
                 wiki_id: wiki_id.clone(),
                 content_json,
@@ -5272,7 +5526,7 @@ impl SyncManager {
     /// broadcast_attachment_manifest because it only sends one file instead of
     /// hashing all 100+ attachments.
     async fn broadcast_single_attachment(&self, wiki_id: &str, canonical_uri: &str) {
-        if !self.is_relay_connected().await {
+        if !self.is_sync_active().await {
             return;
         }
         let app = match GLOBAL_APP_HANDLE.get() {
@@ -5334,9 +5588,8 @@ impl SyncManager {
             };
         }
 
-        // Collect all connected peers (LAN + relay)
-        let peer_ids: Vec<String> = self.connected_peers_all().await
-            .into_iter().map(|(id, _)| id).collect();
+        // Collect peers for this wiki's room (LAN + relay, room-filtered)
+        let peer_ids = self.get_all_peers_for_wiki(wiki_id).await;
 
         if peer_ids.is_empty() {
             return;
@@ -5362,8 +5615,8 @@ impl SyncManager {
     /// Since Android SAF doesn't support inotify-style watches, we poll every 30s.
     #[cfg(target_os = "android")]
     async fn scan_android_attachments(&self) {
-        // Skip if relay is not connected
-        if !self.is_relay_connected().await {
+        // Skip if no connected peers
+        if !self.is_sync_active().await {
             return;
         }
         // Skip if no connected peers (LAN or relay)
@@ -5379,6 +5632,11 @@ impl SyncManager {
         let sync_wikis = crate::wiki_storage::get_sync_enabled_wikis(app);
         for (sync_id, _name, is_folder) in &sync_wikis {
             if *is_folder {
+                continue;
+            }
+            // Only scan wikis assigned to a connected room with room-authenticated peers
+            let peer_ids = self.get_all_peers_for_wiki(sync_id).await;
+            if peer_ids.is_empty() {
                 continue;
             }
             let wiki_path = match crate::wiki_storage::get_wiki_path_by_sync_id(app, sync_id) {
@@ -5411,9 +5669,6 @@ impl SyncManager {
                 .iter()
                 .map(|(e, _)| (e.rel_path.as_str(), e))
                 .collect();
-
-            // Get peer IDs (LAN + relay peers for this wiki)
-            let peer_ids = self.get_all_peers_for_wiki(sync_id).await;
 
             // Broadcast changed files (respecting echo suppression)
             for rel_path in &changed {
@@ -5461,7 +5716,7 @@ impl SyncManager {
     /// Broadcast attachment manifest for a wiki to ALL connected peers.
     /// Used on initial connection to sync all missing attachments.
     async fn broadcast_attachment_manifest(&self, wiki_id: &str) {
-        if !self.is_relay_connected().await {
+        if !self.is_sync_active().await {
             return;
         }
         let app = match GLOBAL_APP_HANDLE.get() {
@@ -6410,8 +6665,30 @@ pub async fn lan_sync_stop() -> Result<(), String> {
 
 #[tauri::command]
 pub async fn lan_sync_announce_username(user_name: String) -> Result<(), String> {
-    let mgr = get_sync_manager().ok_or("Sync not initialized")?;
-    mgr.announce_username(user_name).await;
+    eprintln!("[LAN Sync] lan_sync_announce_username called: '{}'", user_name);
+    // Try sync manager first (main process)
+    if let Some(mgr) = get_sync_manager() {
+        eprintln!("[LAN Sync] announce_username: using sync manager directly");
+        mgr.announce_username(user_name).await;
+        return Ok(());
+    }
+    // Fall back to IPC (wiki process → main process)
+    #[cfg(not(target_os = "android"))]
+    {
+        if let Some(ipc) = IPC_CLIENT_FOR_SYNC.get() {
+            let mut guard = ipc.lock().unwrap();
+            if let Some(ref mut client) = *guard {
+                match client.send_lan_sync_announce_username(&user_name) {
+                    Ok(()) => eprintln!("[LAN Sync] announce_username: sent via IPC"),
+                    Err(e) => eprintln!("[LAN Sync] announce_username: IPC send failed: {}", e),
+                }
+            } else {
+                eprintln!("[LAN Sync] announce_username: IPC client is None");
+            }
+        } else {
+            eprintln!("[LAN Sync] announce_username: IPC_CLIENT_FOR_SYNC not set");
+        }
+    }
     Ok(())
 }
 
@@ -6643,16 +6920,50 @@ pub async fn lan_sync_broadcast_manifest() -> Result<(), String> {
 
 /// Poll for pending LAN sync messages from IPC (desktop wiki processes only).
 /// Returns JSON strings that JS should parse and handle.
+/// `wiki_id`: filters messages for this wiki. Messages with a different
+/// `wiki_id` field in their JSON payload are re-queued so other wiki
+/// windows can pick them up. Pass empty string to get only messages
+/// without a `wiki_id` field (e.g. sync-activate/deactivate).
 #[cfg(not(target_os = "android"))]
 #[tauri::command]
-pub fn lan_sync_poll_ipc() -> Vec<String> {
+pub fn lan_sync_poll_ipc(wiki_id: String) -> Vec<String> {
     let queue = IPC_SYNC_QUEUE.get_or_init(|| std::sync::Mutex::new(Vec::new()));
     let mut guard = queue.lock().unwrap();
-    let messages: Vec<String> = guard.drain(..).collect();
-    if !messages.is_empty() {
-        eprintln!("[LAN Sync] lan_sync_poll_ipc: JS drained {} messages", messages.len());
+    let all: Vec<String> = guard.drain(..).collect();
+    if all.is_empty() {
+        return vec![];
     }
-    messages
+    let mut matching = Vec::new();
+    let mut requeue = Vec::new();
+    for msg in all {
+        // Parse just enough to check the wiki_id field
+        let msg_wiki_id = serde_json::from_str::<serde_json::Value>(&msg)
+            .ok()
+            .and_then(|v| v.get("wiki_id").and_then(|w| w.as_str()).map(String::from));
+        let keep = match (&msg_wiki_id, wiki_id.is_empty()) {
+            // Message has no wiki_id → deliver to everyone (global message)
+            (None, _) => true,
+            // Caller wants global only (empty wiki_id) but message has one → re-queue
+            (Some(_), true) => false,
+            // Message wiki_id matches caller → deliver
+            (Some(mid), false) if mid == &wiki_id => true,
+            // Message wiki_id doesn't match → re-queue for the right wiki
+            (Some(_), false) => false,
+        };
+        if keep {
+            matching.push(msg);
+        } else {
+            requeue.push(msg);
+        }
+    }
+    // Put non-matching messages back
+    if !requeue.is_empty() {
+        guard.extend(requeue);
+    }
+    if !matching.is_empty() {
+        eprintln!("[LAN Sync] lan_sync_poll_ipc({}): JS drained {} messages", wiki_id, matching.len());
+    }
+    matching
 }
 
 /// No-op on Android (JS uses bridge polling instead).
@@ -6867,12 +7178,22 @@ pub async fn relay_sync_get_status() -> Result<RelaySyncStatus, String> {
         let config = relay.get_config().await;
         let mut rooms = relay.get_rooms().await;
         let authenticated = !config.auth_token.is_empty();
-        // Merge LAN peers into room connected_peers (dedup by device_id)
+        let local_device_id = mgr.pairing_manager.device_id();
+        // For relay-disconnected rooms, clear relay peers (none expected anyway).
+        // For relay-connected rooms, remove local device from relay peer list.
+        for room in &mut rooms {
+            if !room.connected {
+                room.connected_peers.clear();
+            } else {
+                room.connected_peers.retain(|p| p.device_id != local_device_id);
+            }
+        }
+        // Always merge LAN peers — rooms can be active via LAN even without relay.
         if let Some(ref server) = *mgr.server.read().await {
             for room in &mut rooms {
                 let lan_peers = server.lan_peers_for_room(&room.room_code).await;
                 for (id, name) in lan_peers {
-                    if !room.connected_peers.iter().any(|p| p.device_id == id) {
+                    if id != local_device_id && !room.connected_peers.iter().any(|p| p.device_id == id) {
                         room.connected_peers.push(crate::relay_sync::RoomPeerInfo {
                             device_id: id,
                             device_name: name,
@@ -6965,15 +7286,19 @@ pub async fn relay_sync_remove_room(room_code: String) -> Result<(), String> {
 
 #[tauri::command]
 pub async fn relay_sync_connect_room(room_code: String) -> Result<(), String> {
+    eprintln!("[LAN Sync] relay_sync_connect_room: {}", room_code);
     let mgr = get_sync_manager().ok_or("Sync not initialized")?;
     if let Some(relay) = &mgr.relay_manager {
         // Try relay connection — log but don't fail if relay is unavailable
         // (LAN-only sync should still work)
         if let Err(e) = relay.connect_room(&room_code).await {
             eprintln!("[LAN Sync] Relay connect failed (LAN still works): {}", e);
+        } else {
+            eprintln!("[LAN Sync] relay.connect_room spawned task for {}", room_code);
         }
         // Mark room as manually activated so UI shows it as connected
         relay.activate_room(&room_code).await;
+        relay.set_room_auto_connect(&room_code, true).await;
         // Refresh LAN room keys and discovery beacons
         mgr.update_room_keys().await;
         mgr.update_active_room_codes().await;
@@ -6982,6 +7307,45 @@ pub async fn relay_sync_connect_room(room_code: String) -> Result<(), String> {
         if mgr.server.read().await.is_none() {
             if let Err(e) = mgr.start().await {
                 eprintln!("[LAN Sync] Auto-start LAN server failed: {}", e);
+            }
+        }
+        // Trigger immediate beacon so peers discover us without waiting 2s
+        mgr.force_discovery_beacon().await;
+        // Re-check all connected peers against our updated room list.
+        // The forced beacon tells the OTHER device about our new rooms, but
+        // we also need to update our own peer_room_codes for already-connected
+        // peers whose room hashes already included this room.
+        if let Some(ref server) = *mgr.server.read().await {
+            let our_rooms = mgr.active_room_codes.read()
+                .unwrap_or_else(|e| e.into_inner())
+                .clone();
+            let all_peer_hashes = mgr.peer_room_hashes.read().await;
+            let mut any_updated = false;
+            for (peer_id, hashes) in all_peer_hashes.iter() {
+                let shared = protocol::select_all_shared_rooms_by_hash(&our_rooms, hashes);
+                let old_codes = server.peer_room_codes(peer_id).await;
+                let mut new_rooms = false;
+                for r in &shared {
+                    if !old_codes.contains(r) {
+                        new_rooms = true;
+                        break;
+                    }
+                }
+                if new_rooms {
+                    server.add_peer_room_codes(peer_id, &shared).await;
+                    eprintln!("[LAN Sync] Added room codes for already-connected peer {}: {:?}",
+                        &peer_id[..8.min(peer_id.len())], shared);
+                    mgr.send_wiki_manifest_to_peer(peer_id).await;
+                    any_updated = true;
+                }
+            }
+            drop(all_peer_hashes);
+            if any_updated {
+                if let Some(app) = GLOBAL_APP_HANDLE.get() {
+                    let _ = app.emit("lan-sync-peers-updated", serde_json::json!({}));
+                }
+                #[cfg(not(target_os = "android"))]
+                mgr.push_peer_updates_to_ipc().await;
             }
         }
         // Start foreground service to keep process alive (Android only)
@@ -6997,11 +7361,48 @@ pub async fn relay_sync_connect_room(room_code: String) -> Result<(), String> {
 pub async fn relay_sync_disconnect_room(room_code: String) -> Result<(), String> {
     let mgr = get_sync_manager().ok_or("Sync not initialized")?;
     if let Some(relay) = &mgr.relay_manager {
+        // Send RoomLeave to all LAN peers in this room BEFORE disconnecting,
+        // so they can update their UI immediately instead of waiting for ping timeout.
+        if let Some(ref server) = *mgr.server.read().await {
+            let room_peers = server.lan_peers_for_room(&room_code).await;
+            if !room_peers.is_empty() {
+                let leave_msg = SyncMessage::RoomLeave {
+                    room_code: room_code.clone(),
+                };
+                let peer_ids: Vec<String> = room_peers.into_iter().map(|(id, _)| id).collect();
+                eprintln!("[LAN Sync] Sending RoomLeave({}) to {} peers", room_code, peer_ids.len());
+                server.send_to_peers(&peer_ids, &leave_msg).await;
+                // Brief delay to let the message flush before we tear down
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            }
+        }
         relay.disconnect_room(&room_code).await;
         relay.deactivate_room(&room_code).await;
-        // Refresh discovery beacons
+        relay.set_room_auto_connect(&room_code, false).await;
+        // Remove room from LAN peers and disconnect those with no remaining rooms
+        if let Some(ref server) = *mgr.server.read().await {
+            let disconnected = server.remove_room_from_peers(&room_code).await;
+            for did in &disconnected {
+                if let Ok(mut set) = mgr.connected_peer_ids.write() {
+                    set.remove(did);
+                }
+                mgr.remote_wikis.write().await.remove(did);
+            }
+            if let Some(app) = GLOBAL_APP_HANDLE.get() {
+                for did in &disconnected {
+                    let _ = app.emit("lan-sync-peer-disconnected", serde_json::json!({
+                        "device_id": did,
+                    }));
+                }
+                if !disconnected.is_empty() {
+                    let _ = app.emit("lan-sync-peers-updated", serde_json::json!({}));
+                }
+            }
+        }
+        // Refresh discovery beacons and trigger immediate beacon
         mgr.update_active_room_codes().await;
         mgr.update_room_keys().await;
+        mgr.force_discovery_beacon().await;
         // Only stop LAN server if no rooms remain configured at all
         // (keep running for LAN-only discovery of other rooms)
         if !relay.has_any_rooms().await {

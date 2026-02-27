@@ -55,6 +55,7 @@
 
   window.TiddlyDesktop.collab = {
     startEditing: function(tiddlerTitle) {
+      if (isSyncExcluded(tiddlerTitle)) return;
       if (_collabSyncActive) {
         sendCollabOutbound('startEditing', _collabWikiId, tiddlerTitle);
       } else {
@@ -62,6 +63,7 @@
       }
     },
     stopEditing: function(tiddlerTitle) {
+      if (isSyncExcluded(tiddlerTitle)) return;
       if (_collabSyncActive) {
         sendCollabOutbound('stopEditing', _collabWikiId, tiddlerTitle);
       } else {
@@ -69,6 +71,7 @@
       }
     },
     sendUpdate: function(tiddlerTitle, base64) {
+      if (isSyncExcluded(tiddlerTitle)) return;
       if (_collabSyncActive) {
         sendCollabOutbound('sendUpdate', _collabWikiId, tiddlerTitle, base64);
       } else {
@@ -76,6 +79,7 @@
       }
     },
     sendAwareness: function(tiddlerTitle, base64) {
+      if (isSyncExcluded(tiddlerTitle)) return;
       if (_collabSyncActive) {
         sendCollabOutbound('sendAwareness', _collabWikiId, tiddlerTitle, base64);
       } else {
@@ -195,6 +199,42 @@
     console.log(msg);
   }
 
+  // Add a $:/temp/* tiddler without triggering change events.
+  // TW5's saveTiddlerFilter already excludes $:/temp/* from saves,
+  // and SaverFilter excludes them from dirty tracking.
+  function addTempTiddler(fields) {
+    var origEnqueue = $tw.wiki.enqueueTiddlerEvent;
+    $tw.wiki.enqueueTiddlerEvent = function() {};
+    $tw.wiki.addTiddler(fields);
+    $tw.wiki.enqueueTiddlerEvent = origEnqueue;
+  }
+
+  // Delete a tiddler without dirtying the wiki or triggering autosave.
+  function deleteTempTiddler(title) {
+    var origEnqueue = $tw.wiki.enqueueTiddlerEvent;
+    $tw.wiki.enqueueTiddlerEvent = function() {};
+    $tw.wiki.deleteTiddler(title);
+    $tw.wiki.enqueueTiddlerEvent = origEnqueue;
+  }
+
+  // Add a temp tiddler and trigger a targeted UI refresh (no dirty/autosave).
+  function addTempTiddlerWithRefresh(fields) {
+    addTempTiddler(fields);
+    var changes = {};
+    changes[fields.title] = { modified: true };
+    $tw.wiki.eventsTriggered = false;
+    $tw.wiki.dispatchEvent('change', changes);
+  }
+
+  // Delete a temp tiddler and trigger a targeted UI refresh (no dirty/autosave).
+  function deleteTempTiddlerWithRefresh(title) {
+    deleteTempTiddler(title);
+    var changes = {};
+    changes[title] = { deleted: true };
+    $tw.wiki.eventsTriggered = false;
+    $tw.wiki.dispatchEvent('change', changes);
+  }
+
   function initLanSync() {
     var wikiPath = window.__WIKI_PATH__ || '';
     if (!wikiPath) return;
@@ -242,7 +282,7 @@
       var preActivationPollActive = true;
       function pollIpcForActivation() {
         if (!preActivationPollActive) return;
-        window.__TAURI__.core.invoke('lan_sync_poll_ipc').then(function(messages) {
+        window.__TAURI__.core.invoke('lan_sync_poll_ipc', { wikiId: '' }).then(function(messages) {
           if (messages && messages.length) {
             rsLog('[LAN Sync] pollIpcForActivation: ' + messages.length + ' messages');
             var activated = false;
@@ -589,6 +629,7 @@
     if (title.indexOf('$:/state/') === 0) return true;
     if (title.indexOf('$:/status/') === 0) return true;
     if (title.indexOf('$:/temp/') === 0) return true;
+    if (title.indexOf('$:/language/') === 0) return true;
     if (title.indexOf('$:/plugins/tiddlydesktop-rs/') === 0) return true;
     if (title.indexOf('$:/plugins/tiddlydesktop/') === 0) return true;
     if (title.indexOf('$:/config/') === 0) return true;
@@ -656,32 +697,30 @@
       outboundTimer: null
     };
 
-    // Compare incoming tiddler fields with local — returns true if they differ.
-    // Includes 'modified' so fingerprint-based sync converges (fingerprints use
-    // modified for diff detection; skipping it here would cause infinite loops).
+    // Compare incoming tiddler fields with local — returns true if content differs.
+    // Ignores 'modified', 'modifier', and 'created' (metadata-only differences
+    // should NOT trigger a re-apply that dirties the wiki). Fingerprint convergence
+    // is handled by knownSyncTitles: when content matches, the remote's modified
+    // timestamp is tracked there so the peer stops re-sending.
     function tiddlerDiffers(fields) {
       var existing = $tw.wiki.getTiddler(fields.title);
       if (!existing) return true;
       var ef = existing.fields;
-      // Check modified timestamp (fingerprint sync depends on this converging)
-      var remoteMod = fields.modified ? String(fields.modified) : '';
-      var localMod = ef.modified ? fieldToString(ef.modified) : '';
-      if (remoteMod !== localMod) return true;
-      // Check all incoming fields exist and match in local
+      // Check all incoming fields exist and match in local (skip metadata)
       var keys = Object.keys(fields);
       for (var i = 0; i < keys.length; i++) {
         var k = keys[i];
-        if (k === 'created' || k === 'modified') continue;
+        if (k === 'created' || k === 'modified' || k === 'modifier') continue;
         var v1 = String(fields[k]);
         var v2 = ef[k];
         if (v2 === undefined) return true;
         if (v1 !== fieldToString(v2)) return true;
       }
-      // Check local doesn't have extra fields not in incoming (skip created only)
+      // Check local doesn't have extra fields not in incoming (skip metadata)
       var eKeys = Object.keys(ef);
       for (var j = 0; j < eKeys.length; j++) {
         var ek = eKeys[j];
-        if (ek === 'created' || ek === 'modified') continue;
+        if (ek === 'created' || ek === 'modified' || ek === 'modifier') continue;
         if (fields[ek] === undefined) return true;
       }
       return false;
@@ -843,10 +882,10 @@
       // Wiki config changed (tiddlywiki.info updated via LAN sync)
       if (data.type === 'wiki-info-changed') {
         _log('[LAN Sync] Wiki config changed from another device');
-        $tw.wiki.addTiddler(new $tw.Tiddler({
+        addTempTiddlerWithRefresh({
           title: "$:/temp/tiddlydesktop/config-reload-required",
           text: "yes"
-        }));
+        });
         return;
       }
 
@@ -857,8 +896,7 @@
         return;
       }
 
-      // Peer status updates — update data tiddlers for peer badge UI
-      // Only call addTiddler if value actually changed (avoid unnecessary refresh cycles)
+      // Peer status updates — update shadow tiddlers for peer badge UI
       if (data.type === 'peer-update') {
         if (data.peers) {
           // Convert array to object keyed by index — strip device_id (sensitive)
@@ -870,18 +908,18 @@
           var countStr = String(data.peers.length);
           var PEERS_TITLE = '$:/temp/tiddlydesktop/connected-peers';
           var COUNT_TITLE = '$:/temp/tiddlydesktop/peer-count';
+          var changed = {};
           if ($tw.wiki.getTiddlerText(PEERS_TITLE) !== peersJson) {
-            $tw.wiki.addTiddler({
-              title: PEERS_TITLE,
-              type: 'application/json',
-              text: peersJson
-            });
+            addTempTiddler({ title: PEERS_TITLE, type: 'application/json', text: peersJson });
+            changed[PEERS_TITLE] = { modified: true };
           }
           if ($tw.wiki.getTiddlerText(COUNT_TITLE) !== countStr) {
-            $tw.wiki.addTiddler({
-              title: COUNT_TITLE,
-              text: countStr
-            });
+            addTempTiddler({ title: COUNT_TITLE, text: countStr });
+            changed[COUNT_TITLE] = { modified: true };
+          }
+          if (Object.keys(changed).length > 0) {
+            $tw.wiki.eventsTriggered = false;
+            $tw.wiki.dispatchEvent('change', changed);
           }
         }
         return;
@@ -903,6 +941,11 @@
 
       var needSave = false;
       var pluginsChanged = false;
+      // Pending conflicts: title → local tiddler snapshot.
+      // Created when a 'conflict' event arrives; consumed when the subsequent
+      // 'apply-change' arrives. If the change is content-identical or a plugin,
+      // the conflict is discarded (no conflict tiddler created).
+      var pendingConflicts = {};
       for (var i = 0; i < batch.length; i++) {
         var data = batch[i];
 
@@ -911,6 +954,8 @@
             var fields = JSON.parse(data.tiddler_json);
             // Plugin tiddlers: only accept if incoming version is newer
             if (fields['plugin-type'] && fields.version) {
+              // Never create conflicts for plugin tiddlers — version comparison only
+              delete pendingConflicts[fields.title];
               var localPlugin = $tw.wiki.getTiddler(fields.title);
               if (localPlugin && localPlugin.fields.version &&
                   compareVersions(fields.version, localPlugin.fields.version) <= 0) {
@@ -925,6 +970,21 @@
               delete deletionTombstones[fields.title];
             }
             if (tiddlerDiffers(fields)) {
+              // Content actually differs — create the pending conflict if one exists
+              if (pendingConflicts[fields.title]) {
+                var localSnap = pendingConflicts[fields.title];
+                var conflictTitle = '$:/TiddlyDesktopRS/Conflicts/' + fields.title;
+                conflictTitles.add(conflictTitle);
+                var conflictFields = Object.assign({}, localSnap.fields, {
+                  title: conflictTitle,
+                  'conflict-original-title': fields.title,
+                  'conflict-timestamp': new Date().toISOString(),
+                  'conflict-source': 'local'
+                });
+                $tw.wiki.addTiddler(new $tw.Tiddler(conflictFields));
+                setTimeout(function() { conflictTitles.delete(conflictTitle); }, 500);
+                delete pendingConflicts[fields.title];
+              }
               // Parse date strings to Date objects so TiddlyWiki stores them correctly
               if (fields.created) fields.created = $tw.utils.parseDate(fields.created);
               if (fields.modified) fields.modified = $tw.utils.parseDate(fields.modified);
@@ -936,6 +996,11 @@
                 pluginsChanged = true;
               }
             } else {
+              // Content identical (only metadata differs) — discard any pending conflict
+              if (pendingConflicts[fields.title]) {
+                _log('[LAN Sync] Skipped conflict for metadata-only diff: ' + fields.title);
+                delete pendingConflicts[fields.title];
+              }
               _log('[LAN Sync] Skipped identical tiddler: ' + fields.title);
               // Track so we include it in fingerprints (peer will stop re-sending)
               var skipMod = fields.modified ? String(fields.modified) : '';
@@ -965,20 +1030,35 @@
 
         } else if (data.type === 'conflict') {
           var title = data.title;
+          // Skip conflicts for plugin tiddlers entirely
+          if (title.indexOf('$:/plugins/') === 0) {
+            _log('[LAN Sync] Skipped conflict for plugin: ' + title);
+            continue;
+          }
+          // Defer conflict creation — will be resolved when the subsequent
+          // apply-change arrives (skip if content is metadata-only different)
           var localTiddler = $tw.wiki.getTiddler(title);
           if (localTiddler) {
-            var conflictTitle = '$:/TiddlyDesktopRS/Conflicts/' + title;
-            conflictTitles.add(conflictTitle);
-            var conflictFields = Object.assign({}, localTiddler.fields, {
-              title: conflictTitle,
-              'conflict-original-title': title,
-              'conflict-timestamp': new Date().toISOString(),
-              'conflict-source': 'local'
-            });
-            $tw.wiki.addTiddler(new $tw.Tiddler(conflictFields));
-            setTimeout(function() { conflictTitles.delete(conflictTitle); }, 500);
+            pendingConflicts[title] = localTiddler;
           }
         }
+      }
+      // Any remaining pending conflicts without a subsequent apply-change
+      // (shouldn't normally happen, but handle gracefully)
+      var pcKeys = Object.keys(pendingConflicts);
+      for (var pc = 0; pc < pcKeys.length; pc++) {
+        var pcTitle = pcKeys[pc];
+        var pcLocal = pendingConflicts[pcTitle];
+        var pcConflictTitle = '$:/TiddlyDesktopRS/Conflicts/' + pcTitle;
+        conflictTitles.add(pcConflictTitle);
+        var pcConflictFields = Object.assign({}, pcLocal.fields, {
+          title: pcConflictTitle,
+          'conflict-original-title': pcTitle,
+          'conflict-timestamp': new Date().toISOString(),
+          'conflict-source': 'local'
+        });
+        $tw.wiki.addTiddler(new $tw.Tiddler(pcConflictFields));
+        setTimeout(function() { conflictTitles.delete(pcConflictTitle); }, 500);
       }
       // If plugin tiddlers were updated, re-extract shadow tiddlers
       if (pluginsChanged) {
@@ -1253,17 +1333,13 @@
         } else {
           _overflowDrained = true;
         }
-        window.__TAURI__.core.invoke('lan_sync_poll_ipc').then(function(messages) {
+        window.__TAURI__.core.invoke('lan_sync_poll_ipc', { wikiId: wikiId }).then(function(messages) {
           if (messages && messages.length) {
             _log('[LAN Sync] IPC poll: ' + messages.length + ' messages');
             for (var i = 0; i < messages.length; i++) {
               try {
                 var data = JSON.parse(messages[i]);
                 if (!data || !data.type) continue;
-                if (data.wiki_id && data.wiki_id !== wikiId) {
-                  _log('[LAN Sync] IPC skip: wiki_id mismatch (' + data.wiki_id + ' vs ' + wikiId + ')');
-                  continue;
-                }
 
                 // Handle sync deactivation via IPC (cross-process)
                 if (data.type === 'sync-deactivate' && data.wiki_path === wikiPath) {
@@ -1293,10 +1369,10 @@
                     break;
                   case 'wiki-info-changed':
                     _log('[LAN Sync] Wiki config changed from another device');
-                    $tw.wiki.addTiddler(new $tw.Tiddler({
+                    addTempTiddlerWithRefresh({
                       title: "$:/temp/tiddlydesktop/config-reload-required",
                       text: "yes"
-                    }));
+                    });
                     break;
                   case 'editing-started':
                   case 'editing-stopped':
@@ -1305,30 +1381,35 @@
                     handleCollabMessage(data);
                     break;
                   case 'peer-update':
-                    // Update peer data tiddlers (pushed from main process)
-                    // Only call addTiddler if value changed (avoid unnecessary refresh cycles)
+                    // Update shadow tiddlers for peer badge (pushed from main process)
                     if (data.peers) {
                       var PEERS_TIDDLER = '$:/temp/tiddlydesktop/connected-peers';
                       var COUNT_TIDDLER = '$:/temp/tiddlydesktop/peer-count';
-                      // Convert array to object keyed by index — strip device_id (sensitive)
                       var peersObj2 = {};
                       for (var pi2 = 0; pi2 < data.peers.length; pi2++) {
                         peersObj2[pi2] = {user_name: data.peers[pi2].user_name || '', device_name: data.peers[pi2].device_name || ''};
                       }
                       var peersJson = JSON.stringify(peersObj2);
                       var countStr = String(data.peers.length);
+                      var changed2 = {};
                       if ($tw.wiki.getTiddlerText(PEERS_TIDDLER) !== peersJson) {
-                        $tw.wiki.addTiddler({
+                        addTempTiddler({
                           title: PEERS_TIDDLER,
                           type: 'application/json',
                           text: peersJson
                         });
+                        changed2[PEERS_TIDDLER] = { modified: true };
                       }
                       if ($tw.wiki.getTiddlerText(COUNT_TIDDLER) !== countStr) {
-                        $tw.wiki.addTiddler({
+                        addTempTiddler({
                           title: COUNT_TIDDLER,
                           text: countStr
                         });
+                        changed2[COUNT_TIDDLER] = { modified: true };
+                      }
+                      if (Object.keys(changed2).length > 0) {
+                        $tw.wiki.eventsTriggered = false;
+                        $tw.wiki.dispatchEvent('change', changed2);
                       }
                     }
                     break;
@@ -1513,13 +1594,13 @@
     var editors = remoteEditorsCache[tiddlerTitle] || [];
     var tid = '$:/temp/tiddlydesktop/editing/' + tiddlerTitle;
     if (editors.length > 0) {
-      $tw.wiki.addTiddler({
+      addTempTiddlerWithRefresh({
         title: tid,
         type: 'application/json',
         text: JSON.stringify(editors)
       });
     } else {
-      $tw.wiki.deleteTiddler(tid);
+      deleteTempTiddlerWithRefresh(tid);
     }
   }
 
@@ -1527,11 +1608,20 @@
   function clearAllEditingTiddlers() {
     if (typeof $tw === 'undefined' || !$tw.wiki) return;
     var prefix = '$:/temp/tiddlydesktop/editing/';
+    var toDelete = [];
     $tw.wiki.each(function(tiddler, title) {
       if (title.indexOf(prefix) === 0) {
-        $tw.wiki.deleteTiddler(title);
+        toDelete.push(title);
       }
     });
+    if (toDelete.length === 0) return;
+    var changes = {};
+    for (var i = 0; i < toDelete.length; i++) {
+      deleteTempTiddler(toDelete[i]);
+      changes[toDelete[i]] = { deleted: true };
+    }
+    $tw.wiki.eventsTriggered = false;
+    $tw.wiki.dispatchEvent('change', changes);
   }
 
   function handleCollabMessage(data) {

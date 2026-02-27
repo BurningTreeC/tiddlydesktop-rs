@@ -342,6 +342,7 @@ fn run_bridge_server(
                                                 .unwrap_or("")
                                                 .to_string(),
                                             deleted: f["deleted"].as_bool().filter(|&b| b),
+                                            version: f["version"].as_str().map(|s| s.to_string()),
                                         })
                                     })
                                     .collect()
@@ -391,6 +392,7 @@ fn run_bridge_server(
                                                 .unwrap_or("")
                                                 .to_string(),
                                             deleted: f["deleted"].as_bool().filter(|&b| b),
+                                            version: f["version"].as_str().map(|s| s.to_string()),
                                         })
                                     })
                                     .collect()

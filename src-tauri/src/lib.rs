@@ -6343,7 +6343,7 @@ async fn check_for_updates() -> Result<UpdateCheckResult, String> {
 
 /// Android version - separate from desktop versioning (must match build.gradle.kts versionName)
 #[cfg(target_os = "android")]
-const ANDROID_VERSION: &str = "0.0.67";
+const ANDROID_VERSION: &str = "0.0.68";
 
 /// Check for updates on Android via version file on GitHub, linking to Play Store
 #[cfg(target_os = "android")]
@@ -8409,6 +8409,7 @@ fn run_wiki_mode(args: WikiModeArgs) {
             // LAN sync commands (fall back to IPC when sync manager not in this process)
             wiki_storage::get_wiki_sync_id,
             lan_sync::lan_sync_wiki_opened,
+            lan_sync::lan_sync_announce_username,
             lan_sync::lan_sync_tiddler_changed,
             lan_sync::lan_sync_tiddler_deleted,
             lan_sync::lan_sync_send_full_sync,
@@ -8878,6 +8879,7 @@ fn run_wiki_folder_mode(args: WikiFolderModeArgs) {
             // LAN sync commands (fall back to IPC when sync manager not in this process)
             wiki_storage::get_wiki_sync_id,
             lan_sync::lan_sync_wiki_opened,
+            lan_sync::lan_sync_announce_username,
             lan_sync::lan_sync_tiddler_changed,
             lan_sync::lan_sync_tiddler_deleted,
             lan_sync::lan_sync_send_full_sync,

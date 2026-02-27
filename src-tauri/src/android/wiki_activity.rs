@@ -107,23 +107,20 @@ fn find_app_class<'a>(env: &mut jni::JNIEnv<'a>, class_name: &str) -> Result<JCl
     Ok(JClass::from(class_obj))
 }
 
-/// Start the foreground service to keep the app alive in background.
+/// Start the foreground service for a specific wiki.
 /// Call this when starting a wiki server.
 /// This is best-effort - if it fails, we continue without the service.
-pub fn start_foreground_service() -> Result<(), String> {
-    eprintln!("[WikiActivity] start_foreground_service called");
+#[allow(dead_code)]
+pub fn wiki_opened(wiki_key: &str, wiki_title: &str) -> Result<(), String> {
+    eprintln!("[WikiActivity] wiki_opened called: {} ({})", wiki_title, wiki_key);
 
     let vm = get_java_vm()?;
-    eprintln!("[WikiActivity] Got JavaVM for foreground service");
-
     let mut env = vm.attach_current_thread()
         .map_err(|e| format!("Failed to attach thread: {}", e))?;
-    eprintln!("[WikiActivity] Attached thread for foreground service");
 
     // Get application context
     let activity_thread_class = env.find_class("android/app/ActivityThread")
         .map_err(|e| format!("Failed to find ActivityThread: {}", e))?;
-    eprintln!("[WikiActivity] Found ActivityThread class");
 
     let app_context = env.call_static_method(
         &activity_thread_class,
@@ -132,34 +129,34 @@ pub fn start_foreground_service() -> Result<(), String> {
         &[],
     ).map_err(|e| format!("Failed to get current application: {}", e))?
         .l().map_err(|e| format!("Failed to convert: {}", e))?;
-    eprintln!("[WikiActivity] Got application context");
 
-    // Call WikiServerService.startService(context)
     let service_class = match find_app_class(&mut env, "com/burningtreec/tiddlydesktop_rs/WikiServerService") {
         Ok(c) => c,
         Err(e) => {
             eprintln!("[WikiActivity] WikiServerService class not found: {}", e);
-            // Clear any exception so we can continue
             if env.exception_check().unwrap_or(false) {
                 let _ = env.exception_clear();
             }
             return Err(format!("WikiServerService class not found: {}", e));
         }
     };
-    eprintln!("[WikiActivity] Found WikiServerService class");
+
+    let j_wiki_key = env.new_string(wiki_key)
+        .map_err(|e| format!("Failed to create wiki_key string: {}", e))?;
+    let j_wiki_title = env.new_string(wiki_title)
+        .map_err(|e| format!("Failed to create wiki_title string: {}", e))?;
 
     match env.call_static_method(
         &service_class,
-        "startService",
-        "(Landroid/content/Context;)V",
-        &[(&app_context).into()],
+        "wikiOpened",
+        "(Landroid/content/Context;Ljava/lang/String;Ljava/lang/String;)V",
+        &[(&app_context).into(), (&j_wiki_key).into(), (&j_wiki_title).into()],
     ) {
         Ok(_) => {
-            eprintln!("[WikiActivity] Started foreground service successfully");
+            eprintln!("[WikiActivity] Started foreground service for wiki: {}", wiki_title);
         }
         Err(e) => {
-            eprintln!("[WikiActivity] Failed to call startService: {}", e);
-            // Clear any exception so we can continue
+            eprintln!("[WikiActivity] Failed to call wikiOpened: {}", e);
             if env.exception_check().unwrap_or(false) {
                 let _ = env.exception_clear();
             }
@@ -171,7 +168,8 @@ pub fn start_foreground_service() -> Result<(), String> {
 }
 
 /// Notify that a wiki was closed. Stops the foreground service when no wikis are open.
-pub fn wiki_closed() -> Result<(), String> {
+#[allow(dead_code)]
+pub fn wiki_closed(wiki_key: &str) -> Result<(), String> {
     let vm = get_java_vm()?;
     let mut env = vm.attach_current_thread()
         .map_err(|e| format!("Failed to attach thread: {}", e))?;
@@ -188,18 +186,20 @@ pub fn wiki_closed() -> Result<(), String> {
     ).map_err(|e| format!("Failed to get current application: {}", e))?
         .l().map_err(|e| format!("Failed to convert: {}", e))?;
 
-    // Call WikiServerService.wikiClosed(context)
     let service_class = find_app_class(&mut env, "com/burningtreec/tiddlydesktop_rs/WikiServerService")
         .map_err(|e| format!("Failed to find WikiServerService: {}", e))?;
+
+    let j_wiki_key = env.new_string(wiki_key)
+        .map_err(|e| format!("Failed to create wiki_key string: {}", e))?;
 
     env.call_static_method(
         &service_class,
         "wikiClosed",
-        "(Landroid/content/Context;)V",
-        &[(&app_context).into()],
+        "(Landroid/content/Context;Ljava/lang/String;)V",
+        &[(&app_context).into(), (&j_wiki_key).into()],
     ).map_err(|e| format!("Failed to notify wiki closed: {}", e))?;
 
-    eprintln!("[WikiActivity] Notified wiki closed");
+    eprintln!("[WikiActivity] Notified wiki closed: {}", wiki_key);
     Ok(())
 }
 

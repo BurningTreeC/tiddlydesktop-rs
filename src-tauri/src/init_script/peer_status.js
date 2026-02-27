@@ -1,5 +1,6 @@
 // Peer status badge — shows connected LAN sync peers in the TopRightBar
-// Creates wikitext badge UI tiddlers and data tiddlers that drive the badge.
+// Creates wikitext badge UI tiddlers (as shadow tiddlers via injected plugin) and
+// data tiddlers (as real $:/temp/* tiddlers — excluded from saves by TW5's saveTiddlerFilter).
 // Desktop: peer data is pushed from main process via IPC and handled by lan_sync.js.
 // Android: peer data is polled from the bridge here.
 (function() {
@@ -9,18 +10,17 @@
   if (!window.__WIKI_PATH__) return;
   if (window.__WINDOW_LABEL__ === 'main') return;
 
-  // Transport detection (same pattern as lan_sync.js)
+  // NOTE: Transport detection is deferred to waitForTw callback because
+  // window.__TAURI__ may not be available yet when init scripts run
+  // (Tauri IPC bridge loads asynchronously on some platforms).
   var isAndroid = typeof window.TiddlyDesktopSync !== 'undefined';
-  var hasTauri = !!(window.__TAURI__ && window.__TAURI__.core && window.__TAURI__.core.invoke);
-
-  // Skip if no sync transport available
-  if (!isAndroid && !hasTauri) return;
 
   var POLL_INTERVAL = 5000;
   var PEERS_TIDDLER = '$:/temp/tiddlydesktop/connected-peers';
   var COUNT_TIDDLER = '$:/temp/tiddlydesktop/peer-count';
   var BADGE_TIDDLER = '$:/temp/tiddlydesktop/PeerBadge';
   var EDITING_BADGE_TIDDLER = '$:/temp/tiddlydesktop/EditingBadge';
+  var PLUGIN_TITLE = '$:/plugins/tiddlydesktop-rs/injected';
 
   var lastPeersJson = '';
 
@@ -35,11 +35,25 @@
   function announceUsername(name) {
     if (isAndroid) {
       try { window.TiddlyDesktopSync.announceUsername(name); } catch (_) {}
-    } else if (hasTauri) {
+    } else if (window.__TAURI__ && window.__TAURI__.core && window.__TAURI__.core.invoke) {
       window.__TAURI__.core.invoke('lan_sync_announce_username', {
         userName: name
-      }).catch(function() {});
+      }).then(function() {
+        console.warn('[PeerStatus] announce invoke succeeded');
+      }).catch(function(e) {
+        console.warn('[PeerStatus] announce invoke FAILED: ' + e);
+      });
     }
+  }
+
+  // Add a $:/temp/* tiddler without triggering change events.
+  // TW5's saveTiddlerFilter already excludes $:/temp/* from saves,
+  // and SaverFilter excludes them from dirty tracking.
+  function addTempTiddler(fields) {
+    var origEnqueue = $tw.wiki.enqueueTiddlerEvent;
+    $tw.wiki.enqueueTiddlerEvent = function() {};
+    $tw.wiki.addTiddler(fields);
+    $tw.wiki.enqueueTiddlerEvent = origEnqueue;
   }
 
   function updatePeerData(peers) {
@@ -56,15 +70,21 @@
 
     var count = String(peers.length);
 
-    $tw.wiki.addTiddler({
+    addTempTiddler({
       title: PEERS_TIDDLER,
       type: 'application/json',
       text: peersJson
     });
-    $tw.wiki.addTiddler({
+    addTempTiddler({
       title: COUNT_TIDDLER,
       text: count
     });
+    // Single targeted refresh for both data tiddlers
+    var changes = {};
+    changes[PEERS_TIDDLER] = { modified: true };
+    changes[COUNT_TIDDLER] = { modified: true };
+    $tw.wiki.eventsTriggered = false;
+    $tw.wiki.dispatchEvent('change', changes);
   }
 
   function createBadgeTiddler() {
@@ -114,12 +134,17 @@
       '<<peer-badge-styles>>\n' +
       '</style>\n';
 
-    $tw.wiki.addTiddler({
-      title: BADGE_TIDDLER,
-      tags: '$:/tags/TopRightBar',
-      'list-before': '',
-      text: wikitext
-    });
+    // Register as shadow tiddler via injected plugin (never saved, no dirty)
+    if (window.TiddlyDesktop && window.TiddlyDesktop.addPluginTiddler) {
+      window.TiddlyDesktop.addPluginTiddler({
+        title: BADGE_TIDDLER,
+        tags: '$:/tags/TopRightBar',
+        'list-before': '',
+        text: wikitext
+      });
+      return true; // needs registerPlugin call
+    }
+    return false;
   }
 
   function createEditingBadgeTiddler() {
@@ -154,27 +179,55 @@
       '<<editing-badge-styles>>\n' +
       '</style>\n';
 
-    $tw.wiki.addTiddler({
-      title: EDITING_BADGE_TIDDLER,
-      tags: '$:/tags/ViewTemplate',
-      'list-before': '$:/core/ui/ViewTemplate/body',
-      text: wikitext
-    });
+    // Register as shadow tiddler via injected plugin (never saved, no dirty)
+    if (window.TiddlyDesktop && window.TiddlyDesktop.addPluginTiddler) {
+      window.TiddlyDesktop.addPluginTiddler({
+        title: EDITING_BADGE_TIDDLER,
+        tags: '$:/tags/ViewTemplate',
+        'list-before': '$:/core/ui/ViewTemplate/body',
+        text: wikitext
+      });
+      return true; // needs registerPlugin call
+    }
+    return false;
   }
 
   waitForTw(function() {
-    // Initialize data tiddlers with empty state
-    $tw.wiki.addTiddler({ title: PEERS_TIDDLER, type: 'application/json', text: '{}' });
-    $tw.wiki.addTiddler({ title: COUNT_TIDDLER, text: '0' });
+    // Re-check transport availability (window.__TAURI__ may not have been ready at IIFE time)
+    var hasTauri = !!(window.__TAURI__ && window.__TAURI__.core && window.__TAURI__.core.invoke);
+    var _psLog = function(msg) {
+      console.warn('[PeerStatus] ' + msg);
+      if (hasTauri) {
+        window.__TAURI__.core.invoke('js_log', { message: '[PeerStatus] ' + msg }).catch(function() {});
+      }
+    };
+    _psLog('waitForTw fired: isAndroid=' + isAndroid + ', hasTauri=' + hasTauri);
+    if (!isAndroid && !hasTauri) { _psLog('No transport, bailing out'); return; }
 
-    // Create the badge UIs
-    createBadgeTiddler();
-    createEditingBadgeTiddler();
+    // Create the badge UIs as shadow tiddlers via injected plugin
+    var needsRegister = false;
+    if (createBadgeTiddler()) needsRegister = true;
+    if (createEditingBadgeTiddler()) needsRegister = true;
+    if (needsRegister && window.TiddlyDesktop && window.TiddlyDesktop.registerPlugin) {
+      window.TiddlyDesktop.registerPlugin();
+    }
 
     // Announce our username
     var userName = $tw.wiki.getTiddlerText('$:/status/UserName') || '';
+    _psLog('UserName=' + JSON.stringify(userName));
     if (userName) {
-      announceUsername(userName);
+      _psLog('Announcing username: ' + userName);
+      if (isAndroid) {
+        try { window.TiddlyDesktopSync.announceUsername(userName); } catch (_) {}
+      } else if (hasTauri) {
+        window.__TAURI__.core.invoke('lan_sync_announce_username', {
+          userName: userName
+        }).then(function() {
+          _psLog('announce invoke OK');
+        }).catch(function(e) {
+          _psLog('announce invoke FAILED: ' + e);
+        });
+      }
     }
 
     // Watch for username changes

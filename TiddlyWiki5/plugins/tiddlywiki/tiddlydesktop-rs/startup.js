@@ -2402,6 +2402,9 @@ exports.startup = function(callback) {
 		listen("lan-sync-peer-disconnected", function(event) {
 			refreshSyncStatus();
 		});
+		listen("lan-sync-peers-updated", function() {
+			refreshSyncStatus();
+		});
 		listen("lan-sync-remote-wikis-updated", function(event) {
 			refreshRemoteWikis(event.payload);
 		});

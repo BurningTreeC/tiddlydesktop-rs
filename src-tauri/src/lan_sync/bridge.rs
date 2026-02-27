@@ -44,6 +44,7 @@ pub enum WikiToSync {
         tiddler_title: String,
         device_id: String,
         device_name: String,
+        user_name: String,
     },
     /// Local device stopped editing a tiddler
     CollabEditingStopped {
@@ -473,6 +474,7 @@ impl SyncBridge {
                 tiddler_title,
                 device_id,
                 device_name,
+                user_name,
             } => {
                 let peers = if let Some(app) = super::GLOBAL_APP_HANDLE.get() {
                     if let Some(room_code) = crate::wiki_storage::get_wiki_relay_room_by_sync_id(app, &wiki_id) {
@@ -487,6 +489,7 @@ impl SyncBridge {
                             tiddler_title,
                             device_id,
                             device_name,
+                            user_name,
                         })
                         .await;
                 }

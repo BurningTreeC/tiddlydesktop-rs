@@ -123,9 +123,24 @@ pub async fn connect_to_room_peer(
     // Low-priority channel for bulk data (attachment/wiki file chunks)
     let (bulk_tx, mut bulk_rx) = mpsc::channel::<Vec<u8>>(super::server::PEER_CHANNEL_BOUND);
 
+    // Preserve existing auth_room_codes if peer already has a connection
+    // (from a different room). The new connection supersedes the old one
+    // (new cipher + channels) but we keep all shared room codes.
     let conn_id = next_connection_id();
     {
         let mut peers_guard = peers.write().await;
+        let mut room_codes = vec![room_code.to_string()];
+        if let Some(existing) = peers_guard.get(&peer_id_confirmed) {
+            for rc in &existing.auth_room_codes {
+                if !room_codes.contains(rc) {
+                    room_codes.push(rc.clone());
+                }
+            }
+            eprintln!(
+                "[LAN Sync] Peer {} reconnecting — preserving {} room codes: {:?}",
+                peer_id_confirmed, room_codes.len(), room_codes
+            );
+        }
         peers_guard.insert(
             peer_id_confirmed.clone(),
             PeerConnection {
@@ -135,7 +150,7 @@ pub async fn connect_to_room_peer(
                 tx,
                 bulk_tx,
                 cipher: send_cipher,
-                auth_room_codes: vec![room_code.to_string()],
+                auth_room_codes: room_codes,
                 user_name: None,
             },
         );

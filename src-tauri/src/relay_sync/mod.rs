@@ -655,6 +655,14 @@ impl RelaySyncManager {
             return Ok(());
         }
 
+        // Check if a task is already running (e.g., in reconnect backoff)
+        if let Some(flag) = self.room_running.read().await.get(room_code) {
+            if flag.load(Ordering::Relaxed) {
+                eprintln!("[Relay] Room {} already has a running task, skipping duplicate spawn", room_code);
+                return Ok(());
+            }
+        }
+
         // Find room definition
         let config = self.config.read().await.clone();
         let room_def = config
@@ -670,7 +678,7 @@ impl RelaySyncManager {
         }
 
         let provider = config.auth_provider.clone().unwrap_or_else(|| "github".to_string());
-        self.spawn_room_task(config.relay_url.clone(), room_def, config.auth_token.clone(), provider);
+        self.spawn_room_task(config.relay_url.clone(), room_def, config.auth_token.clone(), provider).await;
         Ok(())
     }
 
@@ -716,15 +724,18 @@ impl RelaySyncManager {
         let config = self.config.read().await.clone();
         eprintln!("[Relay] Starting auto-connect rooms (url: {})", config.relay_url);
 
-        // Mark auto_connect rooms as activated so they show as connected in UI
-        // (even if relay auth is unavailable, LAN sync still works)
+        // Activate all auto_connect rooms so they appear in LAN discovery
+        // beacons and show as "connected" in the UI. This is safe because
+        // disconnect sets auto_connect=false, so only rooms the user
+        // intentionally left connected will be re-activated.
         for room_def in &config.rooms {
             if room_def.auto_connect {
                 self.activate_room(&room_def.room_code).await;
             }
         }
 
-        // Auth token required for relay — skip if not authenticated
+        // Auth token required for relay — skip relay if not authenticated
+        // (LAN sync still works via activate_room above)
         if config.auth_token.is_empty() {
             eprintln!("[Relay] Skipping relay auto-connect — no auth token (LAN sync still works)");
             return Ok(());
@@ -734,7 +745,7 @@ impl RelaySyncManager {
         for room_def in &config.rooms {
             if room_def.auto_connect {
                 if !self.rooms.read().await.contains_key(&room_def.room_code) {
-                    self.spawn_room_task(config.relay_url.clone(), room_def.clone(), config.auth_token.clone(), provider.clone());
+                    self.spawn_room_task(config.relay_url.clone(), room_def.clone(), config.auth_token.clone(), provider.clone()).await;
                 }
             }
         }
@@ -802,7 +813,7 @@ impl RelaySyncManager {
 
     // ── Spawn a long-lived task for one room ────────────────────────
 
-    fn spawn_room_task(&self, relay_url: String, room_def: RoomDefinition, auth_token: String, auth_provider: String) {
+    async fn spawn_room_task(&self, relay_url: String, room_def: RoomDefinition, auth_token: String, auth_provider: String) {
         let event_tx = self.event_tx.clone();
         let rooms = self.rooms.clone();
         let room_running = self.room_running.clone();
@@ -810,16 +821,10 @@ impl RelaySyncManager {
         let my_device_name = self.pairing_manager.device_name().to_string();
         let room_code = room_def.room_code.clone();
 
-        // Create a per-room running flag
+        // Create a per-room running flag — insert SYNCHRONOUSLY before spawning the task
+        // to prevent duplicate tasks from being spawned by concurrent connect_room calls.
         let running = Arc::new(AtomicBool::new(true));
-        {
-            let room_running = room_running.clone();
-            let room_code = room_code.clone();
-            let running = running.clone();
-            tokio::spawn(async move {
-                room_running.write().await.insert(room_code, running);
-            });
-        }
+        self.room_running.write().await.insert(room_code.clone(), running.clone());
 
         let running_for_task = running.clone();
 
@@ -1041,38 +1046,49 @@ impl RelaySyncManager {
                                         room_code,
                                         &from_device[..8.min(from_device.len())]
                                     );
-                                    let mut rooms_guard = rooms.write().await;
-                                    if let Some(room) = rooms_guard.get_mut(room_code) {
-                                        let is_new = !room.decrypt_ciphers.contains_key(&from_device);
-                                        // Save old cipher for in-flight message decryption during rekey
-                                        if let Some(old_cipher) = room.decrypt_ciphers.get(&from_device) {
-                                            room.old_decrypt_ciphers.insert(from_device.clone(), old_cipher.clone());
-                                        }
-                                        room.decrypt_ciphers.insert(from_device.clone(), cipher);
-                                        // Store the device name from the device_id for now
-                                        // (will be updated when we receive their device_name via a sync message)
-                                        if is_new {
-                                            room.member_names
-                                                .entry(from_device.clone())
-                                                .or_insert_with(|| {
-                                                    from_device[..8.min(from_device.len())].to_string()
+                                    // Prepare reciprocal init frame outside the write lock
+                                    // to avoid holding the lock during async send_binary
+                                    let mut reciprocal_init: Option<Vec<u8>> = None;
+                                    {
+                                        let mut rooms_guard = rooms.write().await;
+                                        if let Some(room) = rooms_guard.get_mut(room_code) {
+                                            let is_new = !room.decrypt_ciphers.contains_key(&from_device);
+                                            // Save old cipher for in-flight message decryption during rekey
+                                            if let Some(old_cipher) = room.decrypt_ciphers.get(&from_device) {
+                                                room.old_decrypt_ciphers.insert(from_device.clone(), old_cipher.clone());
+                                            }
+                                            room.decrypt_ciphers.insert(from_device.clone(), cipher);
+                                            // Store the device name from the device_id for now
+                                            // (will be updated when we receive their device_name via a sync message)
+                                            if is_new {
+                                                room.member_names
+                                                    .entry(from_device.clone())
+                                                    .or_insert_with(|| {
+                                                        from_device[..8.min(from_device.len())].to_string()
+                                                    });
+                                                // Emit PeerConnected for the new member
+                                                let name = room.member_names.get(&from_device)
+                                                    .cloned()
+                                                    .unwrap_or_default();
+                                                let _ = event_tx.send(ServerEvent::PeerConnected {
+                                                    device_id: from_device.clone(),
+                                                    device_name: name,
                                                 });
-                                            // Emit PeerConnected for the new member
-                                            let name = room.member_names.get(&from_device)
-                                                .cloned()
-                                                .unwrap_or_default();
-                                            let _ = event_tx.send(ServerEvent::PeerConnected {
-                                                device_id: from_device.clone(),
-                                                device_name: name,
-                                            });
-                                            // Re-send our session_init so the new peer can
-                                            // create a decrypt cipher for us (reciprocal handshake)
-                                            let mut init_frame =
-                                                Vec::with_capacity(1 + 32 + my_device_id.len());
-                                            init_frame.push(0x01);
-                                            init_frame
-                                                .extend_from_slice(&room.our_session_nonce);
-                                            init_frame.extend_from_slice(my_device_id.as_bytes());
+                                                // Prepare reciprocal session_init (sent after lock release)
+                                                let mut init_frame =
+                                                    Vec::with_capacity(1 + 32 + my_device_id.len());
+                                                init_frame.push(0x01);
+                                                init_frame
+                                                    .extend_from_slice(&room.our_session_nonce);
+                                                init_frame.extend_from_slice(my_device_id.as_bytes());
+                                                reciprocal_init = Some(init_frame);
+                                            }
+                                        }
+                                    } // Write lock released here
+                                    // Send reciprocal session_init outside the write lock
+                                    if let Some(init_frame) = reciprocal_init {
+                                        let rooms_guard = rooms.read().await;
+                                        if let Some(room) = rooms_guard.get(room_code) {
                                             let _ = room.sender.send_binary(init_frame).await;
                                         }
                                     }
@@ -1659,12 +1675,20 @@ impl RelaySyncManager {
         let rooms = self.rooms.read().await;
         let activated = self.manually_activated.read().await;
 
-        config
+        let result: Vec<RoomStatus> = config
             .rooms
             .iter()
             .map(|def| {
                 let connected_room = rooms.get(&def.room_code);
                 let is_activated = activated.contains(&def.room_code);
+                let peer_count = connected_room.map(|r| r.member_names.len()).unwrap_or(0);
+                eprintln!(
+                    "[Relay] get_rooms: {} relay_connected={} activated={} members={}",
+                    &def.room_code[..8.min(def.room_code.len())],
+                    connected_room.is_some(),
+                    is_activated,
+                    peer_count
+                );
                 RoomStatus {
                     name: def.name.clone(),
                     room_code: def.room_code.clone(),
@@ -1684,7 +1708,8 @@ impl RelaySyncManager {
                         .unwrap_or_default(),
                 }
             })
-            .collect()
+            .collect();
+        result
     }
 
     /// Get connected room codes (for filtering wiki manifests)

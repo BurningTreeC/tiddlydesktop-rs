@@ -21,6 +21,10 @@ const EXCLUDED_TIDDLERS: &[&str] = &[
     "$:/theme",
     "$:/palette",
     "$:/DefaultTiddlers",
+    "$:/isEncrypted",
+    "$:/view",
+    "$:/layout",
+    "$:/core",
 ];
 
 /// Prefix for draft tiddlers (excluded from sync).
@@ -37,8 +41,11 @@ const EXCLUDED_PREFIXES: &[&str] = &[
     "$:/status/",
     "$:/temp/",
     "$:/config/",
+    "$:/language/",
     "$:/plugins/tiddlydesktop-rs/",
     "$:/plugins/tiddlydesktop/",
+    "$:/themes/tiddlywiki/vanilla/options/",
+    "$:/themes/tiddlywiki/vanilla/metrics/",
 ];
 
 /// A deletion tombstone

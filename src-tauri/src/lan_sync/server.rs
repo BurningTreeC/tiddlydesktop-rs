@@ -420,6 +420,42 @@ impl SyncServer {
         }
     }
 
+    /// Remove a room code from a specific peer. Returns true if the peer was
+    /// fully disconnected (no remaining shared rooms).
+    pub async fn remove_room_from_peer(&self, device_id: &str, room_code: &str) -> bool {
+        let mut peers = self.peers.write().await;
+        if let Some(peer) = peers.get_mut(device_id) {
+            peer.auth_room_codes.retain(|rc| rc != room_code);
+            if peer.auth_room_codes.is_empty() {
+                peers.remove(device_id);
+                eprintln!("[LAN Sync] Disconnected peer {} (no remaining shared rooms after RoomLeave)", device_id);
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Remove a room code from all peers. Disconnects peers that have no remaining rooms.
+    /// Returns device IDs of peers that were fully disconnected.
+    pub async fn remove_room_from_peers(&self, room_code: &str) -> Vec<String> {
+        let mut peers = self.peers.write().await;
+        let mut disconnected = Vec::new();
+        let mut to_remove = Vec::new();
+        for (id, peer) in peers.iter_mut() {
+            peer.auth_room_codes.retain(|rc| rc != room_code);
+            if peer.auth_room_codes.is_empty() {
+                to_remove.push(id.clone());
+            }
+        }
+        for id in to_remove {
+            if peers.remove(&id).is_some() {
+                eprintln!("[LAN Sync] Disconnected peer {} (no remaining shared rooms)", id);
+                disconnected.push(id);
+            }
+        }
+        disconnected
+    }
+
     /// Get list of connected peer device IDs (LAN + relay)
     pub async fn connected_peers(&self) -> Vec<(String, String, Option<String>)> {
         let mut all: Vec<(String, String, Option<String>)> = {
@@ -615,10 +651,24 @@ async fn handle_connection(
     // Low-priority channel for bulk data (attachment/wiki file chunks)
     let (bulk_tx, mut bulk_rx) = mpsc::channel::<Vec<u8>>(PEER_CHANNEL_BOUND);
 
-    // Register the peer with a unique connection ID
+    // Register the peer with a unique connection ID.
+    // If the peer already has an older connection (from a different room),
+    // preserve its auth_room_codes so all shared rooms are tracked.
     let conn_id = next_connection_id();
     {
         let mut peers_guard = peers.write().await;
+        let mut room_codes = vec![auth_room_code];
+        if let Some(existing) = peers_guard.get(&peer_device_id) {
+            for rc in &existing.auth_room_codes {
+                if !room_codes.contains(rc) {
+                    room_codes.push(rc.clone());
+                }
+            }
+            eprintln!(
+                "[LAN Sync] Peer {} reconnecting — preserving {} room codes: {:?}",
+                peer_device_id, room_codes.len(), room_codes
+            );
+        }
         peers_guard.insert(
             peer_device_id.clone(),
             PeerConnection {
@@ -628,7 +678,7 @@ async fn handle_connection(
                 tx,
                 bulk_tx,
                 cipher: send_cipher,
-                auth_room_codes: vec![auth_room_code],
+                auth_room_codes: room_codes,
                 user_name: None,
             },
         );

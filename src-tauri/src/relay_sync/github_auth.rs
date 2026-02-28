@@ -379,8 +379,12 @@ fn open_browser(url: &str) -> Result<(), String> {
     }
     #[cfg(target_os = "windows")]
     {
+        // Use raw_arg to pass the URL in double-quotes, preventing cmd.exe
+        // from interpreting & in query parameters as command separators.
+        // Without quoting, "start "" https://...?a=1&b=2" truncates at the first &.
+        use std::os::windows::process::CommandExt;
         std::process::Command::new("cmd")
-            .args(["/c", "start", "", url])
+            .raw_arg(format!("/c start \"\" \"{}\"", url))
             .spawn()
             .map_err(|e| format!("Failed to open browser: {}", e))?;
     }

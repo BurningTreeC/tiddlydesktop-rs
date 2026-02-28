@@ -385,6 +385,7 @@ fn open_browser(url: &str) -> Result<(), String> {
         use std::os::windows::process::CommandExt;
         std::process::Command::new("cmd")
             .raw_arg(format!("/c start \"\" \"{}\"", url))
+            .creation_flags(0x08000000) // CREATE_NO_WINDOW
             .spawn()
             .map_err(|e| format!("Failed to open browser: {}", e))?;
     }

@@ -284,6 +284,30 @@ fn decrypt_password(device_key: &[u8; 32], encrypted: &str) -> Option<String> {
     String::from_utf8(plaintext).ok()
 }
 
+/// Load config from backup file. Returns default config if backup doesn't exist or fails.
+fn load_config_from_backup(backup_path: &std::path::Path) -> RelayConfig {
+    if !backup_path.exists() {
+        eprintln!("[Relay] No backup config at {} — using defaults", backup_path.display());
+        return RelayConfig::default();
+    }
+    match std::fs::read_to_string(backup_path) {
+        Ok(s) => match serde_json::from_str(&s) {
+            Ok(c) => {
+                eprintln!("[Relay] Recovered config from backup at {}", backup_path.display());
+                c
+            }
+            Err(e) => {
+                eprintln!("[Relay] Backup config also corrupt: {} — using defaults", e);
+                RelayConfig::default()
+            }
+        },
+        Err(e) => {
+            eprintln!("[Relay] Failed to read backup config: {} — using defaults", e);
+            RelayConfig::default()
+        }
+    }
+}
+
 /// Save config to disk, encrypting all passwords before writing.
 /// This is a sync function so it can be called from the constructor.
 /// Returns an error if serialization or writing fails.
@@ -303,8 +327,23 @@ fn save_config_sync(config_path: &std::path::Path, device_key: &[u8; 32], config
     // auth_token has skip_serializing so it won't appear in output
     let json = serde_json::to_string_pretty(&disk_config)
         .map_err(|e| format!("Failed to serialize relay config: {}", e))?;
-    std::fs::write(config_path, json)
-        .map_err(|e| format!("Failed to write relay config to {}: {}", config_path.display(), e))
+    // Keep a backup of the current config before overwriting
+    let backup_path = config_path.with_extension("json.bak");
+    if config_path.exists() {
+        let _ = std::fs::copy(config_path, &backup_path);
+    }
+    // Atomic write: write to temp file first, then rename.
+    // This prevents config corruption if the process is killed mid-write
+    // (std::fs::write truncates first, so a kill during write = truncated/empty file).
+    let tmp_path = config_path.with_extension("json.tmp");
+    std::fs::write(&tmp_path, &json)
+        .map_err(|e| format!("Failed to write relay config temp file: {}", e))?;
+    std::fs::rename(&tmp_path, config_path)
+        .map_err(|e| {
+            // Clean up temp file on rename failure
+            let _ = std::fs::remove_file(&tmp_path);
+            format!("Failed to rename relay config: {}", e)
+        })
 }
 
 /// Normalize a relay URL: ensure it has a `wss://` scheme and `:8443` port.
@@ -535,14 +574,30 @@ impl RelaySyncManager {
     ) -> Self {
         let device_key = load_or_create_device_key(data_dir);
         let config_path = data_dir.join(RELAY_CONFIG_FILE);
+        let backup_path = config_path.with_extension("json.bak");
         let mut config: RelayConfig = if config_path.exists() {
             match std::fs::read_to_string(&config_path) {
-                Ok(s) => serde_json::from_str(&s).unwrap_or_default(),
-                Err(_) => RelayConfig::default(),
+                Ok(s) if s.trim().is_empty() => {
+                    eprintln!("[Relay] WARNING: Config file is empty at {} — trying backup", config_path.display());
+                    load_config_from_backup(&backup_path)
+                }
+                Ok(s) => match serde_json::from_str(&s) {
+                    Ok(c) => c,
+                    Err(e) => {
+                        eprintln!("[Relay] WARNING: Failed to parse config at {}: {} — trying backup", config_path.display(), e);
+                        load_config_from_backup(&backup_path)
+                    }
+                },
+                Err(e) => {
+                    eprintln!("[Relay] WARNING: Failed to read config at {}: {} — trying backup", config_path.display(), e);
+                    load_config_from_backup(&backup_path)
+                }
             }
         } else {
+            eprintln!("[Relay] No config file at {} — using defaults", config_path.display());
             RelayConfig::default()
         };
+        eprintln!("[Relay] Loaded config: url={}, rooms={}, has_auth={}", config.relay_url, config.rooms.len(), config.encrypted_auth_token.is_some());
 
         // Migrate old ws:// relay URL to wss://
         let mut needs_save = false;
@@ -624,8 +679,47 @@ impl RelaySyncManager {
 
     /// Persist current config to disk and verify the write succeeded.
     /// Used at startup to ensure on-disk state matches in-memory state before sync begins.
+    /// Safety: refuses to overwrite a config file that has rooms if in-memory has none,
+    /// to prevent data loss from a failed config load.
     pub async fn persist_and_verify_config(&self) -> Result<(), String> {
         let config = self.config.read().await.clone();
+        // Safety check: if in-memory config has no rooms but the file on disk does,
+        // something went wrong during loading — don't overwrite the good file.
+        if config.rooms.is_empty() && self.config_path.exists() {
+            if let Ok(s) = std::fs::read_to_string(&self.config_path) {
+                if let Ok(disk) = serde_json::from_str::<RelayConfig>(&s) {
+                    if !disk.rooms.is_empty() {
+                        eprintln!(
+                            "[Relay] WARNING: in-memory config has 0 rooms but disk has {} — NOT overwriting. Reloading from disk.",
+                            disk.rooms.len()
+                        );
+                        // Reload from disk into in-memory config
+                        let mut mem_config = self.config.write().await;
+                        *mem_config = disk;
+                        // Decrypt passwords
+                        for room in &mut mem_config.rooms {
+                            if let Some(ref enc) = room.encrypted_password {
+                                if let Some(pw) = decrypt_password(&self.device_key, enc) {
+                                    room.password = pw;
+                                }
+                            }
+                        }
+                        // Decrypt auth token
+                        if let Some(ref enc) = mem_config.encrypted_auth_token {
+                            if let Some(token) = decrypt_password(&self.device_key, enc) {
+                                mem_config.auth_token = token;
+                            }
+                        }
+                        mem_config.migrate_legacy_fields();
+                        eprintln!(
+                            "[Relay] Reloaded config from disk: url={}, rooms={}, has_auth={}",
+                            mem_config.relay_url, mem_config.rooms.len(), mem_config.encrypted_auth_token.is_some()
+                        );
+                        return Ok(());
+                    }
+                }
+            }
+        }
         save_config_sync(&self.config_path, &self.device_key, &config)
     }
 

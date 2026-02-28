@@ -2104,9 +2104,10 @@ exports.startup = function(callback) {
 	// Add a relay room
 	$tw.rootWidget.addEventListener("tm-tiddlydesktop-rs-relay-add-room", function(event) {
 		var p = event.paramObject || {};
-		if (!p.name || !p.roomCode || !p.password) return;
+		if (!p.roomCode || !p.password) return;
+		var roomName = p.name || "Room";
 		invoke("relay_sync_add_room", {
-			name: p.name, roomCode: p.roomCode, password: p.password, autoConnect: true
+			name: roomName, roomCode: p.roomCode, password: p.password, autoConnect: true
 		}).then(function() {
 			// Auto-connect the new room, then refresh UI once
 			invoke("relay_sync_connect_room", { roomCode: p.roomCode }).then(function() {

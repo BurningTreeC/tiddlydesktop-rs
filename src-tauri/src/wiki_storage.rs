@@ -297,6 +297,14 @@ pub fn reconcile_recent_files(app: tauri::AppHandle, paths: Vec<String>) -> Resu
     let entries = load_recent_files_from_disk(&app);
     let before_count = entries.len();
 
+    // Safety guard: if the WikiList is empty but we have entries on disk,
+    // don't wipe everything — the WikiList tiddler may have been lost
+    // (e.g. HTML not saved, migration issue, or race condition on startup).
+    if paths.is_empty() && before_count > 0 {
+        eprintln!("[WikiStorage] Reconcile: WikiList is empty but JSON has {} entries — skipping to prevent data loss", before_count);
+        return Ok(0);
+    }
+
     // Keep only entries whose path is in the authoritative WikiList
     let mut kept: Vec<WikiEntry> = Vec::new();
     let mut removed: Vec<WikiEntry> = Vec::new();

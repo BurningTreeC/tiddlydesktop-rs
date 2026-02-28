@@ -148,8 +148,42 @@ Section "Main Application" SecMain
     ${If} $InstallModeChoice == "portable"
         FileOpen $0 "$INSTDIR\portable" w
         FileClose $0
-        ; Include batch file to add firewall rule (user right-clicks → Run as administrator)
-        File "/oname=enable-lan-sync.bat" "${__FILEDIR__}\enable-lan-sync.bat"
+        ; Write batch file to add firewall rule (user right-clicks → Run as administrator)
+        ; Written inline because Tauri only copies the .nsi template to the build dir, not companion files
+        FileOpen $0 "$INSTDIR\enable-lan-sync.bat" w
+        FileWrite $0 '@echo off$\r$\n'
+        FileWrite $0 ':: Enable LAN Sync for TiddlyDesktop RS (Portable Mode)$\r$\n'
+        FileWrite $0 ':: Right-click this file and select "Run as administrator"$\r$\n'
+        FileWrite $0 '::$\r$\n'
+        FileWrite $0 ':: This adds a Windows Firewall rule to allow TiddlyDesktop RS$\r$\n'
+        FileWrite $0 ':: to communicate on your local network for wiki syncing.$\r$\n'
+        FileWrite $0 '$\r$\n'
+        FileWrite $0 'net session >nul 2>&1$\r$\n'
+        FileWrite $0 'if %errorlevel% neq 0 ($\r$\n'
+        FileWrite $0 '    echo This script requires administrator privileges.$\r$\n'
+        FileWrite $0 '    echo Right-click "enable-lan-sync.bat" and select "Run as administrator".$\r$\n'
+        FileWrite $0 '    pause$\r$\n'
+        FileWrite $0 '    exit /b 1$\r$\n'
+        FileWrite $0 ')$\r$\n'
+        FileWrite $0 '$\r$\n'
+        FileWrite $0 'set "APP_EXE=%~dp0${MAINBINARYNAME}.exe"$\r$\n'
+        FileWrite $0 '$\r$\n'
+        FileWrite $0 'echo Removing old firewall rule (if any)...$\r$\n'
+        FileWrite $0 'netsh advfirewall firewall delete rule name="TiddlyDesktop RS" >nul 2>&1$\r$\n'
+        FileWrite $0 '$\r$\n'
+        FileWrite $0 'echo Adding firewall rule for: %APP_EXE%$\r$\n'
+        FileWrite $0 'netsh advfirewall firewall add rule name="TiddlyDesktop RS" dir=in action=allow program="%APP_EXE%" enable=yes profile=private,domain$\r$\n'
+        FileWrite $0 '$\r$\n'
+        FileWrite $0 'if %errorlevel% equ 0 ($\r$\n'
+        FileWrite $0 '    echo.$\r$\n'
+        FileWrite $0 '    echo Firewall rule added successfully. LAN sync is now enabled.$\r$\n'
+        FileWrite $0 ') else ($\r$\n'
+        FileWrite $0 '    echo.$\r$\n'
+        FileWrite $0 '    echo Failed to add firewall rule. Please check your permissions.$\r$\n'
+        FileWrite $0 ')$\r$\n'
+        FileWrite $0 '$\r$\n'
+        FileWrite $0 'pause$\r$\n'
+        FileClose $0
     ${EndIf}
 
     ; Only create shortcuts and registry entries for install mode

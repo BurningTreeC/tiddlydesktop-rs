@@ -883,6 +883,29 @@ impl RelaySyncManager {
         }
 
         let provider = config.auth_provider.clone().unwrap_or_else(|| "github".to_string());
+
+        // Validate token before attempting connections
+        eprintln!("[Relay] Validating auth token (len={}, provider={})...", config.auth_token.len(), provider);
+        match github_auth::validate_token(&config.relay_url, &config.auth_token, &provider).await {
+            Ok(result) => {
+                eprintln!("[Relay] Token valid — user: @{} ({})", result.username, result.provider);
+            }
+            Err(e) => {
+                eprintln!("[Relay] Token expired/invalid: {} — clearing auth state", e);
+                // Clear stale auth so the UI shows "Sign in" instead of stale username
+                {
+                    let mut config = self.config.write().await;
+                    config.auth_token.clear();
+                    config.encrypted_auth_token = None;
+                    config.username = None;
+                    config.user_id = None;
+                    config.auth_provider = None;
+                }
+                self.save_config().await;
+                return Ok(());
+            }
+        }
+
         for room_def in &config.rooms {
             if room_def.auto_connect {
                 if !self.rooms.read().await.contains_key(&room_def.room_code) {
@@ -978,10 +1001,13 @@ impl RelaySyncManager {
             let room_token = Self::derive_room_token_from_key(&group_key);
 
             eprintln!(
-                "[Relay] Room {} password len={}, token={}",
+                "[Relay] Room {} password len={}, token={}, auth_token len={}, auth_provider={}, auth_token_prefix={}",
                 room_code,
                 room_def.password.len(),
-                &room_token[..8]
+                &room_token[..8],
+                auth_token.len(),
+                auth_provider,
+                if auth_token.len() >= 8 { &auth_token[..8] } else { &auth_token }
             );
 
             loop {

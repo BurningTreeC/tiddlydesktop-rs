@@ -1,15 +1,17 @@
 //! Multi-provider OAuth Authorization Code flow for relay sync.
 //!
 //! Supports GitHub, GitLab, and OIDC providers. Flow:
-//! 1. Bind a temporary HTTP server on localhost (random port)
-//! 2. Open browser to provider's authorize URL with redirect_uri = http://localhost:{port}/callback
-//! 3. User authorizes → provider redirects to localhost with ?code=...
-//! 4. Capture the code, serve a "success" HTML page
-//! 5. POST /api/auth/exchange/{provider} on the relay server to exchange code for access_token
-//! 6. Return the token + user info
+//! 1. Open browser to provider's authorize URL with redirect_uri pointing to relay server
+//! 2. User authorizes → provider redirects to relay server's callback endpoint
+//! 3. Relay server exchanges code for token, stores result keyed by state token
+//! 4. App retrieves result: Android via deep link notification, desktop via polling
+//! 5. Return the token + user info
 
 /// Timeout for the OAuth flow (user must authorize within this time)
 const OAUTH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300); // 5 minutes
+
+/// Polling interval for desktop auth result retrieval
+const POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(2);
 
 /// Generic auth result returned by all providers
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -81,7 +83,11 @@ pub async fn fetch_providers(relay_url: &str) -> Result<Vec<ProviderInfo>, Strin
     Ok(providers)
 }
 
-/// Start the OAuth Authorization Code flow for a given provider.
+/// Start the OAuth Authorization Code flow using server-side callbacks.
+///
+/// Opens the browser to the provider's authorize URL with `redirect_uri` pointing
+/// to the relay server's callback endpoint. Returns the state token used to
+/// retrieve the auth result later.
 ///
 /// - `provider`: "github", "gitlab", or "oidc"
 /// - `client_id`: OAuth client ID from the relay server's provider config
@@ -95,12 +101,11 @@ pub async fn start_auth_flow(
     auth_url: Option<&str>,
     discovery_url: Option<&str>,
     scope: Option<&str>,
-) -> Result<AuthResult, String> {
+) -> Result<String, String> {
     if client_id.is_empty() {
         return Err(format!("OAuth not configured for {} (no client ID)", provider));
     }
 
-    // Convert wss:// relay URL to https:// for REST API calls
     let api_base = relay_ws_to_https(relay_url);
 
     // Resolve the authorization URL
@@ -112,65 +117,133 @@ pub async fn start_auth_flow(
         _ => default_scope(provider).to_string(),
     };
 
-    // Step 1: Bind temporary HTTP server on random port
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-        .await
-        .map_err(|e| format!("Failed to bind OAuth callback server: {}", e))?;
+    // Generate a random state token (32 bytes, hex-encoded = 64 chars)
+    let state = generate_state_token()?;
 
-    let local_addr = listener.local_addr()
-        .map_err(|e| format!("Failed to get local address: {}", e))?;
-    let port = local_addr.port();
-    let redirect_uri = format!("http://localhost:{}/callback", port);
+    // redirect_uri points to the relay server's callback endpoint
+    let redirect_uri = format!("{}/api/auth/callback/{}", api_base, provider);
 
-    eprintln!("[Auth] OAuth callback server on port {} for {}", port, provider);
-
-    // Step 2: Build authorization URL and open browser
+    // Build authorization URL
     let full_auth_url = format!(
-        "{}?client_id={}&redirect_uri={}&scope={}&response_type=code",
+        "{}?client_id={}&redirect_uri={}&scope={}&response_type=code&state={}",
         resolved_auth_url,
         urlencoding::encode(client_id),
         urlencoding::encode(&redirect_uri),
         urlencoding::encode(&resolved_scope),
+        urlencoding::encode(&state),
     );
 
-    // Open browser using platform-specific method
+    eprintln!("[Auth] Opening browser for {} OAuth, state={}...", provider, &state[..8]);
+
     open_browser(&full_auth_url)?;
 
-    // Step 3: Wait for the callback (with timeout)
-    let code = tokio::time::timeout(OAUTH_TIMEOUT, wait_for_callback(listener))
-        .await
-        .map_err(|_| "OAuth flow timed out (5 minutes). Please try again.".to_string())?
-        .map_err(|e| format!("OAuth callback failed: {}", e))?;
+    Ok(state)
+}
 
-    eprintln!("[Auth] Received authorization code for {}", provider);
+/// Retrieve the auth result from the relay server by polling.
+///
+/// After the user authorizes in the browser, the relay server exchanges the code
+/// and stores the result. This function polls until the result is available.
+/// Used on desktop where there's no deep link to notify the app.
+///
+/// Transient network errors (connection refused, timeout, DNS failure) are retried
+/// silently. Only persistent non-success HTTP responses are treated as fatal.
+pub async fn poll_auth_result(
+    relay_url: &str,
+    state: &str,
+) -> Result<AuthResult, String> {
+    let api_base = relay_ws_to_https(relay_url);
 
-    // Step 4: Exchange code for token via relay server
     let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(30))
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .map_err(|e| format!("HTTP client error: {}", e))?;
+
+    let url = format!("{}/api/auth/result?state={}", api_base, urlencoding::encode(state));
+
+    let deadline = tokio::time::Instant::now() + OAUTH_TIMEOUT;
+    let mut consecutive_errors: u32 = 0;
+
+    loop {
+        if tokio::time::Instant::now() >= deadline {
+            return Err("OAuth flow timed out (5 minutes). Please try again.".to_string());
+        }
+
+        let resp = match client.get(&url).send().await {
+            Ok(r) => {
+                consecutive_errors = 0;
+                r
+            }
+            Err(e) => {
+                consecutive_errors += 1;
+                if consecutive_errors <= 3 {
+                    eprintln!("[Auth] Poll transient error ({}/3), retrying: {}", consecutive_errors, e);
+                } else if consecutive_errors == 4 {
+                    eprintln!("[Auth] Poll repeated errors, continuing to retry silently...");
+                }
+                // Back off: 2s, 4s, 6s, ... capped at 10s
+                let backoff = std::cmp::min(POLL_INTERVAL * consecutive_errors, std::time::Duration::from_secs(10));
+                tokio::time::sleep(backoff).await;
+                continue;
+            }
+        };
+
+        if resp.status() == reqwest::StatusCode::NOT_FOUND {
+            // Not ready yet — wait and retry
+            tokio::time::sleep(POLL_INTERVAL).await;
+            continue;
+        }
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            return Err(format!("Auth result retrieval failed ({}): {}", status, body));
+        }
+
+        let body: serde_json::Value = resp.json().await
+            .map_err(|e| format!("Invalid auth result response: {}", e))?;
+
+        let result = parse_auth_response(&body, "");
+        eprintln!("[Auth] Auth complete: @{} via {}", result.username, result.provider);
+        return Ok(result);
+    }
+}
+
+/// Retrieve the auth result from the relay server (single attempt, no polling).
+///
+/// Used on Android after the deep link arrives — the result should already be
+/// available on the server, so no polling is needed.
+pub async fn fetch_auth_result(
+    relay_url: &str,
+    state: &str,
+) -> Result<AuthResult, String> {
+    let api_base = relay_ws_to_https(relay_url);
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
         .build()
         .map_err(|e| format!("HTTP client error: {}", e))?;
 
     let resp = client
-        .post(format!("{}/api/auth/exchange/{}", api_base, provider))
-        .json(&serde_json::json!({
-            "code": code,
-            "redirect_uri": redirect_uri,
-        }))
+        .get(format!("{}/api/auth/result?state={}", api_base, urlencoding::encode(state)))
         .send()
         .await
-        .map_err(|e| format!("Token exchange request failed: {}", e))?;
+        .map_err(|e| format!("Failed to retrieve auth result: {}", e))?;
 
+    if resp.status() == reqwest::StatusCode::NOT_FOUND {
+        return Err("Auth result not found or expired. Please try again.".to_string());
+    }
     if !resp.status().is_success() {
         let status = resp.status();
         let body = resp.text().await.unwrap_or_default();
-        return Err(format!("Token exchange failed ({}): {}", status, body));
+        return Err(format!("Auth result retrieval failed ({}): {}", status, body));
     }
 
     let body: serde_json::Value = resp.json().await
-        .map_err(|e| format!("Invalid token exchange response: {}", e))?;
+        .map_err(|e| format!("Invalid auth result response: {}", e))?;
 
-    let result = parse_auth_response(&body, provider);
-    eprintln!("[Auth] Authenticated as @{} via {}", result.username, result.provider);
+    let result = parse_auth_response(&body, "");
+    eprintln!("[Auth] Deep link auth complete: @{} via {}", result.username, result.provider);
     Ok(result)
 }
 
@@ -211,6 +284,13 @@ fn default_scope(provider: &str) -> &'static str {
         "oidc" => "openid profile email",
         _ => "read:user",
     }
+}
+
+/// Generate a cryptographically random state token (32 bytes, hex-encoded).
+fn generate_state_token() -> Result<String, String> {
+    use rand::Rng;
+    let bytes: [u8; 32] = rand::rng().random();
+    Ok(bytes.iter().map(|b| format!("{:02x}", b)).collect::<String>())
 }
 
 /// Fetch the authorization_endpoint from an OIDC discovery document.
@@ -272,68 +352,6 @@ fn parse_auth_response(body: &serde_json::Value, provider: &str) -> AuthResult {
         user_id,
         provider: provider_from_server,
     }
-}
-
-/// Wait for the OAuth callback on the temporary HTTP server.
-/// Returns the authorization code from the ?code= query parameter.
-async fn wait_for_callback(listener: tokio::net::TcpListener) -> Result<String, String> {
-    // Accept one connection
-    let (stream, _addr) = listener.accept()
-        .await
-        .map_err(|e| format!("Accept failed: {}", e))?;
-
-    // Read the HTTP request
-    let mut buf = vec![0u8; 4096];
-    stream.readable().await.map_err(|e| format!("Readable wait failed: {}", e))?;
-    let n = stream.try_read(&mut buf).map_err(|e| format!("Read failed: {}", e))?;
-    let request = String::from_utf8_lossy(&buf[..n]);
-
-    // Parse the request line to extract the path + query
-    let first_line = request.lines().next().unwrap_or("");
-    let path = first_line.split_whitespace().nth(1).unwrap_or("");
-
-    // Extract ?code= parameter
-    let code = extract_query_param(path, "code");
-
-    // Send response HTML
-    let (status_line, body) = if let Some(ref code) = code {
-        if code.is_empty() {
-            ("400 Bad Request", "<html><body><h1>Error</h1><p>No authorization code received.</p></body></html>")
-        } else {
-            ("200 OK", "<html><body style=\"font-family:system-ui;text-align:center;padding:60px\"><h1>Authentication Successful!</h1><p>You can close this tab and return to TiddlyDesktop.</p></body></html>")
-        }
-    } else {
-        ("400 Bad Request", "<html><body><h1>Authentication Failed</h1><p>The provider did not return an authorization code. Please try again.</p></body></html>")
-    };
-
-    let response = format!(
-        "HTTP/1.1 {}\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-        status_line,
-        body.len(),
-        body
-    );
-
-    stream.writable().await.map_err(|e| format!("Writable wait failed: {}", e))?;
-    let _ = stream.try_write(response.as_bytes());
-
-    // Small delay to ensure response is sent before closing
-    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-
-    code.ok_or_else(|| "No authorization code in callback".to_string())
-}
-
-/// Extract a query parameter from a URL path.
-fn extract_query_param(path: &str, param: &str) -> Option<String> {
-    let query = path.split('?').nth(1)?;
-    for pair in query.split('&') {
-        let mut parts = pair.splitn(2, '=');
-        if let (Some(key), Some(value)) = (parts.next(), parts.next()) {
-            if key == param {
-                return Some(urlencoding::decode(value).unwrap_or_default().into_owned());
-            }
-        }
-    }
-    None
 }
 
 /// Convert relay WebSocket URL (wss://host:port) to HTTPS API URL (https://host:port)

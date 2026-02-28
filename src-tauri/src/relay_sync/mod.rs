@@ -59,6 +59,53 @@ struct ChunkReassembly {
 /// Old relay URL (plain WebSocket, pre-TLS) — auto-migrated on config load
 const OLD_RELAY_URL: &str = "ws://164.92.180.226:8443";
 
+// ── Android deep-link OAuth flow ─────────────────────────────────────
+
+/// Pending deep-link auth: holds the state token and oneshot channel for completing the flow.
+#[cfg(target_os = "android")]
+struct PendingDeepLinkAuth {
+    state: String,
+    relay_url: String,
+    completer: tokio::sync::oneshot::Sender<Result<github_auth::AuthResult, String>>,
+}
+
+/// Global pending auth state for the deep-link OAuth flow (Android only).
+/// When login() starts the flow, it stores the pending auth here.
+/// When the deep link arrives (via JNI), handle_auth_deep_link() completes it.
+#[cfg(target_os = "android")]
+static PENDING_AUTH_STATE: std::sync::OnceLock<tokio::sync::Mutex<Option<PendingDeepLinkAuth>>> =
+    std::sync::OnceLock::new();
+
+/// Called from JNI when the `tiddlydesktop://auth?state=...` deep link arrives.
+/// Retrieves the auth result from the relay server and sends it through the oneshot channel.
+#[cfg(target_os = "android")]
+pub fn handle_auth_deep_link(state_token: &str) {
+    let state_token = state_token.to_string();
+    tauri::async_runtime::spawn(async move {
+        let mutex = PENDING_AUTH_STATE.get_or_init(|| tokio::sync::Mutex::new(None));
+        let pending = {
+            let mut guard = mutex.lock().await;
+            guard.take()
+        };
+
+        match pending {
+            Some(pending) => {
+                if pending.state != state_token {
+                    eprintln!("[Auth] Deep link state mismatch: expected={}, got={}", &pending.state[..8], &state_token[..std::cmp::min(8, state_token.len())]);
+                    let _ = pending.completer.send(Err("State token mismatch".to_string()));
+                    return;
+                }
+                eprintln!("[Auth] Deep link received, fetching auth result from relay server");
+                let result = github_auth::fetch_auth_result(&pending.relay_url, &state_token).await;
+                let _ = pending.completer.send(result);
+            }
+            None => {
+                eprintln!("[Auth] Deep link received but no pending auth flow (state={})", &state_token[..std::cmp::min(8, state_token.len())]);
+            }
+        }
+    });
+}
+
 /// Derive a per-device app token for relay server authentication.
 /// Uses HMAC-SHA256(device_key, label) truncated to 16 hex chars with a "tdr1-" prefix.
 /// Each installation gets a unique, stable token that isn't hardcoded in the source.
@@ -1753,7 +1800,9 @@ impl RelaySyncManager {
 
     // ── Authentication ─────────────────────────────────────────────
 
-    /// Start OAuth login flow for a given provider
+    /// Start OAuth login flow for a given provider.
+    /// Opens the browser with redirect_uri pointing to the relay server's callback endpoint.
+    /// Desktop: polls for the result. Android: waits for deep link notification.
     pub async fn login(
         &self,
         provider: &str,
@@ -1763,9 +1812,44 @@ impl RelaySyncManager {
         scope: Option<&str>,
     ) -> Result<github_auth::AuthResult, String> {
         let relay_url = self.config.read().await.relay_url.clone();
-        let result = github_auth::start_auth_flow(
+
+        // Both platforms: open browser with server-side callback
+        let state_token = github_auth::start_auth_flow(
             &relay_url, provider, client_id, auth_url, discovery_url, scope,
         ).await?;
+
+        // Desktop: poll for the result
+        #[cfg(not(target_os = "android"))]
+        let result = github_auth::poll_auth_result(&relay_url, &state_token).await?;
+
+        // Android: wait for deep link notification, then fetch result
+        #[cfg(target_os = "android")]
+        let result = {
+            let (tx, rx) = tokio::sync::oneshot::channel();
+
+            let mutex = PENDING_AUTH_STATE.get_or_init(|| tokio::sync::Mutex::new(None));
+            {
+                let mut guard = mutex.lock().await;
+                *guard = Some(PendingDeepLinkAuth {
+                    state: state_token.clone(),
+                    relay_url: relay_url.clone(),
+                    completer: tx,
+                });
+            }
+
+            match tokio::time::timeout(
+                std::time::Duration::from_secs(300),
+                rx,
+            ).await {
+                Ok(Ok(result)) => result?,
+                Ok(Err(_)) => return Err("Auth flow cancelled".to_string()),
+                Err(_) => {
+                    let mut guard = mutex.lock().await;
+                    *guard = None;
+                    return Err("OAuth flow timed out (5 minutes). Please try again.".to_string());
+                }
+            }
+        };
 
         // Store the token in config
         {

@@ -5,6 +5,7 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.net.Uri
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
@@ -27,7 +28,14 @@ class MainActivity : TauriActivity() {
     companion object {
         private const val TAG = "MainActivity"
         private const val NOTIFICATION_PERMISSION_REQUEST_CODE = 1001
+
+        init {
+            System.loadLibrary("tiddlydesktop_rs_lib")
+        }
     }
+
+    // JNI: notify Rust that an OAuth deep link arrived with this state token
+    private external fun completeAuthDeepLink(state: String)
 
     // Android 15+: Colored views behind transparent system bars
     private var statusBarBgView: View? = null
@@ -126,6 +134,9 @@ class MainActivity : TauriActivity() {
 
         // Track that MainActivity is alive for LAN sync service lifecycle
         LanSyncService.setMainActivityAlive(true)
+
+        // Check for OAuth deep link on cold start
+        handleAuthDeepLink(intent)
 
         // Protect Tauri's WebView from renderer crashes that would kill the whole app.
         // Schedule after layout so Tauri has time to create the WebView.
@@ -291,6 +302,23 @@ class MainActivity : TauriActivity() {
             moveTaskToBack(true)
             @Suppress("DEPRECATION")
             overridePendingTransition(0, 0)
+        }
+        handleAuthDeepLink(intent)
+    }
+
+    /**
+     * Handle OAuth deep link: tiddlydesktop://auth?state=...
+     * Called from both onCreate() (cold start) and onNewIntent() (warm start).
+     */
+    private fun handleAuthDeepLink(intent: Intent?) {
+        val uri = intent?.data ?: return
+        if (uri.scheme != "tiddlydesktop" || uri.host != "auth") return
+        val state = uri.getQueryParameter("state") ?: return
+        Log.d(TAG, "OAuth deep link received, state=${state.take(8)}...")
+        try {
+            completeAuthDeepLink(state)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to complete auth deep link: ${e.message}")
         }
     }
 

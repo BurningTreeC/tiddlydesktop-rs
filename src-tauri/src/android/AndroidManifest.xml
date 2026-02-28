@@ -39,6 +39,13 @@
                 <!-- AndroidTV support -->
                 <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
             </intent-filter>
+            <!-- Deep link for OAuth callback (server-side flow) -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="tiddlydesktop" android:host="auth" />
+            </intent-filter>
         </activity>
 
         <!-- Wiki activity for opening wikis in separate instances -->

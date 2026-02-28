@@ -6364,7 +6364,7 @@ async fn check_for_updates() -> Result<UpdateCheckResult, String> {
 
 /// Android version - separate from desktop versioning (must match build.gradle.kts versionName)
 #[cfg(target_os = "android")]
-const ANDROID_VERSION: &str = "0.0.72";
+const ANDROID_VERSION: &str = "0.0.73";
 
 /// Check for updates on Android via version file on GitHub, linking to Play Store
 #[cfg(target_os = "android")]
@@ -10019,4 +10019,24 @@ pub extern "system" fn Java_com_burningtreec_tiddlydesktop_1rs_WikiActivity_pdfC
         Ok(count) => count as jni::sys::jint,
         Err(_) => 0,
     }
+}
+
+/// JNI: Called from MainActivity when the `tiddlydesktop://auth?state=...` deep link arrives.
+/// Notifies the pending relay_sync OAuth flow to retrieve the auth result from the relay server.
+#[cfg(target_os = "android")]
+#[no_mangle]
+pub extern "system" fn Java_com_burningtreec_tiddlydesktop_1rs_MainActivity_completeAuthDeepLink(
+    mut env: jni::JNIEnv,
+    _class: jni::objects::JClass,
+    state: jni::objects::JString,
+) {
+    let state_str: String = match env.get_string(&state) {
+        Ok(s) => s.into(),
+        Err(e) => {
+            eprintln!("[TiddlyDesktop] JNI completeAuthDeepLink: failed to get state string: {}", e);
+            return;
+        }
+    };
+    eprintln!("[TiddlyDesktop] JNI completeAuthDeepLink called, state={}...", &state_str[..std::cmp::min(8, state_str.len())]);
+    relay_sync::handle_auth_deep_link(&state_str);
 }

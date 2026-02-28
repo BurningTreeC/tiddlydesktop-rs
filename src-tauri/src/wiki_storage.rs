@@ -288,6 +288,76 @@ pub fn remove_recent_file(app: tauri::AppHandle, path: String) -> Result<(), Str
     Ok(())
 }
 
+/// Reconcile the Rust JSON config with the authoritative WikiList from the frontend.
+/// Removes any entries from the Rust JSON that are NOT in the provided list of paths.
+/// This prevents stale entries from being broadcast to sync peers.
+/// Returns the number of entries removed.
+#[tauri::command]
+pub fn reconcile_recent_files(app: tauri::AppHandle, paths: Vec<String>) -> Result<i32, String> {
+    let entries = load_recent_files_from_disk(&app);
+    let before_count = entries.len();
+
+    // Keep only entries whose path is in the authoritative WikiList
+    let mut kept: Vec<WikiEntry> = Vec::new();
+    let mut removed: Vec<WikiEntry> = Vec::new();
+    for entry in entries {
+        let found = paths.iter().any(|p| utils::paths_equal(p, &entry.path));
+        if found {
+            kept.push(entry);
+        } else {
+            removed.push(entry);
+        }
+    }
+
+    let removed_count = removed.len() as i32;
+    if removed_count == 0 {
+        return Ok(0);
+    }
+
+    eprintln!("[WikiStorage] Reconcile: removing {} stale entries from Rust config (had {}, WikiList has {})",
+        removed_count, before_count, paths.len());
+
+    // Save the cleaned list
+    save_recent_files_to_disk(&app, &kept)?;
+
+    // Clean up related data for each removed entry
+    if let Ok(mut configs) = load_wiki_configs(&app) {
+        let mut changed = false;
+        for entry in &removed {
+            changed |= configs.external_attachments.remove(&entry.path).is_some();
+            changed |= configs.session_auth.remove(&entry.path).is_some();
+            changed |= configs.window_states.remove(&entry.path).is_some();
+        }
+        if changed {
+            let _ = save_wiki_configs(&app, &configs);
+        }
+    }
+
+    // Clean up sync data for removed entries
+    let data_dir = crate::get_data_dir(&app).unwrap_or_default();
+    for entry in &removed {
+        if let Some(ref sync_id) = entry.sync_id {
+            let state_path = data_dir.join("sync_state").join(format!("{}.json", sync_id));
+            let _ = std::fs::remove_file(state_path);
+            let tombstone_path = data_dir.join("lan_sync_tombstones").join(format!("{}.json", sync_id));
+            let _ = std::fs::remove_file(tombstone_path);
+            if let Some(mgr) = crate::lan_sync::get_sync_manager() {
+                mgr.remove_fingerprint_cache(sync_id);
+            }
+        }
+    }
+
+    // Broadcast updated manifest so peers no longer see removed wikis
+    if let Some(mgr) = crate::lan_sync::get_sync_manager() {
+        let mgr = mgr.clone();
+        tauri::async_runtime::spawn(async move {
+            mgr.broadcast_wiki_manifest().await;
+        });
+    }
+
+    Ok(removed_count)
+}
+
 /// Set backups enabled/disabled for a wiki
 #[tauri::command]
 pub fn set_wiki_backups(app: tauri::AppHandle, path: String, enabled: bool) -> Result<(), String> {

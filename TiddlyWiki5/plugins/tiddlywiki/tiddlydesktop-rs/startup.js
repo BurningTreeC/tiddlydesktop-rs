@@ -401,6 +401,12 @@ exports.startup = function(callback) {
 		});
 		// Trigger autosave so the main wiki file is saved
 		$tw.rootWidget.dispatchEvent({type: "tm-auto-save-wiki"});
+		// Reconcile: ensure Rust JSON only contains wikis that are in the WikiList.
+		// This prevents stale entries from being broadcast to sync peers.
+		var paths = entries.map(function(e) { return e.path; });
+		invoke("reconcile_recent_files", { paths: paths }).catch(function(err) {
+			console.error("[TiddlyDesktop] Failed to reconcile recent files:", err);
+		});
 	}
 
 	// Add an entry to the wiki list
@@ -1546,6 +1552,18 @@ exports.startup = function(callback) {
 
 	// Initial load of wiki list from tiddler
 	refreshWikiList();
+
+	// Reconcile Rust JSON config with the authoritative WikiList on startup.
+	// This removes any stale entries that got into the Rust JSON but are no
+	// longer in the WikiList, preventing them from being broadcast to sync peers.
+	var startupPaths = getWikiListEntries().map(function(e) { return e.path; });
+	invoke("reconcile_recent_files", { paths: startupPaths }).then(function(removedCount) {
+		if (removedCount > 0) {
+			console.log("[TiddlyDesktop] Startup reconciliation removed " + removedCount + " stale entries from Rust config");
+		}
+	}).catch(function(err) {
+		console.error("[TiddlyDesktop] Failed to reconcile on startup:", err);
+	});
 
 	// On Android, merge favicons from disk files into wiki list entries.
 	// WikiActivity saves favicons to files in the :wiki process, but can't send

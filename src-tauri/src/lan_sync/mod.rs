@@ -3202,23 +3202,50 @@ impl SyncManager {
                         _ => None,
                     };
                     if let Some(wid) = sync_wiki_id {
-                        if let Some(app) = GLOBAL_APP_HANDLE.get() {
-                            let sync_wikis = crate::wiki_storage::get_sync_enabled_wikis(app);
-                            if !sync_wikis.iter().any(|(id, _, _)| id == wid) {
-                                eprintln!(
-                                    "[LAN Sync] Ignoring {} — wiki {} no longer sync-enabled",
-                                    msg_type, wid
-                                );
-                                return;
-                            }
-                            // Per-peer filter: check if this peer is in the wiki's room
-                            let allowed = self.is_peer_allowed_for_wiki(app, wid, &from_device_id).await;
-                            if !allowed {
-                                eprintln!(
-                                    "[LAN Sync] Ignoring {} from {} — not in room for wiki {}",
-                                    msg_type, from_device_id, wid
-                                );
-                                return;
+                        // Wiki file transfer messages (Get Wiki) bypass the
+                        // sync-enabled check: the wiki doesn't exist locally yet
+                        // so it can't be in the sync list.  We verify instead
+                        // that an incoming transfer was pre-registered by
+                        // request_wiki_from_peer (RequestWikiFile is always
+                        // allowed because the sender handles it, not us).
+                        let is_wiki_transfer = matches!(
+                            &message,
+                            SyncMessage::WikiFileChunk { .. }
+                            | SyncMessage::WikiFileComplete { .. }
+                            | SyncMessage::RequestWikiFile { .. }
+                        );
+                        let has_active_transfer = if is_wiki_transfer {
+                            self.incoming_transfers.read().await.contains_key(wid)
+                        } else {
+                            false
+                        };
+                        if !is_wiki_transfer || !has_active_transfer {
+                            if let Some(app) = GLOBAL_APP_HANDLE.get() {
+                                let sync_wikis = crate::wiki_storage::get_sync_enabled_wikis(app);
+                                if !sync_wikis.iter().any(|(id, _, _)| id == wid) {
+                                    // RequestWikiFile is handled by the sender
+                                    // (our wiki IS sync-enabled on our side)
+                                    if !matches!(&message, SyncMessage::RequestWikiFile { .. }) {
+                                        eprintln!(
+                                            "[LAN Sync] Ignoring {} — wiki {} no longer sync-enabled",
+                                            msg_type, wid
+                                        );
+                                        return;
+                                    }
+                                }
+                                // Per-peer filter: check if this peer is in the wiki's room
+                                // (skip for active wiki transfers — peer was already validated
+                                // when the transfer was requested)
+                                if !has_active_transfer {
+                                    let allowed = self.is_peer_allowed_for_wiki(app, wid, &from_device_id).await;
+                                    if !allowed {
+                                        eprintln!(
+                                            "[LAN Sync] Ignoring {} from {} — not in room for wiki {}",
+                                            msg_type, from_device_id, wid
+                                        );
+                                        return;
+                                    }
+                                }
                             }
                         }
                     }
@@ -5361,6 +5388,7 @@ impl SyncManager {
                     None
                 }
             };
+            let relay_room_for_event = relay_room.clone();
             let entry = crate::types::WikiEntry {
                 path: wiki_path.clone(),
                 filename: wiki_name.to_string(),
@@ -5386,6 +5414,7 @@ impl SyncManager {
                 "wiki_name": wiki_name,
                 "wiki_path": wiki_path,
                 "is_folder": is_folder,
+                "relay_room": relay_room_for_event,
             }));
         }
     }

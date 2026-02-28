@@ -158,7 +158,7 @@ title: $:/plugins/tiddlywiki/tiddlydesktop-rs/WikiList
 <span class={{{ [<relayRoom>match<roomCode>then[td-sync-peer-check td-sync-peer-checked]else[td-sync-peer-check td-sync-peer-unchecked]] }}}>
 <$list filter="[<relayRoom>match<roomCode>]" variable="ignore">{{$:/core/images/done-button}}</$list>
 </span>
-<span class="td-sync-peer-name"><$text text=<<roomName>>/></span>
+<span class="td-sync-peer-name"><$text text=<<roomCode>>/></span><$list filter="[<roomName>!is[blank]]" variable="ignore"> <span class="td-sync-fingerprint">(<$text text=<<roomName>>/>)</span></$list>
 </$button>
 </$let>
 </$list>

@@ -554,7 +554,7 @@ pub fn get_wiki_sync_id(app: tauri::AppHandle, path: String) -> String {
 /// The user selects which local wiki corresponds to a remote wiki from the peer's manifest.
 /// Also auto-assigns the wiki to the peer's room so sync permission checks pass.
 #[tauri::command]
-pub async fn lan_sync_link_wiki(app: tauri::AppHandle, path: String, sync_id: String, from_device_id: Option<String>, room_code: Option<String>) -> Result<(), String> {
+pub async fn lan_sync_link_wiki(app: tauri::AppHandle, path: String, sync_id: String, from_device_id: Option<String>, room_code: Option<String>) -> Result<Option<String>, String> {
     let mut entries = load_recent_files_from_disk(&app);
     let mut found = false;
 
@@ -617,7 +617,7 @@ pub async fn lan_sync_link_wiki(app: tauri::AppHandle, path: String, sync_id: St
         });
     }
 
-    Ok(())
+    Ok(resolved_room)
 }
 
 /// Get all sync-enabled wikis (for WikiManifest exchange)

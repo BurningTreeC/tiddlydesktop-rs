@@ -1495,6 +1495,23 @@ exports.startup = function(callback) {
 		}
 	});
 
+	// Clean up stale $:/state/ and $:/temp/ tiddlers from previous sessions.
+	// These get persisted into the wiki HTML on save and cause UI glitches
+	// on next launch (e.g. popup dropdowns appearing open).
+	$tw.wiki.each(function(tiddler, title) {
+		if (title.indexOf("$:/state/relay-room-popup/") === 0 ||
+			title.indexOf("$:/state/relay-room-details/") === 0 ||
+			title.indexOf("$:/state/group-popup/") === 0 ||
+			title.indexOf("$:/state/backup-count-popup/") === 0 ||
+			title.indexOf("$:/state/link-wiki-popup") === 0 ||
+			title.indexOf("$:/state/tiddlydesktop-rs/") === 0 ||
+			title.indexOf("$:/temp/tiddlydesktop-rs/") === 0 ||
+			title.indexOf("$:/temp/new-group-name/") === 0 ||
+			title.indexOf("$:/temp/backup-count-input/") === 0) {
+			$tw.wiki.deleteTiddler(title);
+		}
+	});
+
 	// Initial load of wiki list from tiddler
 	refreshWikiList();
 
@@ -1764,8 +1781,8 @@ exports.startup = function(callback) {
 			return;
 		}
 
-		invoke("lan_sync_link_wiki", { path: path, syncId: wikiId, fromDeviceId: fromDeviceId || null, roomCode: roomCode || null }).then(function() {
-			console.log("[LAN Sync] Linked wiki to sync ID " + wikiId);
+		invoke("lan_sync_link_wiki", { path: path, syncId: wikiId, fromDeviceId: fromDeviceId || null, roomCode: roomCode || null }).then(function(resolvedRoom) {
+			console.log("[LAN Sync] Linked wiki to sync ID " + wikiId + " (room: " + resolvedRoom + ")");
 			try {
 				// Update the wiki list tiddler to reflect the new sync state
 				var entries = getWikiListEntries();
@@ -1773,6 +1790,9 @@ exports.startup = function(callback) {
 					if (entries[i].path === path) {
 						entries[i].sync_enabled = true;
 						entries[i].sync_id = wikiId;
+						if (resolvedRoom) {
+							entries[i].relay_room = resolvedRoom;
+						}
 						break;
 					}
 				}
@@ -2414,6 +2434,12 @@ exports.startup = function(callback) {
 			// Open the received wiki
 			var command = data.is_folder ? "open_wiki_folder" : "open_wiki_window";
 			invoke(command, { path: data.wiki_path }).then(function(entry) {
+				// Carry over sync settings from the transfer
+				entry.sync_enabled = true;
+				entry.sync_id = data.wiki_id;
+				if (data.relay_room) {
+					entry.relay_room = data.relay_room;
+				}
 				addToWikiList(entry);
 				refreshWikiList();
 			}).catch(function(err) {

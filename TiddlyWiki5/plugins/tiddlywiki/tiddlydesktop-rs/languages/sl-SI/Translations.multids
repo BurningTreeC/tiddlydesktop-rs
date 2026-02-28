@@ -134,6 +134,7 @@ RelaySync/RegisteredOnRelay: Registrirano
 RelaySync/Registering: Registracija...
 RelaySync/RegisterFailed: Registracija ni uspela
 Tooltips/SelectRelayRoom: Dodeli ta wiki prenosni sobi
+Tooltips/PluginsDisabled: Najprej zaprite wiki
 RelaySync/ServerRooms: Vaše sobe na strežniku
 RelaySync/ServerRoomsEmpty: Na strežniku ni bilo najdenih sob. Registrirajte sobo iz njenega podrobnostnega panela.
 RelaySync/Configured: Nastavljeno

@@ -134,6 +134,7 @@ RelaySync/RegisteredOnRelay: ثبت شده
 RelaySync/Registering: در حال ثبت...
 RelaySync/RegisterFailed: ثبت ناموفق بود
 Tooltips/SelectRelayRoom: اختصاص این ویکی به یک اتاق رله
+Tooltips/PluginsDisabled: ابتدا ویکی را ببندید
 RelaySync/ServerRooms: اتاق‌های شما روی سرور
 RelaySync/ServerRoomsEmpty: اتاقی روی سرور یافت نشد. یک اتاق را از پنل جزئیات آن ثبت کنید.
 RelaySync/Configured: پیکربندی شده

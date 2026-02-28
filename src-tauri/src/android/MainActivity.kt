@@ -1,7 +1,10 @@
 package com.burningtreec.tiddlydesktop_rs
 
 import android.Manifest
+import android.content.BroadcastReceiver
+import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
@@ -29,6 +32,20 @@ class MainActivity : TauriActivity() {
     // Android 15+: Colored views behind transparent system bars
     private var statusBarBgView: View? = null
     private var navBarBgView: View? = null
+
+    // Receiver for WikiActivity close broadcasts (cross-process, from :wiki process)
+    private val wikiClosedReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            val wikiPath = intent.getStringExtra("wiki_path") ?: return
+            Log.d(TAG, "Received wiki closed broadcast: $wikiPath")
+            val webView = findWebView(window.decorView) ?: return
+            val escaped = wikiPath.replace("\\", "\\\\").replace("'", "\\'")
+            webView.evaluateJavascript(
+                "if(window.__tdWikiClosed) window.__tdWikiClosed('$escaped');",
+                null
+            )
+        }
+    }
 
     /**
      * Called from Rust JNI to update the background colors of the system bar views.
@@ -98,6 +115,14 @@ class MainActivity : TauriActivity() {
         }
 
         requestNotificationPermission()
+
+        // Register receiver for WikiActivity close broadcasts from :wiki process
+        val filter = IntentFilter("com.burningtreec.tiddlydesktop_rs.ACTION_WIKI_CLOSED")
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            registerReceiver(wikiClosedReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
+        } else {
+            registerReceiver(wikiClosedReceiver, filter)
+        }
 
         // Track that MainActivity is alive for LAN sync service lifecycle
         LanSyncService.setMainActivityAlive(true)
@@ -270,6 +295,9 @@ class MainActivity : TauriActivity() {
     }
 
     override fun onDestroy() {
+        try {
+            unregisterReceiver(wikiClosedReceiver)
+        } catch (_: Exception) {}
         super.onDestroy()
         // When the user presses Back (isFinishing=true), notify LAN sync service.
         // It will stop if no wiki activities are open.

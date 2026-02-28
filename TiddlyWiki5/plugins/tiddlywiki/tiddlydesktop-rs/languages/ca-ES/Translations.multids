@@ -134,6 +134,7 @@ RelaySync/RegisteredOnRelay: Registrat
 RelaySync/Registering: Registrant...
 RelaySync/RegisterFailed: Error de registre
 Tooltips/SelectRelayRoom: Assignar aquest wiki a una sala de retransmissió
+Tooltips/PluginsDisabled: Tanqueu la wiki primer
 RelaySync/ServerRooms: Les vostres sales al servidor
 RelaySync/ServerRoomsEmpty: No s'han trobat sales al servidor. Registreu una sala des del seu panell de detalls.
 RelaySync/Configured: Configurat

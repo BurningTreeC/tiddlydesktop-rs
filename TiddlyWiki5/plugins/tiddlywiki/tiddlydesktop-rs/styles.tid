@@ -38,6 +38,12 @@ tags: $:/tags/Stylesheet
 	border-color: <<colour tab-border>>;
 }
 
+.td-button-disabled,
+.td-button-disabled:hover {
+	opacity: 0.4;
+	cursor: not-allowed;
+}
+
 .td-button-create-new {
 	background: #e8f4e8;
 	border-color: #a0d0a0;

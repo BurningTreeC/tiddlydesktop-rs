@@ -414,6 +414,44 @@ pub fn launch_wiki_activity(
     Ok(())
 }
 
+/// Check if a wiki is currently open as an Android Activity task.
+/// Uses ActivityManager.appTasks to scan for a running WikiActivity with the given path.
+pub fn is_wiki_open_android(wiki_path: &str) -> bool {
+    let vm = match get_java_vm() {
+        Ok(vm) => vm,
+        Err(_) => return false,
+    };
+    let mut env = match vm.attach_current_thread() {
+        Ok(env) => env,
+        Err(_) => return false,
+    };
+
+    let activity = match get_current_activity(&mut env) {
+        Ok(a) => a,
+        Err(_) => return false,
+    };
+
+    let wiki_activity_class = match find_app_class(&mut env, "com/burningtreec/tiddlydesktop_rs/WikiActivity") {
+        Ok(c) => c,
+        Err(_) => return false,
+    };
+
+    let wiki_path_jstring = match env.new_string(wiki_path) {
+        Ok(s) => s,
+        Err(_) => return false,
+    };
+
+    let task_id = env.call_static_method(
+        &wiki_activity_class,
+        "getOpenWikiTaskId",
+        "(Landroid/content/Context;Ljava/lang/String;)I",
+        &[(&activity).into(), (&wiki_path_jstring).into()],
+    ).and_then(|v| v.i())
+        .unwrap_or(-1);
+
+    task_id >= 0
+}
+
 /// Try to bring an existing wiki instance to the foreground.
 /// Returns true if the wiki was already open and brought to front.
 fn try_bring_wiki_to_front<'a>(

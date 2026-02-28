@@ -80,6 +80,7 @@ class WikiActivity : AppCompatActivity() {
         const val EXTRA_BACKUP_DIR = "backup_dir"
         const val EXTRA_TIDDLER_TITLE = "tiddler_title"  // For tm-open-window: navigate to specific tiddler
         const val EXTRA_FOLDER_LOCAL_PATH = "folder_local_path"  // Local filesystem path for SAF folder wikis
+        const val EXTRA_FROM_NOTIFICATION = "from_notification"  // Set by notification click intents
         private const val TAG = "WikiActivity"
 
         // 1x1 transparent GIF (43 bytes) — served as placeholder during boot to prevent
@@ -3029,6 +3030,23 @@ class WikiActivity : AppCompatActivity() {
         val customBackupDir = intent.getStringExtra(EXTRA_BACKUP_DIR)  // Custom backup directory URI
 
         Log.d(TAG, "WikiActivity onCreate - path: $wikiPath, title: $wikiTitle, isFolder: $isFolder, folderUrl: $folderServerUrl, localPath: $folderLocalPath, backupsEnabled: $backupsEnabled, backupCount: $backupCount")
+
+        // If launched from notification click, bring the existing wiki task to front
+        // and finish this duplicate instance. Notification intents set EXTRA_FROM_NOTIFICATION=true.
+        if (intent.getBooleanExtra(EXTRA_FROM_NOTIFICATION, false) && !wikiPath.isNullOrEmpty()) {
+            val myTaskId = taskId
+            val existingTask = findWikiTask(this, wikiPath!!)
+            if (existingTask != null && existingTask.taskInfo.taskId != myTaskId) {
+                Log.d(TAG, "Notification click: wiki already open in task ${existingTask.taskInfo.taskId}, bringing to front")
+                try {
+                    existingTask.moveToFront()
+                } catch (e: Exception) {
+                    Log.e(TAG, "moveToFront failed: ${e.message}")
+                }
+                finish()
+                return
+            }
+        }
 
         // Start foreground notification to keep wiki alive in background
         try {
@@ -8101,6 +8119,14 @@ class WikiActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         Log.d(TAG, "Wiki closed: path=$wikiPath, isFolder=$isFolder")
+
+        // Notify MainActivity that this wiki was closed (cross-process broadcast)
+        if (!wikiPath.isNullOrEmpty()) {
+            val closedIntent = Intent("com.burningtreec.tiddlydesktop_rs.ACTION_WIKI_CLOSED")
+            closedIntent.putExtra("wiki_path", wikiPath)
+            closedIntent.setPackage(packageName)
+            sendBroadcast(closedIntent)
+        }
 
         // Stop main process watchdog
         mainProcessWatchdog.removeCallbacks(mainProcessCheckRunnable)

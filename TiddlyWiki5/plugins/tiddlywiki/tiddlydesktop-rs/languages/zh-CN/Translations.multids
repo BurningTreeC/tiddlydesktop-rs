@@ -134,6 +134,7 @@ RelaySync/RegisteredOnRelay: 已注册
 RelaySync/Registering: 注册中...
 RelaySync/RegisterFailed: 注册失败
 Tooltips/SelectRelayRoom: 将此维基分配到中继房间
+Tooltips/PluginsDisabled: 请先关闭Wiki
 RelaySync/ServerRooms: 您在服务器上的房间
 RelaySync/ServerRoomsEmpty: 服务器上未找到房间。请从详情面板注册房间。
 RelaySync/Configured: 已配置

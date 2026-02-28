@@ -134,6 +134,7 @@ RelaySync/RegisteredOnRelay: ਰਜਿਸਟਰਡ
 RelaySync/Registering: ਰਜਿਸਟਰ ਹੋ ਰਿਹਾ ਹੈ...
 RelaySync/RegisterFailed: ਰਜਿਸਟ੍ਰੇਸ਼ਨ ਅਸਫਲ
 Tooltips/SelectRelayRoom: ਇਸ ਵਿਕੀ ਨੂੰ ਰਿਲੇ ਕਮਰੇ ਵਿੱਚ ਅਸਾਈਨ ਕਰੋ
+Tooltips/PluginsDisabled: ਪਹਿਲਾਂ ਵਿਕੀ ਬੰਦ ਕਰੋ
 RelaySync/ServerRooms: ਸਰਵਰ 'ਤੇ ਤੁਹਾਡੇ ਕਮਰੇ
 RelaySync/ServerRoomsEmpty: ਸਰਵਰ 'ਤੇ ਕੋਈ ਕਮਰਾ ਨਹੀਂ ਮਿਲਿਆ। ਵੇਰਵਿਆਂ ਪੈਨਲ ਤੋਂ ਕਮਰਾ ਰਜਿਸਟਰ ਕਰੋ।
 RelaySync/Configured: ਸੰਰਚਿਤ

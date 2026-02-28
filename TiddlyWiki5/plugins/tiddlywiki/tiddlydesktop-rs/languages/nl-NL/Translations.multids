@@ -134,6 +134,7 @@ RelaySync/RegisteredOnRelay: Geregistreerd
 RelaySync/Registering: Registreren...
 RelaySync/RegisterFailed: Registratie mislukt
 Tooltips/SelectRelayRoom: Wijs deze wiki toe aan een relay-kamer
+Tooltips/PluginsDisabled: Sluit eerst de wiki
 RelaySync/ServerRooms: Uw kamers op de server
 RelaySync/ServerRoomsEmpty: Geen kamers gevonden op de server. Registreer een kamer vanuit het detailpaneel.
 RelaySync/Configured: Geconfigureerd

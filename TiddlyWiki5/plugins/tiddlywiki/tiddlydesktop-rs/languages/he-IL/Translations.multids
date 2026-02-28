@@ -134,6 +134,7 @@ RelaySync/RegisteredOnRelay: רשום
 RelaySync/Registering: רושם...
 RelaySync/RegisterFailed: הרישום נכשל
 Tooltips/SelectRelayRoom: שייך ויקי זה לחדר ממסר
+Tooltips/PluginsDisabled: סגור את הוויקי קודם
 RelaySync/ServerRooms: החדרים שלך בשרת
 RelaySync/ServerRoomsEmpty: לא נמצאו חדרים בשרת. רשום חדר מלוח הפרטים שלו.
 RelaySync/Configured: מוגדר

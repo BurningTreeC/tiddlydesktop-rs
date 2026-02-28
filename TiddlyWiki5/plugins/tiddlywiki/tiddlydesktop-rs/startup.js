@@ -531,6 +531,15 @@ exports.startup = function(callback) {
 				$tw.wiki.setText("$:/temp/tiddlydesktop-rs/wikis/" + index, "needs_reauth", null, "no");
 			});
 		}
+
+		// Check which wikis are currently open (for disabling Plugins button etc.)
+		entries.forEach(function(entry, index) {
+			invoke("is_wiki_open", { path: entry.path }).then(function(isOpen) {
+				$tw.wiki.setText("$:/temp/tiddlydesktop-rs/wikis/" + index, "is_open", null, isOpen ? "yes" : "no");
+			}).catch(function() {
+				$tw.wiki.setText("$:/temp/tiddlydesktop-rs/wikis/" + index, "is_open", null, "no");
+			});
+		});
 	}
 
 	// Check permissions for all wiki entries (Android only)
@@ -1470,6 +1479,22 @@ exports.startup = function(callback) {
 		}
 		refreshWikiList();
 	});
+
+	// Listen for wiki process closed events to update open/closed state (desktop)
+	listen("wiki-process-closed", function() {
+		refreshWikiList();
+	});
+
+	// Expose a global function for Android to call from Kotlin when a WikiActivity closes.
+	// MainActivity's BroadcastReceiver calls evaluateJavascript() with this.
+	window.__tdWikiClosed = function(wikiPath) {
+		var entries = getWikiListEntries();
+		entries.forEach(function(entry, index) {
+			if (entry.path === wikiPath) {
+				$tw.wiki.setText("$:/temp/tiddlydesktop-rs/wikis/" + index, "is_open", null, "no");
+			}
+		});
+	};
 
 	// Listen for favicon updates from wiki windows (updates in real-time without full refresh)
 	window.addEventListener("td-favicon-updated", function(event) {

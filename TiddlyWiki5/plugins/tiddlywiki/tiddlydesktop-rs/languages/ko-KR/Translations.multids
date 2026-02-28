@@ -134,6 +134,7 @@ RelaySync/RegisteredOnRelay: 등록됨
 RelaySync/Registering: 등록 중...
 RelaySync/RegisterFailed: 등록 실패
 Tooltips/SelectRelayRoom: 이 위키를 릴레이 방에 할당
+Tooltips/PluginsDisabled: 먼저 위키를 닫으세요
 RelaySync/ServerRooms: 서버의 내 방
 RelaySync/ServerRoomsEmpty: 서버에서 방을 찾을 수 없습니다. 세부 정보 패널에서 방을 등록하세요.
 RelaySync/Configured: 구성됨

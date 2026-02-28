@@ -15,15 +15,18 @@ import java.util.concurrent.atomic.AtomicInteger
 /**
  * Foreground Service to keep wiki servers alive when the app is in background.
  *
- * Each open wiki gets its own notification showing the wiki title.
+ * Each open wiki gets its own persistent notification showing the wiki title.
+ * Clicking a notification brings that specific WikiActivity to the foreground.
  * The service stops when all wikis are closed.
+ *
+ * Notification IDs start at 2001 to avoid collision with LanSyncService (1002).
  */
 class WikiServerService : Service() {
 
     companion object {
         private const val TAG = "WikiServerService"
-        // Base notification ID — each wiki gets NOTIFICATION_ID_BASE + sequential index
-        private const val NOTIFICATION_ID_BASE = 1001
+        // Base notification ID — well above LanSyncService's 1002 to avoid collisions
+        private const val NOTIFICATION_ID_BASE = 2001
         private const val CHANNEL_ID = "wiki_server_channel"
         private const val NOTIFICATION_CHECK_INTERVAL = 2000L
 
@@ -37,7 +40,8 @@ class WikiServerService : Service() {
 
         data class WikiNotification(
             val notificationId: Int,
-            val wikiTitle: String
+            val wikiTitle: String,
+            val wikiKey: String
         )
 
         /**
@@ -55,7 +59,7 @@ class WikiServerService : Service() {
                 }
 
                 val notifId = nextNotificationId.getAndIncrement()
-                activeWikis[wikiKey] = WikiNotification(notifId, wikiTitle)
+                activeWikis[wikiKey] = WikiNotification(notifId, wikiTitle, wikiKey)
                 Log.d(TAG, "Wiki opened: $wikiTitle ($wikiKey), notifId=$notifId, count=${activeWikis.size}")
 
                 if (!isRunning) {
@@ -68,7 +72,7 @@ class WikiServerService : Service() {
                 } else {
                     // Service already running — post notification for this wiki
                     val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-                    notificationManager.notify(notifId, createWikiNotification(context, wikiTitle))
+                    notificationManager.notify(notifId, createWikiNotification(context, wikiKey, wikiTitle, notifId))
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to start foreground service: ${e.message}", e)
@@ -117,13 +121,25 @@ class WikiServerService : Service() {
         fun getActiveWikiCount(): Int = activeWikis.size
 
         /**
-         * Create a notification for a specific wiki (static helper for use from companion)
+         * Create a notification for a specific wiki.
+         * Clicking the notification brings the corresponding WikiActivity to the foreground
+         * using the existing bringWikiToFront mechanism via AppTask scanning.
          */
-        private fun createWikiNotification(context: Context, wikiTitle: String): Notification {
+        private fun createWikiNotification(context: Context, wikiKey: String, wikiTitle: String, notifId: Int): Notification {
+            // Create an intent that launches WikiActivity with the wiki path.
+            // WikiActivity's onCreate will detect the existing task via getOpenWikiTaskId
+            // and bring it to front instead of creating a duplicate.
+            val clickIntent = Intent(context, WikiActivity::class.java).apply {
+                putExtra(WikiActivity.EXTRA_WIKI_PATH, wikiKey)
+                putExtra(WikiActivity.EXTRA_FROM_NOTIFICATION, true)
+                // FLAG_ACTIVITY_NEW_TASK is required from a Service context.
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK
+            }
+
             val pendingIntent = PendingIntent.getActivity(
                 context,
-                0,
-                Intent(context, MainActivity::class.java),
+                notifId, // unique request code per wiki so PendingIntents don't overwrite each other
+                clickIntent,
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
             )
 
@@ -171,21 +187,23 @@ class WikiServerService : Service() {
             // Use the first wiki's notification as the foreground notification
             val firstEntry = activeWikis.entries.firstOrNull()
             if (firstEntry != null) {
-                val notification = createWikiNotification(this, firstEntry.value.wikiTitle)
+                val wn = firstEntry.value
+                val notification = createWikiNotification(this, wn.wikiKey, wn.wikiTitle, wn.notificationId)
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-                    startForeground(firstEntry.value.notificationId, notification,
+                    startForeground(wn.notificationId, notification,
                         android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
                 } else {
-                    startForeground(firstEntry.value.notificationId, notification)
+                    startForeground(wn.notificationId, notification)
                 }
 
                 // Show notifications for any additional wikis
                 val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
                 for (entry in activeWikis.entries) {
                     if (entry.key != firstEntry.key) {
+                        val e = entry.value
                         notificationManager.notify(
-                            entry.value.notificationId,
-                            createWikiNotification(this, entry.value.wikiTitle)
+                            e.notificationId,
+                            createWikiNotification(this, e.wikiKey, e.wikiTitle, e.notificationId)
                         )
                     }
                 }
@@ -209,10 +227,11 @@ class WikiServerService : Service() {
 
         for (entry in activeWikis.entries) {
             if (entry.value.notificationId !in activeIds) {
-                Log.d(TAG, "Notification was dismissed for ${entry.value.wikiTitle}, re-showing")
+                val wn = entry.value
+                Log.d(TAG, "Notification was dismissed for ${wn.wikiTitle}, re-showing")
                 notificationManager.notify(
-                    entry.value.notificationId,
-                    createWikiNotification(this, entry.value.wikiTitle)
+                    wn.notificationId,
+                    createWikiNotification(this, wn.wikiKey, wn.wikiTitle, wn.notificationId)
                 )
             }
         }

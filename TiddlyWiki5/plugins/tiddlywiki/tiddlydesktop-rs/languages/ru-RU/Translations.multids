@@ -134,6 +134,7 @@ RelaySync/RegisteredOnRelay: Зарегистрировано
 RelaySync/Registering: Регистрация...
 RelaySync/RegisterFailed: Ошибка регистрации
 Tooltips/SelectRelayRoom: Назначить эту вики комнате ретрансляции
+Tooltips/PluginsDisabled: Сначала закройте вики
 RelaySync/ServerRooms: Ваши комнаты на сервере
 RelaySync/ServerRoomsEmpty: Комнаты на сервере не найдены. Зарегистрируйте комнату через её панель подробностей.
 RelaySync/Configured: Настроено

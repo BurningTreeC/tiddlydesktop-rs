@@ -134,6 +134,7 @@ RelaySync/RegisteredOnRelay: Zarejestrowano
 RelaySync/Registering: Rejestrowanie...
 RelaySync/RegisterFailed: Rejestracja nie powiodła się
 Tooltips/SelectRelayRoom: Przypisz to wiki do pokoju przekaźnikowego
+Tooltips/PluginsDisabled: Najpierw zamknij wiki
 RelaySync/ServerRooms: Twoje pokoje na serwerze
 RelaySync/ServerRoomsEmpty: Nie znaleziono pokoi na serwerze. Zarejestruj pokój z jego panelu szczegółów.
 RelaySync/Configured: Skonfigurowany

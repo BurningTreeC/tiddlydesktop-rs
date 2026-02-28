@@ -134,6 +134,7 @@ RelaySync/RegisteredOnRelay: 登録済み
 RelaySync/Registering: 登録中...
 RelaySync/RegisterFailed: 登録に失敗しました
 Tooltips/SelectRelayRoom: このウィキをリレールームに割り当てる
+Tooltips/PluginsDisabled: 先にWikiを閉じてください
 RelaySync/ServerRooms: サーバー上のルーム
 RelaySync/ServerRoomsEmpty: サーバーにルームが見つかりません。詳細パネルからルームを登録してください。
 RelaySync/Configured: 設定済み

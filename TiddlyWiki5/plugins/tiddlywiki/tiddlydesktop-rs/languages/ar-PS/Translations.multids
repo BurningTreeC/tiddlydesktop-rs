@@ -134,6 +134,7 @@ RelaySync/RegisteredOnRelay: مُسجّل
 RelaySync/Registering: جاري التسجيل...
 RelaySync/RegisterFailed: فشل التسجيل
 Tooltips/SelectRelayRoom: تعيين هذا الويكي إلى غرفة ترحيل
+Tooltips/PluginsDisabled: أغلق الويكي أولاً
 RelaySync/ServerRooms: غرفك على الخادم
 RelaySync/ServerRoomsEmpty: لم يتم العثور على غرف على الخادم. سجّل غرفة من لوحة التفاصيل الخاصة بها.
 RelaySync/Configured: مُعدّ

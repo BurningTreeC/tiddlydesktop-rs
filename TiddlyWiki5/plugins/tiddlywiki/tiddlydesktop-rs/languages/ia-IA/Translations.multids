@@ -134,6 +134,7 @@ RelaySync/RegisteredOnRelay: Registrate
 RelaySync/Registering: Registration...
 RelaySync/RegisterFailed: Registration fallite
 Tooltips/SelectRelayRoom: Assign this wiki to a relay room
+Tooltips/PluginsDisabled: Primo claude le wiki
 RelaySync/ServerRooms: Vostre cameras sur le servitor
 RelaySync/ServerRoomsEmpty: Nulle camera trovate sur le servitor. Registra un camera ab su pannello de detalios.
 RelaySync/Configured: Configurate

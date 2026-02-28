@@ -134,6 +134,7 @@ RelaySync/RegisteredOnRelay: Registriert
 RelaySync/Registering: Registrierung...
 RelaySync/RegisterFailed: Registrierung fehlgeschlagen
 Tooltips/SelectRelayRoom: Dieses Wiki einem Relay-Raum zuweisen
+Tooltips/PluginsDisabled: Schließen Sie zuerst das Wiki
 RelaySync/ServerRooms: Ihre Räume auf dem Server
 RelaySync/ServerRoomsEmpty: Keine Räume auf dem Server gefunden. Registrieren Sie einen Raum über sein Detailpanel.
 RelaySync/Configured: Konfiguriert

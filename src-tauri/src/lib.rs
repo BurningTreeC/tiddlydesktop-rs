@@ -3244,6 +3244,9 @@ async fn open_wiki_folder(app: tauri::AppHandle, path: String, _tiddler_title: O
         let state = app_handle.state::<AppState>();
         state.wiki_processes.lock().unwrap().remove(&path_clone);
 
+        // Notify landing page that a wiki was closed
+        let _ = app_handle.emit("wiki-process-closed", &path_clone);
+
         // Exit app if no more wikis and no windows
         let wiki_count = state.wiki_processes.lock().unwrap().len();
         let has_windows = app_handle.webview_windows().len() > 0;
@@ -5762,6 +5765,9 @@ async fn open_wiki_window(
         state.wiki_processes.lock().unwrap().remove(&path_clone);
         eprintln!("[TiddlyDesktop] Removed wiki process from tracking: {}", path_clone);
 
+        // Notify landing page that a wiki was closed
+        let _ = app_handle.emit("wiki-process-closed", &path_clone);
+
         // Exit app if no more wikis and no windows
         let wiki_count = state.wiki_processes.lock().unwrap().len();
         let has_windows = app_handle.webview_windows().len() > 0;
@@ -6326,6 +6332,21 @@ struct UpdateCheckResult {
     current_version: String,
 }
 
+/// Check if a wiki is currently open (running as a separate process/activity).
+#[tauri::command]
+fn is_wiki_open(#[allow(unused_variables)] app: tauri::AppHandle, path: String) -> bool {
+    #[cfg(target_os = "android")]
+    {
+        android::wiki_activity::is_wiki_open_android(&path)
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let state = app.state::<AppState>();
+        let wiki_processes = state.wiki_processes.lock().unwrap();
+        wiki_processes.contains_key(&path)
+    }
+}
+
 /// Check for application updates
 /// On Android: Checks Google Play Store
 /// On Desktop: Checks GitHub releases
@@ -6343,7 +6364,7 @@ async fn check_for_updates() -> Result<UpdateCheckResult, String> {
 
 /// Android version - separate from desktop versioning (must match build.gradle.kts versionName)
 #[cfg(target_os = "android")]
-const ANDROID_VERSION: &str = "0.0.69";
+const ANDROID_VERSION: &str = "0.0.70";
 
 /// Check for updates on Android via version file on GitHub, linking to Play Store
 #[cfg(target_os = "android")]
@@ -9580,6 +9601,7 @@ pub fn run() {
             set_over_droppable,
             set_internal_drag_type,
             check_for_updates,
+            is_wiki_open,
             // Android SAF commands (stubs on desktop)
             android_pick_wiki_file,
             android_pick_directory,

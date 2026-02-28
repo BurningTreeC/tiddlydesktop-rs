@@ -134,6 +134,7 @@ RelaySync/RegisteredOnRelay: Registrerad
 RelaySync/Registering: Registrerar...
 RelaySync/RegisterFailed: Registrering misslyckades
 Tooltips/SelectRelayRoom: Tilldela denna wiki till ett relay-rum
+Tooltips/PluginsDisabled: Stäng wikin först
 RelaySync/ServerRooms: Dina rum på servern
 RelaySync/ServerRoomsEmpty: Inga rum hittades på servern. Registrera ett rum från dess detaljpanel.
 RelaySync/Configured: Konfigurerad

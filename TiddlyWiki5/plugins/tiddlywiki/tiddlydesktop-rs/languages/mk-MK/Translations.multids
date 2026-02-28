@@ -134,6 +134,7 @@ RelaySync/RegisteredOnRelay: Регистрирано
 RelaySync/Registering: Регистрирање...
 RelaySync/RegisterFailed: Регистрацијата не успеа
 Tooltips/SelectRelayRoom: Додели го ова вики на соба за пренос
+Tooltips/PluginsDisabled: Прво затворете го викито
 RelaySync/ServerRooms: Вашите соби на серверот
 RelaySync/ServerRoomsEmpty: Не се пронајдени соби на серверот. Регистрирајте соба од нејзиниот панел за детали.
 RelaySync/Configured: Конфигурирано

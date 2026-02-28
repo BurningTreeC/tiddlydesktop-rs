@@ -1,7 +1,7 @@
 title: $:/plugins/tiddlywiki/tiddlydesktop-rs/WikiList
 
 \define render-wiki-item()
-<$let path={{!!path}} displayPath={{!!display_path}} filename={{!!filename}} favicon={{!!favicon}} isFolder={{!!is_folder}} backupsEnabled={{!!backups_enabled}} backupDir={{!!backup_dir}} backupDirDisplay={{!!backup_dir_display}} backupCount={{!!backup_count}} wikiGroup={{!!group}} syncEnabled={{!!sync_enabled}} syncId={{!!sync_id}} relayRoom={{!!relay_room}} needsReauth={{!!needs_reauth}}>
+<$let path={{!!path}} displayPath={{!!display_path}} filename={{!!filename}} favicon={{!!favicon}} isFolder={{!!is_folder}} backupsEnabled={{!!backups_enabled}} backupDir={{!!backup_dir}} backupDirDisplay={{!!backup_dir_display}} backupCount={{!!backup_count}} wikiGroup={{!!group}} syncEnabled={{!!sync_enabled}} syncId={{!!sync_id}} relayRoom={{!!relay_room}} needsReauth={{!!needs_reauth}} isOpen={{!!is_open}}>
 <div class={{{ [<needsReauth>match[yes]then[td-wikilist-item td-needs-reauth]else[td-wikilist-item]] }}}>
 <div class="td-wikilist-thumbnail">
 <$button class="tc-btn-invisible">
@@ -56,10 +56,17 @@ title: $:/plugins/tiddlywiki/tiddlydesktop-rs/WikiList
 <$list filter="[{$:/temp/tiddlydesktop-rs/is-mobile}!match[yes]]" variable="ignore">
 <$button message="tm-tiddlydesktop-rs-reveal" param=<<path>> class="tc-btn-invisible td-button td-button-reveal"><<td-lingo Buttons/Reveal>></$button>
 </$list>
+<$list filter="[<isOpen>match[yes]]" variable="ignore">
+<$button class="tc-btn-invisible td-button td-button-plugins td-button-disabled" disabled="yes" tooltip=<<td-lingo Tooltips/PluginsDisabled>>>
+<<td-lingo Buttons/Plugins>>
+</$button>
+</$list>
+<$list filter="[<isOpen>!match[yes]]" variable="ignore">
 <$button class="tc-btn-invisible td-button td-button-plugins">
 <$action-sendmessage $message="tm-tiddlydesktop-rs-show-plugin-installer" path=<<path>> isFolder=<<isFolder>> filename=<<filename>>/>
 <<td-lingo Buttons/Plugins>>
 </$button>
+</$list>
 </$list>
 <!-- Remove button always shown -->
 <$button message="tm-tiddlydesktop-rs-remove" param=<<path>> class="tc-btn-invisible td-button td-button-remove"><<td-lingo Buttons/Remove>></$button>

@@ -134,6 +134,7 @@ RelaySync/RegisteredOnRelay: Zaregistrované
 RelaySync/Registering: Registrácia...
 RelaySync/RegisterFailed: Registrácia zlyhala
 Tooltips/SelectRelayRoom: Priradiť toto wiki k prenosovej miestnosti
+Tooltips/PluginsDisabled: Najskôr zatvorte wiki
 RelaySync/ServerRooms: Vaše miestnosti na serveri
 RelaySync/ServerRoomsEmpty: Na serveri sa nenašli žiadne miestnosti. Zaregistrujte miestnosť z jej panela podrobností.
 RelaySync/Configured: Nakonfigurované

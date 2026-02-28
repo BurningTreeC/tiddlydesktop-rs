@@ -134,6 +134,7 @@ RelaySync/RegisteredOnRelay: Εγγεγραμμένο
 RelaySync/Registering: Εγγραφή...
 RelaySync/RegisterFailed: Η εγγραφή απέτυχε
 Tooltips/SelectRelayRoom: Αντιστοίχιση αυτού του wiki σε δωμάτιο αναμετάδοσης
+Tooltips/PluginsDisabled: Κλείστε πρώτα το wiki
 RelaySync/ServerRooms: Τα δωμάτιά σας στον διακομιστή
 RelaySync/ServerRoomsEmpty: Δεν βρέθηκαν δωμάτια στον διακομιστή. Καταχωρίστε ένα δωμάτιο από τον πίνακα λεπτομερειών του.
 RelaySync/Configured: Ρυθμισμένο

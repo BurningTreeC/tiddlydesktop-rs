@@ -35,14 +35,20 @@ fn resolve_data_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
             if let Some(exe_dir) = exe_path.parent() {
                 if exe_dir.join("portable").exists()
                     || exe_dir.join("portable.txt").exists()
-                    || exe_dir.join("tiddlydesktop.html").exists()
                 {
+                    eprintln!("[TiddlyDesktop] Data directory: {} (portable mode, marker file)", exe_dir.display());
+                    return Ok(exe_dir.to_path_buf());
+                }
+                if exe_dir.join("tiddlydesktop.html").exists() {
+                    eprintln!("[TiddlyDesktop] Data directory: {} (portable mode, tiddlydesktop.html exists)", exe_dir.display());
                     return Ok(exe_dir.to_path_buf());
                 }
             }
         }
     }
-    app.path().app_data_dir().map_err(|e| e.to_string())
+    let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    eprintln!("[TiddlyDesktop] Data directory: {} (system mode)", dir.display());
+    Ok(dir)
 }
 
 /// Get the global AppHandle (for use by drag_drop module to emit events)
@@ -1048,7 +1054,7 @@ fn ensure_main_wiki_exists(app: &tauri::App) -> Result<PathBuf, String> {
         // First run: copy from bundled resources
         std::fs::copy(&bundled_path, &main_wiki_path)
             .map_err(|e| format!("Failed to copy wiki: {}", e))?;
-        println!("Created main wiki from {:?}", bundled_path);
+        eprintln!("[TiddlyDesktop] Created main wiki from {:?}", bundled_path);
     } else {
         // Check if we need to migrate to a newer version
         let existing_html = std::fs::read_to_string(&main_wiki_path)
@@ -1064,24 +1070,46 @@ fn ensure_main_wiki_exists(app: &tauri::App) -> Result<PathBuf, String> {
             .unwrap_or(0);
 
         if bundled_version > existing_version {
-            println!("Migrating to newer version...");
+            eprintln!("[TiddlyDesktop] Migrating landing page from version {} to {}", existing_version, bundled_version);
 
-            // Extract user data from existing wiki
-            let wiki_list = tiddlywiki_html::extract_tiddler_from_html(&existing_html, "$:/TiddlyDesktop/WikiList");
+            // Create backup before migration
+            let backup_path = wiki_dir.join("tiddlydesktop.html.migration-backup");
+            std::fs::copy(&main_wiki_path, &backup_path)
+                .map_err(|e| format!("Failed to create migration backup: {}", e))?;
+            eprintln!("[TiddlyDesktop] Created backup: {:?}", backup_path);
 
-            // Start with bundled HTML
-            let mut new_html = bundled_html;
+            // Merge tiddler stores: preserve user data, update system/plugin tiddlers
+            match tiddlywiki_html::build_merged_html(&existing_html, &bundled_html) {
+                Ok(merged_html) => {
+                    // Validate: if old had WikiList, make sure merged does too
+                    let had_wiki_list = tiddlywiki_html::extract_tiddler_from_html(
+                        &existing_html, "$:/TiddlyDesktop/WikiList").is_some();
+                    let has_wiki_list = tiddlywiki_html::extract_tiddler_from_html(
+                        &merged_html, "$:/TiddlyDesktop/WikiList").is_some();
 
-            // Inject user data into new HTML
-            if let Some(list) = wiki_list {
-                println!("Preserving wiki list during migration");
-                new_html = tiddlywiki_html::inject_tiddler_into_html(&new_html, "$:/TiddlyDesktop/WikiList", "application/json", &list);
+                    if had_wiki_list && !has_wiki_list {
+                        eprintln!("[TiddlyDesktop] ERROR: WikiList lost during merge, restoring backup");
+                        std::fs::copy(&backup_path, &main_wiki_path)
+                            .map_err(|e| format!("Failed to restore backup: {}", e))?;
+                        return Ok(main_wiki_path);
+                    }
+
+                    // Atomic write: temp file + rename
+                    let temp_path = wiki_dir.join("tiddlydesktop.html.migration-tmp");
+                    std::fs::write(&temp_path, &merged_html)
+                        .map_err(|e| format!("Failed to write migrated wiki: {}", e))?;
+                    std::fs::rename(&temp_path, &main_wiki_path)
+                        .map_err(|e| format!("Failed to finalize migrated wiki: {}", e))?;
+
+                    eprintln!("[TiddlyDesktop] Migration complete (version {} -> {})",
+                        existing_version, bundled_version);
+                }
+                Err(e) => {
+                    eprintln!("[TiddlyDesktop] ERROR: Migration merge failed: {}. Restoring backup.", e);
+                    std::fs::copy(&backup_path, &main_wiki_path)
+                        .map_err(|e| format!("Failed to restore backup: {}", e))?;
+                }
             }
-
-            // Write the migrated wiki
-            std::fs::write(&main_wiki_path, new_html)
-                .map_err(|e| format!("Failed to write migrated wiki: {}", e))?;
-            println!("Migration complete");
         }
     }
 
@@ -1103,7 +1131,7 @@ fn ensure_main_wiki_exists(app: &tauri::App) -> Result<PathBuf, String> {
         // First run: write bundled content
         std::fs::write(&main_wiki_path, &bundled_content)
             .map_err(|e| format!("Failed to write wiki: {}", e))?;
-        println!("Created main wiki from bundled assets");
+        eprintln!("[TiddlyDesktop] Created main wiki from bundled assets");
     } else {
         // Check if we need to migrate to a newer version
         let existing_html = std::fs::read_to_string(&main_wiki_path)
@@ -1117,24 +1145,46 @@ fn ensure_main_wiki_exists(app: &tauri::App) -> Result<PathBuf, String> {
             .unwrap_or(0);
 
         if bundled_version > existing_version {
-            println!("Migrating to newer version...");
+            eprintln!("[TiddlyDesktop] Migrating landing page from version {} to {}", existing_version, bundled_version);
 
-            // Extract user data from existing wiki
-            let wiki_list = tiddlywiki_html::extract_tiddler_from_html(&existing_html, "$:/TiddlyDesktop/WikiList");
+            // Create backup before migration
+            let backup_path = wiki_dir.join("tiddlydesktop.html.migration-backup");
+            std::fs::copy(&main_wiki_path, &backup_path)
+                .map_err(|e| format!("Failed to create migration backup: {}", e))?;
+            eprintln!("[TiddlyDesktop] Created backup: {:?}", backup_path);
 
-            // Start with bundled HTML
-            let mut new_html = bundled_html;
+            // Merge tiddler stores: preserve user data, update system/plugin tiddlers
+            match tiddlywiki_html::build_merged_html(&existing_html, &bundled_html) {
+                Ok(merged_html) => {
+                    // Validate: if old had WikiList, make sure merged does too
+                    let had_wiki_list = tiddlywiki_html::extract_tiddler_from_html(
+                        &existing_html, "$:/TiddlyDesktop/WikiList").is_some();
+                    let has_wiki_list = tiddlywiki_html::extract_tiddler_from_html(
+                        &merged_html, "$:/TiddlyDesktop/WikiList").is_some();
 
-            // Inject user data into new HTML
-            if let Some(list) = wiki_list {
-                println!("Preserving wiki list during migration");
-                new_html = tiddlywiki_html::inject_tiddler_into_html(&new_html, "$:/TiddlyDesktop/WikiList", "application/json", &list);
+                    if had_wiki_list && !has_wiki_list {
+                        eprintln!("[TiddlyDesktop] ERROR: WikiList lost during merge, restoring backup");
+                        std::fs::copy(&backup_path, &main_wiki_path)
+                            .map_err(|e| format!("Failed to restore backup: {}", e))?;
+                        return Ok(main_wiki_path);
+                    }
+
+                    // Atomic write: temp file + rename
+                    let temp_path = wiki_dir.join("tiddlydesktop.html.migration-tmp");
+                    std::fs::write(&temp_path, &merged_html)
+                        .map_err(|e| format!("Failed to write migrated wiki: {}", e))?;
+                    std::fs::rename(&temp_path, &main_wiki_path)
+                        .map_err(|e| format!("Failed to finalize migrated wiki: {}", e))?;
+
+                    eprintln!("[TiddlyDesktop] Migration complete (version {} -> {})",
+                        existing_version, bundled_version);
+                }
+                Err(e) => {
+                    eprintln!("[TiddlyDesktop] ERROR: Migration merge failed: {}. Restoring backup.", e);
+                    std::fs::copy(&backup_path, &main_wiki_path)
+                        .map_err(|e| format!("Failed to restore backup: {}", e))?;
+                }
             }
-
-            // Write the migrated wiki
-            std::fs::write(&main_wiki_path, new_html)
-                .map_err(|e| format!("Failed to write migrated wiki: {}", e))?;
-            println!("Migration complete");
         }
     }
 
@@ -6364,7 +6414,7 @@ async fn check_for_updates() -> Result<UpdateCheckResult, String> {
 
 /// Android version - separate from desktop versioning (must match build.gradle.kts versionName)
 #[cfg(target_os = "android")]
-const ANDROID_VERSION: &str = "0.0.75";
+const ANDROID_VERSION: &str = "0.0.76";
 
 /// Check for updates on Android via version file on GitHub, linking to Play Store
 #[cfg(target_os = "android")]

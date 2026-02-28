@@ -123,7 +123,8 @@ pub fn extract_tiddler_from_html(html: &str, tiddler_title: &str) -> Option<Stri
 
 /// Inject or replace a tiddler in TiddlyWiki HTML
 /// Works with modern TiddlyWiki JSON store format
-pub fn inject_tiddler_into_html(html: &str, tiddler_title: &str, tiddler_type: &str, content: &str) -> String {
+/// Returns Err if no tiddler store marker is found in the HTML
+pub fn inject_tiddler_into_html(html: &str, tiddler_title: &str, tiddler_type: &str, content: &str) -> Result<String, String> {
     // Modern TiddlyWiki (5.2+) uses JSON store in a script tag
     // Format: <script class="tiddlywiki-tiddler-store" type="application/json">[{...}]</script>
 
@@ -150,7 +151,7 @@ pub fn inject_tiddler_into_html(html: &str, tiddler_title: &str, tiddler_type: &
         result.push(',');
         result.push_str(&new_tiddler);
         result.push_str(&html[end_pos..]);
-        return result;
+        return Ok(result);
     }
 
     // Fallback to div format for older TiddlyWiki
@@ -175,12 +176,133 @@ pub fn inject_tiddler_into_html(html: &str, tiddler_title: &str, tiddler_type: &
             result.push_str(&new_div);
             result.push('\n');
             result.push_str(&html[pos..]);
-            return result;
+            return Ok(result);
         }
     }
 
-    // Fallback: return unchanged
-    html.to_string()
+    // No store marker found - return error instead of silently returning unchanged HTML
+    Err(format!("No tiddler store marker found in HTML for injecting '{}'", tiddler_title))
+}
+
+/// Extract all tiddlers from all JSON tiddler stores in TiddlyWiki HTML.
+/// Finds all `<script class="tiddlywiki-tiddler-store" type="application/json">` tags,
+/// parses each JSON array, and returns a flat Vec of all tiddler objects.
+pub fn extract_all_tiddlers_from_html(html: &str) -> Vec<serde_json::Value> {
+    let mut tiddlers = Vec::new();
+    let store_start_marker = r#"<script class="tiddlywiki-tiddler-store" type="application/json">"#;
+    let store_end_marker = "</script>";
+
+    let mut search_pos = 0;
+    while let Some(start_rel) = html[search_pos..].find(store_start_marker) {
+        let content_start = search_pos + start_rel + store_start_marker.len();
+        if let Some(end_rel) = html[content_start..].find(store_end_marker) {
+            let json_str = &html[content_start..content_start + end_rel];
+            match serde_json::from_str::<serde_json::Value>(json_str) {
+                Ok(serde_json::Value::Array(arr)) => {
+                    tiddlers.extend(arr);
+                }
+                Ok(_) => {
+                    eprintln!("[TiddlyDesktop] Warning: tiddler store is not a JSON array");
+                }
+                Err(e) => {
+                    eprintln!("[TiddlyDesktop] Warning: failed to parse tiddler store JSON: {}", e);
+                }
+            }
+            search_pos = content_start + end_rel + store_end_marker.len();
+        } else {
+            break;
+        }
+    }
+    tiddlers
+}
+
+/// Check if a tiddler title is a system/plugin tiddler that should be updated from bundled.
+/// User-data tiddlers (wiki list, config, etc.) are NOT considered system tiddlers.
+fn is_bundled_system_tiddler(title: &str) -> bool {
+    title.starts_with("$:/plugins/")
+        || title.starts_with("$:/boot/")
+        || title == "$:/core"
+        || title.starts_with("$:/themes/")
+        || title.starts_with("$:/info/")
+        || title.starts_with("$:/language/")
+        || title.starts_with("$:/languages/")
+        || title == "$:/TiddlyDesktop/AppVersion"
+}
+
+/// Build merged HTML by combining user data from old HTML with updated system/plugin
+/// tiddlers from bundled HTML.
+///
+/// Merge logic:
+/// - Start with ALL tiddlers from old HTML (preserves all user data)
+/// - Override system/plugin tiddlers with bundled versions (gets code updates)
+/// - Add any new tiddlers from bundled that don't exist in old (new features)
+///
+/// The merged tiddler array replaces the LAST JSON store in the bundled HTML template.
+pub fn build_merged_html(old_html: &str, bundled_html: &str) -> Result<String, String> {
+    let old_tiddlers = extract_all_tiddlers_from_html(old_html);
+    let bundled_tiddlers = extract_all_tiddlers_from_html(bundled_html);
+
+    if bundled_tiddlers.is_empty() {
+        return Err("No tiddler stores found in bundled HTML".to_string());
+    }
+
+    eprintln!("[TiddlyDesktop] Migration: {} tiddlers in old wiki, {} in bundled",
+        old_tiddlers.len(), bundled_tiddlers.len());
+
+    // Build merged map: title -> tiddler
+    let mut merged: std::collections::HashMap<String, serde_json::Value> =
+        std::collections::HashMap::new();
+
+    // Start with ALL old tiddlers (preserves user data)
+    for t in &old_tiddlers {
+        if let Some(title) = t.get("title").and_then(|v| v.as_str()) {
+            merged.insert(title.to_string(), t.clone());
+        }
+    }
+
+    let old_count = merged.len();
+    let mut updated_count = 0;
+    let mut added_count = 0;
+
+    // Override system/plugin tiddlers from bundled; add new bundled tiddlers
+    for t in &bundled_tiddlers {
+        if let Some(title) = t.get("title").and_then(|v| v.as_str()) {
+            if is_bundled_system_tiddler(title) {
+                if merged.contains_key(title) {
+                    updated_count += 1;
+                }
+                merged.insert(title.to_string(), t.clone());
+            } else if !merged.contains_key(title) {
+                added_count += 1;
+                merged.insert(title.to_string(), t.clone());
+            }
+        }
+    }
+
+    eprintln!("[TiddlyDesktop] Migration merge: {} total ({} from old, {} system updated, {} new)",
+        merged.len(), old_count, updated_count, added_count);
+
+    // Serialize merged tiddlers as JSON array
+    let merged_array: Vec<serde_json::Value> = merged.into_values().collect();
+    let merged_json = serde_json::to_string(&merged_array)
+        .map_err(|e| format!("Failed to serialize merged tiddlers: {}", e))?;
+
+    // Replace the LAST JSON store in bundled HTML with merged content
+    let store_start_marker = r#"<script class="tiddlywiki-tiddler-store" type="application/json">"#;
+
+    let last_store_start = bundled_html.rfind(store_start_marker)
+        .ok_or("No tiddler store found in bundled HTML")?;
+    let content_start = last_store_start + store_start_marker.len();
+    let store_end_rel = bundled_html[content_start..].find("</script>")
+        .ok_or("Unterminated tiddler store in bundled HTML")?;
+    let content_end = content_start + store_end_rel;
+
+    let mut result = String::with_capacity(bundled_html.len() + merged_json.len());
+    result.push_str(&bundled_html[..content_start]);
+    result.push_str(&merged_json);
+    result.push_str(&bundled_html[content_end..]);
+
+    Ok(result)
 }
 
 /// Extract favicon from the $:/favicon.ico tiddler in TiddlyWiki HTML

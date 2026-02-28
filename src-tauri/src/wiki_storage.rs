@@ -4,10 +4,55 @@
 //! - Recent wikis list (wiki_list.json)
 //! - Wiki-specific configurations (external attachments, session auth)
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use tauri::{Emitter, Manager};
 use crate::types::{WikiEntry, WikiConfigs, ExternalAttachmentsConfig, SessionAuthConfig, AppSettings};
 use crate::utils;
+
+/// Atomic write with backup: keeps a .bak copy of the previous file, writes to
+/// a .tmp file first, then renames over the target. Prevents data loss if the
+/// process is killed mid-write (std::fs::write truncates first → empty file).
+fn atomic_write_with_backup(path: &Path, content: &str) -> Result<(), String> {
+    let backup_path = path.with_extension("json.bak");
+    if path.exists() {
+        let _ = std::fs::copy(path, &backup_path);
+    }
+    let tmp_path = path.with_extension("json.tmp");
+    std::fs::write(&tmp_path, content)
+        .map_err(|e| format!("Failed to write temp file {}: {}", tmp_path.display(), e))?;
+    std::fs::rename(&tmp_path, path).map_err(|e| {
+        let _ = std::fs::remove_file(&tmp_path);
+        format!("Failed to rename {} -> {}: {}", tmp_path.display(), path.display(), e)
+    })
+}
+
+/// Load a JSON config from a .bak backup file. Returns default on failure.
+fn load_json_from_backup<T: serde::de::DeserializeOwned + Default>(backup_path: &Path) -> Result<T, String> {
+    if !backup_path.exists() {
+        eprintln!("[WikiStorage] No backup at {} — using defaults", backup_path.display());
+        return Ok(T::default());
+    }
+    match std::fs::read_to_string(backup_path) {
+        Ok(s) if s.trim().is_empty() => {
+            eprintln!("[WikiStorage] Backup is also empty — using defaults");
+            Ok(T::default())
+        }
+        Ok(s) => match serde_json::from_str(&s) {
+            Ok(c) => {
+                eprintln!("[WikiStorage] Recovered from backup at {}", backup_path.display());
+                Ok(c)
+            }
+            Err(e) => {
+                eprintln!("[WikiStorage] Backup also corrupt: {} — using defaults", e);
+                Ok(T::default())
+            }
+        },
+        Err(e) => {
+            eprintln!("[WikiStorage] Failed to read backup: {} — using defaults", e);
+            Ok(T::default())
+        }
+    }
+}
 
 /// Get the path to the recent files JSON
 pub fn get_recent_files_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
@@ -40,7 +85,7 @@ pub fn load_app_settings(app: &tauri::AppHandle) -> Result<AppSettings, String> 
     }
 }
 
-/// Save app settings to disk
+/// Save app settings to disk (atomic write with backup)
 pub fn save_app_settings(app: &tauri::AppHandle, settings: &AppSettings) -> Result<(), String> {
     let path = get_app_settings_path(app)?;
 
@@ -51,7 +96,7 @@ pub fn save_app_settings(app: &tauri::AppHandle, settings: &AppSettings) -> Resu
 
     let content = serde_json::to_string_pretty(settings)
         .map_err(|e| format!("Failed to serialize app settings: {}", e))?;
-    std::fs::write(&path, content)
+    atomic_write_with_backup(&path, &content)
         .map_err(|e| format!("Failed to write app settings: {}", e))
 }
 
@@ -76,20 +121,32 @@ pub fn get_effective_language(app: &tauri::AppHandle) -> String {
     effective
 }
 
-/// Load all wiki configs from disk
+/// Load all wiki configs from disk (with backup recovery on corruption)
 pub fn load_wiki_configs(app: &tauri::AppHandle) -> Result<WikiConfigs, String> {
     let path = get_wiki_configs_path(app)?;
-    if path.exists() {
-        let content = std::fs::read_to_string(&path)
-            .map_err(|e| format!("Failed to read wiki configs: {}", e))?;
-        serde_json::from_str(&content)
-            .map_err(|e| format!("Failed to parse wiki configs: {}", e))
-    } else {
-        Ok(WikiConfigs::default())
+    if !path.exists() {
+        return Ok(WikiConfigs::default());
+    }
+    match std::fs::read_to_string(&path) {
+        Ok(content) if content.trim().is_empty() => {
+            eprintln!("[WikiStorage] WARNING: wiki_configs.json is empty — trying backup");
+            load_json_from_backup::<WikiConfigs>(&path.with_extension("json.bak"))
+        }
+        Ok(content) => match serde_json::from_str(&content) {
+            Ok(c) => Ok(c),
+            Err(e) => {
+                eprintln!("[WikiStorage] WARNING: Failed to parse wiki_configs.json: {} — trying backup", e);
+                load_json_from_backup::<WikiConfigs>(&path.with_extension("json.bak"))
+            }
+        },
+        Err(e) => {
+            eprintln!("[WikiStorage] WARNING: Failed to read wiki_configs.json: {} — trying backup", e);
+            load_json_from_backup::<WikiConfigs>(&path.with_extension("json.bak"))
+        }
     }
 }
 
-/// Save all wiki configs to disk
+/// Save all wiki configs to disk (atomic write with backup)
 pub fn save_wiki_configs(app: &tauri::AppHandle, configs: &WikiConfigs) -> Result<(), String> {
     let path = get_wiki_configs_path(app)?;
 
@@ -100,11 +157,11 @@ pub fn save_wiki_configs(app: &tauri::AppHandle, configs: &WikiConfigs) -> Resul
 
     let content = serde_json::to_string_pretty(configs)
         .map_err(|e| format!("Failed to serialize wiki configs: {}", e))?;
-    std::fs::write(&path, content)
+    atomic_write_with_backup(&path, &content)
         .map_err(|e| format!("Failed to write wiki configs: {}", e))
 }
 
-/// Load recent files from disk
+/// Load recent files from disk (with backup recovery on corruption)
 pub fn load_recent_files_from_disk(app: &tauri::AppHandle) -> Vec<WikiEntry> {
     let path = match get_recent_files_path(app) {
         Ok(p) => p,
@@ -116,12 +173,28 @@ pub fn load_recent_files_from_disk(app: &tauri::AppHandle) -> Vec<WikiEntry> {
     }
 
     match std::fs::read_to_string(&path) {
-        Ok(content) => serde_json::from_str(&content).unwrap_or_default(),
-        Err(_) => Vec::new(),
+        Ok(content) if content.trim().is_empty() => {
+            eprintln!("[WikiStorage] WARNING: recent_wikis.json is empty — trying backup");
+            load_json_from_backup::<Vec<WikiEntry>>(&path.with_extension("json.bak"))
+                .unwrap_or_default()
+        }
+        Ok(content) => match serde_json::from_str(&content) {
+            Ok(entries) => entries,
+            Err(e) => {
+                eprintln!("[WikiStorage] WARNING: Failed to parse recent_wikis.json: {} — trying backup", e);
+                load_json_from_backup::<Vec<WikiEntry>>(&path.with_extension("json.bak"))
+                    .unwrap_or_default()
+            }
+        },
+        Err(e) => {
+            eprintln!("[WikiStorage] WARNING: Failed to read recent_wikis.json: {} — trying backup", e);
+            load_json_from_backup::<Vec<WikiEntry>>(&path.with_extension("json.bak"))
+                .unwrap_or_default()
+        }
     }
 }
 
-/// Save recent files to disk
+/// Save recent files to disk (atomic write with backup)
 pub fn save_recent_files_to_disk(app: &tauri::AppHandle, entries: &[WikiEntry]) -> Result<(), String> {
     let path = get_recent_files_path(app)?;
 
@@ -131,7 +204,7 @@ pub fn save_recent_files_to_disk(app: &tauri::AppHandle, entries: &[WikiEntry]) 
     }
 
     let json = serde_json::to_string_pretty(entries).map_err(|e| e.to_string())?;
-    std::fs::write(&path, json).map_err(|e| e.to_string())
+    atomic_write_with_backup(&path, &json)
 }
 
 /// Add or update a wiki in the recent files list

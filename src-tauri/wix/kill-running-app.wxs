@@ -1,7 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
     <Fragment>
-        <!-- Type 50 custom action: run exe from COMSPEC property (cmd.exe) -->
         <!-- Kill running instance so files aren't locked during upgrade -->
         <!-- taskkill returns error if process isn't running; Return="ignore" handles that -->
         <CustomAction
@@ -9,8 +8,32 @@
             Property="COMSPEC"
             ExeCommand='/c taskkill /f /im "tiddlydesktop-rs.exe" &amp; ping -n 2 127.0.0.1 >nul 2>&amp;1'
             Return="ignore" />
+
+        <!-- Add Windows Firewall rule for LAN sync discovery and connections -->
+        <!-- Delete existing rule first to avoid duplicates, then add fresh -->
+        <CustomAction
+            Id="RemoveFirewallRule"
+            Property="COMSPEC"
+            ExeCommand='/c netsh advfirewall firewall delete rule name="TiddlyDesktop RS" >nul 2>&amp;1'
+            Return="ignore" />
+        <CustomAction
+            Id="AddFirewallRule"
+            Property="COMSPEC"
+            ExeCommand='/c netsh advfirewall firewall add rule name="TiddlyDesktop RS" dir=in action=allow program="[INSTALLDIR]tiddlydesktop-rs.exe" enable=yes profile=private,domain'
+            Return="ignore" />
+
+        <!-- Remove firewall rule on uninstall -->
+        <CustomAction
+            Id="RemoveFirewallRuleOnUninstall"
+            Property="COMSPEC"
+            ExeCommand='/c netsh advfirewall firewall delete rule name="TiddlyDesktop RS" >nul 2>&amp;1'
+            Return="ignore" />
+
         <InstallExecuteSequence>
             <Custom Action="KillRunningApp" Before="InstallInitialize">1</Custom>
+            <Custom Action="RemoveFirewallRule" After="InstallFiles">NOT REMOVE~="ALL"</Custom>
+            <Custom Action="AddFirewallRule" After="RemoveFirewallRule">NOT REMOVE~="ALL"</Custom>
+            <Custom Action="RemoveFirewallRuleOnUninstall" Before="RemoveFiles">REMOVE~="ALL"</Custom>
         </InstallExecuteSequence>
     </Fragment>
 </Wix>

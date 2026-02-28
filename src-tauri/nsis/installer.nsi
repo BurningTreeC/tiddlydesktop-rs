@@ -144,14 +144,22 @@ Section "Main Application" SecMain
     File /a "/oname={{this}}" "{{no-escape @key}}"
     {{/each}}
 
-    ; Create portable marker file if in portable mode
+    ; Create portable marker file and include LAN sync helper in portable mode
     ${If} $InstallModeChoice == "portable"
         FileOpen $0 "$INSTDIR\portable" w
         FileClose $0
+        ; Include batch file to add firewall rule (user right-clicks → Run as administrator)
+        File "/oname=enable-lan-sync.bat" "${__FILEDIR__}\enable-lan-sync.bat"
     ${EndIf}
 
     ; Only create shortcuts and registry entries for install mode
     ${If} $InstallModeChoice == "install"
+        ; Add Windows Firewall rule to allow LAN sync (UDP discovery + TCP connections)
+        ; Remove any existing rule first to avoid duplicates, then add fresh
+        ; For portable mode, Windows shows its natural firewall prompt on first run instead
+        nsExec::Exec 'netsh advfirewall firewall delete rule name="TiddlyDesktop RS"'
+        nsExec::Exec 'netsh advfirewall firewall add rule name="TiddlyDesktop RS" dir=in action=allow program="$INSTDIR\${MAINBINARYNAME}.exe" enable=yes profile=private,domain'
+
         ; Create Start Menu shortcuts
         CreateDirectory "$SMPROGRAMS\${PRODUCTNAME}"
         CreateShortCut "$SMPROGRAMS\${PRODUCTNAME}\${PRODUCTNAME}.lnk" "$INSTDIR\${MAINBINARYNAME}.exe"
@@ -199,6 +207,9 @@ SectionEnd
 
 ; Uninstaller section (only used for install mode)
 Section "Uninstall"
+    ; Remove Windows Firewall rule
+    nsExec::Exec 'netsh advfirewall firewall delete rule name="TiddlyDesktop RS"'
+
     ; Remove shortcuts
     Delete "$SMPROGRAMS\${PRODUCTNAME}\${PRODUCTNAME}.lnk"
     Delete "$SMPROGRAMS\${PRODUCTNAME}\Uninstall.lnk"

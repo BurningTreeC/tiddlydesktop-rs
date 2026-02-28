@@ -564,6 +564,12 @@ impl SyncManager {
                 start_sync_foreground_service();
             }
         }
+
+        // Notify the frontend that relay config may have changed (e.g. auth cleared
+        // on token validation failure, or rooms connected after boot)
+        if let Some(ref app) = app {
+            let _ = app.emit("relay-sync-config-updated", ());
+        }
     }
 
     /// Start the sync server and mDNS discovery

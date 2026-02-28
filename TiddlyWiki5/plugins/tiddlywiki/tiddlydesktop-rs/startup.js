@@ -1553,17 +1553,38 @@ exports.startup = function(callback) {
 	// Initial load of wiki list from tiddler
 	refreshWikiList();
 
-	// Reconcile Rust JSON config with the authoritative WikiList on startup.
-	// This removes any stale entries that got into the Rust JSON but are no
-	// longer in the WikiList, preventing them from being broadcast to sync peers.
-	var startupPaths = getWikiListEntries().map(function(e) { return e.path; });
-	invoke("reconcile_recent_files", { paths: startupPaths }).then(function(removedCount) {
-		if (removedCount > 0) {
-			console.log("[TiddlyDesktop] Startup reconciliation removed " + removedCount + " stale entries from Rust config");
-		}
-	}).catch(function(err) {
-		console.error("[TiddlyDesktop] Failed to reconcile on startup:", err);
-	});
+	// If the WikiList tiddler is empty (e.g. migration reset, autosave didn't fire,
+	// or HTML was rebuilt), restore entries from the Rust JSON config on disk.
+	// Reconcile runs after the fallback resolves so it sees the restored entries.
+	function reconcileStartupPaths() {
+		var paths = getWikiListEntries().map(function(e) { return e.path; });
+		invoke("reconcile_recent_files", { paths: paths }).then(function(removedCount) {
+			if (removedCount > 0) {
+				console.log("[TiddlyDesktop] Startup reconciliation removed " + removedCount + " stale entries from Rust config");
+			}
+		}).catch(function(err) {
+			console.error("[TiddlyDesktop] Failed to reconcile on startup:", err);
+		});
+	}
+
+	var initialEntries = getWikiListEntries();
+	if (initialEntries.length === 0) {
+		// WikiList tiddler is empty — try restoring from Rust JSON backup
+		invoke("get_recent_files").then(function(jsonEntries) {
+			if (jsonEntries && jsonEntries.length > 0) {
+				console.log("[TiddlyDesktop] WikiList tiddler empty — restoring " +
+					jsonEntries.length + " entries from recent_wikis.json");
+				saveWikiList(jsonEntries);
+				refreshWikiList();
+			}
+			reconcileStartupPaths();
+		}).catch(function(err) {
+			console.error("[TiddlyDesktop] Failed to load recent files for fallback:", err);
+			reconcileStartupPaths();
+		});
+	} else {
+		reconcileStartupPaths();
+	}
 
 	// On Android, merge favicons from disk files into wiki list entries.
 	// WikiActivity saves favicons to files in the :wiki process, but can't send
@@ -2516,6 +2537,11 @@ exports.startup = function(callback) {
 			}, 3000);
 		});
 		listen("relay-room-disconnected", function() {
+			refreshSyncStatus();
+		});
+		// Refresh relay status after start_background() completes (may clear auth on
+		// token validation failure, or successfully connect rooms after initial boot)
+		listen("relay-sync-config-updated", function() {
 			refreshSyncStatus();
 		});
 	}

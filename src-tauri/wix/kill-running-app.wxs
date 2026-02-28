@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+    <Fragment>
+        <!-- Type 50 custom action: run exe from COMSPEC property (cmd.exe) -->
+        <!-- Kill running instance so files aren't locked during upgrade -->
+        <!-- taskkill returns error if process isn't running; Return="ignore" handles that -->
+        <CustomAction
+            Id="KillRunningApp"
+            Property="COMSPEC"
+            ExeCommand='/c taskkill /f /im "tiddlydesktop-rs.exe" &amp; ping -n 2 127.0.0.1 >nul 2>&amp;1'
+            Return="ignore" />
+        <InstallExecuteSequence>
+            <Custom Action="KillRunningApp" Before="InstallInitialize">1</Custom>
+        </InstallExecuteSequence>
+    </Fragment>
+</Wix>

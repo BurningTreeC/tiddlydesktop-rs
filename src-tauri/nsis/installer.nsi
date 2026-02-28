@@ -123,6 +123,9 @@ FunctionEnd
 Section "Main Application" SecMain
     SetOutPath "$INSTDIR"
 
+    ; Clean old resources so stale files from a previous version don't linger
+    RMDir /r "$INSTDIR\resources"
+
     ; Install main binary
     File "${MAINBINARYSRCPATH}"
 
@@ -237,5 +240,15 @@ Function InstallWebView2
 FunctionEnd
 
 Function .onInit
+    ; Kill any running instance so files aren't locked during upgrade
+    nsExec::Exec 'taskkill /f /im "${MAINBINARYNAME}.exe"'
+    Sleep 1000
+
+    ; Detect previous install location from registry so upgrades go to the same directory
+    ReadRegStr $R0 SHCTX "Software\Microsoft\Windows\CurrentVersion\Uninstall\${PRODUCTNAME}" "InstallLocation"
+    ${If} $R0 != ""
+        StrCpy $INSTDIR $R0
+    ${EndIf}
+
     Call InstallWebView2
 FunctionEnd

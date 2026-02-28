@@ -1523,6 +1523,8 @@ exports.startup = function(callback) {
 	// Clean up stale $:/state/ and $:/temp/ tiddlers from previous sessions.
 	// These get persisted into the wiki HTML on save and cause UI glitches
 	// on next launch (e.g. popup dropdowns appearing open).
+	// NOTE: Do NOT delete all $:/temp/tiddlydesktop-rs/ — that would wipe
+	// is-mobile, is-android, relay-sync-url, etc. Only delete specific stale prefixes.
 	$tw.wiki.each(function(tiddler, title) {
 		if (title.indexOf("$:/state/relay-room-popup/") === 0 ||
 			title.indexOf("$:/state/relay-room-details/") === 0 ||
@@ -1530,7 +1532,12 @@ exports.startup = function(callback) {
 			title.indexOf("$:/state/backup-count-popup/") === 0 ||
 			title.indexOf("$:/state/link-wiki-popup") === 0 ||
 			title.indexOf("$:/state/tiddlydesktop-rs/") === 0 ||
-			title.indexOf("$:/temp/tiddlydesktop-rs/") === 0 ||
+			title.indexOf("$:/temp/tiddlydesktop-rs/wikis/") === 0 ||
+			title.indexOf("$:/temp/tiddlydesktop-rs/relay-room/") === 0 ||
+			title.indexOf("$:/temp/tiddlydesktop-rs/relay-room-details/") === 0 ||
+			title.indexOf("$:/temp/tiddlydesktop-rs/relay-room-password/") === 0 ||
+			title.indexOf("$:/temp/tiddlydesktop-rs/relay-room-name-edit/") === 0 ||
+			title.indexOf("$:/temp/tiddlydesktop-rs/relay-server-room/") === 0 ||
 			title.indexOf("$:/temp/new-group-name/") === 0 ||
 			title.indexOf("$:/temp/backup-count-input/") === 0) {
 			$tw.wiki.deleteTiddler(title);

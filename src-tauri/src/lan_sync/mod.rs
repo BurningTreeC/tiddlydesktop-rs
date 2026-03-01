@@ -2829,6 +2829,14 @@ impl SyncManager {
         }
         match event {
             attachments::AttachmentEvent::Changed { wiki_id, rel_path } => {
+                // Block disallowed file types from being synced outbound
+                if !attachments::is_allowed_attachment(&rel_path) {
+                    eprintln!(
+                        "[LAN Sync] Skipping outbound sync of '{}' — file type not allowed",
+                        rel_path
+                    );
+                    return;
+                }
                 // Check if this file was recently received from sync (suppress echo)
                 if self.attachment_manager.should_suppress(&wiki_id, &rel_path) {
                     return;
@@ -2880,6 +2888,10 @@ impl SyncManager {
                 }
             }
             attachments::AttachmentEvent::Deleted { wiki_id, rel_path } => {
+                // Block disallowed file types
+                if !attachments::is_allowed_attachment(&rel_path) {
+                    return;
+                }
                 // Check if this deletion was from incoming sync
                 if self.attachment_manager.should_suppress(&wiki_id, &rel_path) {
                     return;
@@ -5705,8 +5717,11 @@ impl SyncManager {
                 .map(|(e, _)| (e.rel_path.as_str(), e))
                 .collect();
 
-            // Broadcast changed files (respecting echo suppression)
+            // Broadcast changed files (respecting echo suppression + extension allowlist)
             for rel_path in &changed {
+                if !attachments::is_allowed_attachment(rel_path) {
+                    continue;
+                }
                 if self.attachment_manager.should_suppress(sync_id, rel_path) {
                     continue;
                 }
@@ -5724,9 +5739,12 @@ impl SyncManager {
                 }
             }
 
-            // Broadcast deletions (respecting echo suppression)
+            // Broadcast deletions (respecting echo suppression + extension allowlist)
             if !peer_ids.is_empty() {
                 for rel_path in &deleted {
+                    if !attachments::is_allowed_attachment(rel_path) {
+                        continue;
+                    }
                     if self.attachment_manager.should_suppress(sync_id, rel_path) {
                         continue;
                     }
@@ -5827,6 +5845,10 @@ impl SyncManager {
         // Find files that are missing or have different hashes
         let mut needed: Vec<String> = Vec::new();
         for remote_file in remote_files {
+            // Skip disallowed file types
+            if !attachments::is_allowed_attachment(&remote_file.rel_path) {
+                continue;
+            }
             match local_hashes.get(&remote_file.rel_path) {
                 Some(local_hash) if local_hash == &remote_file.sha256_hex => {
                     // File is up to date
@@ -6566,11 +6588,28 @@ fn collect_files_recursive_inner(
     if let Ok(entries) = std::fs::read_dir(dir) {
         for entry in entries.flatten() {
             let path = entry.path();
-            // Verify every path stays within the base (catches symlinks)
+
+            // Skip hidden files/directories (dotfiles: .git, .env, .DS_Store, etc.)
+            if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                if name.starts_with('.') {
+                    continue;
+                }
+            }
+
+            // Skip symlinks entirely — never follow or sync them
+            if path.symlink_metadata().map(|m| m.file_type().is_symlink()).unwrap_or(false) {
+                eprintln!(
+                    "[LAN Sync] Security: Skipping symlink: {}",
+                    path.display()
+                );
+                continue;
+            }
+
+            // Verify every path stays within the base
             if let Ok(canonical) = dunce::canonicalize(&path) {
                 if !canonical.starts_with(canonical_base) {
                     eprintln!(
-                        "[LAN Sync] Security: Skipping symlink escape: {} -> {}",
+                        "[LAN Sync] Security: Skipping path escape: {} -> {}",
                         path.display(),
                         canonical.display()
                     );

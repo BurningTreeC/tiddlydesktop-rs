@@ -9,6 +9,7 @@ import android.util.Log
 import androidx.documentfile.provider.DocumentFile
 import java.io.*
 import java.io.File
+import java.util.UUID
 import java.util.zip.GZIPOutputStream
 import java.net.ServerSocket
 import java.net.Socket
@@ -78,6 +79,10 @@ class WikiHttpServer(
         private set
     var attachmentPorts: IntArray = IntArray(ATTACHMENT_PORT_COUNT)
         private set
+
+    // Per-session authentication token — set as cookie on first wiki load,
+    // validated on all subsequent requests to protect against other apps probing localhost
+    private val sessionToken: String = UUID.randomUUID().toString()
 
     // Cached backup directory (lazy-initialized)
     private var backupDirectory: DocumentFile? = null
@@ -439,6 +444,27 @@ class WikiHttpServer(
                     val isMediaRoute = path.startsWith("/_file/") || path.startsWith("/_relative/") || path.startsWith("/_td/")
                     if (!isMediaRoute) keepAlive = false
 
+                    // Session cookie authentication: protect all routes except
+                    // GET / (initial wiki load sets the cookie), HEAD /, and OPTIONS.
+                    // Cookie name uses main port (this.port) so it works across
+                    // attachment ports too (RFC 6265: cookies are not port-specific).
+                    val isPublicRoute = (method == "GET" && path == "/") ||
+                        (method == "HEAD" && path == "/") ||
+                        method == "OPTIONS"
+                    if (!isPublicRoute) {
+                        val cookieHeader = headers["cookie"] ?: ""
+                        val cookieName = "_td_${port}"
+                        val hasValidToken = cookieHeader.split(";").any { cookie ->
+                            val trimmed = cookie.trim()
+                            trimmed == "$cookieName=$sessionToken"
+                        }
+                        if (!hasValidToken) {
+                            sendError(output, 403, "Forbidden")
+                            keepAlive = false
+                            continue
+                        }
+                    }
+
                     when {
                         method == "GET" && path == "/" -> handleGetWiki(output, headers)
                         method == "HEAD" && path == "/" -> handleHead(output)
@@ -593,6 +619,7 @@ class WikiHttpServer(
                     "Content-Encoding: gzip\r\n" +
                     "Content-Length: ${compressed.size}\r\n" +
                     "Vary: Accept-Encoding\r\n" +
+                    "Set-Cookie: _td_${port}=$sessionToken; Path=/; HttpOnly; SameSite=Strict\r\n" +
                     "Access-Control-Allow-Origin: *\r\n" +
                     "Connection: close\r\n\r\n"
                 output.write(headers.toByteArray())
@@ -605,6 +632,7 @@ class WikiHttpServer(
                 val headers = "HTTP/1.1 200 OK\r\n" +
                     "Content-Type: text/html; charset=utf-8\r\n" +
                     "Content-Length: $totalLength\r\n" +
+                    "Set-Cookie: _td_${port}=$sessionToken; Path=/; HttpOnly; SameSite=Strict\r\n" +
                     "Access-Control-Allow-Origin: *\r\n" +
                     "Connection: close\r\n\r\n"
                 output.write(headers.toByteArray())

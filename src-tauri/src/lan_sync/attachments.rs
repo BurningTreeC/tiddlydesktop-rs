@@ -49,6 +49,55 @@ pub struct AttachmentManager {
 /// How long to suppress watcher events for a file after receiving it from sync
 const SUPPRESS_DURATION: std::time::Duration = std::time::Duration::from_secs(5);
 
+/// Allowed file extensions for attachment sync.
+/// Only files with these extensions are accepted from peers.
+/// Blocks executables, scripts, and other potentially dangerous file types.
+const ALLOWED_ATTACHMENT_EXTENSIONS: &[&str] = &[
+    // Images
+    "png", "jpg", "jpeg", "gif", "webp", "bmp", "tiff", "tif", "heic", "heif",
+    "ico", "avif", "jxl", "raw", "cr2", "nef", "arw", "dng",
+    // Video
+    "mp4", "m4v", "webm", "ogv", "avi", "mov", "wmv", "mkv", "3gp", "flv",
+    // Audio
+    "mp3", "m4a", "aac", "ogg", "oga", "opus", "wav", "flac", "aiff", "aif",
+    "wma", "mid", "midi",
+    // Documents
+    "pdf",
+    "doc", "docx", "xls", "xlsx", "ppt", "pptx",
+    "odt", "ods", "odp", "odg",
+    "rtf", "epub",
+    // Text / data
+    "txt", "csv", "tsv", "json", "xml", "yaml", "yml", "toml",
+    "md", "tid", "org", "rst", "tex", "bib", "log",
+    // Fonts
+    "woff", "woff2", "ttf", "otf", "eot",
+    // Archives (non-executable)
+    "zip", "tar", "gz", "gzip", "bz2", "xz", "7z", "rar",
+    // 3D / CAD
+    "stl", "obj", "gltf", "glb",
+    // SVG is intentionally excluded — can contain embedded JavaScript
+];
+
+/// Check if a filename has an allowed extension for attachment sync.
+pub fn is_allowed_attachment(filename: &str) -> bool {
+    // Reject hidden files/directories (any path component starting with '.')
+    let normalized = filename.replace('\\', "/");
+    for component in normalized.split('/') {
+        if component.starts_with('.') && component != "." {
+            return false;
+        }
+    }
+
+    let lower = filename.to_lowercase();
+    if let Some(dot_pos) = lower.rfind('.') {
+        let ext = &lower[dot_pos + 1..];
+        ALLOWED_ATTACHMENT_EXTENSIONS.contains(&ext)
+    } else {
+        // No extension — reject
+        false
+    }
+}
+
 impl AttachmentManager {
     pub fn new() -> Self {
         Self {
@@ -183,6 +232,11 @@ impl AttachmentManager {
                         eprintln!("[LAN Sync] Security: Rejected _canonical_uri with encoded path traversal: {}", uri);
                         return None;
                     }
+                }
+                // Block disallowed file types from being synced
+                if !is_allowed_attachment(uri) {
+                    eprintln!("[LAN Sync] Security: Rejected _canonical_uri with disallowed file type: {}", uri);
+                    return None;
                 }
                 eprintln!("[LAN Sync] Found _canonical_uri in tiddler: {}", uri);
                 return Some(uri.to_string());
@@ -366,6 +420,15 @@ impl AttachmentManager {
         sha256: &[u8],
         chunk_count: u32,
     ) -> bool {
+        // Block files with disallowed extensions (executables, scripts, etc.)
+        if !is_allowed_attachment(filename) {
+            eprintln!(
+                "[LAN Sync] Security: Rejected attachment '{}' — file type not allowed",
+                filename
+            );
+            return false;
+        }
+
         let transfer_key = format!("{}:{}", wiki_id, filename);
 
         // Clear any previous skip marker for this file
@@ -552,6 +615,13 @@ impl AttachmentManager {
 
     /// Handle an incoming AttachmentDeleted message
     pub fn handle_attachment_deleted(&self, wiki_id: &str, filename: &str) -> Result<(), String> {
+        if !is_allowed_attachment(filename) {
+            return Err(format!(
+                "Rejected deletion of '{}' — file type not allowed",
+                filename
+            ));
+        }
+
         #[cfg(not(target_os = "android"))]
         {
             if let Some(path) = self.resolve_path(wiki_id, filename) {
@@ -774,6 +844,27 @@ impl AttachmentWatcher {
                             // Flush mature entries below
                         } else {
                             for path in &event.paths {
+                                // Skip hidden files (dotfiles: .git, .env, .DS_Store, etc.)
+                                if path.file_name()
+                                    .and_then(|n| n.to_str())
+                                    .map(|n| n.starts_with('.'))
+                                    .unwrap_or(false)
+                                {
+                                    continue;
+                                }
+                                // Also skip if any parent component is hidden
+                                if path.components().any(|c| {
+                                    c.as_os_str().to_str().map(|s| s.starts_with('.')).unwrap_or(false)
+                                }) {
+                                    continue;
+                                }
+                                // Skip symlinks entirely — never sync them
+                                if path.symlink_metadata()
+                                    .map(|m| m.file_type().is_symlink())
+                                    .unwrap_or(false)
+                                {
+                                    continue;
+                                }
                                 // For changes, skip directories
                                 if is_change && !path.is_file() {
                                     continue;

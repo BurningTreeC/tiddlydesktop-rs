@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Privacy Policy - TiddlyDesktop-RS</title>
+    <title>Privacy Policy & Terms - TiddlyDesktop-RS</title>
     <style>
         body {
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
@@ -27,10 +27,10 @@
             color: #34495e;
             margin-top: 20px;
         }
-        p, ul {
+        p, ul, ol {
             margin-bottom: 15px;
         }
-        ul {
+        ul, ol {
             padding-left: 25px;
         }
         .last-updated {
@@ -41,11 +41,46 @@
         a {
             color: #3498db;
         }
+        .toc {
+            background-color: #f8f9fa;
+            border: 1px solid #e1e4e8;
+            border-radius: 6px;
+            padding: 15px 20px;
+            margin-bottom: 30px;
+        }
+        .toc ul {
+            list-style: none;
+            padding-left: 0;
+            margin-bottom: 0;
+        }
+        .toc li {
+            margin-bottom: 5px;
+        }
+        .section-divider {
+            margin-top: 60px;
+            border: none;
+            border-top: 3px solid #3498db;
+        }
+        .disclaimer-box {
+            background-color: #fff3cd;
+            border: 1px solid #ffc107;
+            border-radius: 6px;
+            padding: 15px 20px;
+            margin: 20px 0;
+        }
     </style>
 </head>
 <body>
-    <h1>Privacy Policy for TiddlyDesktop-RS</h1>
-    <p class="last-updated">Last updated: February 25, 2026</p>
+    <div class="toc">
+        <strong>Contents</strong>
+        <ul>
+            <li><a href="#privacy-policy">I. Privacy Policy</a></li>
+            <li><a href="#terms-and-conditions">II. Terms and Conditions</a></li>
+        </ul>
+    </div>
+
+    <h1 id="privacy-policy">I. Privacy Policy for TiddlyDesktop-RS</h1>
+    <p class="last-updated">Last updated: March 1, 2026</p>
 
     <h2>Introduction</h2>
     <p>TiddlyDesktop-RS ("we", "our", or "the app") is an open-source application for viewing and editing TiddlyWiki files. We are committed to protecting your privacy. This Privacy Policy explains how we handle your data.</p>
@@ -79,12 +114,13 @@
     <p>When you enable LAN Sync, the app discovers and communicates with other TiddlyDesktop-RS devices on your local network to synchronize wiki content. All communication stays within your local network and does not pass through any external servers. Wiki content is encrypted end-to-end between devices.</p>
 
     <h3>Relay Sync</h3>
-    <p>When you enable Relay Sync, the app can synchronize wiki content between devices over the internet via a relay server. This feature requires you to log in with a GitHub account and involves the following:</p>
+    <p>When you enable Relay Sync, the app can synchronize wiki content between devices over the internet via a relay server. This feature requires you to log in with a supported authentication provider (GitHub or Google) and involves the following:</p>
     <ul>
         <li><strong>GitHub Authentication:</strong> When you choose to log in with GitHub, the app initiates a standard OAuth authorization flow. Your GitHub username and user ID are shared with the relay server to verify your identity and manage room membership. We only request the <code>read:user</code> scope and do not access your repositories, email, or any other GitHub data beyond your public username and ID.</li>
-        <li><strong>Relay Server:</strong> The relay server (<code>relay.tiddlydesktop-rs.com</code>) facilitates message passing between your devices. Room membership data (GitHub usernames associated with rooms) is stored on the relay server.</li>
+        <li><strong>Google Authentication:</strong> When you choose to log in with Google, the app initiates a standard OpenID Connect (OIDC) authorization flow. Your Google display name and unique user ID are shared with the relay server to verify your identity and manage room membership. We only request the <code>openid</code> and <code>profile</code> scopes and do not access your email, contacts, files, or any other Google data beyond your public display name and ID.</li>
+        <li><strong>Relay Server:</strong> The relay server (<code>relay.tiddlydesktop-rs.com</code>) facilitates message passing between your devices. Room membership data (usernames associated with rooms) is stored on the relay server.</li>
         <li><strong>End-to-End Encryption:</strong> All wiki content transmitted through the relay server is end-to-end encrypted using a password-derived key that only you and your room members know. The relay server cannot read your wiki content.</li>
-        <li><strong>Token Storage:</strong> Your GitHub access token is stored locally on your device, encrypted at rest using a device-specific key. It is never stored in plaintext.</li>
+        <li><strong>Token Storage:</strong> Your authentication access token (GitHub or Google) is stored locally on your device, encrypted at rest using a device-specific key. It is never stored in plaintext.</li>
     </ul>
 
     <h2>Network Access</h2>
@@ -95,20 +131,21 @@
         <li>Checking for app updates (a single request to GitHub to compare version numbers)</li>
         <li>LAN Sync device discovery and communication (local network only, opt-in)</li>
         <li>Relay Sync communication with the relay server (internet, opt-in)</li>
-        <li>GitHub OAuth authentication (internet, opt-in)</li>
+        <li>GitHub or Google OAuth authentication (internet, opt-in)</li>
     </ul>
 
     <h2>Third-Party Services</h2>
     <p>TiddlyDesktop-RS does not use any analytics platforms or advertising networks. The following third-party services are used only when you explicitly opt in:</p>
     <ul>
-        <li><strong>GitHub OAuth:</strong> Used for authentication with the relay server. Subject to <a href="https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement" target="_blank" rel="noopener">GitHub's Privacy Statement</a>.</li>
+        <li><strong>GitHub OAuth:</strong> Used as an optional authentication provider for the relay server. Subject to <a href="https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement" target="_blank" rel="noopener">GitHub's Privacy Statement</a>.</li>
+        <li><strong>Google OAuth (OpenID Connect):</strong> Used as an optional authentication provider for the relay server. Subject to <a href="https://policies.google.com/privacy" target="_blank" rel="noopener">Google's Privacy Policy</a>.</li>
         <li><strong>Relay Server:</strong> Operated by the TiddlyDesktop-RS project. Stores room membership data only. Cannot access your wiki content (end-to-end encrypted).</li>
     </ul>
 
     <h2>Data Retention</h2>
     <ul>
         <li><strong>Local data:</strong> Stored until you delete it or uninstall the app.</li>
-        <li><strong>Relay server data:</strong> Room membership records are stored until a room owner deletes the room. GitHub authentication tokens are cached on the relay server for up to 5 minutes for validation purposes.</li>
+        <li><strong>Relay server data:</strong> Room membership records are stored until a room owner deletes the room. Authentication tokens are cached on the relay server for up to 5 minutes for validation purposes.</li>
     </ul>
 
     <h2>Children's Privacy</h2>
@@ -123,7 +160,101 @@
     <h2>Contact</h2>
     <p>If you have any questions about this Privacy Policy, please open an issue on our GitHub repository or contact the developer.</p>
 
+    <hr class="section-divider">
+
+    <h1 id="terms-and-conditions">II. Terms and Conditions for TiddlyDesktop-RS</h1>
+    <p class="last-updated">Last updated: March 1, 2026</p>
+
+    <p>Please read these Terms and Conditions ("Terms") carefully before using TiddlyDesktop-RS ("the Software", "the Application", or "the App"). By downloading, installing, or using the Software, you agree to be bound by these Terms. If you do not agree to these Terms, do not use the Software.</p>
+
+    <h2>1. Acceptance of Terms</h2>
+    <p>By accessing, downloading, installing, or using TiddlyDesktop-RS in any way, you acknowledge that you have read, understood, and agree to be bound by these Terms and Conditions. These Terms constitute a legally binding agreement between you ("User", "you", or "your") and the developer(s) of TiddlyDesktop-RS ("Developer", "we", "us", or "our").</p>
+
+    <h2>2. License</h2>
+    <p>TiddlyDesktop-RS is released under the MIT License. You are free to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, subject to the conditions of the MIT License. The full license text is included with the Software and available in the source code repository.</p>
+
+    <h2>3. Disclaimer of Warranties</h2>
+    <div class="disclaimer-box">
+        <p><strong>THE SOFTWARE IS PROVIDED "AS IS" AND "AS AVAILABLE", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, TITLE, AND NON-INFRINGEMENT.</strong></p>
+    </div>
+    <p>Without limiting the foregoing, the Developer makes no warranty or representation that:</p>
+    <ul>
+        <li>The Software will meet your requirements or expectations</li>
+        <li>The Software will be uninterrupted, timely, secure, error-free, or free of viruses or other harmful components</li>
+        <li>The results obtained from the use of the Software will be accurate, reliable, or complete</li>
+        <li>Any errors or defects in the Software will be corrected</li>
+        <li>The Software will be compatible with any particular hardware, software, or system configuration</li>
+        <li>Data stored, processed, or transmitted by the Software will be preserved, uncorrupted, or secure</li>
+        <li>The synchronization features (LAN Sync, Relay Sync) will function without data loss, duplication, or corruption</li>
+        <li>Backup features will successfully create usable backups or that backups will be recoverable</li>
+        <li>The relay server or any network service will be available at any particular time</li>
+    </ul>
+
+    <h2>4. Limitation of Liability</h2>
+    <div class="disclaimer-box">
+        <p><strong>TO THE MAXIMUM EXTENT PERMITTED BY APPLICABLE LAW, IN NO EVENT SHALL THE DEVELOPER, CONTRIBUTORS, MAINTAINERS, OR ANY AFFILIATED PARTIES BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, CONSEQUENTIAL, PUNITIVE, OR EXEMPLARY DAMAGES WHATSOEVER, INCLUDING BUT NOT LIMITED TO:</strong></p>
+    </div>
+    <ul>
+        <li><strong>Data loss</strong> of any kind, including but not limited to loss of wiki files, tiddlers, configurations, settings, backups, or any other user data, whether stored locally or transmitted via sync features</li>
+        <li><strong>Data corruption</strong>, including but not limited to corrupted wiki files, malformed HTML, damaged tiddler content, duplicated or missing data, or any alteration of data integrity</li>
+        <li><strong>Device damage or malfunction</strong>, including but not limited to hardware failure, storage degradation, battery drain, overheating, or any adverse effect on your device resulting from use of the Software</li>
+        <li><strong>Software conflicts</strong>, including but not limited to incompatibilities with your operating system, other applications, system libraries, WebView components, or any third-party software</li>
+        <li><strong>Synchronization failures</strong>, including but not limited to failed sync operations, partial syncs, sync conflicts, data overwrites, data duplication, data divergence between devices, or loss of data during synchronization via LAN Sync, Relay Sync, or any other sync mechanism</li>
+        <li><strong>Security breaches</strong>, including but not limited to unauthorized access to your data, interception of transmitted data, compromise of authentication credentials, or any security vulnerability in the Software, its dependencies, or the relay server</li>
+        <li><strong>Loss of access</strong> to your data, including but not limited to inability to open wiki files, authentication failures, relay server unavailability, or incompatible file format changes</li>
+        <li><strong>Business losses</strong>, including but not limited to loss of profits, revenue, business opportunities, goodwill, anticipated savings, or any commercial or professional damages</li>
+        <li><strong>Consequential damages</strong> arising from any of the above, or from any use or inability to use the Software, even if the Developer has been advised of the possibility of such damages</li>
+    </ul>
+    <p>This limitation of liability applies regardless of the theory of liability, whether based in contract, tort (including negligence), strict liability, warranty, or any other legal or equitable theory, and regardless of whether the Developer knew or should have known of the possibility of such damages.</p>
+
+    <h2>5. User Responsibility</h2>
+    <p>You are solely and exclusively responsible for:</p>
+    <ul>
+        <li><strong>Backing up your data:</strong> You must maintain independent backups of all wiki files and data. The Software's built-in backup features, if any, are provided as a convenience only and do not constitute a reliable or guaranteed backup solution. You should not rely on the Software as your sole means of data preservation.</li>
+        <li><strong>Evaluating suitability:</strong> You are responsible for determining whether the Software is suitable for your intended use, including for any mission-critical, commercial, medical, legal, financial, or other high-stakes applications.</li>
+        <li><strong>Verifying data integrity:</strong> You are responsible for regularly verifying the integrity and accuracy of your data, including after sync operations, software updates, or any other operations performed by the Software.</li>
+        <li><strong>Securing your devices:</strong> You are responsible for the security of your devices, networks, authentication credentials, and any access tokens used with the Software.</li>
+        <li><strong>Understanding sync behavior:</strong> If you enable synchronization features, you are responsible for understanding how data flows between devices and for monitoring for any unintended data changes, duplications, or deletions.</li>
+        <li><strong>Complying with laws:</strong> You are responsible for ensuring your use of the Software complies with all applicable local, national, and international laws and regulations.</li>
+    </ul>
+
+    <h2>6. No Guarantee of Availability</h2>
+    <p>The Developer does not guarantee the continued availability, maintenance, or support of the Software, the relay server, or any associated services. The Developer reserves the right to discontinue, modify, or suspend any part of the Software or its services at any time, with or without notice, and without liability to you.</p>
+
+    <h2>7. Third-Party Components</h2>
+    <p>The Software incorporates third-party components (including but not limited to TiddlyWiki5, PDF.js, Node.js, Tauri, Yjs, and various open-source libraries) which are subject to their own licenses and terms. The Developer assumes no responsibility for the functionality, security, or reliability of any third-party component. Your use of these components is at your own risk and subject to their respective licenses.</p>
+
+    <h2>8. Authentication Providers</h2>
+    <p>If you choose to authenticate with GitHub or Google for relay sync features:</p>
+    <ul>
+        <li>Your use of these authentication services is subject to the respective provider's terms of service and privacy policy</li>
+        <li>The Developer is not responsible for any actions taken by these providers, including account suspension, data breaches, or service discontinuation</li>
+        <li>The Developer is not responsible for any consequences arising from the compromise of your authentication tokens, whether due to vulnerabilities in the Software, your device, or the authentication provider</li>
+        <li>You are responsible for managing your authentication sessions and revoking access when appropriate</li>
+    </ul>
+
+    <h2>9. Experimental Software</h2>
+    <p>TiddlyDesktop-RS is an open-source community project under active development. Features, including but not limited to synchronization, collaborative editing, relay services, and file handling, may be experimental, incomplete, or unstable. You acknowledge that using the Software entails inherent risks, including the risk of data loss, corruption, or other adverse outcomes, and you accept these risks voluntarily.</p>
+
+    <h2>10. Indemnification</h2>
+    <p>You agree to indemnify, defend, and hold harmless the Developer, contributors, and maintainers from and against any and all claims, liabilities, damages, losses, costs, and expenses (including reasonable legal fees) arising out of or in connection with your use or misuse of the Software, your violation of these Terms, or your violation of any rights of a third party.</p>
+
+    <h2>11. Severability</h2>
+    <p>If any provision of these Terms is found to be unenforceable or invalid by a court of competent jurisdiction, such provision shall be modified to the minimum extent necessary to make it enforceable, or if modification is not possible, shall be severed from these Terms. All remaining provisions shall continue in full force and effect.</p>
+
+    <h2>12. Entire Agreement</h2>
+    <p>These Terms, together with the Privacy Policy and the MIT License, constitute the entire agreement between you and the Developer regarding the use of the Software and supersede all prior agreements, representations, and understandings.</p>
+
+    <h2>13. Governing Law</h2>
+    <p>These Terms shall be governed by and construed in accordance with applicable law, without regard to conflict of law principles. Any dispute arising under these Terms shall be resolved in the competent courts of the Developer's jurisdiction.</p>
+
+    <h2>14. Changes to These Terms</h2>
+    <p>The Developer reserves the right to modify these Terms at any time. Changes will be posted on this page with an updated revision date. Your continued use of the Software after any changes constitutes acceptance of the modified Terms. It is your responsibility to review these Terms periodically.</p>
+
+    <h2>15. Contact</h2>
+    <p>If you have any questions about these Terms, please open an issue on our GitHub repository at <a href="https://github.com/BurningTreeC/TiddlyDesktopRust" target="_blank" rel="noopener">https://github.com/BurningTreeC/TiddlyDesktopRust</a> or contact the developer.</p>
+
     <hr style="margin-top: 40px; border: none; border-top: 1px solid #ddd;">
-    <p style="color: #7f8c8d; font-size: 0.9em;">TiddlyDesktop-RS is a free and open-source application.</p>
+    <p style="color: #7f8c8d; font-size: 0.9em;">TiddlyDesktop-RS is a free and open-source application licensed under the MIT License.</p>
 </body>
 </html>

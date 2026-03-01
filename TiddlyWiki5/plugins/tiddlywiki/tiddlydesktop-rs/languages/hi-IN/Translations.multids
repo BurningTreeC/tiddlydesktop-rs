@@ -150,3 +150,5 @@ PluginInstaller/Install: परिवर्तन लागू करें
 PluginInstaller/Installing: प्लगइन अपडेट हो रहे हैं...
 PluginInstaller/Installed: (स्थापित)
 PluginInstaller/RestartNeeded: परिवर्तन लागू करने के लिए विकी को पुनः आरंभ करें।
+
+Terms/AcceptPrompt: इस सुविधा का उपयोग करके, आप हमारे नियम और शर्तें स्वीकार करते हैं:

@@ -150,3 +150,5 @@ PluginInstaller/Install: اعمال تغییرات
 PluginInstaller/Installing: در حال به‌روزرسانی افزونه‌ها...
 PluginInstaller/Installed: (نصب شده)
 PluginInstaller/RestartNeeded: ویکی را مجدداً راه‌اندازی کنید تا تغییرات اعمال شوند.
+
+Terms/AcceptPrompt: با استفاده از این ویژگی، شرایط و ضوابط ما را می‌پذیرید:

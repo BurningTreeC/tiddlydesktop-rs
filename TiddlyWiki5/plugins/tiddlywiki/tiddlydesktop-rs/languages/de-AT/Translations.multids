@@ -150,3 +150,5 @@ PluginInstaller/Install: Änderungen übernehmen
 PluginInstaller/Installing: Plugins werden aktualisiert...
 PluginInstaller/Installed: (installiert)
 PluginInstaller/RestartNeeded: Starten Sie das Wiki neu, um die Änderungen zu übernehmen.
+
+Terms/AcceptPrompt: Durch die Nutzung dieser Funktion akzeptieren Sie unsere Nutzungsbedingungen:

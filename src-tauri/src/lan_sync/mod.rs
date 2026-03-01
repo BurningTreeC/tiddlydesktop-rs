@@ -7685,12 +7685,13 @@ pub async fn relay_sync_add_member(
     username: Option<String>,
     provider: Option<String>,
     github_login: Option<String>,  // legacy param
+    user_id: Option<String>,       // direct user_id for unblocking
 ) -> Result<(), String> {
     let mgr = get_sync_manager().ok_or("Sync not initialized")?;
     if let Some(relay) = &mgr.relay_manager {
         // Support both new (username) and legacy (github_login) params
         let name = username.or(github_login).ok_or("username is required")?;
-        relay.add_room_member(&room_code, &name, provider.as_deref()).await
+        relay.add_room_member(&room_code, &name, provider.as_deref(), user_id.as_deref()).await
     } else {
         Err("Relay sync not available".to_string())
     }

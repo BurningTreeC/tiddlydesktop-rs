@@ -2112,10 +2112,14 @@ impl RelaySyncManager {
     }
 
     /// Add a member to a server room (owner only). Sends hashed room code.
-    pub async fn add_room_member(&self, room_code: &str, username: &str, provider: Option<&str>) -> Result<(), String> {
+    /// When `user_id` is provided, it's sent to the server for direct unblock (bypasses external API lookup).
+    pub async fn add_room_member(&self, room_code: &str, username: &str, provider: Option<&str>, user_id: Option<&str>) -> Result<(), String> {
         let room_hash = crate::lan_sync::discovery::hash_room_code(room_code);
         let provider = provider.unwrap_or("github");
-        let body = serde_json::json!({"username": username, "provider": provider, "github_login": username});
+        let mut body = serde_json::json!({"username": username, "provider": provider, "github_login": username});
+        if let Some(uid) = user_id {
+            body["user_id"] = serde_json::json!(uid);
+        }
         let _: serde_json::Value = self.relay_api(
             reqwest::Method::POST,
             &format!("/api/rooms/{}/members", room_hash),

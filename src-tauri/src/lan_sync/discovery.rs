@@ -290,9 +290,9 @@ impl DiscoveryManager {
                                 let active = connected_peers.read()
                                     .unwrap_or_else(|e| e.into_inner());
                                 if !active.contains(&beacon.id) {
-                                    // Re-emit every 10s for unconnected peers
+                                    // Re-emit every 3s for unconnected peers (fast retry)
                                     match last_emitted.get(&beacon.id) {
-                                        Some(t) if t.elapsed() < Duration::from_secs(10) => false,
+                                        Some(t) if t.elapsed() < Duration::from_secs(3) => false,
                                         _ => true,
                                     }
                                 } else {

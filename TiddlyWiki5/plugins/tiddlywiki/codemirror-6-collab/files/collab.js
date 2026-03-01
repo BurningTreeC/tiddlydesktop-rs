@@ -895,6 +895,9 @@ function _setupCollabExtensions(context, core) {
 		if(currentText && ytext.length === 0) {
 			doc.transact(function() { ytext.insert(0, currentText); });
 		}
+		// Store seed text for dedup (new field joining existing Y.Doc)
+		if(!existingState._seedTexts) existingState._seedTexts = {};
+		existingState._seedTexts[editField] = currentText;
 
 		var fieldSyncOrigin = { _field: editField };
 		var fieldState = {
@@ -985,6 +988,9 @@ function _setupCollabExtensions(context, core) {
 	if(currentText) {
 		doc.transact(function() { ytext.insert(0, currentText); });
 	}
+	// Store seed text for dedup when both editors independently seed the same text
+	state._seedTexts = {};
+	state._seedTexts[editField] = currentText;
 	_clog("[Collab] Case C: Y.Text(" + ytextKey + ") inserted " + (currentText ? currentText.length : 0) + " chars for " + collabTitle);
 
 	// Create sync + remote selections — ALWAYS in initial extensions.
@@ -1010,11 +1016,21 @@ function _connectTransport(engine, collab) {
 	var doc = state.doc;
 	var awareness = state.awareness;
 
+	// CRITICAL: Set awaiting mode BEFORE registering any listeners.
+	// This closes the race window where a collab-update could arrive between
+	// listener registration and the async getRemoteEditorsAsync resolution,
+	// causing text duplication because the update is merged without clearing.
+	state._awaitingRemoteState = true;
+
 	// --- Outbound: local Yjs changes → transport ---
 
 	var onDocUpdate = function(update, origin) {
 		if(state.destroyed) return;
 		if(origin === "remote") return;
+		// Don't send outbound updates while still in awaiting mode.
+		// Our Y.Doc only has locally-seeded text; sending it would cause
+		// duplication on peers who already have the authoritative state.
+		if(state._awaitingRemoteState) return;
 		try {
 			collab.sendUpdate(collabTitle, uint8ToBase64(update));
 		} catch(_e) {}
@@ -1173,16 +1189,16 @@ function _connectTransport(engine, collab) {
 		try {
 			var update = base64ToUint8(data.update_base64);
 
-			// Capture lengths of ALL Y.Texts before applying update
-			var ytextLengthsBefore = {};
+			// Capture content of ALL Y.Texts before applying update
+			var ytextContentBefore = {};
 			var fieldEditors = state._fieldEditors || {};
 			for(var fname in fieldEditors) {
 				if(fieldEditors.hasOwnProperty(fname)) {
-					ytextLengthsBefore[fname] = fieldEditors[fname].ytext.toString().length;
+					ytextContentBefore[fname] = fieldEditors[fname].ytext.toString();
 				}
 			}
 
-			_clog("[Collab] INBOUND update: " + update.length + " bytes for " + collabTitle + ", awaitingRemote=" + state._awaitingRemoteState + ", fields=" + Object.keys(ytextLengthsBefore).join(","));
+			_clog("[Collab] INBOUND update: " + update.length + " bytes for " + collabTitle + ", awaitingRemote=" + state._awaitingRemoteState + ", fields=" + Object.keys(ytextContentBefore).join(","));
 
 			// JOINING: on first remote update, clear ALL Y.Texts
 			// BEFORE applying the remote state.
@@ -1190,6 +1206,9 @@ function _connectTransport(engine, collab) {
 				state._awaitingRemoteState = false;
 				if(state._joinTimer) { clearTimeout(state._joinTimer); state._joinTimer = null; }
 				_clog("[Collab] Joining: clearing all Y.Texts before applying remote state for " + collabTitle);
+				// Use "remote" origin so the delete operations are NOT broadcast
+				// to peers. Without this, the deletes propagate and cause peers
+				// who adopted our items to lose their text.
 				doc.transact(function() {
 					for(var fname in fieldEditors) {
 						if(fieldEditors.hasOwnProperty(fname)) {
@@ -1199,30 +1218,65 @@ function _connectTransport(engine, collab) {
 							}
 						}
 					}
-				});
-				// Reset lengths to 0 after clearing
-				for(var fname in ytextLengthsBefore) {
-					if(ytextLengthsBefore.hasOwnProperty(fname)) {
-						ytextLengthsBefore[fname] = 0;
+				}, "remote");
+				// Reset content to empty after clearing
+				for(var fname in ytextContentBefore) {
+					if(ytextContentBefore.hasOwnProperty(fname)) {
+						ytextContentBefore[fname] = "";
 					}
 				}
 			}
 
 			Y.applyUpdate(doc, update, "remote");
 
-			// Per-field dedup safety net
+			// Per-field dedup safety net — catches text duplication when
+			// both peers independently seeded the same (or similar) text.
 			for(var fname in fieldEditors) {
 				if(!fieldEditors.hasOwnProperty(fname)) continue;
 				var yt = fieldEditors[fname].ytext;
-				var before = ytextLengthsBefore[fname] || 0;
-				var after = yt.toString().length;
-				if(before > 0 && after === before * 2) {
-					var afterStr = yt.toString();
-					if(afterStr.substring(0, before) === afterStr.substring(before)) {
-						_clog("[Collab] DEDUP field=" + fname + ": removing duplicate " + before + " chars for " + collabTitle);
-						doc.transact(function() {
-							yt.delete(before, before);
-						});
+				var beforeStr = ytextContentBefore[fname] || "";
+				var afterStr = yt.toString();
+				var beforeLen = beforeStr.length;
+
+				if(beforeLen > 0 && afterStr.length > beforeLen) {
+					var dedupDone = false;
+
+					// Case 1: Exact doubling (both halves identical)
+					if(afterStr.length === beforeLen * 2) {
+						if(afterStr.substring(0, beforeLen) === afterStr.substring(beforeLen)) {
+							_clog("[Collab] DEDUP exact field=" + fname + ": removing duplicate " + beforeLen + " chars for " + collabTitle);
+							doc.transact(function() { yt.delete(beforeLen, beforeLen); }, "remote");
+							dedupDone = true;
+						}
+					}
+
+					// Case 2: Seed text based dedup — catches the case where
+					// text was slightly edited by one peer before the merge.
+					if(!dedupDone) {
+						var seedText = state._seedTexts && state._seedTexts[fname];
+						if(seedText && seedText.length > 0 && afterStr.length > seedText.length) {
+							// If the text contains the seed followed by the actual content
+							// (or vice versa), remove the seed text portion.
+							var seedLen = seedText.length;
+							if(afterStr.substring(0, seedLen) === seedText) {
+								var rest = afterStr.substring(seedLen);
+								// rest should be the remote peer's version — sanity check:
+								// it should be at least half the seed length (not a tiny fragment)
+								if(rest.length >= seedLen * 0.5) {
+									_clog("[Collab] DEDUP seed-prefix field=" + fname + ": removing " + seedLen + " seed chars for " + collabTitle);
+									doc.transact(function() { yt.delete(0, seedLen); }, "remote");
+									dedupDone = true;
+								}
+							}
+							if(!dedupDone && afterStr.substring(afterStr.length - seedLen) === seedText) {
+								var rest = afterStr.substring(0, afterStr.length - seedLen);
+								if(rest.length >= seedLen * 0.5) {
+									_clog("[Collab] DEDUP seed-suffix field=" + fname + ": removing " + seedLen + " seed chars for " + collabTitle);
+									doc.transact(function() { yt.delete(afterStr.length - seedLen, seedLen); }, "remote");
+									dedupDone = true;
+								}
+							}
+						}
 					}
 				}
 			}
@@ -1243,14 +1297,14 @@ function _connectTransport(engine, collab) {
 		} catch(_e) {}
 	};
 
-	// When a new editor joins, send our full state so they can sync
+	// When a new editor joins, send our full state so they can sync.
+	// ALWAYS respond, even in awaiting mode — the joining peer needs
+	// SOME state to start with. Their collab-update handler will dedup
+	// if both sides independently seeded the same text.
 	state.listeners["editing-started"] = function(data) {
 		if(state.destroyed) return;
 		if(data.tiddler_title !== collabTitle) return;
 		_clog("[Collab] editing-started for " + collabTitle + " from " + (data.device_id || "?") + ", awaitingRemote=" + state._awaitingRemoteState);
-
-		// Don't respond if we're still joining (our state isn't authoritative)
-		if(state._awaitingRemoteState) return;
 
 		try {
 			var fullState = Y.encodeStateAsUpdate(doc);
@@ -1324,70 +1378,50 @@ function _connectTransport(engine, collab) {
 	}
 
 	// Determine first-editor vs joining.
-	// Desktop has getRemoteEditorsAsync (async Tauri command).
-	// Android may only have getRemoteEditors (synchronous) or neither.
+	// _awaitingRemoteState was set to true at the start of _connectTransport.
+	// Now we query known editors to decide the timeout:
+	//   - Known remote editors: 5s timeout (they should respond to startEditing)
+	//   - No known editors: 500ms timeout (brief wait in case getRemoteEditors
+	//     was wrong — e.g., editing-started message hasn't arrived yet)
+	// In BOTH cases, the first incoming collab-update triggers join mode
+	// (clear + apply) because _awaitingRemoteState is already true.
 	function _onEditorsResolved(editors) {
 		if(state.destroyed) return;
 
 		var hasRemote = editors && editors.length > 0;
 		_clog("[Collab] Phase 2: hasRemoteEditors=" + hasRemote + " for " + collabTitle + " (editors: " + JSON.stringify(editors) + ")");
 
-		if(hasRemote) {
-			// JOINING: mark that the next collab-update should clear our
-			// locally-inserted text before applying the remote state.
-			// The editor keeps showing our text until then (no blank flicker).
-			state._awaitingRemoteState = true;
-			// Do NOT populate Y.Map here — defer to remote state arrival.
-			// Fallback: if no remote state arrives in 5s, stop waiting
-			// and send our full state so peers can dedup-merge.
-			state._joinTimer = setTimeout(function() {
-				if(state._awaitingRemoteState && !state.destroyed) {
-					state._awaitingRemoteState = false;
-					_clog("[Collab] Join timeout (5s): keeping local text for " + collabTitle);
-					// Populate Y.Map from draft as fallback (same as first-editor)
-					if(state._populateYmapFromDraft) {
-						state._populateYmapFromDraft();
-					}
-					// Send full state as fallback (peers' dedup safety net handles doubling)
-					try {
-						var fullState = Y.encodeStateAsUpdate(doc);
-						_clog("[Collab] Join timeout: sending full state (" + fullState.length + " bytes) for " + collabTitle);
-						collab.sendUpdate(collabTitle, uint8ToBase64(fullState));
-					} catch(_e2) {}
+		// Use longer timeout when we KNOW there are remote editors (they
+		// should respond), shorter timeout for the "maybe first editor" case.
+		var timeout = hasRemote ? 5000 : 500;
+
+		state._joinTimer = setTimeout(function() {
+			if(state._awaitingRemoteState && !state.destroyed) {
+				state._awaitingRemoteState = false;
+				_clog("[Collab] Timeout (" + timeout + "ms): becoming first editor for " + collabTitle);
+				// Populate Y.Map from draft (first-editor)
+				if(state._populateYmapFromDraft) {
+					state._populateYmapFromDraft();
 				}
-			}, 5000);
-		}
+				// Send full state so any future peers can join
+				try {
+					var fullState = Y.encodeStateAsUpdate(doc);
+					_clog("[Collab] Sending full state (" + fullState.length + " bytes) as first editor for " + collabTitle);
+					collab.sendUpdate(collabTitle, uint8ToBase64(fullState));
+				} catch(_e2) {}
+			}
+		}, timeout);
 
 		// Notify peers that we're editing (triggers them to send full state)
 		try {
 			collab.startEditing(collabTitle);
 		} catch(_e) {}
 
-		// Send our full Y.Doc state — but only when NOT joining.
-		// When joining, we skip sending to avoid transient text doubling on
-		// existing peers. Our startEditing() triggers them to send their state;
-		// once we receive it, we clear our local text and apply theirs.
-		// If the remote state never arrives, the join timeout above sends
-		// our state as a fallback.
-		if(!hasRemote) {
-			// First editor: populate Y.Map from draft before sending full state
-			if(state._populateYmapFromDraft) {
-				state._populateYmapFromDraft();
-			}
-			try {
-				var fullState = Y.encodeStateAsUpdate(doc);
-				_clog("[Collab] Phase 2: sending full state (" + fullState.length + " bytes) for " + collabTitle);
-				collab.sendUpdate(collabTitle, uint8ToBase64(fullState));
-				var awarenessUpdate = encodeAwarenessUpdate(awareness, [doc.clientID]);
-				collab.sendAwareness(collabTitle, uint8ToBase64(awarenessUpdate));
-			} catch(_e) {}
-		} else {
-			// Still send awareness so remote cursors show up immediately
-			try {
-				var awarenessUpdate = encodeAwarenessUpdate(awareness, [doc.clientID]);
-				collab.sendAwareness(collabTitle, uint8ToBase64(awarenessUpdate));
-			} catch(_e) {}
-		}
+		// Send awareness so remote cursors show up immediately
+		try {
+			var awarenessUpdate = encodeAwarenessUpdate(awareness, [doc.clientID]);
+			collab.sendAwareness(collabTitle, uint8ToBase64(awarenessUpdate));
+		} catch(_e) {}
 	}
 
 	if(typeof collab.getRemoteEditorsAsync === "function") {

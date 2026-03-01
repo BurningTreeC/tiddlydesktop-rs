@@ -150,3 +150,5 @@ PluginInstaller/Install: Anvend ændringer
 PluginInstaller/Installing: Opdaterer plugins...
 PluginInstaller/Installed: (installeret)
 PluginInstaller/RestartNeeded: Genstart wikien for at anvende ændringerne.
+
+Terms/AcceptPrompt: Ved at bruge denne funktion accepterer du vores vilkår og betingelser:

@@ -150,3 +150,5 @@ PluginInstaller/Install: Uporabi spremembe
 PluginInstaller/Installing: Posodabljanje vtičnikov...
 PluginInstaller/Installed: (nameščeno)
 PluginInstaller/RestartNeeded: Znova zaženite wiki za uveljavitev sprememb.
+
+Terms/AcceptPrompt: Z uporabo te funkcije sprejemate naše Pogoje uporabe:

@@ -150,3 +150,5 @@ PluginInstaller/Install: 変更を適用
 PluginInstaller/Installing: プラグインを更新中...
 PluginInstaller/Installed: (インストール済み)
 PluginInstaller/RestartNeeded: 変更を適用するにはWikiを再起動してください。
+
+Terms/AcceptPrompt: この機能を使用することで、利用規約に同意したものとみなされます:

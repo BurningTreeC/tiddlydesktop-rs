@@ -150,3 +150,5 @@ PluginInstaller/Install: החל שינויים
 PluginInstaller/Installing: מעדכן תוספים...
 PluginInstaller/Installed: (מותקן)
 PluginInstaller/RestartNeeded: הפעל מחדש את הוויקי כדי להחיל שינויים.
+
+Terms/AcceptPrompt: בשימוש בתכונה זו, אתה מקבל את התנאים וההגבלות שלנו:

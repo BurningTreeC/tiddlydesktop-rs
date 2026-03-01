@@ -229,78 +229,83 @@ fn is_bundled_system_tiddler(title: &str) -> bool {
         || title == "$:/TiddlyDesktop/AppVersion"
 }
 
-/// Build merged HTML by combining user data from old HTML with updated system/plugin
-/// tiddlers from bundled HTML.
+/// Build merged HTML by injecting user data tiddlers from the old wiki into
+/// a fresh copy of the bundled HTML.
 ///
-/// Merge logic:
-/// - Start with ALL tiddlers from old HTML (preserves all user data)
-/// - Override system/plugin tiddlers with bundled versions (gets code updates)
-/// - Add any new tiddlers from bundled that don't exist in old (new features)
-///
-/// The merged tiddler array replaces the LAST JSON store in the bundled HTML template.
+/// Strategy: keep the bundled HTML completely intact (preserving all system/plugin
+/// tiddlers, boot scripts, and HTML structure). Extract only user-data tiddlers
+/// from the old HTML and inject them as a NEW tiddler store right after the last
+/// bundled store (so they override bundled defaults via TiddlyWiki's last-wins
+/// processing order). This avoids re-serializing large plugin blobs and prevents
+/// escaping issues (e.g. </script> inside JSON breaking the enclosing <script> tag).
 pub fn build_merged_html(old_html: &str, bundled_html: &str) -> Result<String, String> {
     let old_tiddlers = extract_all_tiddlers_from_html(old_html);
+
+    if old_tiddlers.is_empty() {
+        eprintln!("[TiddlyDesktop] Migration: no tiddlers found in old wiki, using bundled as-is");
+        return Ok(bundled_html.to_string());
+    }
+
+    // Collect titles from bundled HTML (only need titles, not full parse)
     let bundled_tiddlers = extract_all_tiddlers_from_html(bundled_html);
+    let bundled_titles: std::collections::HashSet<String> = bundled_tiddlers.iter()
+        .filter_map(|t| t.get("title").and_then(|v| v.as_str()).map(|s| s.to_string()))
+        .collect();
 
-    if bundled_tiddlers.is_empty() {
-        return Err("No tiddler stores found in bundled HTML".to_string());
-    }
-
-    eprintln!("[TiddlyDesktop] Migration: {} tiddlers in old wiki, {} in bundled",
-        old_tiddlers.len(), bundled_tiddlers.len());
-
-    // Build merged map: title -> tiddler
-    let mut merged: std::collections::HashMap<String, serde_json::Value> =
-        std::collections::HashMap::new();
-
-    // Start with ALL old tiddlers (preserves user data)
-    for t in &old_tiddlers {
-        if let Some(title) = t.get("title").and_then(|v| v.as_str()) {
-            merged.insert(title.to_string(), t.clone());
-        }
-    }
-
-    let old_count = merged.len();
-    let mut updated_count = 0;
-    let mut added_count = 0;
-
-    // Override system/plugin tiddlers from bundled; add new bundled tiddlers
-    for t in &bundled_tiddlers {
-        if let Some(title) = t.get("title").and_then(|v| v.as_str()) {
-            if is_bundled_system_tiddler(title) {
-                if merged.contains_key(title) {
-                    updated_count += 1;
-                }
-                merged.insert(title.to_string(), t.clone());
-            } else if !merged.contains_key(title) {
-                added_count += 1;
-                merged.insert(title.to_string(), t.clone());
+    // Keep only user-data tiddlers from old HTML (skip system/plugin tiddlers
+    // which are already up-to-date in the bundled HTML)
+    let user_tiddlers: Vec<&serde_json::Value> = old_tiddlers.iter()
+        .filter(|t| {
+            if let Some(title) = t.get("title").and_then(|v| v.as_str()) {
+                !is_bundled_system_tiddler(title)
+            } else {
+                false
             }
-        }
+        })
+        .collect();
+
+    eprintln!("[TiddlyDesktop] Migration: {} tiddlers in old wiki ({} user data, {} system/plugin skipped), {} in bundled",
+        old_tiddlers.len(), user_tiddlers.len(), old_tiddlers.len() - user_tiddlers.len(), bundled_titles.len());
+
+    if user_tiddlers.is_empty() {
+        eprintln!("[TiddlyDesktop] Migration: no user data to preserve, using bundled as-is");
+        return Ok(bundled_html.to_string());
     }
 
-    eprintln!("[TiddlyDesktop] Migration merge: {} total ({} from old, {} system updated, {} new)",
-        merged.len(), old_count, updated_count, added_count);
+    // Serialize user tiddlers as JSON array
+    let user_json = serde_json::to_string(&user_tiddlers)
+        .map_err(|e| format!("Failed to serialize user tiddlers: {}", e))?;
 
-    // Serialize merged tiddlers as JSON array
-    let merged_array: Vec<serde_json::Value> = merged.into_values().collect();
-    let merged_json = serde_json::to_string(&merged_array)
-        .map_err(|e| format!("Failed to serialize merged tiddlers: {}", e))?;
+    // CRITICAL: Escape </ as <\/ to prevent breaking the enclosing <script> tag.
+    // TiddlyWiki does this natively; serde_json does not escape forward slashes.
+    // <\/ is valid JSON (just an escaped forward slash), so parsers handle it fine.
+    let user_json = user_json.replace("</", "<\\/");
 
-    // Replace the LAST JSON store in bundled HTML with merged content
+    // Build the new tiddler store tag
+    let injection = format!(
+        "<script class=\"tiddlywiki-tiddler-store\" type=\"application/json\">{}</script>",
+        user_json
+    );
+
+    // Find injection point: right after the last bundled tiddler store's </script>.
+    // Must be BEFORE boot scripts so the DOM elements exist when boot.js reads them.
     let store_start_marker = r#"<script class="tiddlywiki-tiddler-store" type="application/json">"#;
-
     let last_store_start = bundled_html.rfind(store_start_marker)
         .ok_or("No tiddler store found in bundled HTML")?;
-    let content_start = last_store_start + store_start_marker.len();
-    let store_end_rel = bundled_html[content_start..].find("</script>")
+    let after_last_store = &bundled_html[last_store_start..];
+    let store_close = after_last_store.find("</script>")
         .ok_or("Unterminated tiddler store in bundled HTML")?;
-    let content_end = content_start + store_end_rel;
+    let inject_pos = last_store_start + store_close + "</script>".len();
 
-    let mut result = String::with_capacity(bundled_html.len() + merged_json.len());
-    result.push_str(&bundled_html[..content_start]);
-    result.push_str(&merged_json);
-    result.push_str(&bundled_html[content_end..]);
+    // Build result: bundled HTML with user data store injected
+    let mut result = String::with_capacity(bundled_html.len() + injection.len() + 1);
+    result.push_str(&bundled_html[..inject_pos]);
+    result.push('\n');
+    result.push_str(&injection);
+    result.push_str(&bundled_html[inject_pos..]);
+
+    eprintln!("[TiddlyDesktop] Migration: injected {} user tiddlers ({} bytes) into bundled HTML",
+        user_tiddlers.len(), user_json.len());
 
     Ok(result)
 }

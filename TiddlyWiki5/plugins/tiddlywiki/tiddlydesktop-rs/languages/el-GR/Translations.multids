@@ -150,3 +150,5 @@ PluginInstaller/Install: Εφαρμογή αλλαγών
 PluginInstaller/Installing: Ενημέρωση προσθέτων...
 PluginInstaller/Installed: (εγκατεστημένο)
 PluginInstaller/RestartNeeded: Επανεκκινήστε το wiki για να εφαρμοστούν οι αλλαγές.
+
+Terms/AcceptPrompt: Χρησιμοποιώντας αυτή τη λειτουργία, αποδέχεστε τους Όρους και Προϋποθέσεις μας:

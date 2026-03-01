@@ -2529,3 +2529,33 @@ body.td-is-android.td-main-wiki .td-wikilist {
 	border-color: <<colour primary>>;
 	box-shadow: 0 0 0 2px rgba(74, 144, 217, 0.2);
 }
+
+/* Relay member items */
+.td-relay-member-item {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	padding: 2px 0;
+}
+
+.td-relay-member-name {
+	font-weight: 500;
+}
+
+.td-relay-member-role {
+	font-size: 0.85em;
+	color: <<colour muted-foreground>>;
+}
+
+.td-relay-member-blocked {
+	color: #c53030;
+	font-style: italic;
+}
+
+.td-relay-member-blocked .td-relay-member-name {
+	color: #c53030;
+}
+
+.td-relay-member-blocked .td-relay-member-role {
+	color: #c53030;
+}

@@ -150,3 +150,5 @@ PluginInstaller/Install: تطبيق التغييرات
 PluginInstaller/Installing: جارٍ تحديث الإضافات...
 PluginInstaller/Installed: (مُثبَّت)
 PluginInstaller/RestartNeeded: أعد تشغيل الويكي لتطبيق التغييرات.
+
+Terms/AcceptPrompt: باستخدام هذه الميزة، فإنك توافق على الشروط والأحكام الخاصة بنا:

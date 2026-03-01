@@ -150,3 +150,5 @@ PluginInstaller/Install: Zastosuj zmiany
 PluginInstaller/Installing: Aktualizowanie wtyczek...
 PluginInstaller/Installed: (zainstalowane)
 PluginInstaller/RestartNeeded: Uruchom ponownie wiki, aby zastosować zmiany.
+
+Terms/AcceptPrompt: Korzystając z tej funkcji, akceptujesz nasze Warunki korzystania:

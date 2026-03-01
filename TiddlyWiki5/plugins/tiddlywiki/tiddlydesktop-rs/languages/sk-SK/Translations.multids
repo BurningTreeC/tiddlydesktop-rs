@@ -150,3 +150,5 @@ PluginInstaller/Install: Použiť zmeny
 PluginInstaller/Installing: Aktualizácia pluginov...
 PluginInstaller/Installed: (nainštalované)
 PluginInstaller/RestartNeeded: Reštartujte wiki na použitie zmien.
+
+Terms/AcceptPrompt: Používaním tejto funkcie prijímate naše Podmienky používania:

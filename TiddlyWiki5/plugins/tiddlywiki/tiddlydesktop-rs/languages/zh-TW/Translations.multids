@@ -150,3 +150,5 @@ PluginInstaller/Install: 套用變更
 PluginInstaller/Installing: 正在更新外掛...
 PluginInstaller/Installed: (已安裝)
 PluginInstaller/RestartNeeded: 重新啟動維基以套用變更。
+
+Terms/AcceptPrompt: 使用此功能即表示您接受我們的條款和條件：

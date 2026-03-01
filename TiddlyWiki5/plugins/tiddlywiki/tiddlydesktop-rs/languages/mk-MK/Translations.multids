@@ -150,3 +150,5 @@ PluginInstaller/Install: Примени промени
 PluginInstaller/Installing: Ажурирање на додатоци...
 PluginInstaller/Installed: (инсталирано)
 PluginInstaller/RestartNeeded: Рестартирајте го викито за да се применат промените.
+
+Terms/AcceptPrompt: Со користење на оваа функција, ги прифаќате нашите Услови и правила:

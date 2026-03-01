@@ -150,3 +150,5 @@ PluginInstaller/Install: 변경 적용
 PluginInstaller/Installing: 플러그인 업데이트 중...
 PluginInstaller/Installed: (설치됨)
 PluginInstaller/RestartNeeded: 변경 사항을 적용하려면 위키를 다시 시작하세요.
+
+Terms/AcceptPrompt: 이 기능을 사용하면 이용약관에 동의하는 것으로 간주됩니다:

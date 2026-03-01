@@ -150,3 +150,5 @@ PluginInstaller/Install: Tillämpa ändringar
 PluginInstaller/Installing: Uppdaterar plugins...
 PluginInstaller/Installed: (installerad)
 PluginInstaller/RestartNeeded: Starta om wikin för att tillämpa ändringarna.
+
+Terms/AcceptPrompt: Genom att använda denna funktion godkänner du våra Villkor:

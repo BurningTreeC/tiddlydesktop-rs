@@ -151,3 +151,5 @@ PluginInstaller/Installing: Updating plugins...
 PluginInstaller/Installed: (installed)
 PluginInstaller/RestartNeeded: Restart the wiki to apply changes.
 
+Terms/AcceptPrompt: By using this feature, you accept our Terms and Conditions:
+

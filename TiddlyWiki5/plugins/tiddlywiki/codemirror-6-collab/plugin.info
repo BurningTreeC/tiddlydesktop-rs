@@ -3,7 +3,7 @@
   "name": "CodeMirror 6 Collaborative Editing",
   "description": "Real-time collaborative editing via Yjs over TiddlyDesktop Sync",
   "author": "BurningTreeC",
-  "version": "0.0.11",
+  "version": "0.0.12",
   "core-version": ">=5.3.0",
   "plugin-type": "plugin",
   "dependents": "$:/plugins/tiddlywiki/codemirror-6",

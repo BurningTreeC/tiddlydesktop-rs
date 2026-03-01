@@ -150,3 +150,5 @@ PluginInstaller/Install: Aplica els canvis
 PluginInstaller/Installing: S'estan actualitzant els connectors...
 PluginInstaller/Installed: (instal·lat)
 PluginInstaller/RestartNeeded: Reinicieu el wiki per aplicar els canvis.
+
+Terms/AcceptPrompt: En utilitzar aquesta funcionalitat, accepteu els nostres Termes i Condicions:

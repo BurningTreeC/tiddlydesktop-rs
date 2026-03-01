@@ -150,3 +150,5 @@ PluginInstaller/Install: Применить изменения
 PluginInstaller/Installing: Обновление плагинов...
 PluginInstaller/Installed: (установлено)
 PluginInstaller/RestartNeeded: Перезапустите вики для применения изменений.
+
+Terms/AcceptPrompt: Используя эту функцию, вы принимаете наши Условия использования:

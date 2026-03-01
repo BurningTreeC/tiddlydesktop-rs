@@ -764,7 +764,8 @@ title: $:/plugins/tiddlywiki/tiddlydesktop-rs/WikiList
 <$list filter="[<membersTiddler>has[text]]" variable="ignore">
 <$let membersJson={{{ [<membersTiddler>get[text]] }}}>
 <$list filter="[<membersJson>jsonindexes[]]">
-<$let memberName={{{ [<membersJson>jsonget<currentTiddler>,[username]] ~[<membersJson>jsonget<currentTiddler>,[github_login]] }}} memberId={{{ [<membersJson>jsonget<currentTiddler>,[user_id]] ~[<membersJson>jsonget<currentTiddler>,[github_login]] }}} memberRole={{{ [<membersJson>jsonget<currentTiddler>,[role]] }}}>
+<$let memberName={{{ [<membersJson>jsonget<currentTiddler>,[username]] ~[<membersJson>jsonget<currentTiddler>,[github_login]] }}} memberId={{{ [<membersJson>jsonget<currentTiddler>,[user_id]] ~[<membersJson>jsonget<currentTiddler>,[github_login]] }}} memberRole={{{ [<membersJson>jsonget<currentTiddler>,[role]] }}} memberProvider={{{ [<membersJson>jsonget<currentTiddler>,[provider]] }}} memberBlocked={{{ [<membersJson>jsonget<currentTiddler>,[blocked]] }}}>
+<$list filter="[<memberBlocked>!match[true]]" variable="ignore">
 <div class="td-relay-member-item">
 <span class="td-relay-member-name">@<$text text=<<memberName>>/></span>
 <span class="td-relay-member-role">(<$text text=<<memberRole>>/>)</span>
@@ -775,6 +776,17 @@ title: $:/plugins/tiddlywiki/tiddlydesktop-rs/WikiList
 </$button>
 </$list>
 </div>
+</$list>
+<$list filter="[<memberBlocked>match[true]]" variable="ignore">
+<div class="td-relay-member-item td-relay-member-blocked">
+<span class="td-relay-member-name">@<$text text=<<memberName>>/></span>
+<span class="td-relay-member-role">(blocked)</span>
+<$button class="tc-btn-invisible td-button td-button-primary td-button-small">
+<$action-sendmessage $message="tm-tiddlydesktop-rs-relay-add-member" roomCode=<<roomCode>> username=<<memberName>> provider=<<memberProvider>> userId=<<memberId>>/>
+Unblock
+</$button>
+</div>
+</$list>
 </$let>
 </$list>
 </$let>

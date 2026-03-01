@@ -85,6 +85,19 @@ exports.startup = function(callback) {
 		}
 	};
 
+	// Check if terms and conditions have been accepted (one-time gate for sync features)
+	function checkTermsAccepted() {
+		var accepted = $tw.wiki.getTiddlerText("$:/config/TiddlyDesktopRS/TermsAccepted");
+		if(accepted) return true;
+		var msg = $tw.wiki.renderText("text/plain", "text/vnd.tiddlywiki", "<<td-lingo Terms/AcceptPrompt>>");
+		msg += "\nhttps://burningtreec.github.io/TiddlyDesktopRust/";
+		if(confirm(msg)) {
+			$tw.wiki.setText("$:/config/TiddlyDesktopRS/TermsAccepted", "text", null, new Date().toISOString());
+			return true;
+		}
+		return false;
+	}
+
 	// Desktop app - always set mobile to no
 	$tw.wiki.setText("$:/temp/tiddlydesktop-rs/is-mobile", "text", null, "no");
 
@@ -1134,6 +1147,7 @@ exports.startup = function(callback) {
 	$tw.rootWidget.addEventListener("tm-tiddlydesktop-rs-set-wiki-sync", function(event) {
 		var path = event.paramObject && event.paramObject.path;
 		var enabled = event.paramObject && event.paramObject.enabled === "true";
+		if(enabled && !checkTermsAccepted()) return;
 		if (path) {
 			invoke("set_wiki_sync", { path: path, enabled: enabled }).then(function(syncId) {
 				var entries = getWikiListEntries();
@@ -1886,6 +1900,7 @@ exports.startup = function(callback) {
 
 	// Sign in — fetch providers, then start auth flow
 	$tw.rootWidget.addEventListener("tm-tiddlydesktop-rs-relay-signin", function(event) {
+		if(!checkTermsAccepted()) return;
 		invoke("relay_sync_fetch_providers").then(function(providers) {
 			if (!providers || providers.length === 0) {
 				console.error("[Relay] No auth providers available");
@@ -2077,12 +2092,12 @@ exports.startup = function(callback) {
 		});
 	});
 
-	// Add a member to a server room
+	// Add a member to a server room (also used for unblocking)
 	$tw.rootWidget.addEventListener("tm-tiddlydesktop-rs-relay-add-member", function(event) {
 		var p = event.paramObject || {};
 		var memberName = p.username || p.githubLogin;
 		if (!p.roomCode || !memberName) return;
-		invoke("relay_sync_add_member", { roomCode: p.roomCode, username: memberName, provider: p.provider || null }).then(function() {
+		invoke("relay_sync_add_member", { roomCode: p.roomCode, username: memberName, provider: p.provider || null, userId: p.userId || null }).then(function() {
 			// Refresh member list
 			$tw.rootWidget.dispatchEvent({
 				type: "tm-tiddlydesktop-rs-relay-load-members",

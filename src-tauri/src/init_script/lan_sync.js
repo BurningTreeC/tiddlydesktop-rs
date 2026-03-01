@@ -1744,6 +1744,7 @@
 
   var collabWsReconnects = 0;
   var collabWsPort = 0;
+  var collabWsReconnectTimer = null;
 
   function connectCollabWs(wikiId, attempt) {
     if (!hasTauri || isAndroid) return;
@@ -1763,6 +1764,11 @@
       ws.onmessage = function(event) {
         try {
           var data = JSON.parse(event.data);
+          // Handle pong responses (application-level keepalive)
+          if (data.type === 'pong') {
+            ws._awaitingPong = false;
+            return;
+          }
           handleCollabMessage(data);
         } catch (e) {
           console.error('[Collab WS] Parse error:', e);
@@ -1776,13 +1782,16 @@
       ws.onclose = function() {
         if (collabWs === ws) collabWs = null;
         collabWsReconnects++;
-        if (collabWsReconnects <= 10) {
-          var delay = Math.min(1000 * Math.pow(2, collabWsReconnects - 1), 30000);
-          _log('[Collab WS] Disconnected, reconnecting in ' + delay + 'ms (attempt ' + collabWsReconnects + ')');
-          setTimeout(function() { doConnect(port); }, delay);
-        } else {
-          _log('[Collab WS] Disconnected, giving up after ' + collabWsReconnects + ' attempts');
-        }
+        // Never give up — keep retrying with capped exponential backoff.
+        // The collab WS is a local connection (127.0.0.1), so if the server
+        // is alive it will eventually succeed. IPC fallback handles messages
+        // in the meantime.
+        var delay = Math.min(1000 * Math.pow(2, Math.min(collabWsReconnects - 1, 5)), 30000);
+        _log('[Collab WS] Disconnected, reconnecting in ' + delay + 'ms (attempt ' + collabWsReconnects + ')');
+        collabWsReconnectTimer = setTimeout(function() {
+          collabWsReconnectTimer = null;
+          doConnect(port);
+        }, delay);
       };
     }
 
@@ -1805,6 +1814,52 @@
       doConnect(port);
     }).catch(function(e) {
       _log('[Collab WS] Failed to get port: ' + e);
+    });
+  }
+
+  // When the window regains visibility (user returns from background/blur),
+  // force-reconnect the collab WS. WebViews may silently close or zombie
+  // WebSocket connections when backgrounded — even if readyState still says OPEN,
+  // the connection may be dead. Close and reconnect to guarantee a fresh connection.
+  if (typeof document !== 'undefined') {
+    document.addEventListener('visibilitychange', function() {
+      if (document.visibilityState === 'visible' && _collabSyncActive && collabWsPort > 0) {
+        // Cancel any pending reconnect timer
+        if (collabWsReconnectTimer) {
+          clearTimeout(collabWsReconnectTimer);
+          collabWsReconnectTimer = null;
+        }
+        if (!collabWs || collabWs.readyState !== WebSocket.OPEN) {
+          // WS is clearly dead — reconnect immediately
+          _log('[Collab WS] Window became visible, WS not open — reconnecting immediately');
+          collabWsReconnects = 0;
+          connectCollabWs(_collabWikiId);
+        } else {
+          // WS appears open but may be zombie — send an application-level ping.
+          // If no pong within 3 seconds, force-reconnect.
+          try {
+            var pingTime = Date.now();
+            collabWs._awaitingPong = true;
+            collabWs.send(JSON.stringify({ type: 'ping' }));
+            var checkWs = collabWs;
+            setTimeout(function() {
+              if (checkWs._awaitingPong && collabWs === checkWs) {
+                _log('[Collab WS] No pong after visibility restore — force-reconnecting');
+                try { checkWs.close(); } catch(_e) {}
+                collabWs = null;
+                collabWsReconnects = 0;
+                connectCollabWs(_collabWikiId);
+              }
+            }, 3000);
+          } catch(_e) {
+            _log('[Collab WS] Ping failed — force-reconnecting');
+            try { collabWs.close(); } catch(_e2) {}
+            collabWs = null;
+            collabWsReconnects = 0;
+            connectCollabWs(_collabWikiId);
+          }
+        }
+      }
     });
   }
 })();

@@ -350,7 +350,7 @@ impl SyncMessage {
 }
 
 /// Lightweight fingerprint of a tiddler for diff-based sync
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TiddlerFingerprint {
     pub title: String,
     pub modified: String,

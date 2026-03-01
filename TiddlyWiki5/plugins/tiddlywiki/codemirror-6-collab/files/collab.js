@@ -1458,6 +1458,53 @@ function _updateAllUserNames(newName) {
 
 exports.updateUserName = _updateAllUserNames;
 
+// ============================================================================
+// Visibility change handler: re-sync all active collab sessions when the page
+// becomes visible again. While backgrounded, the Yjs Awareness 30-second
+// timeout removes our cursor from remote peers, and any missed updates during
+// a transport interruption could leave Yjs documents diverged.
+//
+// On visibility restore we:
+//   1. Re-announce startEditing (peer may have received editing-stopped during disconnect)
+//   2. Send full Yjs state (ensures CRDT convergence after any missed updates)
+//   3. Re-send awareness (restores our cursor/selection on remote peers)
+// ============================================================================
+if(typeof document !== "undefined") {
+	document.addEventListener("visibilitychange", function() {
+		if(document.visibilityState !== "visible") return;
+		var collab = window.TiddlyDesktop && window.TiddlyDesktop.collab;
+		if(!collab) return;
+
+		var count = 0;
+		for(var title in _collabStateByTitle) {
+			if(!_collabStateByTitle.hasOwnProperty(title)) continue;
+			var state = _collabStateByTitle[title];
+			if(state.destroyed || !state._transportConnected) continue;
+			// Skip sessions still in initial join phase
+			if(state._awaitingRemoteState) continue;
+
+			count++;
+			try {
+				// Re-announce that we're editing
+				collab.startEditing(state.collabTitle);
+			} catch(_e) {}
+			try {
+				// Send full Yjs state for CRDT convergence
+				var fullState = Y.encodeStateAsUpdate(state.doc);
+				collab.sendUpdate(state.collabTitle, uint8ToBase64(fullState));
+			} catch(_e) {}
+			try {
+				// Re-send awareness (cursor/selection)
+				var awarenessUpdate = encodeAwarenessUpdate(state.awareness, [state.doc.clientID]);
+				collab.sendAwareness(state.collabTitle, uint8ToBase64(awarenessUpdate));
+			} catch(_e) {}
+		}
+		if(count > 0) {
+			_clog("[Collab] Visibility restored: re-synced " + count + " active session(s)");
+		}
+	});
+}
+
 exports.plugin = {
 	name: "collab",
 	description: "Real-time collaborative editing via Yjs",

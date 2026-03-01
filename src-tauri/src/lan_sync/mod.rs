@@ -435,6 +435,12 @@ impl SyncManager {
             overrides.remove(wiki_id);
         }
         let cache_snapshot = if let Ok(mut cache) = self.local_fingerprint_cache.lock() {
+            // Skip disk write if fingerprints haven't changed
+            if let Some(existing) = cache.get(wiki_id) {
+                if *existing == fingerprints {
+                    return;
+                }
+            }
             cache.insert(wiki_id.to_string(), fingerprints);
             cache.clone()
         } else {
@@ -1584,10 +1590,12 @@ impl SyncManager {
             }
         }
 
-        eprintln!(
-            "[Sync] Broadcast {} fingerprints for wiki {} to {} peers",
-            fingerprints.len(), wiki_id, sent_count
-        );
+        if sent_count > 0 {
+            eprintln!(
+                "[Sync] Broadcast {} fingerprints for wiki {} to {} peers",
+                fingerprints.len(), wiki_id, sent_count
+            );
+        }
         Ok(())
     }
 
@@ -2239,27 +2247,33 @@ impl SyncManager {
 
     /// Send a collab message to JS via WebSocket (preferred) or IPC fallback
     fn emit_collab_to_wiki(&self, wiki_id: &str, payload: serde_json::Value) {
-        let msg_type = payload.get("type").and_then(|v| v.as_str()).unwrap_or("unknown");
-        eprintln!("[Collab] emit_collab_to_wiki: wiki={}, type={}", wiki_id, msg_type);
         let msg = serde_json::to_string(&payload).unwrap_or_default();
 
         // Try collab WebSocket first (low-latency push)
         let mut sent_ws = false;
-        if let Ok(clients) = self.collab_ws_clients.lock() {
-            if let Some(senders) = clients.get(wiki_id) {
-                if !senders.is_empty() {
-                    eprintln!("[Collab] emit_collab_to_wiki: sending via WS to {} clients", senders.len());
-                    for sender in senders {
-                        let _ = sender.send(msg.clone());
+        if let Ok(mut clients) = self.collab_ws_clients.lock() {
+            if let Some(senders) = clients.get_mut(wiki_id) {
+                // Proactively remove dead senders (channel receiver dropped)
+                senders.retain(|s| !s.is_closed());
+                if senders.is_empty() {
+                    clients.remove(wiki_id);
+                } else {
+                    // Only count as sent if at least one send actually succeeded
+                    let mut any_ok = false;
+                    for sender in senders.iter() {
+                        if sender.send(msg.clone()).is_ok() {
+                            any_ok = true;
+                        }
                     }
-                    sent_ws = true;
+                    if any_ok {
+                        sent_ws = true;
+                    }
                 }
             }
         }
 
         // Fallback to regular emit_to_wiki (IPC on desktop, bridge on Android)
         if !sent_ws {
-            eprintln!("[Collab] emit_collab_to_wiki: no WS clients, using IPC/bridge fallback");
             Self::emit_to_wiki(wiki_id, "lan-sync-collab", payload);
         }
     }
@@ -2335,16 +2349,43 @@ impl SyncManager {
         // Wiki ID is set when the client sends an "identify" message
         let wiki_id: Arc<tokio::sync::Mutex<Option<String>>> = Arc::new(tokio::sync::Mutex::new(None));
 
-        // Spawn outbound message forwarder
+        // Spawn outbound message forwarder with periodic WebSocket-level pings.
+        // Pings detect zombie connections (e.g. JS side went to background and OS
+        // killed the TCP connection silently). Without pings, the dead sender stays
+        // in collab_ws_clients and silently drops messages (IPC fallback is skipped).
         let wiki_id_out = Arc::clone(&wiki_id);
         let outbound = tokio::spawn(async move {
-            while let Some(msg) = rx.recv().await {
-                if ws_sender
-                    .send(tokio_tungstenite::tungstenite::Message::Text(msg.into()))
-                    .await
-                    .is_err()
-                {
-                    break;
+            let mut ping_interval = tokio::time::interval(std::time::Duration::from_secs(30));
+            ping_interval.tick().await; // skip immediate first tick
+            loop {
+                tokio::select! {
+                    biased;
+                    msg = rx.recv() => {
+                        match msg {
+                            Some(msg) => {
+                                if ws_sender
+                                    .send(tokio_tungstenite::tungstenite::Message::Text(msg.into()))
+                                    .await
+                                    .is_err()
+                                {
+                                    break;
+                                }
+                            }
+                            None => break,
+                        }
+                    }
+                    _ = ping_interval.tick() => {
+                        // Send WebSocket protocol-level ping; browser auto-responds with pong.
+                        // If send fails, connection is dead.
+                        if ws_sender
+                            .send(tokio_tungstenite::tungstenite::Message::Ping(vec![].into()))
+                            .await
+                            .is_err()
+                        {
+                            eprintln!("[Collab WS] Ping send failed — connection dead");
+                            break;
+                        }
+                    }
                 }
             }
             let _ = wiki_id_out; // prevent warning
@@ -2361,6 +2402,11 @@ impl SyncManager {
                 break;
             }
 
+            // Skip pong frames (response to our pings — handled by tungstenite)
+            if msg.is_pong() {
+                continue;
+            }
+
             let text = match msg.into_text() {
                 Ok(t) => t,
                 Err(_) => continue,
@@ -2375,6 +2421,10 @@ impl SyncManager {
             let msg_type = json["type"].as_str().unwrap_or("");
 
             match msg_type {
+                // Application-level ping from JS (used on visibility restore to verify connection)
+                "ping" => {
+                    let _ = tx.send(r#"{"type":"pong"}"#.to_string());
+                }
                 "identify" => {
                     let wid = json["wiki_id"].as_str().unwrap_or("").to_string();
                     if !wid.is_empty() {
@@ -3486,10 +3536,8 @@ impl SyncManager {
                         ref tiddler_title,
                         ref update_base64,
                     } => {
-                        eprintln!("[Collab] INBOUND CollabUpdate: wiki={}, tiddler={}, len={}", wiki_id, tiddler_title, update_base64.len());
                         // Skip messages from our own device (self-echo guard)
                         if from_device_id == self.pairing_manager.device_id() {
-                            eprintln!("[Collab] Skipping self-echoed CollabUpdate for {}", tiddler_title);
                             return;
                         }
                         self.emit_collab_to_wiki(wiki_id, serde_json::json!({
@@ -3515,7 +3563,6 @@ impl SyncManager {
                                 (from_device_id.to_string(), std::time::Instant::now()),
                             );
                         }
-                        eprintln!("[Collab] INBOUND CollabAwareness: wiki={}, tiddler={}, len={}", wiki_id, tiddler_title, update_base64.len());
                         self.emit_collab_to_wiki(wiki_id, serde_json::json!({
                             "type": "collab-awareness",
                             "wiki_id": wiki_id,
@@ -6965,13 +7012,8 @@ pub async fn lan_sync_broadcast_fingerprints(
             let fingerprints_json = serde_json::to_string(&fingerprints).unwrap_or_default();
             let mut guard = ipc.lock().unwrap();
             if let Some(ref mut client) = *guard {
-                match client.send_lan_sync_broadcast_fingerprints(&wiki_id, &fingerprints_json) {
-                    Ok(()) => {
-                        eprintln!("[LAN Sync] IPC broadcast_fingerprints sent: {} fingerprints for wiki {}", fp_count, wiki_id);
-                    }
-                    Err(e) => {
-                        eprintln!("[LAN Sync] IPC broadcast_fingerprints failed: {} — IPC connection may be broken", e);
-                    }
+                if let Err(e) = client.send_lan_sync_broadcast_fingerprints(&wiki_id, &fingerprints_json) {
+                    eprintln!("[LAN Sync] IPC broadcast_fingerprints failed: {} — IPC connection may be broken", e);
                 }
             } else {
                 eprintln!("[LAN Sync] IPC client is None in broadcast_fingerprints");

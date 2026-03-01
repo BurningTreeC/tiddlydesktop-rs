@@ -1848,14 +1848,6 @@ impl RelaySyncManager {
             .map(|def| {
                 let connected_room = rooms.get(&def.room_code);
                 let is_activated = activated.contains(&def.room_code);
-                let peer_count = connected_room.map(|r| r.member_names.len()).unwrap_or(0);
-                eprintln!(
-                    "[Relay] get_rooms: {} relay_connected={} activated={} members={}",
-                    &def.room_code[..8.min(def.room_code.len())],
-                    connected_room.is_some(),
-                    is_activated,
-                    peer_count
-                );
                 RoomStatus {
                     name: def.name.clone(),
                     room_code: def.room_code.clone(),

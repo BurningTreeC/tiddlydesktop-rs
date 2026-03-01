@@ -116,8 +116,8 @@ impl DiscoveryManager {
             .set_broadcast(true)
             .map_err(|e| format!("Failed to set SO_BROADCAST: {}", e))?;
         socket
-            .set_nonblocking(true)
-            .map_err(|e| format!("Failed to set nonblocking: {}", e))?;
+            .set_read_timeout(Some(Duration::from_millis(100)))
+            .map_err(|e| format!("Failed to set read timeout: {}", e))?;
 
         let bind_addr = SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, DISCOVERY_PORT);
         socket
@@ -325,9 +325,9 @@ impl DiscoveryManager {
                             }
                         }
                     }
-                    Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                        // No data available — sleep briefly to avoid busy-spinning
-                        std::thread::sleep(Duration::from_millis(100));
+                    Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock
+                        || e.kind() == std::io::ErrorKind::TimedOut => {
+                        // No data available — read timeout handles the wait efficiently
                     }
                     Err(_) => {
                         std::thread::sleep(Duration::from_millis(100));

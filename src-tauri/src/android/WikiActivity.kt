@@ -6510,16 +6510,35 @@ class WikiActivity : AppCompatActivity() {
             "S.broadcastFingerprints(syncId,JSON.stringify(fps));" +
             // Poll loop — fast polling (20ms) for first 5s to speed up initial sync
             "var pollStart=Date.now();" +
+            "var pollTimer=null;" +
             "function pollIv(){return(Date.now()-pollStart<5000)?20:100;}" +
             "function poll(){if(!syncActive)return;try{var j=S.pollChanges(syncId);var c=JSON.parse(j);" +
             "if(c&&c.length){for(var i=0;i<c.length;i++){" +
             "if(c[i].type==='sync-deactivate'){console.log('[LAN Sync] Deactivated by landing page');syncActive=false;_syncActive=false;clearAllET();rec={};" +
             // After deactivation, poll for re-activation (user may re-enable sync)
-            "var reiv=setInterval(function(){var rid=S.getSyncId(wp);if(rid){clearInterval(reiv);console.log('[LAN Sync] Re-activated: '+rid);syncActive=true;_syncActive=true;pollStart=Date.now();setTimeout(poll,0);var rfps=cfps();S.broadcastFingerprints(rid,JSON.stringify(rfps));}},500);" +
+            "var reiv=setInterval(function(){var rid=S.getSyncId(wp);if(rid){clearInterval(reiv);console.log('[LAN Sync] Re-activated: '+rid);syncActive=true;_syncActive=true;pollStart=Date.now();pollTimer=setTimeout(poll,0);var rfps=cfps();S.broadcastFingerprints(rid,JSON.stringify(rfps));}},500);" +
             "return;}" +
             "queueChange(c[i]);}}}" +
-            "catch(e){}setTimeout(poll,pollIv());}" +
-            "setTimeout(poll,0);" +
+            "catch(e){}pollTimer=setTimeout(poll,pollIv());}" +
+            "pollTimer=setTimeout(poll,0);" +
+            // Expose resume hook — called from onResume() to restart fast polling immediately.
+            // JS timers are throttled while backgrounded, so the poll loop may have stalled.
+            "window.__tdResumeSync=function(){" +
+            "if(!syncActive)return;" +
+            "console.log('[LAN Sync] Resume: triggering immediate poll with fast interval');" +
+            "pollStart=Date.now();" +  // Reset fast-poll window (20ms for next 5s)
+            "if(pollTimer){clearTimeout(pollTimer);pollTimer=null;}" +
+            "poll();" +  // Immediate poll picks up any queued messages
+            "};" +
+            // Also listen for visibilitychange — fires when user switches apps/tabs
+            "document.addEventListener('visibilitychange',function(){" +
+            "if(document.visibilityState==='visible'&&syncActive){" +
+            "console.log('[LAN Sync] visibilitychange: visible — resuming fast poll');" +
+            "pollStart=Date.now();" +
+            "if(pollTimer){clearTimeout(pollTimer);pollTimer=null;}" +
+            "poll();" +
+            "}" +
+            "});" +
             // Periodic fingerprint re-broadcast (5s safety net for convergence)
             "setInterval(function(){if(!syncActive)return;try{var fps2=cfps();S.broadcastFingerprints(syncId,JSON.stringify(fps2));}catch(e){}},5000);" +
             // Periodic tombstone cleanup (every 10 minutes)
@@ -7366,11 +7385,16 @@ class WikiActivity : AppCompatActivity() {
             }
         }
 
-        // Trigger sync activation check — JS setInterval is throttled while backgrounded,
-        // so on resume we explicitly check if sync was enabled while we were away
+        // Trigger sync activation check AND resume sync polling — JS timers are
+        // throttled while backgrounded, so on resume we explicitly:
+        // 1. Check if sync was enabled while we were away (activation)
+        // 2. Restart the poll loop immediately with fast polling (resume)
         if (wasPaused && ::webView.isInitialized) {
             webView.evaluateJavascript(
-                "(function(){if(window.__tdCheckSyncActivation)window.__tdCheckSyncActivation();})()"
+                "(function(){" +
+                "if(window.__tdCheckSyncActivation)window.__tdCheckSyncActivation();" +
+                "if(window.__tdResumeSync)window.__tdResumeSync();" +
+                "})()"
             , null)
         }
 

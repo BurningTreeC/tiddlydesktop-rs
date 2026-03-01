@@ -2137,11 +2137,48 @@ exports.startup = function(callback) {
 		});
 	});
 
+	// Generate a unique speakable room name that doesn't conflict with existing rooms
+	function generateUniqueRoomName() {
+		var adjectives = [
+			"Amber", "Blue", "Coral", "Dawn", "Echo", "Frost", "Gold", "Haze",
+			"Iris", "Jade", "Kelp", "Luna", "Mint", "Nova", "Opal", "Pine",
+			"Quill", "Rose", "Sage", "Tide", "Vale", "Wind", "Zen", "Arc",
+			"Birch", "Cloud", "Dusk", "Elm", "Fern", "Glen", "Husk", "Ivy"
+		];
+		var nouns = [
+			"Brook", "Cove", "Drift", "Edge", "Forge", "Grove", "Haven", "Isle",
+			"Keep", "Lake", "Mesa", "Nest", "Oak", "Peak", "Ridge", "Shore",
+			"Trail", "Vault", "Wharf", "Yard", "Bluff", "Creek", "Dell", "Field",
+			"Gate", "Heath", "Knoll", "Ledge", "Mill", "Nook", "Pond", "Reef"
+		];
+		// Collect existing room names
+		var existing = {};
+		$tw.wiki.each(function(tiddler, title) {
+			if(title.indexOf("$:/temp/tiddlydesktop-rs/relay-room/") === 0) {
+				var name = tiddler.fields.room_name;
+				if(name) existing[name.toLowerCase()] = true;
+			}
+		});
+		// Try random combinations (adjective + noun)
+		for(var attempt = 0; attempt < 100; attempt++) {
+			var adj = adjectives[Math.floor(Math.random() * adjectives.length)];
+			var noun = nouns[Math.floor(Math.random() * nouns.length)];
+			var candidate = adj + " " + noun;
+			if(!existing[candidate.toLowerCase()]) return candidate;
+		}
+		// Fallback: append a number
+		for(var n = 1; n < 1000; n++) {
+			var fallback = "Room " + n;
+			if(!existing[fallback.toLowerCase()]) return fallback;
+		}
+		return "Room";
+	}
+
 	// Add a relay room
 	$tw.rootWidget.addEventListener("tm-tiddlydesktop-rs-relay-add-room", function(event) {
 		var p = event.paramObject || {};
 		if (!p.roomCode || !p.password) return;
-		var roomName = p.name || "Room";
+		var roomName = p.name || generateUniqueRoomName();
 		invoke("relay_sync_add_room", {
 			name: roomName, roomCode: p.roomCode, password: p.password, autoConnect: true
 		}).then(function() {
@@ -2293,7 +2330,7 @@ exports.startup = function(callback) {
 		invoke("relay_sync_generate_credentials").then(function(creds) {
 			$tw.wiki.setText("$:/temp/tiddlydesktop-rs/relay-add-room-code", "text", null, creds.room_code);
 			$tw.wiki.setText("$:/temp/tiddlydesktop-rs/relay-add-room-password", "text", null, creds.password);
-			$tw.wiki.setText("$:/temp/tiddlydesktop-rs/relay-add-room-name", "text", null, "");
+			$tw.wiki.setText("$:/temp/tiddlydesktop-rs/relay-add-room-name", "text", null, generateUniqueRoomName());
 		}).catch(function(err) {
 			console.error("Failed to generate room credentials:", err);
 		});

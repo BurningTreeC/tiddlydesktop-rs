@@ -86,16 +86,50 @@ exports.startup = function(callback) {
 	};
 
 	// Check if terms and conditions have been accepted (one-time gate for sync features)
-	function checkTermsAccepted() {
+	// Calls onAccept() if already accepted or after user accepts; does nothing on cancel.
+	function checkTermsAccepted(onAccept) {
 		var accepted = $tw.wiki.getTiddlerText("$:/config/TiddlyDesktopRS/TermsAccepted");
-		if(accepted) return true;
+		if(accepted) { onAccept(); return; }
 		var msg = $tw.wiki.renderText("text/plain", "text/vnd.tiddlywiki", "<<td-lingo Terms/AcceptPrompt>>");
-		msg += "\nhttps://burningtreec.github.io/TiddlyDesktopRust/";
-		if(confirm(msg)) {
+		var termsUrl = "https://burningtreec.github.io/tiddlydesktop-rs/";
+		// Build a custom dialog overlay with a clickable link
+		var overlay = document.createElement("div");
+		overlay.style.cssText = "position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.5);z-index:99999;display:flex;align-items:center;justify-content:center;";
+		var dialog = document.createElement("div");
+		dialog.style.cssText = "background:#fff;color:#333;border-radius:8px;padding:24px;max-width:400px;width:90%;box-shadow:0 4px 24px rgba(0,0,0,0.3);font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;font-size:14px;line-height:1.5;";
+		var msgEl = document.createElement("p");
+		msgEl.style.cssText = "margin:0 0 12px 0;";
+		msgEl.textContent = msg;
+		var linkEl = document.createElement("a");
+		linkEl.href = termsUrl;
+		linkEl.target = "_blank";
+		linkEl.rel = "noopener";
+		linkEl.textContent = termsUrl;
+		linkEl.style.cssText = "display:block;margin:0 0 20px 0;color:#3498db;word-break:break-all;";
+		var btnRow = document.createElement("div");
+		btnRow.style.cssText = "display:flex;justify-content:flex-end;gap:8px;";
+		var cancelBtn = document.createElement("button");
+		cancelBtn.textContent = $tw.wiki.renderText("text/plain", "text/vnd.tiddlywiki", "<<td-lingo Buttons/Cancel>>") || "Cancel";
+		cancelBtn.style.cssText = "padding:6px 16px;border:1px solid #ccc;border-radius:4px;background:#f5f5f5;color:#333;cursor:pointer;font-size:14px;";
+		var acceptBtn = document.createElement("button");
+		acceptBtn.textContent = "OK";
+		acceptBtn.style.cssText = "padding:6px 16px;border:none;border-radius:4px;background:#3498db;color:#fff;cursor:pointer;font-size:14px;";
+		btnRow.appendChild(cancelBtn);
+		btnRow.appendChild(acceptBtn);
+		dialog.appendChild(msgEl);
+		dialog.appendChild(linkEl);
+		dialog.appendChild(btnRow);
+		overlay.appendChild(dialog);
+		document.body.appendChild(overlay);
+		function cleanup() { if(overlay.parentNode) overlay.parentNode.removeChild(overlay); }
+		cancelBtn.addEventListener("click", function() { cleanup(); });
+		overlay.addEventListener("click", function(e) { if(e.target === overlay) cleanup(); });
+		acceptBtn.addEventListener("click", function() {
+			cleanup();
 			$tw.wiki.setText("$:/config/TiddlyDesktopRS/TermsAccepted", "text", null, new Date().toISOString());
-			return true;
-		}
-		return false;
+			onAccept();
+		});
+		acceptBtn.focus();
 	}
 
 	// Desktop app - always set mobile to no
@@ -1147,24 +1181,30 @@ exports.startup = function(callback) {
 	$tw.rootWidget.addEventListener("tm-tiddlydesktop-rs-set-wiki-sync", function(event) {
 		var path = event.paramObject && event.paramObject.path;
 		var enabled = event.paramObject && event.paramObject.enabled === "true";
-		if(enabled && !checkTermsAccepted()) return;
-		if (path) {
-			invoke("set_wiki_sync", { path: path, enabled: enabled }).then(function(syncId) {
-				var entries = getWikiListEntries();
-				for (var i = 0; i < entries.length; i++) {
-					if (entries[i].path === path) {
-						entries[i].sync_enabled = enabled;
-						if (syncId) entries[i].sync_id = syncId;
-						var tempTitle = "$:/temp/tiddlydesktop-rs/wikis/" + i;
-						$tw.wiki.setText(tempTitle, "sync_enabled", null, enabled ? "true" : "false");
-						$tw.wiki.setText(tempTitle, "sync_id", null, syncId || "");
-						break;
+		function doSetSync() {
+			if (path) {
+				invoke("set_wiki_sync", { path: path, enabled: enabled }).then(function(syncId) {
+					var entries = getWikiListEntries();
+					for (var i = 0; i < entries.length; i++) {
+						if (entries[i].path === path) {
+							entries[i].sync_enabled = enabled;
+							if (syncId) entries[i].sync_id = syncId;
+							var tempTitle = "$:/temp/tiddlydesktop-rs/wikis/" + i;
+							$tw.wiki.setText(tempTitle, "sync_enabled", null, enabled ? "true" : "false");
+							$tw.wiki.setText(tempTitle, "sync_id", null, syncId || "");
+							break;
+						}
 					}
-				}
-				saveWikiList(entries);
-			}).catch(function(err) {
-				console.error("Failed to set wiki sync:", err);
-			});
+					saveWikiList(entries);
+				}).catch(function(err) {
+					console.error("Failed to set wiki sync:", err);
+				});
+			}
+		}
+		if(enabled) {
+			checkTermsAccepted(doSetSync);
+		} else {
+			doSetSync();
 		}
 	});
 
@@ -1900,7 +1940,7 @@ exports.startup = function(callback) {
 
 	// Sign in — fetch providers, then start auth flow
 	$tw.rootWidget.addEventListener("tm-tiddlydesktop-rs-relay-signin", function(event) {
-		if(!checkTermsAccepted()) return;
+		checkTermsAccepted(function() {
 		invoke("relay_sync_fetch_providers").then(function(providers) {
 			if (!providers || providers.length === 0) {
 				console.error("[Relay] No auth providers available");
@@ -1915,6 +1955,7 @@ exports.startup = function(callback) {
 			}
 		}).catch(function(err) {
 			console.error("[Relay] Failed to fetch providers:", err);
+		});
 		});
 	});
 

@@ -6414,7 +6414,7 @@ async fn check_for_updates() -> Result<UpdateCheckResult, String> {
 
 /// Android version - separate from desktop versioning (must match build.gradle.kts versionName)
 #[cfg(target_os = "android")]
-const ANDROID_VERSION: &str = "0.0.83";
+const ANDROID_VERSION: &str = "0.0.84";
 
 /// Check for updates on Android via version file on GitHub, linking to Play Store
 #[cfg(target_os = "android")]
@@ -7808,6 +7808,8 @@ window.__SAVE_URL__ = "{save_url}";
                 .status(200)
                 .header("Content-Type", "text/html; charset=utf-8")
                 .header("Access-Control-Allow-Origin", "*")
+                .header("Cache-Control", "no-store, no-cache, must-revalidate")
+                .header("Pragma", "no-cache")
                 .body(response_bytes)
                 .unwrap()
         }
@@ -9599,6 +9601,7 @@ pub fn run() {
             wiki_storage::get_recent_files,
             wiki_storage::remove_recent_file,
             wiki_storage::reconcile_recent_files,
+            wiki_storage::save_full_wiki_list,
             wiki_storage::set_wiki_backups,
             wiki_storage::set_wiki_backup_dir,
             wiki_storage::set_wiki_backup_count,

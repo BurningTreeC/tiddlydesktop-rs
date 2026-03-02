@@ -448,11 +448,10 @@ exports.startup = function(callback) {
 		});
 		// Trigger autosave so the main wiki file is saved
 		$tw.rootWidget.dispatchEvent({type: "tm-auto-save-wiki"});
-		// Reconcile: ensure Rust JSON only contains wikis that are in the WikiList.
-		// This prevents stale entries from being broadcast to sync peers.
-		var paths = entries.map(function(e) { return e.path; });
-		invoke("reconcile_recent_files", { paths: paths }).catch(function(err) {
-			console.error("[TiddlyDesktop] Failed to reconcile recent files:", err);
+		// Sync the full wiki list to Rust JSON (source of truth).
+		// This ensures the JSON config always matches the frontend state.
+		invoke("save_full_wiki_list", { entries: entries }).catch(function(err) {
+			console.error("[TiddlyDesktop] Failed to save wiki list to JSON:", err);
 		});
 	}
 
@@ -1604,41 +1603,38 @@ exports.startup = function(callback) {
 		}
 	});
 
-	// Initial load of wiki list from tiddler
-	refreshWikiList();
-
-	// If the WikiList tiddler is empty (e.g. migration reset, autosave didn't fire,
-	// or HTML was rebuilt), restore entries from the Rust JSON config on disk.
-	// Reconcile runs after the fallback resolves so it sees the restored entries.
-	function reconcileStartupPaths() {
-		var paths = getWikiListEntries().map(function(e) { return e.path; });
-		invoke("reconcile_recent_files", { paths: paths }).then(function(removedCount) {
-			if (removedCount > 0) {
-				console.log("[TiddlyDesktop] Startup reconciliation removed " + removedCount + " stale entries from Rust config");
+	// Always load wiki list from Rust JSON config (source of truth).
+	// The JSON is updated atomically with backups on every save, making it
+	// more reliable than the HTML tiddler which can be affected by browser
+	// caching or partial saves. Fall back to the HTML tiddler only if JSON
+	// is empty (e.g. first launch or JSON corruption).
+	invoke("get_recent_files").then(function(jsonEntries) {
+		if (jsonEntries && jsonEntries.length > 0) {
+			// JSON is the source of truth — update the WikiList tiddler
+			$tw.wiki.addTiddler({
+				title: "$:/TiddlyDesktop/WikiList",
+				type: "application/json",
+				text: JSON.stringify(jsonEntries, null, 2)
+			});
+			refreshWikiList();
+		} else {
+			// JSON is empty — try the HTML tiddler as fallback
+			refreshWikiList();
+			var htmlEntries = getWikiListEntries();
+			if (htmlEntries.length > 0) {
+				console.log("[TiddlyDesktop] JSON config empty — using " +
+					htmlEntries.length + " entries from HTML tiddler, syncing to JSON");
+				// Sync HTML entries back to JSON so this doesn't happen again
+				invoke("save_full_wiki_list", { entries: htmlEntries }).catch(function(err) {
+					console.error("[TiddlyDesktop] Failed to sync HTML entries to JSON:", err);
+				});
 			}
-		}).catch(function(err) {
-			console.error("[TiddlyDesktop] Failed to reconcile on startup:", err);
-		});
-	}
-
-	var initialEntries = getWikiListEntries();
-	if (initialEntries.length === 0) {
-		// WikiList tiddler is empty — try restoring from Rust JSON backup
-		invoke("get_recent_files").then(function(jsonEntries) {
-			if (jsonEntries && jsonEntries.length > 0) {
-				console.log("[TiddlyDesktop] WikiList tiddler empty — restoring " +
-					jsonEntries.length + " entries from recent_wikis.json");
-				saveWikiList(jsonEntries);
-				refreshWikiList();
-			}
-			reconcileStartupPaths();
-		}).catch(function(err) {
-			console.error("[TiddlyDesktop] Failed to load recent files for fallback:", err);
-			reconcileStartupPaths();
-		});
-	} else {
-		reconcileStartupPaths();
-	}
+		}
+	}).catch(function(err) {
+		console.error("[TiddlyDesktop] Failed to load JSON config:", err);
+		// Fall back to HTML tiddler
+		refreshWikiList();
+	});
 
 	// On Android, merge favicons from disk files into wiki list entries.
 	// WikiActivity saves favicons to files in the :wiki process, but can't send
@@ -2639,8 +2635,9 @@ exports.startup = function(callback) {
 		});
 	}
 
-	// Initial status check
+	// Initial status check (with retry in case backend isn't fully initialized yet)
 	refreshSyncStatus();
+	setTimeout(refreshSyncStatus, 2000);
 
 	// Pre-populate display name input from saved setting
 	invoke("lan_sync_get_display_name_setting").then(function(name) {

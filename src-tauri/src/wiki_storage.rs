@@ -439,6 +439,23 @@ pub fn reconcile_recent_files(app: tauri::AppHandle, paths: Vec<String>) -> Resu
     Ok(removed_count)
 }
 
+/// Save the full wiki list from the frontend to JSON.
+/// This replaces the entire recent_wikis.json with the provided entries,
+/// ensuring the JSON config stays in sync with the frontend WikiList tiddler.
+#[tauri::command]
+pub fn save_full_wiki_list(app: tauri::AppHandle, entries: Vec<WikiEntry>) -> Result<(), String> {
+    // Safety guard: refuse to save an empty list if we have entries on disk.
+    // This prevents accidental data loss if JS sends an empty array due to a bug.
+    if entries.is_empty() {
+        let existing = load_recent_files_from_disk(&app);
+        if !existing.is_empty() {
+            eprintln!("[WikiStorage] save_full_wiki_list: refusing to overwrite {} entries with empty list", existing.len());
+            return Ok(());
+        }
+    }
+    save_recent_files_to_disk(&app, &entries)
+}
+
 /// Set backups enabled/disabled for a wiki
 #[tauri::command]
 pub fn set_wiki_backups(app: tauri::AppHandle, path: String, enabled: bool) -> Result<(), String> {

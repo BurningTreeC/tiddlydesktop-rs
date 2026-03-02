@@ -39,8 +39,8 @@
 //! - HTML: Script tags and event handlers are stripped
 //! - File paths: Path traversal sequences are rejected
 
-// Encoding utilities - only needed on Linux (Windows no longer uses custom IDropTarget)
-#[cfg(target_os = "linux")]
+// Encoding utilities - needed on Linux and Windows for content extraction from IDataObject/SelectionData
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 mod encoding;
 
 // Sanitization utilities - needed on all platforms for path validation in Tauri commands

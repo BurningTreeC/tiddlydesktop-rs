@@ -9,8 +9,12 @@
 
 #![cfg(target_os = "windows")]
 
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicU8, AtomicU32, Ordering};
 use std::sync::Mutex;
+
+use super::encoding;
+use super::sanitize;
 
 use tauri::{Emitter, Manager, WebviewWindow};
 // Note: wry::WebViewExtWindows has composition_controller() but Tauri's PlatformWebview
@@ -22,16 +26,15 @@ use windows::Win32::System::Com::{
     IDataObject, IDataObject_Impl, IEnumFORMATETC, DVASPECT_CONTENT, FORMATETC,
     STGMEDIUM, TYMED_HGLOBAL, IAdviseSink, IEnumSTATDATA,
 };
-use windows::Win32::System::Memory::{GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE};
+use windows::Win32::System::Memory::{GlobalAlloc, GlobalLock, GlobalSize, GlobalUnlock, GMEM_MOVEABLE};
 use windows::Win32::System::Ole::{
     DoDragDrop, IDropSource, IDropSource_Impl, IDropTarget, IDropTarget_Impl,
-    OleInitialize,
+    OleInitialize, RegisterDragDrop, RevokeDragDrop,
     DROPEFFECT, DROPEFFECT_COPY, DROPEFFECT_LINK, DROPEFFECT_MOVE, DROPEFFECT_NONE,
 };
 use windows::Win32::System::SystemServices::MODIFIERKEYS_FLAGS;
 use windows::Win32::System::DataExchange::RegisterClipboardFormatW;
 use windows::Win32::UI::Shell::DragQueryFileW;
-use windows::Win32::UI::WindowsAndMessaging::GetClassNameW;
 use windows::Win32::Graphics::Gdi::ScreenToClient;
 use windows_core::{BOOL, Interface, Ref};
 
@@ -73,6 +76,14 @@ fn cf_url_w() -> u16 {
 
 fn cf_moz_url() -> u16 {
     unsafe { RegisterClipboardFormatW(w!("text/x-moz-url")) as u16 }
+}
+
+fn cf_chromium_custom() -> u16 {
+    unsafe { RegisterClipboardFormatW(w!("chromium/x-web-custom-data")) as u16 }
+}
+
+fn cf_moz_custom() -> u16 {
+    unsafe { RegisterClipboardFormatW(w!("application/x-moz-custom-clipdata")) as u16 }
 }
 
 // ============================================================================
@@ -223,9 +234,9 @@ pub struct OutgoingDragData {
 /// In composition hosting mode:
 /// - WebView2 renders to a DirectComposition visual
 /// - No Chrome_WidgetWin_* child windows are created in our process
-/// - WRY already registers IDropTarget via CompositionDragDropTarget
-/// - WRY extracts file paths and calls drag_drop_handler → Tauri events
-/// - We only need to register DragStarting handler for outgoing drag detection
+/// - We replace WRY's CompositionDragDropTarget with our ContentAwareDropTarget
+///   that extracts content (text, HTML, tiddler data) from external drags
+/// - We register DragStarting handler for outgoing drag detection
 pub fn setup_drag_handlers(window: &WebviewWindow) {
     let window_label = window.label().to_string();
     let app_handle = window.app_handle().clone();
@@ -240,12 +251,12 @@ pub fn setup_drag_handlers(window: &WebviewWindow) {
     let _ = window.with_webview(move |webview| {
         #[cfg(windows)]
         unsafe {
-            // Initialize OLE (required for DoDragDrop)
+            // Initialize OLE (required for DoDragDrop and RegisterDragDrop)
             let _ = OleInitialize(None);
 
             let controller = webview.controller();
 
-            // Get the WRY container HWND (for logging)
+            // Get the WRY container HWND
             let mut container_hwnd = HWND::default();
             let _ = controller.ParentWindow(&mut container_hwnd);
             eprintln!("[TiddlyDesktop] Windows: Container HWND = {:?}", container_hwnd);
@@ -258,8 +269,7 @@ pub fn setup_drag_handlers(window: &WebviewWindow) {
                 }
             }
 
-            // Get composition controller for DragStarting handler
-            // Cast ICoreWebView2Controller → ICoreWebView2CompositionController → Controller3
+            // Get composition controller for forwarding drag events and DragStarting handler
             let composition_controller3 = controller.cast::<ICoreWebView2CompositionController>()
                 .ok()
                 .and_then(|c| c.cast::<ICoreWebView2CompositionController3>().ok());
@@ -267,10 +277,33 @@ pub fn setup_drag_handlers(window: &WebviewWindow) {
             if let Some(comp_ctrl) = composition_controller3 {
                 eprintln!("[TiddlyDesktop] Windows: Got ICoreWebView2CompositionController3 - composition mode active");
 
-                // Register DragStarting handler for cross-wiki drag detection
-                // NOTE: WRY already registers IDropTarget via CompositionDragDropTarget,
-                // so we do NOT call register_drop_target_composition here.
-                // File paths from external drops come through Tauri's onDragDropEvent.
+                // Replace WRY's CompositionDragDropTarget with our ContentAwareDropTarget
+                // that extracts content from external drags and emits td-drag-* events
+                match RevokeDragDrop(container_hwnd) {
+                    Ok(()) => eprintln!("[TiddlyDesktop] Windows: RevokeDragDrop succeeded on container HWND"),
+                    Err(e) => eprintln!("[TiddlyDesktop] Windows: RevokeDragDrop failed (may not have been registered): {:?}", e),
+                }
+
+                let drop_target = ContentAwareDropTarget::new(
+                    container_hwnd,
+                    comp_ctrl.clone(),
+                    app_handle.clone(),
+                    window_label.clone(),
+                );
+                let drop_target_interface: IDropTarget = drop_target.into();
+
+                match RegisterDragDrop(container_hwnd, &drop_target_interface) {
+                    Ok(()) => {
+                        eprintln!("[TiddlyDesktop] Windows: Registered ContentAwareDropTarget on container HWND");
+                        // Keep the drop target alive for the lifetime of the window
+                        std::mem::forget(drop_target_interface);
+                    }
+                    Err(e) => {
+                        eprintln!("[TiddlyDesktop] Windows: RegisterDragDrop failed: {:?}", e);
+                    }
+                }
+
+                // Register DragStarting handler for outgoing drag detection
                 if let Ok(controller5) = comp_ctrl.cast::<ICoreWebView2CompositionController5>() {
                     let handler: ICoreWebView2DragStartingEventHandler =
                         DragStartingHandler::new(window_label.clone()).into();
@@ -289,168 +322,269 @@ pub fn setup_drag_handlers(window: &WebviewWindow) {
     });
 }
 
-/// Register IDropTarget on container HWND for composition hosting mode
-/// NOTE: Not currently used - WRY's CompositionDragDropTarget handles this now
-#[allow(dead_code)]
-unsafe fn register_drop_target_composition(
-    container_hwnd: HWND,
-    composition_controller: ICoreWebView2CompositionController3,
-    app: tauri::AppHandle,
-) {
-    use windows::Win32::System::Ole::RegisterDragDrop;
+// ============================================================================
+// Content extraction helpers for incoming drags
+// ============================================================================
 
-    eprintln!("[TiddlyDesktop] Windows: Registering IDropTarget on container HWND {:?} (composition mode)", container_hwnd);
+/// Get raw bytes from a clipboard format in an IDataObject
+unsafe fn get_format_bytes(data_object: &IDataObject, cf: u16) -> Option<Vec<u8>> {
+    let format = FORMATETC {
+        cfFormat: cf,
+        ptd: std::ptr::null_mut(),
+        dwAspect: DVASPECT_CONTENT.0 as u32,
+        lindex: -1,
+        tymed: TYMED_HGLOBAL.0 as u32,
+    };
 
-    // Create our drop target that forwards to WebView2
-    let drop_target = ForwardingDropTarget::new(container_hwnd, composition_controller, app);
-    let drop_target_interface: IDropTarget = drop_target.into();
-
-    // Register on the container HWND
-    match RegisterDragDrop(container_hwnd, &drop_target_interface) {
-        Ok(()) => {
-            eprintln!("[TiddlyDesktop] Windows: Registered ForwardingDropTarget on container HWND");
-            // Keep it alive
-            std::mem::forget(drop_target_interface);
-        }
-        Err(e) => {
-            eprintln!("[TiddlyDesktop] Windows: RegisterDragDrop on container HWND failed: {:?}", e);
-        }
+    let medium = data_object.GetData(&format).ok()?;
+    if medium.tymed != TYMED_HGLOBAL.0 as u32 || medium.u.hGlobal.0.is_null() {
+        return None;
     }
+
+    let ptr = GlobalLock(medium.u.hGlobal);
+    if ptr.is_null() {
+        return None;
+    }
+
+    let size = GlobalSize(medium.u.hGlobal);
+    if size == 0 {
+        let _ = GlobalUnlock(medium.u.hGlobal);
+        return None;
+    }
+
+    let bytes = std::slice::from_raw_parts(ptr as *const u8, size).to_vec();
+    let _ = GlobalUnlock(medium.u.hGlobal);
+    Some(bytes)
 }
 
-/// Register IDropTarget for windowed mode (fallback - finds Chrome_WidgetWin_* windows)
-/// NOTE: Not currently used - WRY's CompositionDragDropTarget handles this now
-#[allow(dead_code)]
-unsafe fn register_drop_target_windowed(
-    parent_hwnd: HWND,
-    composition_controller: ICoreWebView2CompositionController3,
-    app: tauri::AppHandle,
-) {
-    use windows::Win32::Foundation::LPARAM;
-    use windows::Win32::UI::WindowsAndMessaging::EnumChildWindows;
-    use windows::Win32::System::Ole::{RegisterDragDrop, RevokeDragDrop};
+/// Get a string from a clipboard format, using encoding::decode_string for auto-detection
+unsafe fn get_format_string(data_object: &IDataObject, cf: u16) -> Option<String> {
+    let bytes = get_format_bytes(data_object, cf)?;
+    let s = encoding::decode_string(&bytes);
+    if s.is_empty() { None } else { Some(s) }
+}
 
-    struct EnumContext {
-        chrome_widget_0: Option<HWND>,
-        chrome_widget_1: Option<HWND>,
-    }
+/// Check if a clipboard format is available in an IDataObject
+unsafe fn has_format(data_object: &IDataObject, cf: u16) -> bool {
+    let format = FORMATETC {
+        cfFormat: cf,
+        ptd: std::ptr::null_mut(),
+        dwAspect: DVASPECT_CONTENT.0 as u32,
+        lindex: -1,
+        tymed: TYMED_HGLOBAL.0 as u32,
+    };
+    data_object.QueryGetData(&format) == S_OK
+}
 
-    unsafe extern "system" fn enum_callback(hwnd: HWND, lparam: LPARAM) -> BOOL {
-        let ctx = &mut *(lparam.0 as *mut EnumContext);
+/// Check if the IDataObject has any content formats (not just files)
+unsafe fn has_content_formats(data_object: &IDataObject) -> bool {
+    has_format(data_object, CF_UNICODETEXT)
+        || has_format(data_object, cf_html())
+        || has_format(data_object, cf_tiddler())
+        || has_format(data_object, cf_url_w())
+        || has_format(data_object, cf_chromium_custom())
+        || has_format(data_object, cf_moz_custom())
+}
 
-        let mut class_name_buf = [0u16; 256];
-        let len = GetClassNameW(hwnd, &mut class_name_buf);
-        if len > 0 {
-            let class_name = String::from_utf16_lossy(&class_name_buf[..len as usize]);
-            if class_name == "Chrome_WidgetWin_0" && ctx.chrome_widget_0.is_none() {
-                ctx.chrome_widget_0 = Some(hwnd);
-            } else if class_name == "Chrome_WidgetWin_1" && ctx.chrome_widget_1.is_none() {
-                ctx.chrome_widget_1 = Some(hwnd);
+/// Extract file paths from CF_HDROP in an IDataObject
+unsafe fn extract_file_paths(data_object: &IDataObject) -> Vec<String> {
+    let mut paths = Vec::new();
+
+    let format = FORMATETC {
+        cfFormat: CF_HDROP,
+        ptd: std::ptr::null_mut(),
+        dwAspect: DVASPECT_CONTENT.0 as u32,
+        lindex: -1,
+        tymed: TYMED_HGLOBAL.0 as u32,
+    };
+
+    if let Ok(medium) = data_object.GetData(&format) {
+        if medium.tymed == TYMED_HGLOBAL.0 as u32 && !medium.u.hGlobal.0.is_null() {
+            let hdrop = windows::Win32::UI::Shell::HDROP(medium.u.hGlobal.0);
+            let count = DragQueryFileW(hdrop, 0xFFFFFFFF, None);
+
+            for i in 0..count {
+                let len = DragQueryFileW(hdrop, i, None);
+                if len > 0 {
+                    let mut buf = vec![0u16; (len + 1) as usize];
+                    DragQueryFileW(hdrop, i, Some(&mut buf));
+                    let path = String::from_utf16_lossy(&buf[..len as usize]);
+                    paths.push(path);
+                }
             }
         }
-        BOOL::from(true)
     }
 
-    let mut ctx = EnumContext { chrome_widget_0: None, chrome_widget_1: None };
-    let _ = EnumChildWindows(Some(parent_hwnd), Some(enum_callback), LPARAM(&mut ctx as *mut _ as isize));
+    paths
+}
 
-    // Also check children of Chrome_WidgetWin_0 for Chrome_WidgetWin_1
-    if let Some(chrome_0) = ctx.chrome_widget_0 {
-        let mut ctx2 = EnumContext { chrome_widget_0: None, chrome_widget_1: None };
-        let _ = EnumChildWindows(Some(chrome_0), Some(enum_callback), LPARAM(&mut ctx2 as *mut _ as isize));
-        if ctx.chrome_widget_1.is_none() {
-            ctx.chrome_widget_1 = ctx2.chrome_widget_1;
-        }
-    }
+/// Extract content from an IDataObject into a map of MIME type → content string.
+/// Tries browser custom formats first (Chrome, Firefox), then falls back to individual formats.
+/// Applies sanitization to HTML and URL content.
+unsafe fn extract_content(data_object: &IDataObject) -> HashMap<String, String> {
+    let mut result = HashMap::new();
 
-    if let Some(chrome_0) = ctx.chrome_widget_0 {
-        eprintln!("[TiddlyDesktop] Windows: Found Chrome_WidgetWin_0 at {:?}", chrome_0);
-    }
-
-    if let Some(chrome_1) = ctx.chrome_widget_1 {
-        eprintln!("[TiddlyDesktop] Windows: Found Chrome_WidgetWin_1 at {:?}", chrome_1);
-
-        // Revoke the browser process's drop target
-        match RevokeDragDrop(chrome_1) {
-            Ok(()) => eprintln!("[TiddlyDesktop] Windows: RevokeDragDrop succeeded on Chrome_WidgetWin_1"),
-            Err(e) => eprintln!("[TiddlyDesktop] Windows: RevokeDragDrop failed: {:?}", e),
-        }
-
-        // Create our drop target that forwards to WebView2
-        let drop_target = ForwardingDropTarget::new(chrome_1, composition_controller, app);
-        let drop_target_interface: IDropTarget = drop_target.into();
-
-        // Register it on Chrome_WidgetWin_1
-        match RegisterDragDrop(chrome_1, &drop_target_interface) {
-            Ok(()) => {
-                eprintln!("[TiddlyDesktop] Windows: Registered ForwardingDropTarget on Chrome_WidgetWin_1");
-                std::mem::forget(drop_target_interface);
+    // Try Chrome custom data first (richest source - contains all MIME types)
+    if let Some(bytes) = get_format_bytes(data_object, cf_chromium_custom()) {
+        if let Some(custom_data) = encoding::parse_chromium_custom_data(&bytes) {
+            eprintln!("[TiddlyDesktop] Windows: Extracted Chrome custom data with {} types", custom_data.len());
+            for (mime, content) in custom_data {
+                // Sanitize HTML content
+                let content = if mime == "text/html" {
+                    sanitize::sanitize_html(&content)
+                } else {
+                    content
+                };
+                result.insert(mime, content);
             }
-            Err(e) => {
-                eprintln!("[TiddlyDesktop] Windows: RegisterDragDrop on Chrome_WidgetWin_1 failed: {:?}", e);
+            if !result.is_empty() {
+                return result;
             }
         }
-    } else {
-        eprintln!("[TiddlyDesktop] Windows: Chrome_WidgetWin_1 not found - drag-drop may not work");
     }
+
+    // Try Firefox custom data
+    if let Some(bytes) = get_format_bytes(data_object, cf_moz_custom()) {
+        if let Some(custom_data) = encoding::parse_moz_custom_clipdata(&bytes) {
+            eprintln!("[TiddlyDesktop] Windows: Extracted Mozilla custom data with {} types", custom_data.len());
+            for (mime, content) in custom_data {
+                let content = if mime == "text/html" {
+                    sanitize::sanitize_html(&content)
+                } else {
+                    content
+                };
+                result.insert(mime, content);
+            }
+            if !result.is_empty() {
+                return result;
+            }
+        }
+    }
+
+    // Fall back to individual clipboard formats
+    if let Some(text) = get_format_string(data_object, CF_UNICODETEXT) {
+        result.insert("text/plain".to_string(), text);
+    }
+
+    if let Some(html_raw) = get_format_string(data_object, cf_html()) {
+        let html = strip_cf_html_header(&html_raw);
+        let html = sanitize::sanitize_html(&html);
+        result.insert("text/html".to_string(), html);
+    }
+
+    if let Some(tiddler) = get_format_string(data_object, cf_tiddler()) {
+        result.insert("text/vnd.tiddler".to_string(), tiddler);
+    }
+
+    if let Some(url) = get_format_string(data_object, cf_url_w()) {
+        if !sanitize::is_dangerous_url(&url) {
+            result.insert("text/uri-list".to_string(), url);
+        } else {
+            eprintln!("[TiddlyDesktop] Windows: Blocked dangerous URL from drag data");
+        }
+    }
+
+    eprintln!("[TiddlyDesktop] Windows: Extracted {} individual format(s)", result.len());
+    result
+}
+
+/// Strip the CF_HTML header to extract just the HTML fragment.
+/// CF_HTML format wraps the actual HTML with header lines like:
+/// ```
+/// Version:0.9
+/// StartHTML:0000000105
+/// EndHTML:0000000199
+/// StartFragment:0000000141
+/// EndFragment:0000000163
+/// ```
+/// We extract the fragment between `<!--StartFragment-->` and `<!--EndFragment-->` markers.
+fn strip_cf_html_header(html: &str) -> String {
+    const START_MARKER: &str = "<!--StartFragment-->";
+    const END_MARKER: &str = "<!--EndFragment-->";
+
+    if let Some(start) = html.find(START_MARKER) {
+        let content_start = start + START_MARKER.len();
+        if let Some(end) = html[content_start..].find(END_MARKER) {
+            return html[content_start..content_start + end].to_string();
+        }
+    }
+
+    // If no markers found, try to skip the header lines and return everything after the blank line
+    if let Some(pos) = html.find("\r\n\r\n") {
+        return html[pos + 4..].to_string();
+    }
+    if let Some(pos) = html.find("\n\n") {
+        return html[pos + 2..].to_string();
+    }
+
+    html.to_string()
+}
+
+/// Query OUTGOING_DRAG_STATE for info about the current outgoing drag.
+/// Returns (is_our_drag, is_same_window, source_window, has_tiddler_data, is_text_selection_drag)
+fn get_outgoing_drag_info(target_window: &str) -> (bool, bool, Option<String>, bool, bool) {
+    if let Ok(state) = OUTGOING_DRAG_STATE.lock() {
+        if let Some(ref s) = *state {
+            let is_our_drag = true;
+            let is_same_window = s.source_window_label == target_window;
+            let source_window = Some(s.source_window_label.clone());
+            let has_tiddler = s.data.text_vnd_tiddler.is_some();
+            let is_text_sel = s.data.is_text_selection_drag;
+            return (is_our_drag, is_same_window, source_window, has_tiddler, is_text_sel);
+        }
+    }
+    (false, false, None, false, false)
 }
 
 // ============================================================================
-// ForwardingDropTarget - extracts file paths and forwards to WebView2
-// NOTE: Not currently used - WRY's CompositionDragDropTarget handles this now
+// ContentAwareDropTarget - extracts content and file paths, forwards to WebView2
 // ============================================================================
 
-#[allow(dead_code)]
+/// Serializable drag content data for td-drag-content events
+#[derive(Clone, Debug, serde::Serialize)]
+struct DragContentData {
+    types: Vec<String>,
+    data: HashMap<String, String>,
+    #[serde(rename = "isSameWindow")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    is_same_window: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    is_text_selection_drag: Option<bool>,
+}
+
 #[implement(IDropTarget)]
-struct ForwardingDropTarget {
+struct ContentAwareDropTarget {
     hwnd: HWND,
     composition_controller: ICoreWebView2CompositionController3,
     app: tauri::AppHandle,
+    window_label: String,
+    /// Whether we're tracking an active content drag (non-file)
+    drag_active: std::cell::UnsafeCell<bool>,
+    /// Whether we're tracking a file drag
+    file_drag_active: std::cell::UnsafeCell<bool>,
+    /// File paths extracted during DragEnter
     current_paths: std::cell::UnsafeCell<Vec<String>>,
 }
 
-unsafe impl Send for ForwardingDropTarget {}
-unsafe impl Sync for ForwardingDropTarget {}
+unsafe impl Send for ContentAwareDropTarget {}
+unsafe impl Sync for ContentAwareDropTarget {}
 
-impl ForwardingDropTarget {
-    fn new(hwnd: HWND, composition_controller: ICoreWebView2CompositionController3, app: tauri::AppHandle) -> Self {
+impl ContentAwareDropTarget {
+    fn new(
+        hwnd: HWND,
+        composition_controller: ICoreWebView2CompositionController3,
+        app: tauri::AppHandle,
+        window_label: String,
+    ) -> Self {
         Self {
             hwnd,
             composition_controller,
             app,
+            window_label,
+            drag_active: std::cell::UnsafeCell::new(false),
+            file_drag_active: std::cell::UnsafeCell::new(false),
             current_paths: std::cell::UnsafeCell::new(Vec::new()),
         }
-    }
-
-    unsafe fn extract_file_paths(data_object: &IDataObject) -> Vec<String> {
-        let mut paths = Vec::new();
-
-        let format = FORMATETC {
-            cfFormat: CF_HDROP,
-            ptd: std::ptr::null_mut(),
-            dwAspect: DVASPECT_CONTENT.0 as u32,
-            lindex: -1,
-            tymed: TYMED_HGLOBAL.0 as u32,
-        };
-
-        if let Ok(medium) = data_object.GetData(&format) {
-            if medium.tymed == TYMED_HGLOBAL.0 as u32 && !medium.u.hGlobal.0.is_null() {
-                let hdrop = windows::Win32::UI::Shell::HDROP(medium.u.hGlobal.0);
-                let count = DragQueryFileW(hdrop, 0xFFFFFFFF, None);
-
-                for i in 0..count {
-                    let len = DragQueryFileW(hdrop, i, None);
-                    if len > 0 {
-                        let mut buf = vec![0u16; (len + 1) as usize];
-                        DragQueryFileW(hdrop, i, Some(&mut buf));
-                        let path = String::from_utf16_lossy(&buf[..len as usize]);
-                        paths.push(path);
-                    }
-                }
-            }
-        }
-
-        paths
     }
 
     unsafe fn to_client_coords(&self, pt: &POINTL) -> (i32, i32) {
@@ -460,7 +594,7 @@ impl ForwardingDropTarget {
     }
 }
 
-impl IDropTarget_Impl for ForwardingDropTarget_Impl {
+impl IDropTarget_Impl for ContentAwareDropTarget_Impl {
     fn DragEnter(
         &self,
         pdataobj: Ref<'_, IDataObject>,
@@ -468,28 +602,68 @@ impl IDropTarget_Impl for ForwardingDropTarget_Impl {
         pt: &POINTL,
         pdweffect: *mut DROPEFFECT,
     ) -> windows_core::Result<()> {
-        eprintln!("[TiddlyDesktop] ForwardingDropTarget::DragEnter at ({}, {})", pt.x, pt.y);
+        let (x, y) = unsafe { self.to_client_coords(pt) };
+        eprintln!("[TiddlyDesktop] ContentAwareDropTarget::DragEnter at ({}, {}) client=({}, {})", pt.x, pt.y, x, y);
 
-        // Extract file paths
+        let internal_state = INTERNAL_DRAG_STATE.load(Ordering::Acquire);
+        let is_internal_tiddler = internal_state == DRAG_STATE_TIDDLER;
+
         if let Some(data_obj) = pdataobj.as_ref() {
-            let paths = unsafe { ForwardingDropTarget::extract_file_paths(data_obj) };
-            if !paths.is_empty() {
-                eprintln!("[TiddlyDesktop] ForwardingDropTarget DragEnter: {} files", paths.len());
-                unsafe { *self.current_paths.get() = paths.clone(); }
+            // Check for file drops first
+            let paths = unsafe { extract_file_paths(data_obj) };
 
-                let (x, y) = unsafe { self.to_client_coords(pt) };
+            if !paths.is_empty() && !is_internal_tiddler {
+                // File drag - emit tauri://drag-enter and track as file drag
+                eprintln!("[TiddlyDesktop] Windows: DragEnter: {} file(s)", paths.len());
+                unsafe {
+                    *self.current_paths.get() = paths.clone();
+                    *self.file_drag_active.get() = true;
+                }
+
                 let _ = self.app.emit("tauri://drag-enter", serde_json::json!({
                     "paths": paths,
                     "position": { "x": x, "y": y }
                 }));
+            } else if !is_internal_tiddler {
+                // Check for content formats (text, HTML, tiddler data, URLs, browser custom)
+                let has_content = unsafe { has_content_formats(data_obj) };
+
+                if has_content {
+                    eprintln!("[TiddlyDesktop] Windows: DragEnter: content drag detected");
+                    unsafe { *self.drag_active.get() = true; }
+
+                    // Get outgoing drag info for cross-wiki detection
+                    let (is_our_drag, is_same_window, source_window, has_tiddler, is_text_sel) =
+                        get_outgoing_drag_info(&self.window_label);
+
+                    let _ = self.app.emit("td-drag-motion", serde_json::json!({
+                        "x": x,
+                        "y": y,
+                        "physicalPixels": true,
+                        "isOurDrag": is_our_drag,
+                        "isSameWindow": is_same_window,
+                        "sourceWindow": source_window,
+                        "targetWindow": self.window_label,
+                        "hasTiddlerData": has_tiddler,
+                        "isTextSelectionDrag": is_text_sel
+                    }));
+
+                    // Force COPY effect for content drags
+                    unsafe { *pdweffect = DROPEFFECT_COPY; }
+                }
             }
         }
 
-        // Forward to WebView2
+        // Forward to WebView2 composition controller
         unsafe {
             let point = POINT { x: pt.x, y: pt.y };
             if let Err(e) = self.composition_controller.DragEnter(pdataobj.as_ref(), grfkeystate.0, point, pdweffect as *mut u32) {
-                eprintln!("[TiddlyDesktop] ForwardingDropTarget: DragEnter forward failed: {:?}", e);
+                eprintln!("[TiddlyDesktop] Windows: DragEnter forward failed: {:?}", e);
+            }
+
+            // Override effect back to COPY for content drags (WebView2 may have changed it)
+            if *self.drag_active.get() {
+                *pdweffect = DROPEFFECT_COPY;
             }
         }
 
@@ -503,15 +677,41 @@ impl IDropTarget_Impl for ForwardingDropTarget_Impl {
         pdweffect: *mut DROPEFFECT,
     ) -> windows_core::Result<()> {
         let (x, y) = unsafe { self.to_client_coords(pt) };
-        let _ = self.app.emit("tauri://drag-over", serde_json::json!({
-            "position": { "x": x, "y": y }
-        }));
+
+        let is_content_drag = unsafe { *self.drag_active.get() };
+        let is_file_drag = unsafe { *self.file_drag_active.get() };
+
+        if is_content_drag {
+            let (is_our_drag, is_same_window, source_window, has_tiddler, is_text_sel) =
+                get_outgoing_drag_info(&self.window_label);
+
+            let _ = self.app.emit("td-drag-motion", serde_json::json!({
+                "x": x,
+                "y": y,
+                "physicalPixels": true,
+                "isOurDrag": is_our_drag,
+                "isSameWindow": is_same_window,
+                "sourceWindow": source_window,
+                "targetWindow": self.window_label,
+                "hasTiddlerData": has_tiddler,
+                "isTextSelectionDrag": is_text_sel
+            }));
+        } else if is_file_drag {
+            let _ = self.app.emit("tauri://drag-over", serde_json::json!({
+                "position": { "x": x, "y": y }
+            }));
+        }
 
         // Forward to WebView2
         unsafe {
             let point = POINT { x: pt.x, y: pt.y };
             if let Err(e) = self.composition_controller.DragOver(grfkeystate.0, point, pdweffect as *mut u32) {
-                eprintln!("[TiddlyDesktop] ForwardingDropTarget: DragOver forward failed: {:?}", e);
+                eprintln!("[TiddlyDesktop] Windows: DragOver forward failed: {:?}", e);
+            }
+
+            // Override effect for content drags
+            if is_content_drag {
+                *pdweffect = DROPEFFECT_COPY;
             }
         }
 
@@ -519,15 +719,39 @@ impl IDropTarget_Impl for ForwardingDropTarget_Impl {
     }
 
     fn DragLeave(&self) -> windows_core::Result<()> {
-        unsafe { (*self.current_paths.get()).clear(); }
-        let _ = self.app.emit("tauri://drag-leave", serde_json::json!({}));
+        let was_content_drag = unsafe { *self.drag_active.get() };
+        let was_file_drag = unsafe { *self.file_drag_active.get() };
+
+        eprintln!("[TiddlyDesktop] Windows: DragLeave (content={}, file={})", was_content_drag, was_file_drag);
+
+        if was_content_drag {
+            let (is_our_drag, _, _, _, _) = get_outgoing_drag_info(&self.window_label);
+            let _ = self.app.emit("td-drag-leave", serde_json::json!({
+                "isOurDrag": is_our_drag,
+                "targetWindow": self.window_label
+            }));
+        }
+
+        if was_file_drag {
+            let _ = self.app.emit("tauri://drag-leave", serde_json::json!({}));
+        }
+
+        // Clear state
+        unsafe {
+            *self.drag_active.get() = false;
+            *self.file_drag_active.get() = false;
+            (*self.current_paths.get()).clear();
+        }
 
         // Forward to WebView2
         unsafe {
             if let Err(e) = self.composition_controller.DragLeave() {
-                eprintln!("[TiddlyDesktop] ForwardingDropTarget: DragLeave forward failed: {:?}", e);
+                eprintln!("[TiddlyDesktop] Windows: DragLeave forward failed: {:?}", e);
             }
         }
+
+        // Clear internal drag state (safety net)
+        INTERNAL_DRAG_STATE.store(DRAG_STATE_NONE, Ordering::Release);
 
         Ok(())
     }
@@ -539,34 +763,84 @@ impl IDropTarget_Impl for ForwardingDropTarget_Impl {
         pt: &POINTL,
         pdweffect: *mut DROPEFFECT,
     ) -> windows_core::Result<()> {
-        eprintln!("[TiddlyDesktop] ForwardingDropTarget::Drop at ({}, {})", pt.x, pt.y);
+        let (x, y) = unsafe { self.to_client_coords(pt) };
+        let was_content_drag = unsafe { *self.drag_active.get() };
+        let was_file_drag = unsafe { *self.file_drag_active.get() };
 
-        // Get file paths
-        let paths = if let Some(data_obj) = pdataobj.as_ref() {
-            unsafe { ForwardingDropTarget::extract_file_paths(data_obj) }
-        } else {
-            unsafe { (*self.current_paths.get()).clone() }
-        };
+        eprintln!("[TiddlyDesktop] Windows: Drop at ({}, {}) content={}, file={}", x, y, was_content_drag, was_file_drag);
 
-        if !paths.is_empty() {
-            eprintln!("[TiddlyDesktop] ForwardingDropTarget Drop: {} files: {:?}", paths.len(), paths);
+        if let Some(data_obj) = pdataobj.as_ref() {
+            if was_file_drag {
+                // File drop
+                let paths = unsafe { extract_file_paths(data_obj) };
+                if !paths.is_empty() {
+                    eprintln!("[TiddlyDesktop] Windows: File drop: {} files", paths.len());
 
-            let (x, y) = unsafe { self.to_client_coords(pt) };
-            let _ = self.app.emit("tauri://drag-drop", serde_json::json!({
-                "paths": paths,
-                "position": { "x": x, "y": y }
-            }));
+                    let _ = self.app.emit("td-file-drop", serde_json::json!({
+                        "paths": paths,
+                        "targetWindow": self.window_label
+                    }));
+
+                    let _ = self.app.emit("tauri://drag-drop", serde_json::json!({
+                        "paths": paths,
+                        "position": { "x": x, "y": y }
+                    }));
+                }
+            } else if was_content_drag {
+                // Content drop - extract all content from IDataObject
+                let content = unsafe { extract_content(data_obj) };
+
+                if !content.is_empty() {
+                    let (_, is_same_window, _, _, is_text_sel) = get_outgoing_drag_info(&self.window_label);
+
+                    // Emit td-drag-drop-start
+                    let _ = self.app.emit("td-drag-drop-start", serde_json::json!({
+                        "x": x,
+                        "y": y,
+                        "physicalPixels": true
+                    }));
+
+                    // Emit td-drag-drop-position
+                    let _ = self.app.emit("td-drag-drop-position", serde_json::json!({
+                        "x": x,
+                        "y": y,
+                        "physicalPixels": true,
+                        "targetWindow": self.window_label
+                    }));
+
+                    // Emit td-drag-content with extracted data
+                    let types: Vec<String> = content.keys().cloned().collect();
+                    eprintln!("[TiddlyDesktop] Windows: Content drop - emitting td-drag-content with {} types: {:?}",
+                        types.len(), types);
+
+                    let content_data = DragContentData {
+                        types,
+                        data: content,
+                        is_same_window: if is_same_window { Some(true) } else { None },
+                        is_text_selection_drag: if is_text_sel { Some(true) } else { None },
+                    };
+                    let _ = self.app.emit("td-drag-content", &content_data);
+                }
+            }
         }
 
-        unsafe { (*self.current_paths.get()).clear(); }
+        // Clear state
+        unsafe {
+            *self.drag_active.get() = false;
+            *self.file_drag_active.get() = false;
+            (*self.current_paths.get()).clear();
+        }
 
         // Forward to WebView2
         unsafe {
             let point = POINT { x: pt.x, y: pt.y };
             if let Err(e) = self.composition_controller.Drop(pdataobj.as_ref(), grfkeystate.0, point, pdweffect as *mut u32) {
-                eprintln!("[TiddlyDesktop] ForwardingDropTarget: Drop forward failed: {:?}", e);
+                eprintln!("[TiddlyDesktop] Windows: Drop forward failed: {:?}", e);
             }
         }
+
+        // Clear internal drag state
+        INTERNAL_DRAG_STATE.store(DRAG_STATE_NONE, Ordering::Release);
 
         Ok(())
     }

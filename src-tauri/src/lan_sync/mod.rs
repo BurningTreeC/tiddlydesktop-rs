@@ -1916,6 +1916,11 @@ impl SyncManager {
             None => return,
         };
 
+        // Load cached fingerprints once before the peer loop
+        let cached_fps = self.get_accurate_cached_fingerprints(wiki_id);
+        let my_device_id = self.pairing_manager.device_id().to_string();
+        let mut found_peer_count = 0u32;
+
         // Find all connected peers that have this wiki AND are in the wiki's room
         for (device_id, wikis) in remote.iter() {
             if wikis.iter().any(|w| w.wiki_id == wiki_id) {
@@ -1948,6 +1953,36 @@ impl SyncManager {
                     }),
                 );
 
+                found_peer_count += 1;
+
+                // Send RequestFingerprints directly to the peer so relay peers
+                // get an explicit request even if JS isn't ready yet.
+                let _ = self.send_to_peer_any(
+                    device_id,
+                    &SyncMessage::RequestFingerprints {
+                        wiki_id: wiki_id.to_string(),
+                    },
+                ).await;
+
+                // Send our cached fingerprints so the peer can compute diffs
+                // immediately. Respects dedup to avoid redundant sends.
+                if !self.dedup_fp_send(wiki_id, device_id) {
+                    let fps = cached_fps.clone().unwrap_or_default();
+                    eprintln!(
+                        "[LAN Sync] Sending {} cached fingerprints for wiki {} to peer {} (on_wiki_opened)",
+                        fps.len(), wiki_id, device_id
+                    );
+                    let _ = self.send_to_peer_any(
+                        device_id,
+                        &SyncMessage::TiddlerFingerprints {
+                            wiki_id: wiki_id.to_string(),
+                            from_device_id: my_device_id.clone(),
+                            fingerprints: fps,
+                            is_reply: false,
+                        },
+                    ).await;
+                }
+
                 // Also send our attachment manifest for single-file wikis.
                 // Spawned as background task to avoid blocking the event loop.
                 if let Some(wiki_path) = crate::wiki_storage::get_wiki_path_by_sync_id(app, wiki_id) {
@@ -1959,6 +1994,63 @@ impl SyncManager {
                         });
                     }
                 }
+            }
+        }
+
+        // Drop the remote_wikis read lock before spawning the delayed task
+        drop(remote);
+
+        // If no peers were found (e.g. relay not yet connected at startup),
+        // schedule a delayed retry so we catch up once the relay connects.
+        if found_peer_count == 0 {
+            eprintln!(
+                "[LAN Sync] No peers found for wiki {} — scheduling 4s delayed retry",
+                wiki_id
+            );
+            let wiki_id_owned = wiki_id.to_string();
+            if let Some(mgr) = get_sync_manager() {
+                tokio::spawn(async move {
+                    tokio::time::sleep(std::time::Duration::from_secs(4)).await;
+                    let remote = mgr.remote_wikis.read().await;
+                    let allowed_peers = mgr.get_all_peers_for_wiki(&wiki_id_owned).await;
+                    let cached_fps = mgr.get_accurate_cached_fingerprints(&wiki_id_owned);
+                    let my_did = mgr.pairing_manager.device_id().to_string();
+
+                    for (device_id, wikis) in remote.iter() {
+                        if !allowed_peers.contains(device_id) {
+                            continue;
+                        }
+                        if wikis.iter().any(|w| w.wiki_id == wiki_id_owned) {
+                            eprintln!(
+                                "[LAN Sync] Delayed retry: sending catch-up for wiki {} to peer {}",
+                                wiki_id_owned, device_id
+                            );
+                            let _ = mgr.send_to_peer_any(
+                                device_id,
+                                &SyncMessage::RequestFingerprints {
+                                    wiki_id: wiki_id_owned.clone(),
+                                },
+                            ).await;
+
+                            if !mgr.dedup_fp_send(&wiki_id_owned, device_id) {
+                                let fps = cached_fps.clone().unwrap_or_default();
+                                eprintln!(
+                                    "[LAN Sync] Delayed retry: sending {} cached fingerprints for wiki {} to peer {}",
+                                    fps.len(), wiki_id_owned, device_id
+                                );
+                                let _ = mgr.send_to_peer_any(
+                                    device_id,
+                                    &SyncMessage::TiddlerFingerprints {
+                                        wiki_id: wiki_id_owned.clone(),
+                                        from_device_id: my_did.clone(),
+                                        fingerprints: fps,
+                                        is_reply: false,
+                                    },
+                                ).await;
+                            }
+                        }
+                    }
+                });
             }
         }
 
@@ -2052,11 +2144,6 @@ impl SyncManager {
         }
 
         let remote = self.remote_wikis.read().await;
-        let server_guard = self.server.read().await;
-        let server = match server_guard.as_ref() {
-            Some(s) => s,
-            None => return,
-        };
 
         // Load cached local fingerprints for this wiki, excluding any
         // tiddlers merged from FullSyncBatch while wiki JS was closed
@@ -2074,8 +2161,9 @@ impl SyncManager {
                     "[LAN Sync] Pre-requesting fingerprints for wiki {} from peer {}",
                     wiki_id, device_id
                 );
-                // Ask peer for their fingerprints (peer will forward to their JS)
-                let _ = server.send_to_peer(
+                // Ask peer for their fingerprints (peer will forward to their JS).
+                // Uses send_to_peer_any so relay-only peers are reached too.
+                let _ = self.send_to_peer_any(
                     device_id,
                     &SyncMessage::RequestFingerprints {
                         wiki_id: wiki_id.to_string(),
@@ -2093,7 +2181,7 @@ impl SyncManager {
                     "[LAN Sync] Sending {} fingerprints for wiki {} to peer {} (pre-boot)",
                     fps.len(), wiki_id, device_id
                 );
-                let _ = server.send_to_peer(
+                let _ = self.send_to_peer_any(
                     device_id,
                     &SyncMessage::TiddlerFingerprints {
                         wiki_id: wiki_id.to_string(),

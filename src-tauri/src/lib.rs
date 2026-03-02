@@ -3586,6 +3586,27 @@ async fn get_available_editions(app: tauri::AppHandle) -> Result<Vec<EditionInfo
         }
     }
 
+    // Scan directories from TIDDLYWIKI_EDITION_PATH environment variable
+    if let Ok(env_path) = std::env::var("TIDDLYWIKI_EDITION_PATH") {
+        for dir in std::env::split_paths(&env_path) {
+            if !dir.exists() || !dir.is_dir() {
+                continue;
+            }
+            // Skip directories already scanned
+            if dir == bundled_editions_dir || dir == user_editions_dir {
+                continue;
+            }
+            let existing_ids: Vec<String> = editions.iter().map(|e| e.id.clone()).collect();
+            let mut skip_list: Vec<&str> = skip_editions.to_vec();
+            for id in &existing_ids {
+                skip_list.push(id.as_str());
+            }
+            let mut env_editions = read_editions_from_dir(&dir.to_path_buf(), true, &skip_list);
+            env_editions.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+            editions.extend(env_editions);
+        }
+    }
+
     println!("Editions: {} total ({} user editions from {:?})", editions.len(), user_edition_ids.len(), user_editions_dir);
 
     Ok(editions)
@@ -3784,6 +3805,61 @@ async fn get_available_plugins(app: tauri::AppHandle) -> Result<Vec<PluginInfo>,
                 }
                 Err(e) => {
                     eprintln!("[TiddlyDesktop] Warning: Failed to sync custom plugins: {}", e);
+                }
+            }
+        }
+    }
+
+    // Scan directories from TIDDLYWIKI_PLUGIN_PATH environment variable
+    if let Ok(env_path) = std::env::var("TIDDLYWIKI_PLUGIN_PATH") {
+        let existing_ids: std::collections::HashSet<String> = plugins.iter().map(|p| p.id.clone()).collect();
+        for dir in std::env::split_paths(&env_path) {
+            if !dir.exists() || !dir.is_dir() {
+                continue;
+            }
+            // Scan two levels deep: {dir}/{author}/{name}/plugin.info
+            if let Ok(author_entries) = std::fs::read_dir(&dir) {
+                for author_entry in author_entries.flatten() {
+                    let author_path = author_entry.path();
+                    if !author_path.is_dir() { continue; }
+                    let author_name = author_path.file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("")
+                        .to_string();
+                    if let Ok(plugin_entries) = std::fs::read_dir(&author_path) {
+                        for plugin_entry in plugin_entries.flatten() {
+                            let plugin_path = plugin_entry.path();
+                            if !plugin_path.is_dir() { continue; }
+                            let plugin_info_path = plugin_path.join("plugin.info");
+                            if !plugin_info_path.exists() { continue; }
+                            let plugin_name = plugin_path.file_name()
+                                .and_then(|n| n.to_str())
+                                .unwrap_or("")
+                                .to_string();
+                            let id = format!("{}/{}", author_name, plugin_name);
+                            if existing_ids.contains(&plugin_name) || existing_ids.contains(&id) {
+                                continue;
+                            }
+                            if let Ok(content) = std::fs::read_to_string(&plugin_info_path) {
+                                if let Ok(info) = serde_json::from_str::<serde_json::Value>(&content) {
+                                    let name = info.get("name")
+                                        .and_then(|v| v.as_str())
+                                        .unwrap_or(&plugin_name)
+                                        .to_string();
+                                    let description = info.get("description")
+                                        .and_then(|v| v.as_str())
+                                        .unwrap_or("")
+                                        .to_string();
+                                    plugins.push(PluginInfo {
+                                        id,
+                                        name,
+                                        description,
+                                        category: "Custom".to_string(),
+                                    });
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -6414,7 +6490,7 @@ async fn check_for_updates() -> Result<UpdateCheckResult, String> {
 
 /// Android version - separate from desktop versioning (must match build.gradle.kts versionName)
 #[cfg(target_os = "android")]
-const ANDROID_VERSION: &str = "0.0.84";
+const ANDROID_VERSION: &str = "0.0.85";
 
 /// Check for updates on Android via version file on GitHub, linking to Play Store
 #[cfg(target_os = "android")]

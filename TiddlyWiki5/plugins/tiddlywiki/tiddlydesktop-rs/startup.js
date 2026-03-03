@@ -567,6 +567,7 @@ exports.startup = function(callback) {
 				sync_id: entry.sync_id || "",
 				sync_peers: entry.sync_peers ? JSON.stringify(entry.sync_peers) : "[]",
 				relay_room: entry.relay_room || "",
+				sync_mode: entry.sync_mode || "",
 				needs_reauth: "checking", // Will be updated by permission check on Android
 				text: ""
 			});
@@ -2403,6 +2404,30 @@ exports.startup = function(callback) {
 		if (roomCode) {
 			invoke("relay_sync_connect_room", { roomCode: roomCode }).catch(function() {});
 		}
+	});
+
+	$tw.rootWidget.addEventListener("tm-tiddlydesktop-rs-set-sync-mode", function(event) {
+		var p = event.paramObject || {};
+		var path = p.path;
+		var mode = p.mode || "";
+		if (!path) return;
+		var entries = getWikiListEntries();
+		for (var i = 0; i < entries.length; i++) {
+			if (entries[i].path === path) {
+				if (mode && mode !== "bidirectional") {
+					entries[i].sync_mode = mode;
+				} else {
+					delete entries[i].sync_mode;
+				}
+				var tempTitle = "$:/temp/tiddlydesktop-rs/wikis/" + i;
+				$tw.wiki.setText(tempTitle, "sync_mode", null, mode || "");
+				break;
+			}
+		}
+		saveWikiList(entries);
+		invoke("set_wiki_sync_mode", { path: path, mode: mode || null }).catch(function(err) {
+			console.error("Failed to set wiki sync mode:", err);
+		});
 	});
 
 	// Track auth state transitions to fetch server rooms once on initial detection

@@ -2188,6 +2188,46 @@ body.td-is-android.td-main-wiki .td-wikilist {
 	flex-shrink: 0;
 }
 
+/* Sync mode dropdown */
+.td-button-sync-mode {
+	font-size: 12px;
+}
+
+.td-sync-mode-dropdown {
+	min-width: 160px;
+	max-width: 240px;
+}
+
+.td-sync-mode-dropdown-content {
+	padding: 4px 0;
+}
+
+.td-sync-mode-header {
+	padding: 6px 12px;
+	font-size: 12px;
+	font-weight: 600;
+	color: <<colour muted-foreground>>;
+	border-bottom: 1px solid <<colour tiddler-border>>;
+}
+
+.td-sync-mode-option {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	width: 100%;
+	padding: 8px 12px;
+	text-align: left;
+	background: none;
+	border: none;
+	cursor: pointer;
+	font-size: 13px;
+	color: <<colour foreground>>;
+}
+
+.td-sync-mode-option:hover {
+	background: <<colour tab-background>>;
+}
+
 /* Relay connection status dot */
 .td-sync-relay {
 	background: #2196f3;

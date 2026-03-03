@@ -134,7 +134,12 @@ RelaySync/RegisteredOnRelay: ثبت شده
 RelaySync/Registering: در حال ثبت...
 RelaySync/RegisterFailed: ثبت ناموفق بود
 Tooltips/SelectRelayRoom: اختصاص این ویکی به یک اتاق رله
+Tooltips/SyncMode: تنظیم جهت همگام‌سازی برای این ویکی
 Tooltips/PluginsDisabled: ابتدا ویکی را ببندید
+SyncMode/Label: حالت همگام‌سازی
+SyncMode/Bidirectional: دوطرفه
+SyncMode/SendOnly: فقط ارسال
+SyncMode/ReceiveOnly: فقط دریافت
 RelaySync/ServerRooms: اتاق‌های شما روی سرور
 RelaySync/ServerRoomsEmpty: اتاقی روی سرور یافت نشد. یک اتاق را از پنل جزئیات آن ثبت کنید.
 RelaySync/Configured: پیکربندی شده

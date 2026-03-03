@@ -170,7 +170,7 @@
       '<$text text=<<dn>>/>\n' +
       '</$reveal>\n' +
       '</$let>\n' +
-      '<$list filter="[<editingTid>get[text]jsonindexes[]count[]compare:number:gt<cnt-first>]" variable="ignore">, </$list>\n' +
+      '<$list filter="[<cnt-last>!match[yes]]" variable="ignore">, </$list>\n' +
       '</$list>\n' +
       '</div>\n' +
       '</$list>\n' +

@@ -2168,6 +2168,23 @@ class WikiActivity : AppCompatActivity() {
         }
 
         @JavascriptInterface
+        fun getSyncMode(wikiPath: String): String {
+            val port = bridgePort()
+            if (port <= 0) return ""
+            return try {
+                val url = java.net.URL("http://127.0.0.1:$port/_bridge/sync-id?path=${java.net.URLEncoder.encode(wikiPath, "UTF-8")}")
+                val conn = url.openConnection() as java.net.HttpURLConnection
+                conn.connectTimeout = 2000
+                conn.readTimeout = 2000
+                val body = conn.inputStream.bufferedReader().readText()
+                conn.disconnect()
+                org.json.JSONObject(body).optString("sync_mode", "")
+            } catch (e: Exception) {
+                ""
+            }
+        }
+
+        @JavascriptInterface
         fun tiddlerChanged(wikiId: String, title: String, tiddlerJson: String) {
             Thread {
                 bridgePost("/_bridge/tiddler-changed", org.json.JSONObject().apply {
@@ -4460,6 +4477,14 @@ class WikiActivity : AppCompatActivity() {
                 });
 
                 registerPlugin();  // Register all shadow tiddlers as a plugin
+
+                // Expose plugin registration API globally so other scripts
+                // (e.g. peerStatusScript) can add shadow tiddlers too
+                if (!window.TiddlyDesktop) window.TiddlyDesktop = {};
+                window.TiddlyDesktop.addPluginTiddler = addPluginTiddler;
+                window.TiddlyDesktop.removePluginTiddler = removePluginTiddler;
+                window.TiddlyDesktop.registerPlugin = registerPlugin;
+
                 installImportHook();
 
                 // Override permalink/permaview actions to do nothing — address bar URLs
@@ -6307,12 +6332,12 @@ class WikiActivity : AppCompatActivity() {
             "function init(){" +
             "if(typeof \$tw==='undefined'||!\$tw.wiki||!\$tw.wiki.addEventListener||!\$tw.rootWidget){setTimeout(init,100);return;}" +
             "var sid=S.getSyncId(wp);" +
-            "if(sid){activate(sid);}else{" +
+            "if(sid){var sm=S.getSyncMode(wp)||'';activate(sid,sm);}else{" +
             // Re-check every 500ms in case user enables sync from landing page
             "console.log('[LAN Sync] No sync_id yet, polling for activation...');" +
-            "var iv=setInterval(function(){var id=S.getSyncId(wp);if(id){clearInterval(iv);console.log('[LAN Sync] Sync activated via polling: '+id);activate(id);}},500);" +
+            "var iv=setInterval(function(){var id=S.getSyncId(wp);if(id){clearInterval(iv);console.log('[LAN Sync] Sync activated via polling: '+id);var m=S.getSyncMode(wp)||'';activate(id,m);}},500);" +
             // Expose a check function for onResume — JS timers are throttled in background
-            "window.__tdCheckSyncActivation=function(){var id=S.getSyncId(wp);if(id){clearInterval(iv);console.log('[LAN Sync] Sync activated via onResume: '+id);activate(id);window.__tdCheckSyncActivation=null;}};" +
+            "window.__tdCheckSyncActivation=function(){var id=S.getSyncId(wp);if(id){clearInterval(iv);console.log('[LAN Sync] Sync activated via onResume: '+id);var m=S.getSyncMode(wp)||'';activate(id,m);window.__tdCheckSyncActivation=null;}};" +
             "}" +
             "}" +
             // Serialize tiddler fields, converting Date objects to TW date strings
@@ -6322,9 +6347,10 @@ class WikiActivity : AppCompatActivity() {
             "if(t.indexOf('Draft ')==0){var r=t.substring(6);var p=r.indexOf(\" of '\");if(p>0){var n=r.substring(0,p);if(/^\\d+\$/.test(n))return true;}}return false;}" +
             // Compare version strings (semver-like). Returns 1 if a>b, -1 if a<b, 0 if equal.
             "function cmpVer(a,b){if(!a&&!b)return 0;if(!a)return -1;if(!b)return 1;var pa=a.split('.'),pb=b.split('.');var len=Math.max(pa.length,pb.length);for(var i=0;i<len;i++){var na=parseInt(pa[i]||'0',10)||0;var nb=parseInt(pb[i]||'0',10)||0;if(na>nb)return 1;if(na<nb)return -1;}return 0;}" +
-            "function activate(syncId){" +
+            "function activate(syncId,syncMode){" +
             "var syncActive=true;" +
-            "console.log('[LAN Sync] Activated for wiki: '+syncId);" +
+            "syncMode=syncMode||'';" +
+            "console.log('[LAN Sync] Activated for wiki: '+syncId+' mode: '+(syncMode||'bidirectional'));" +
             "S.wikiOpened(syncId);" +
             // Activate collab: set flag, flush queued outbound messages
             // NOTE: Do NOT reset collabListeners — CM6 editors created before sync
@@ -6357,6 +6383,7 @@ class WikiActivity : AppCompatActivity() {
             // Outbound: detect local changes
             "\$tw.wiki.addEventListener('change',function(ch){" +
             "if(!syncActive)return;" +
+            "if(syncMode==='receive-only')return;" +
             "var keys=Object.keys(ch);" +
             "for(var i=0;i<keys.length;i++){" +
             "var t=keys[i];" +
@@ -6418,6 +6445,7 @@ class WikiActivity : AppCompatActivity() {
             "queue.push(d);if(!batchTimer)batchTimer=setTimeout(applyBatch,50);" +
             "}" +
             "function applyBatch(){batchTimer=null;var b=queue;queue=[];if(!b.length)return;" +
+            "if(syncMode==='send-only'){console.log('[LAN Sync] Discarding '+b.length+' inbound changes (send-only mode)');return;}" +
             "console.log('[LAN Sync] Applying batch of '+b.length+' changes');" +
             "var ns=false;var pc=false;var pendConf={};" +
             "for(var i=0;i<b.length;i++){var d=b[i];" +
@@ -6442,7 +6470,8 @@ class WikiActivity : AppCompatActivity() {
             // Separate normal fingerprints from tombstones
             "var remote={};var peerVer={};var peerTombs={};for(var i=0;i<fps.length;i++){if(fps[i].deleted)peerTombs[fps[i].title]=fps[i].modified;else{remote[fps[i].title]=fps[i].modified;if(fps[i].version)peerVer[fps[i].title]=fps[i].version;}}" +
             // Apply peer tombstones: delete local tiddlers that peer intentionally deleted
-            "var tombNs=false;var ptks=Object.keys(peerTombs);for(var ti=0;ti<ptks.length;ti++){" +
+            "if(syncMode==='send-only'){console.log('[LAN Sync] Skipping tombstone application (send-only mode)');}" +
+            "var tombNs=false;var ptks=Object.keys(peerTombs);for(var ti=0;ti<ptks.length&&syncMode!=='send-only';ti++){" +
             "var tt=ptks[ti];var tm=peerTombs[tt];" +
             "var lt2=tomb[tt];if(lt2&&lt2.cleared&&lt2.modified>=tm)continue;" +
             "var lt=\$tw.wiki.getTiddler(tt);" +
@@ -6450,6 +6479,7 @@ class WikiActivity : AppCompatActivity() {
             "if(!lm2||lm2<=tm){suppress.add(tt);\$tw.wiki.deleteTiddler(tt);tombNs=true;console.log('[LAN Sync] Applied tombstone deletion: '+tt);}}" +
             "if(!lt2||lt2.modified<tm)tomb[tt]={modified:tm,time:Date.now()};}" +
             "if(tombNs)scheduleSave();if(ptks.length>0)S.saveTombstones(syncId,JSON.stringify(tomb));" +
+            "if(syncMode==='receive-only'){console.log('[LAN Sync] Skipping outbound diff (receive-only mode)');S.sendFullSyncBatch(syncId,fromDevId,'[]',true);return;}" +
             "var all=\$tw.wiki.allTitles();var diffs=[];" +
             "for(var j=0;j<all.length;j++){var t=all[j];" +
             "if(t==='\$:/StoryList'||t==='\$:/HistoryList'||t==='\$:/library/sjcl.js'||t==='\$:/Import'||t==='\$:/language'||t==='\$:/theme'||t==='\$:/palette'||t==='\$:/isEncrypted'||t==='\$:/view'||t==='\$:/layout'||t==='\$:/DefaultTiddlers'||t==='\$:/core')continue;" +
@@ -6710,7 +6740,7 @@ class WikiActivity : AppCompatActivity() {
             "_aT({title:CT,text:String(p.length)});" +
             "var ch={};ch[PT]={modified:true};ch[CT]={modified:true};\$tw.wiki.eventsTriggered=false;\$tw.wiki.dispatchEvent('change',ch);}" +
             "var rc=st.relay_connected||false;if(rc!==_lastRelay){_lastRelay=rc;try{S.setRelayConnected(rc);}catch(_){}}}" +
-            "function createBadge(){if(\$tw.wiki.tiddlerExists(BT))return;" +
+            "function createBadge(){if(\$tw.wiki.tiddlerExists(BT))return false;" +
             "var wt=" +
             "'\\\\define peer-badge-styles()\\n" +
             ".td-peer-badge{display:inline-block;cursor:pointer;padding:2px 6px;position:relative;}\\n" +
@@ -6742,8 +6772,8 @@ class WikiActivity : AppCompatActivity() {
             "</\$list></div>\\n" +
             "</\$reveal></\$reveal></\$reveal>\\n" +
             "<style><<peer-badge-styles>></style>';" +
-            "_aT({title:BT,tags:'\$:/tags/TopRightBar',text:wt});}" +
-            "function createEditBadge(){if(\$tw.wiki.tiddlerExists(EBT))return;" +
+            "var TD=window.TiddlyDesktop;if(TD&&TD.addPluginTiddler){TD.addPluginTiddler({title:BT,tags:'\$:/tags/TopRightBar','list-before':'',text:wt});return true;}return false;}" +
+            "function createEditBadge(){if(\$tw.wiki.tiddlerExists(EBT))return false;" +
             "var eb=" +
             "'\\\\define editing-badge-styles()\\n" +
             ".td-editing-badge{display:inline-block;font-size:0.8em;padding:2px 8px;margin:0 0 4px 0;border-radius:10px;background:<<colour notification-background>>;border:1px solid <<colour notification-border>>;color:<<colour foreground>>;}\\n" +
@@ -6758,17 +6788,17 @@ class WikiActivity : AppCompatActivity() {
             "<\$reveal type=\"nomatch\" default=<<un>> text=\"\"><\$text text=<<un>>/></\$reveal>\\n" +
             "<\$reveal type=\"match\" default=<<un>> text=\"\"><\$text text=<<dn>>/></\$reveal>\\n" +
             "</\$let>\\n" +
-            "<\$list filter=\"[<editingTid>get[text]jsonindexes[]count[]compare:number:gt<cnt-first>]\" variable=\"ignore\">, </\$list>\\n" +
+            "<\$list filter=\"[<cnt-last>!match[yes]]\" variable=\"ignore\">, </\$list>\\n" +
             "</\$list>\\n" +
             "</div>\\n" +
             "</\$list>\\n" +
             "</\$set>\\n" +
             "<style><<editing-badge-styles>></style>';" +
-            "_aT({title:EBT,tags:'\$:/tags/ViewTemplate','list-before':'\$:/core/ui/ViewTemplate/body',text:eb});}" +
+            "var TD=window.TiddlyDesktop;if(TD&&TD.addPluginTiddler){TD.addPluginTiddler({title:EBT,tags:'\$:/tags/ViewTemplate','list-before':'\$:/core/ui/ViewTemplate/body',text:eb});return true;}return false;}" +
             "waitTw(function(){" +
             "_aT({title:PT,type:'application/json',text:'{}'});" +
             "_aT({title:CT,text:'0'});" +
-            "createBadge();createEditBadge();" +
+            "var nr=false;if(createBadge())nr=true;if(createEditBadge())nr=true;if(nr&&window.TiddlyDesktop&&window.TiddlyDesktop.registerPlugin)window.TiddlyDesktop.registerPlugin();" +
             "var un=\$tw.wiki.getTiddlerText('\$:/status/UserName')||'';" +
             "if(un)announce(un);" +
             "\$tw.wiki.addEventListener('change',function(ch){if(ch['\$:/status/UserName']){var nn=\$tw.wiki.getTiddlerText('\$:/status/UserName')||'';announce(nn);try{var cp=require('\$:/plugins/tiddlywiki/codemirror-6-collab/collab.js');if(cp&&cp.updateUserName)cp.updateUserName(nn||'Anonymous');}catch(_){}}});" +

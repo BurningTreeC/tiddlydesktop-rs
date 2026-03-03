@@ -134,7 +134,12 @@ RelaySync/RegisteredOnRelay: רשום
 RelaySync/Registering: רושם...
 RelaySync/RegisterFailed: הרישום נכשל
 Tooltips/SelectRelayRoom: שייך ויקי זה לחדר ממסר
+Tooltips/SyncMode: הגדר כיוון סנכרון עבור ויקי זה
 Tooltips/PluginsDisabled: סגור את הוויקי קודם
+SyncMode/Label: מצב סנכרון
+SyncMode/Bidirectional: דו-כיווני
+SyncMode/SendOnly: שליחה בלבד
+SyncMode/ReceiveOnly: קבלה בלבד
 RelaySync/ServerRooms: החדרים שלך בשרת
 RelaySync/ServerRoomsEmpty: לא נמצאו חדרים בשרת. רשום חדר מלוח הפרטים שלו.
 RelaySync/Configured: מוגדר

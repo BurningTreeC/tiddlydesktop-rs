@@ -134,7 +134,12 @@ RelaySync/RegisteredOnRelay: مُسجّل
 RelaySync/Registering: جاري التسجيل...
 RelaySync/RegisterFailed: فشل التسجيل
 Tooltips/SelectRelayRoom: تعيين هذا الويكي إلى غرفة ترحيل
+Tooltips/SyncMode: تعيين اتجاه المزامنة لهذا الويكي
 Tooltips/PluginsDisabled: أغلق الويكي أولاً
+SyncMode/Label: وضع المزامنة
+SyncMode/Bidirectional: ثنائي الاتجاه
+SyncMode/SendOnly: إرسال فقط
+SyncMode/ReceiveOnly: استقبال فقط
 RelaySync/ServerRooms: غرفك على الخادم
 RelaySync/ServerRoomsEmpty: لم يتم العثور على غرف على الخادم. سجّل غرفة من لوحة التفاصيل الخاصة بها.
 RelaySync/Configured: مُعدّ

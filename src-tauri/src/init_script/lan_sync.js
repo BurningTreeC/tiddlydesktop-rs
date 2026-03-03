@@ -184,6 +184,8 @@
 
   // Track active sync state so we can deactivate cleanly
   var activeSyncState = null;
+  // Sync mode: "" or "bidirectional" = both, "send-only" = no inbound, "receive-only" = no outbound
+  var syncMode = '';
 
   // Buffer for non-activation messages drained from the IPC queue by
   // pollIpcForActivation before the main pollIpc handler starts.
@@ -252,7 +254,9 @@
     getSyncId(wikiPath, function(syncId) {
       rsLog('[LAN Sync] Got sync_id: ' + (syncId || '(none)'));
       if (syncId) {
-        activateSync(syncId);
+        getSyncMode(wikiPath, function(mode) {
+          activateSync(syncId, mode);
+        });
       }
     });
 
@@ -264,7 +268,7 @@
           var currentId = activeSyncState ? activeSyncState.syncId : '';
           if (id && id !== currentId) {
             rsLog('[LAN Sync] Sync enabled via periodic check: ' + id);
-            activateSync(id);
+            getSyncMode(wikiPath, function(mode) { activateSync(id, mode); });
           } else if (!id && currentId) {
             rsLog('[LAN Sync] Sync disabled via periodic check');
             deactivateSync();
@@ -314,7 +318,7 @@
               var syncData = JSON.parse(messages.find(function(m) {
                 try { var d = JSON.parse(m); return d.type === 'sync-activate' && d.wiki_path === wikiPath; } catch(e) { return false; }
               }));
-              activateSync(syncData.sync_id);
+              activateSync(syncData.sync_id, syncData.sync_mode);
               return;
             }
           }
@@ -333,7 +337,7 @@
     // are delivered through IPC poll (desktop) or bridge poll (Android),
     // handled as type 'wiki-info-changed' in queueInboundChange / IPC switch.
 
-    function activateSync(syncId) {
+    function activateSync(syncId, mode) {
       // If already active with the same syncId, don't duplicate
       if (activeSyncState && activeSyncState.syncId === syncId) {
         rsLog('[LAN Sync] Already active with syncId: ' + syncId);
@@ -344,6 +348,10 @@
       if (activeSyncState) {
         deactivateSync();
       }
+
+      // Store sync mode ("send-only", "receive-only", or "" for bidirectional)
+      syncMode = mode || '';
+      rsLog('[LAN Sync] syncMode: ' + (syncMode || 'bidirectional'));
 
       // Stop the pre-activation poll — sync is now active, setupSyncHandlers
       // starts its own poll that handles all message types including activation.
@@ -467,6 +475,16 @@
     } else {
       window.__TAURI__.core.invoke('get_wiki_sync_id', { path: path })
         .then(function(id) { callback(id || ''); })
+        .catch(function() { callback(''); });
+    }
+  }
+
+  function getSyncMode(path, callback) {
+    if (isAndroid) {
+      try { callback(window.TiddlyDesktopSync.getSyncMode(path) || ''); } catch(_) { callback(''); }
+    } else {
+      window.__TAURI__.core.invoke('get_wiki_sync_mode', { path: path })
+        .then(function(mode) { callback(mode || ''); })
         .catch(function() { callback(''); });
     }
   }
@@ -800,6 +818,8 @@
     }
 
     var changeListener = function(changes) {
+      // Receive-only wikis don't send local changes
+      if (syncMode === 'receive-only') return;
       Object.keys(changes).forEach(function(title) {
         // Skip titles just applied from remote sync (prevents echo loop)
         if (suppressOutbound.delete(title)) return;
@@ -936,6 +956,12 @@
       var batch = state.inboundQueue;
       state.inboundQueue = [];
       if (batch.length === 0) return;
+
+      // Send-only wikis don't apply incoming changes
+      if (syncMode === 'send-only') {
+        _log('[LAN Sync] Discarding ' + batch.length + ' inbound changes (send-only mode)');
+        return;
+      }
 
       _log('[LAN Sync] Applying batch of ' + batch.length + ' inbound changes');
 
@@ -1122,9 +1148,13 @@
 
       // Phase 1: Apply peer's tombstones — delete local tiddlers that the peer
       // intentionally deleted (if our version is older than the deletion).
+      // Send-only wikis skip this (they don't accept inbound changes).
       var tombKeys = Object.keys(peerTombstones);
       var needSave = false;
-      for (var t = 0; t < tombKeys.length; t++) {
+      if (syncMode === 'send-only') {
+        _log('[LAN Sync] Skipping tombstone application (send-only mode)');
+      }
+      for (var t = 0; t < tombKeys.length && syncMode !== 'send-only'; t++) {
         var tombTitle = tombKeys[t];
         var tombModified = peerTombstones[tombTitle];
 
@@ -1160,6 +1190,12 @@
       }
 
       // Phase 2: Find tiddlers we have that the peer needs (missing or newer)
+      // Receive-only wikis skip sending — they only accept inbound changes.
+      if (syncMode === 'receive-only') {
+        _log('[LAN Sync] Skipping outbound diff (receive-only mode)');
+        sendFullSyncBatch(wikiId, fromDeviceId, [], true);
+        return;
+      }
       var titles = getSyncableTitles();
       var toSend = [];
 
@@ -1379,6 +1415,12 @@
                   case 'collab-update':
                   case 'collab-awareness':
                     handleCollabMessage(data);
+                    break;
+                  case 'sync-mode-changed':
+                    if (data.wiki_path === wikiPath) {
+                      syncMode = data.sync_mode || '';
+                      _log('[LAN Sync] Mode changed to: ' + (syncMode || 'bidirectional'));
+                    }
                     break;
                   case 'peer-update':
                     // Update shadow tiddlers for peer badge (pushed from main process)

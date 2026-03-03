@@ -134,7 +134,12 @@ RelaySync/RegisteredOnRelay: Registrirano
 RelaySync/Registering: Registracija...
 RelaySync/RegisterFailed: Registracija ni uspela
 Tooltips/SelectRelayRoom: Dodeli ta wiki prenosni sobi
+Tooltips/SyncMode: Nastavi smer sinhronizacije za ta wiki
 Tooltips/PluginsDisabled: Najprej zaprite wiki
+SyncMode/Label: Način sinhronizacije
+SyncMode/Bidirectional: Dvosmeren
+SyncMode/SendOnly: Samo pošiljanje
+SyncMode/ReceiveOnly: Samo sprejemanje
 RelaySync/ServerRooms: Vaše sobe na strežniku
 RelaySync/ServerRoomsEmpty: Na strežniku ni bilo najdenih sob. Registrirajte sobo iz njenega podrobnostnega panela.
 RelaySync/Configured: Nastavljeno

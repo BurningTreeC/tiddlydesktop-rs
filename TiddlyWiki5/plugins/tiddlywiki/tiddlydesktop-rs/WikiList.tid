@@ -1,7 +1,7 @@
 title: $:/plugins/tiddlywiki/tiddlydesktop-rs/WikiList
 
 \define render-wiki-item()
-<$let path={{!!path}} displayPath={{!!display_path}} filename={{!!filename}} favicon={{!!favicon}} isFolder={{!!is_folder}} backupsEnabled={{!!backups_enabled}} backupDir={{!!backup_dir}} backupDirDisplay={{!!backup_dir_display}} backupCount={{!!backup_count}} wikiGroup={{!!group}} syncEnabled={{!!sync_enabled}} syncId={{!!sync_id}} relayRoom={{!!relay_room}} needsReauth={{!!needs_reauth}} isOpen={{!!is_open}}>
+<$let path={{!!path}} displayPath={{!!display_path}} filename={{!!filename}} favicon={{!!favicon}} isFolder={{!!is_folder}} backupsEnabled={{!!backups_enabled}} backupDir={{!!backup_dir}} backupDirDisplay={{!!backup_dir_display}} backupCount={{!!backup_count}} wikiGroup={{!!group}} syncEnabled={{!!sync_enabled}} syncId={{!!sync_id}} relayRoom={{!!relay_room}} syncMode={{!!sync_mode}} needsReauth={{!!needs_reauth}} isOpen={{!!is_open}}>
 <div class={{{ [<needsReauth>match[yes]then[td-wikilist-item td-needs-reauth]else[td-wikilist-item]] }}}>
 <div class="td-wikilist-thumbnail">
 <$button class="tc-btn-invisible">
@@ -169,6 +169,43 @@ title: $:/plugins/tiddlywiki/tiddlydesktop-rs/WikiList
 </$button>
 </$let>
 </$list>
+</div>
+</$reveal>
+</$let>
+</$list>
+<!-- Sync mode picker (when sync is enabled) -->
+<$list filter="[<syncEnabled>match[true]]" variable="ignore">
+<$let syncModePopupState={{{ [<path>encodeuri[]addprefix[$:/state/sync-mode-popup/]] }}} effectiveSyncMode={{{ [<syncMode>!is[blank]then<syncMode>else[bidirectional]] }}}>
+<$button popup=<<syncModePopupState>> class="tc-btn-invisible td-button td-button-sync-mode" tooltip=<<td-lingo Tooltips/SyncMode>>>
+{{$:/core/images/chevron-down}} <$list filter="[<effectiveSyncMode>match[send-only]]" variable="ignore"><<td-lingo SyncMode/SendOnly>></$list><$list filter="[<effectiveSyncMode>match[receive-only]]" variable="ignore"><<td-lingo SyncMode/ReceiveOnly>></$list><$list filter="[<effectiveSyncMode>!match[send-only]!match[receive-only]]" variable="ignore"><<td-lingo SyncMode/Bidirectional>></$list>
+</$button>
+<$reveal state=<<syncModePopupState>> type="popup" position="below" animate="yes" class="tc-drop-down td-sync-mode-dropdown tc-popup-keep">
+<div class="td-sync-mode-dropdown-content">
+<div class="td-sync-mode-header"><<td-lingo SyncMode/Label>></div>
+<$button class="tc-btn-invisible td-sync-mode-option">
+<$action-sendmessage $message="tm-tiddlydesktop-rs-set-sync-mode" path=<<path>> mode=""/>
+<$action-deletetiddler $tiddler=<<syncModePopupState>>/>
+<span class={{{ [<effectiveSyncMode>!match[send-only]!match[receive-only]then[td-sync-peer-check td-sync-peer-checked]else[td-sync-peer-check td-sync-peer-unchecked]] }}}>
+<$list filter="[<effectiveSyncMode>!match[send-only]!match[receive-only]]" variable="ignore">{{$:/core/images/done-button}}</$list>
+</span>
+<span class="td-sync-peer-name"><<td-lingo SyncMode/Bidirectional>></span>
+</$button>
+<$button class="tc-btn-invisible td-sync-mode-option">
+<$action-sendmessage $message="tm-tiddlydesktop-rs-set-sync-mode" path=<<path>> mode="send-only"/>
+<$action-deletetiddler $tiddler=<<syncModePopupState>>/>
+<span class={{{ [<effectiveSyncMode>match[send-only]then[td-sync-peer-check td-sync-peer-checked]else[td-sync-peer-check td-sync-peer-unchecked]] }}}>
+<$list filter="[<effectiveSyncMode>match[send-only]]" variable="ignore">{{$:/core/images/done-button}}</$list>
+</span>
+<span class="td-sync-peer-name"><<td-lingo SyncMode/SendOnly>></span>
+</$button>
+<$button class="tc-btn-invisible td-sync-mode-option">
+<$action-sendmessage $message="tm-tiddlydesktop-rs-set-sync-mode" path=<<path>> mode="receive-only"/>
+<$action-deletetiddler $tiddler=<<syncModePopupState>>/>
+<span class={{{ [<effectiveSyncMode>match[receive-only]then[td-sync-peer-check td-sync-peer-checked]else[td-sync-peer-check td-sync-peer-unchecked]] }}}>
+<$list filter="[<effectiveSyncMode>match[receive-only]]" variable="ignore">{{$:/core/images/done-button}}</$list>
+</span>
+<span class="td-sync-peer-name"><<td-lingo SyncMode/ReceiveOnly>></span>
+</$button>
 </div>
 </$reveal>
 </$let>

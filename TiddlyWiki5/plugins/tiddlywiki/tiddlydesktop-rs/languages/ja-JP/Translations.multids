@@ -134,7 +134,12 @@ RelaySync/RegisteredOnRelay: 登録済み
 RelaySync/Registering: 登録中...
 RelaySync/RegisterFailed: 登録に失敗しました
 Tooltips/SelectRelayRoom: このウィキをリレールームに割り当てる
+Tooltips/SyncMode: このウィキの同期方向を設定する
 Tooltips/PluginsDisabled: 先にWikiを閉じてください
+SyncMode/Label: 同期モード
+SyncMode/Bidirectional: 双方向
+SyncMode/SendOnly: 送信のみ
+SyncMode/ReceiveOnly: 受信のみ
 RelaySync/ServerRooms: サーバー上のルーム
 RelaySync/ServerRoomsEmpty: サーバーにルームが見つかりません。詳細パネルからルームを登録してください。
 RelaySync/Configured: 設定済み

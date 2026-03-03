@@ -6839,9 +6839,11 @@ pub async fn lan_sync_start(_app: tauri::AppHandle) -> Result<(), String> {
         if entry.sync_enabled {
             if let Some(ref sync_id) = entry.sync_id {
                 if !sync_id.is_empty() {
+                    let sync_mode = entry.sync_mode.clone().unwrap_or_default();
                     let _ = _app.emit("lan-sync-activate", serde_json::json!({
                         "wiki_path": entry.path,
                         "sync_id": sync_id,
+                        "sync_mode": sync_mode,
                     }));
                     // Also send via IPC for wiki processes in separate OS processes
                     // (app.emit() only reaches webviews in the same process)
@@ -6852,6 +6854,7 @@ pub async fn lan_sync_start(_app: tauri::AppHandle) -> Result<(), String> {
                                 "type": "sync-activate",
                                 "wiki_path": entry.path,
                                 "sync_id": sync_id,
+                                "sync_mode": sync_mode,
                             }).to_string();
                             server.send_lan_sync_to_all("*", &payload);
                         }

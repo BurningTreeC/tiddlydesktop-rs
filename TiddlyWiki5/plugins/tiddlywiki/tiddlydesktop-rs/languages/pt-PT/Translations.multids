@@ -134,7 +134,12 @@ RelaySync/RegisteredOnRelay: Registado
 RelaySync/Registering: A registar...
 RelaySync/RegisterFailed: Falha no registo
 Tooltips/SelectRelayRoom: Atribuir este wiki a uma sala de retransmissão
+Tooltips/SyncMode: Definir a direção de sincronização para este wiki
 Tooltips/PluginsDisabled: Feche a wiki primeiro
+SyncMode/Label: Modo de sincronização
+SyncMode/Bidirectional: Bidirecional
+SyncMode/SendOnly: Apenas enviar
+SyncMode/ReceiveOnly: Apenas receber
 RelaySync/ServerRooms: As suas salas no servidor
 RelaySync/ServerRoomsEmpty: Nenhuma sala encontrada no servidor. Registe uma sala a partir do painel de detalhes.
 RelaySync/Configured: Configurado

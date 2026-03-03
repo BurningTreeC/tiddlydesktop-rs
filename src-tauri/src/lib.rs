@@ -3191,6 +3191,7 @@ async fn open_wiki_folder(app: tauri::AppHandle, path: String, _tiddler_title: O
                 sync_id: None,
                 sync_peers: vec![],
         relay_room: None,
+        sync_mode: None,
             });
         }
     }
@@ -3321,6 +3322,7 @@ async fn open_wiki_folder(app: tauri::AppHandle, path: String, _tiddler_title: O
         sync_id: None,
         sync_peers: vec![],
         relay_room: None,
+        sync_mode: None,
     };
 
     // Add to recent files list
@@ -3434,6 +3436,7 @@ fn open_wiki_folder_blocking(app: tauri::AppHandle, path: String) -> Result<Wiki
         sync_id: None,
         sync_peers: vec![],
         relay_room: None,
+        sync_mode: None,
         is_folder: true,
     };
 
@@ -4596,6 +4599,7 @@ async fn init_wiki_folder(app: tauri::AppHandle, path: String, edition: String, 
         sync_id: None,
         sync_peers: vec![],
         relay_room: None,
+        sync_mode: None,
         is_folder: true,
     };
 
@@ -5810,6 +5814,7 @@ async fn open_wiki_window(
                 sync_id: None,
                 sync_peers: vec![],
         relay_room: None,
+        sync_mode: None,
             });
         }
     }
@@ -5931,6 +5936,7 @@ async fn open_wiki_window(
         sync_id: None,
         sync_peers: vec![],
         relay_room: None,
+        sync_mode: None,
     };
 
     // Add to recent files list
@@ -6047,6 +6053,7 @@ fn open_wiki_window_blocking(
         sync_id: None,
         sync_peers: vec![],
         relay_room: None,
+        sync_mode: None,
     };
 
     // Add to recent files
@@ -6490,7 +6497,7 @@ async fn check_for_updates() -> Result<UpdateCheckResult, String> {
 
 /// Android version - separate from desktop versioning (must match build.gradle.kts versionName)
 #[cfg(target_os = "android")]
-const ANDROID_VERSION: &str = "0.0.85";
+const ANDROID_VERSION: &str = "0.0.86";
 
 /// Check for updates on Android via version file on GitHub, linking to Play Store
 #[cfg(target_os = "android")]
@@ -8608,6 +8615,9 @@ fn run_wiki_mode(args: WikiModeArgs) {
             lan_sync::relay_sync_list_server_rooms,
             // Per-wiki relay room assignment
             wiki_storage::set_wiki_relay_room,
+            // Per-wiki sync mode (bidirectional / send-only / receive-only)
+            wiki_storage::set_wiki_sync_mode,
+            wiki_storage::get_wiki_sync_mode,
             get_wiki_installed_plugins,
             install_plugins_to_wiki
         ])
@@ -9078,6 +9088,9 @@ fn run_wiki_folder_mode(args: WikiFolderModeArgs) {
             lan_sync::relay_sync_list_server_rooms,
             // Per-wiki relay room assignment
             wiki_storage::set_wiki_relay_room,
+            // Per-wiki sync mode (bidirectional / send-only / receive-only)
+            wiki_storage::set_wiki_sync_mode,
+            wiki_storage::get_wiki_sync_mode,
             get_wiki_installed_plugins,
             install_plugins_to_wiki
         ])
@@ -9309,10 +9322,12 @@ pub fn run() {
                             if let Some(ref sync_id) = entry.sync_id {
                                 if !sync_id.is_empty() {
                                     if let Some(server) = GLOBAL_IPC_SERVER.get() {
+                                        let sync_mode = entry.sync_mode.clone().unwrap_or_default();
                                         let payload = serde_json::json!({
                                             "type": "sync-activate",
                                             "wiki_path": wiki_path,
                                             "sync_id": sync_id,
+                                            "sync_mode": sync_mode,
                                         }).to_string();
                                         server.send_lan_sync_to_all("*", &payload);
                                         eprintln!("[IPC] Sent sync-activate to new client: wiki={}, sync_id={}", wiki_path, sync_id);
@@ -9816,6 +9831,9 @@ pub fn run() {
             lan_sync::relay_sync_list_server_rooms,
             // Per-wiki relay room assignment
             wiki_storage::set_wiki_relay_room,
+            // Per-wiki sync mode (bidirectional / send-only / receive-only)
+            wiki_storage::set_wiki_sync_mode,
+            wiki_storage::get_wiki_sync_mode,
             get_wiki_installed_plugins,
             install_plugins_to_wiki
         ])

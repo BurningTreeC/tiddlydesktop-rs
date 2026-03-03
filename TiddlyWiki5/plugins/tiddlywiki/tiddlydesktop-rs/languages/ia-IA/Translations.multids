@@ -134,7 +134,12 @@ RelaySync/RegisteredOnRelay: Registrate
 RelaySync/Registering: Registration...
 RelaySync/RegisterFailed: Registration fallite
 Tooltips/SelectRelayRoom: Assign this wiki to a relay room
+Tooltips/SyncMode: Definir le direction de synchronisation pro iste wiki
 Tooltips/PluginsDisabled: Primo claude le wiki
+SyncMode/Label: Modo de synchronisation
+SyncMode/Bidirectional: Bidirectional
+SyncMode/SendOnly: Solo inviar
+SyncMode/ReceiveOnly: Solo reciper
 RelaySync/ServerRooms: Vostre cameras sur le servitor
 RelaySync/ServerRoomsEmpty: Nulle camera trovate sur le servitor. Registra un camera ab su pannello de detalios.
 RelaySync/Configured: Configurate

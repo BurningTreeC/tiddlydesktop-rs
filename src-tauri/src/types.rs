@@ -35,6 +35,8 @@ pub struct WikiEntry {
     pub sync_peers: Vec<String>, // deprecated: kept for deserialization compat with old configs
     #[serde(default)]
     pub relay_room: Option<String>, // relay room code this wiki is assigned to (None = no relay sync)
+    #[serde(default)]
+    pub sync_mode: Option<String>, // sync direction: None/"bidirectional", "send-only", "receive-only"
 }
 
 fn default_backups_enabled() -> bool {

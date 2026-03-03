@@ -434,18 +434,19 @@ fn run_bridge_server(
                     .unwrap_or_else(|_| path.clone().into())
                     .to_string();
 
-                let sync_id = if let Some(app) = GLOBAL_APP_HANDLE.get() {
+                let (sync_id, sync_mode) = if let Some(app) = GLOBAL_APP_HANDLE.get() {
                     let id = crate::wiki_storage::get_wiki_sync_id(app.clone(), path.clone());
+                    let mode = crate::wiki_storage::get_wiki_sync_mode(app.clone(), path.clone());
                     if !id.is_empty() {
-                        eprintln!("[Bridge] sync-id query: path={} -> sync_id={}", path, id);
+                        eprintln!("[Bridge] sync-id query: path={} -> sync_id={}, sync_mode={}", path, id, mode);
                     }
-                    id
+                    (id, mode)
                 } else {
                     eprintln!("[Bridge] sync-id query: GLOBAL_APP_HANDLE not set");
-                    String::new()
+                    (String::new(), String::new())
                 };
 
-                let resp = serde_json::json!({ "sync_id": sync_id }).to_string();
+                let resp = serde_json::json!({ "sync_id": sync_id, "sync_mode": sync_mode }).to_string();
                 let _ = request.respond(cors_response(&resp, 200, &origin));
             }
 

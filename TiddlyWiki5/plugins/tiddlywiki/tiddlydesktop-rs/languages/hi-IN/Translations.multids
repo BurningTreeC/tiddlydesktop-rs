@@ -134,7 +134,12 @@ RelaySync/RegisteredOnRelay: पंजीकृत
 RelaySync/Registering: पंजीकरण हो रहा है...
 RelaySync/RegisterFailed: पंजीकरण विफल
 Tooltips/SelectRelayRoom: इस विकी को एक रिले कमरे में असाइन करें
+Tooltips/SyncMode: इस विकी के लिए सिंक दिशा सेट करें
 Tooltips/PluginsDisabled: पहले विकी बंद करें
+SyncMode/Label: सिंक मोड
+SyncMode/Bidirectional: द्विदिशात्मक
+SyncMode/SendOnly: केवल भेजें
+SyncMode/ReceiveOnly: केवल प्राप्त करें
 RelaySync/ServerRooms: सर्वर पर आपके कमरे
 RelaySync/ServerRoomsEmpty: सर्वर पर कोई कमरा नहीं मिला। विवरण पैनल से कमरा पंजीकृत करें।
 RelaySync/Configured: कॉन्फ़िगर किया गया

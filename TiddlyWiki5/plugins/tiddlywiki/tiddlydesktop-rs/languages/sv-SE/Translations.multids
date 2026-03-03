@@ -134,7 +134,12 @@ RelaySync/RegisteredOnRelay: Registrerad
 RelaySync/Registering: Registrerar...
 RelaySync/RegisterFailed: Registrering misslyckades
 Tooltips/SelectRelayRoom: Tilldela denna wiki till ett relay-rum
+Tooltips/SyncMode: Ställ in synkroniseringsriktning för denna wiki
 Tooltips/PluginsDisabled: Stäng wikin först
+SyncMode/Label: Synkroniseringsläge
+SyncMode/Bidirectional: Tvåvägs
+SyncMode/SendOnly: Skicka endast
+SyncMode/ReceiveOnly: Ta emot endast
 RelaySync/ServerRooms: Dina rum på servern
 RelaySync/ServerRoomsEmpty: Inga rum hittades på servern. Registrera ett rum från dess detaljpanel.
 RelaySync/Configured: Konfigurerad

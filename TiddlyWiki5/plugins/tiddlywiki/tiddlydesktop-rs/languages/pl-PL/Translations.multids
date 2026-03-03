@@ -134,7 +134,12 @@ RelaySync/RegisteredOnRelay: Zarejestrowano
 RelaySync/Registering: Rejestrowanie...
 RelaySync/RegisterFailed: Rejestracja nie powiodła się
 Tooltips/SelectRelayRoom: Przypisz to wiki do pokoju przekaźnikowego
+Tooltips/SyncMode: Ustaw kierunek synchronizacji dla tego wiki
 Tooltips/PluginsDisabled: Najpierw zamknij wiki
+SyncMode/Label: Tryb synchronizacji
+SyncMode/Bidirectional: Dwukierunkowy
+SyncMode/SendOnly: Tylko wysyłanie
+SyncMode/ReceiveOnly: Tylko odbieranie
 RelaySync/ServerRooms: Twoje pokoje na serwerze
 RelaySync/ServerRoomsEmpty: Nie znaleziono pokoi na serwerze. Zarejestruj pokój z jego panelu szczegółów.
 RelaySync/Configured: Skonfigurowany

@@ -620,6 +620,7 @@ pub fn update_wiki_favicon(app: tauri::AppHandle, path: String, favicon: Option<
 pub fn set_wiki_sync(app: tauri::AppHandle, path: String, enabled: bool) -> Result<String, String> {
     let mut entries = load_recent_files_from_disk(&app);
     let mut sync_id = String::new();
+    let mut sync_mode = String::new();
 
     for entry in entries.iter_mut() {
         if utils::paths_equal(&entry.path, &path) {
@@ -633,6 +634,7 @@ pub fn set_wiki_sync(app: tauri::AppHandle, path: String, enabled: bool) -> Resu
             // Note: we do NOT clear sync_id on disable. This allows
             // re-enabling to keep the same ID, maintaining cross-device matching.
             sync_id = entry.sync_id.clone().unwrap_or_default();
+            sync_mode = entry.sync_mode.clone().unwrap_or_default();
             break;
         }
     }
@@ -647,8 +649,9 @@ pub fn set_wiki_sync(app: tauri::AppHandle, path: String, enabled: bool) -> Resu
         let _ = app.emit("lan-sync-activate", serde_json::json!({
             "wiki_path": path,
             "sync_id": sync_id,
+            "sync_mode": sync_mode,
         }));
-        eprintln!("[LAN Sync] Sync enabled for wiki: {} (sync_id: {})", path, sync_id);
+        eprintln!("[LAN Sync] Sync enabled for wiki: {} (sync_id: {}, mode: {})", path, sync_id, sync_mode);
     } else {
         let _ = app.emit("lan-sync-deactivate", serde_json::json!({
             "wiki_path": path,
@@ -665,6 +668,7 @@ pub fn set_wiki_sync(app: tauri::AppHandle, path: String, enabled: bool) -> Resu
                     "type": "sync-activate",
                     "wiki_path": path,
                     "sync_id": sync_id,
+                    "sync_mode": sync_mode,
                 }).to_string()
             } else {
                 serde_json::json!({
@@ -718,6 +722,18 @@ pub fn get_wiki_sync_id(app: tauri::AppHandle, path: String) -> String {
     String::new()
 }
 
+/// Get the sync_mode for a wiki ("bidirectional", "send-only", "receive-only", or empty)
+#[tauri::command]
+pub fn get_wiki_sync_mode(app: tauri::AppHandle, path: String) -> String {
+    let entries = load_recent_files_from_disk(&app);
+    for entry in &entries {
+        if utils::paths_equal(&entry.path, &path) && entry.sync_enabled {
+            return entry.sync_mode.clone().unwrap_or_default();
+        }
+    }
+    String::new()
+}
+
 /// Link a local wiki to a remote wiki's sync_id (peer-assisted matching after reinstall).
 /// The user selects which local wiki corresponds to a remote wiki from the peer's manifest.
 /// Also auto-assigns the wiki to the peer's room so sync permission checks pass.
@@ -757,9 +773,12 @@ pub async fn lan_sync_link_wiki(app: tauri::AppHandle, path: String, sync_id: St
     // Tell the wiki window (if open) to activate sync.
     // Tauri app.emit() only reaches windows in the SAME Tauri app, but wiki
     // windows are separate processes. IPC (TCP) crosses process boundaries.
+    let sync_mode = entries.iter().find(|e| utils::paths_equal(&e.path, &path))
+        .and_then(|e| e.sync_mode.clone()).unwrap_or_default();
     let _ = app.emit("lan-sync-activate", serde_json::json!({
         "wiki_path": path,
         "sync_id": sync_id,
+        "sync_mode": sync_mode,
     }));
 
     // Also notify via IPC (cross-process to wiki windows)
@@ -770,6 +789,7 @@ pub async fn lan_sync_link_wiki(app: tauri::AppHandle, path: String, sync_id: St
                 "type": "sync-activate",
                 "wiki_path": path,
                 "sync_id": sync_id,
+                "sync_mode": sync_mode,
             }).to_string();
             server.send_lan_sync_to_all("*", &payload);
         }
@@ -816,6 +836,42 @@ pub fn has_wiki_with_sync_id(app: &tauri::AppHandle, sync_id: &str) -> bool {
         .any(|e| e.sync_id.as_deref() == Some(sync_id))
 }
 
+/// Set the sync mode for a wiki ("bidirectional", "send-only", "receive-only", or empty/null for default)
+#[tauri::command]
+pub fn set_wiki_sync_mode(app: tauri::AppHandle, path: String, mode: Option<String>) -> Result<(), String> {
+    let mut entries = load_recent_files_from_disk(&app);
+
+    for entry in entries.iter_mut() {
+        if utils::paths_equal(&entry.path, &path) {
+            // Normalize: None and "" both mean "bidirectional" (default)
+            entry.sync_mode = mode.filter(|m| !m.is_empty() && m != "bidirectional");
+            break;
+        }
+    }
+
+    save_recent_files_to_disk(&app, &entries)?;
+
+    // Notify open wiki window of the mode change via a sync-mode-changed message.
+    // The wiki JS will update its local mode variable without needing a full deactivate/reactivate.
+    #[cfg(not(target_os = "android"))]
+    {
+        if let Some(server) = crate::GLOBAL_IPC_SERVER.get() {
+            let effective_mode = entries.iter()
+                .find(|e| utils::paths_equal(&e.path, &path))
+                .and_then(|e| e.sync_mode.clone())
+                .unwrap_or_default();
+            let payload = serde_json::json!({
+                "type": "sync-mode-changed",
+                "wiki_path": path,
+                "sync_mode": effective_mode,
+            }).to_string();
+            server.send_lan_sync_to_all("*", &payload);
+        }
+    }
+
+    Ok(())
+}
+
 /// Set the relay room for a wiki (None to unassign)
 #[tauri::command]
 pub fn set_wiki_relay_room(app: tauri::AppHandle, path: String, room_code: Option<String>) -> Result<(), String> {
@@ -841,10 +897,11 @@ pub fn set_wiki_relay_room(app: tauri::AppHandle, path: String, room_code: Optio
         }
     }
 
-    // Find the sync_id for the wiki (after potential generation above)
-    let sync_id_for_event = entries.iter()
-        .find(|e| crate::utils::paths_equal(&e.path, &path))
-        .and_then(|e| e.sync_id.clone());
+    // Find the sync_id and sync_mode for the wiki (after potential generation above)
+    let matched_entry = entries.iter()
+        .find(|e| crate::utils::paths_equal(&e.path, &path));
+    let sync_id_for_event = matched_entry.and_then(|e| e.sync_id.clone());
+    let sync_mode_for_event = matched_entry.and_then(|e| e.sync_mode.clone()).unwrap_or_default();
 
     save_recent_files_to_disk(&app, &entries)?;
 
@@ -856,6 +913,7 @@ pub fn set_wiki_relay_room(app: tauri::AppHandle, path: String, room_code: Optio
             let _ = app.emit("lan-sync-activate", serde_json::json!({
                 "wiki_path": path,
                 "sync_id": sid,
+                "sync_mode": sync_mode_for_event,
             }));
 
             // Also notify via IPC (cross-process to wiki windows)
@@ -866,6 +924,7 @@ pub fn set_wiki_relay_room(app: tauri::AppHandle, path: String, room_code: Optio
                         "type": "sync-activate",
                         "wiki_path": path,
                         "sync_id": sid,
+                        "sync_mode": sync_mode_for_event,
                     }).to_string();
                     server.send_lan_sync_to_all("*", &payload);
                 }

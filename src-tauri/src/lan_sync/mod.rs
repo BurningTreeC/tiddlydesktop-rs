@@ -5322,6 +5322,7 @@ impl SyncManager {
                                 sync_id: Some(wiki_id.to_string()),
                                 sync_peers: vec![],
                                 relay_room,
+                                sync_mode: None,
                             };
                             if let Err(e) = crate::wiki_storage::add_to_recent_files(app, entry) {
                                 eprintln!("[LAN Sync] Failed to early-register wiki: {}", e);
@@ -5556,6 +5557,7 @@ impl SyncManager {
                 sync_id: Some(wiki_id.to_string()),
                 sync_peers: vec![],
                 relay_room,
+                sync_mode: None,
             };
             if let Err(e) = crate::wiki_storage::add_to_recent_files(app, entry) {
                 eprintln!("[LAN Sync] Failed to add received wiki to recent files: {}", e);

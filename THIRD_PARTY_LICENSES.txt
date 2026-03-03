@@ -5763,7 +5763,7 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 ## MIT License
 
 Used by:
-- ipnet 2.11.0 (https://github.com/krisprice/ipnet)
+- ipnet 2.12.0 (https://github.com/krisprice/ipnet)
 
 License text:
 ```
@@ -6673,7 +6673,7 @@ SOFTWARE.
 ## MIT License
 
 Used by:
-- tokio-macros 2.6.0 (https://github.com/tokio-rs/tokio)
+- tokio-macros 2.6.1 (https://github.com/tokio-rs/tokio)
 
 License text:
 ```
@@ -7150,7 +7150,7 @@ Used by:
 - webview2-com-macros 0.8.1 (https://github.com/wravery/webview2-rs)
 - webview2-com-sys 0.38.2 (https://github.com/wravery/webview2-rs)
 - webview2-com 0.38.2 (https://github.com/wravery/webview2-rs)
-- tiddlydesktop-rs 0.7.19
+- tiddlydesktop-rs 0.7.20
 - block2 0.6.2 (https://github.com/madsmtm/objc2)
 - brotli-decompressor 5.0.0 (https://github.com/dropbox/rust-brotli-decompressor)
 - cargo_toml 0.22.3 (https://gitlab.com/lib.rs/cargo_toml)
@@ -7599,7 +7599,7 @@ Used by:
 - dtoa 1.0.11 (https://github.com/dtolnay/dtoa)
 - dyn-clone 1.0.20 (https://github.com/dtolnay/dyn-clone)
 - endi 1.1.1 (https://github.com/zeenix/endi)
-- erased-serde 0.4.9 (https://github.com/dtolnay/erased-serde)
+- erased-serde 0.4.10 (https://github.com/dtolnay/erased-serde)
 - event-listener-strategy 0.5.4 (https://github.com/smol-rs/event-listener-strategy)
 - event-listener 5.4.1 (https://github.com/smol-rs/event-listener)
 - fastrand 2.3.0 (https://github.com/smol-rs/fastrand)
@@ -7890,7 +7890,7 @@ SOFTWARE.
 ## MIT License
 
 Used by:
-- zip 8.1.0 (https://github.com/zip-rs/zip2.git)
+- zip 8.2.0 (https://github.com/zip-rs/zip2.git)
 
 License text:
 ```

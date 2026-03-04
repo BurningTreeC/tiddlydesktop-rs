@@ -1,7 +1,5 @@
 title: $:/plugins/tiddlywiki/tiddlydesktop-rs/ShareTemplates
 
-\define td-lingo(title) $:/plugins/tiddlywiki/tiddlydesktop-rs/languages/$(languageTitle)$/$(title)$
-
 <!-- Share Templates Manager Modal (Android only) -->
 <$list filter="[{$:/temp/tiddlydesktop-rs/is-android}match[yes]]" variable="ignore">
 <$reveal type="match" state="$:/temp/tiddlydesktop-rs/template-manager-open" text="yes" animate="yes">

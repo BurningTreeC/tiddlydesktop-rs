@@ -3005,6 +3005,15 @@ impl SyncManager {
         }
         match event {
             attachments::AttachmentEvent::Changed { wiki_id, rel_path } => {
+                // Receive-only wikis don't send attachments outbound
+                if let Some(app) = GLOBAL_APP_HANDLE.get() {
+                    if let Some(wiki_path) = crate::wiki_storage::get_wiki_path_by_sync_id(app, &wiki_id) {
+                        let mode = crate::wiki_storage::get_wiki_sync_mode(app.clone(), wiki_path);
+                        if mode == "receive-only" {
+                            return;
+                        }
+                    }
+                }
                 // Block disallowed file types from being synced outbound
                 if !attachments::is_allowed_attachment(&rel_path) {
                     eprintln!(
@@ -3064,6 +3073,15 @@ impl SyncManager {
                 }
             }
             attachments::AttachmentEvent::Deleted { wiki_id, rel_path } => {
+                // Receive-only wikis don't send attachment deletions outbound
+                if let Some(app) = GLOBAL_APP_HANDLE.get() {
+                    if let Some(wiki_path) = crate::wiki_storage::get_wiki_path_by_sync_id(app, &wiki_id) {
+                        let mode = crate::wiki_storage::get_wiki_sync_mode(app.clone(), wiki_path);
+                        if mode == "receive-only" {
+                            return;
+                        }
+                    }
+                }
                 // Block disallowed file types
                 if !attachments::is_allowed_attachment(&rel_path) {
                     return;
@@ -5865,6 +5883,11 @@ impl SyncManager {
                 Some(p) => p,
                 None => continue,
             };
+            // Receive-only wikis don't send attachments outbound
+            let mode = crate::wiki_storage::get_wiki_sync_mode(app.clone(), wiki_path.clone());
+            if mode == "receive-only" {
+                continue;
+            }
 
             // Collect entries with sizes in a blocking task (SAF calls)
             let wp = wiki_path.clone();

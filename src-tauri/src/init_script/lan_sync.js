@@ -55,6 +55,7 @@
 
   window.TiddlyDesktop.collab = {
     startEditing: function(tiddlerTitle) {
+      if (syncMode === 'receive-only') return;
       if (isSyncExcluded(tiddlerTitle)) return;
       if (_collabSyncActive) {
         sendCollabOutbound('startEditing', _collabWikiId, tiddlerTitle);
@@ -63,6 +64,7 @@
       }
     },
     stopEditing: function(tiddlerTitle) {
+      if (syncMode === 'receive-only') return;
       if (isSyncExcluded(tiddlerTitle)) return;
       if (_collabSyncActive) {
         sendCollabOutbound('stopEditing', _collabWikiId, tiddlerTitle);
@@ -71,6 +73,7 @@
       }
     },
     sendUpdate: function(tiddlerTitle, base64) {
+      if (syncMode === 'receive-only') return;
       if (isSyncExcluded(tiddlerTitle)) return;
       if (_collabSyncActive) {
         sendCollabOutbound('sendUpdate', _collabWikiId, tiddlerTitle, base64);
@@ -79,6 +82,7 @@
       }
     },
     sendAwareness: function(tiddlerTitle, base64) {
+      if (syncMode === 'receive-only') return;
       if (isSyncExcluded(tiddlerTitle)) return;
       if (_collabSyncActive) {
         sendCollabOutbound('sendAwareness', _collabWikiId, tiddlerTitle, base64);
@@ -87,6 +91,7 @@
       }
     },
     peerSaved: function(tiddlerTitle, savedTitle) {
+      if (syncMode === 'receive-only') return;
       if (_collabSyncActive) {
         sendCollabOutbound('peerSaved', _collabWikiId, tiddlerTitle, null, savedTitle);
       } else {
@@ -383,12 +388,14 @@
           }).catch(function() {});
         }
 
-        // Flush queued outbound messages
+        // Flush queued outbound messages (skip if receive-only)
         var queued = _collabOutboundQueue;
         _collabOutboundQueue = [];
-        for (var qi = 0; qi < queued.length; qi++) {
-          var q = queued[qi];
-          sendCollabOutbound(q[0], syncId, q[1], q[2], q[3]);
+        if (syncMode !== 'receive-only') {
+          for (var qi = 0; qi < queued.length; qi++) {
+            var q = queued[qi];
+            sendCollabOutbound(q[0], syncId, q[1], q[2], q[3]);
+          }
         }
 
         // Connect collab WebSocket (desktop only — gives sub-ms push delivery)
@@ -1266,6 +1273,11 @@
 
     // Legacy full dump (kept as fallback for dump-tiddlers events)
     function handleDumpTiddlers(toDeviceId) {
+      if (syncMode === 'receive-only') {
+        _log('[LAN Sync] Skipping dump-tiddlers (receive-only mode)');
+        sendFullSyncBatch(wikiId, toDeviceId, [], true);
+        return;
+      }
       var titles = getSyncableTitles();
       var MAX_BATCH_BYTES = 500000;
 

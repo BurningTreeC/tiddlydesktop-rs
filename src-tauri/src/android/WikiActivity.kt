@@ -6303,7 +6303,7 @@ class WikiActivity : AppCompatActivity() {
             // Collab API: created immediately so CM6 plugin can find it before sync activates.
             // Outbound methods queue until activate() sets syncActive=true.
             "var collabListeners={};" +
-            "var _syncActive=false;var _syncId=null;var _localDeviceId=null;var _collabQueue=[];var rec={};" +
+            "var _syncActive=false;var _syncId=null;var _localDeviceId=null;var _collabQueue=[];var rec={};var _syncMode='';" +
             // Non-dirty tiddler helpers — suppress enqueueTiddlerEvent to avoid dirty/autosave
             "function _addTemp(f){var o=\$tw.wiki.enqueueTiddlerEvent;\$tw.wiki.enqueueTiddlerEvent=function(){};\$tw.wiki.addTiddler(f);\$tw.wiki.enqueueTiddlerEvent=o;}" +
             "function _delTemp(t){var o=\$tw.wiki.enqueueTiddlerEvent;\$tw.wiki.enqueueTiddlerEvent=function(){};\$tw.wiki.deleteTiddler(t);\$tw.wiki.enqueueTiddlerEvent=o;}" +
@@ -6318,11 +6318,11 @@ class WikiActivity : AppCompatActivity() {
             "return false;}" +
             "if(!window.TiddlyDesktop)window.TiddlyDesktop={};" +
             "window.TiddlyDesktop.collab={" +
-            "startEditing:function(t){if(isSyncExcluded(t))return;if(_syncActive){S.collabEditingStarted(_syncId,t);}else{_collabQueue.push(['startEditing',t]);}}," +
-            "stopEditing:function(t){if(isSyncExcluded(t))return;if(_syncActive){S.collabEditingStopped(_syncId,t);}else{_collabQueue.push(['stopEditing',t]);}}," +
-            "sendUpdate:function(t,b){if(isSyncExcluded(t))return;if(_syncActive){S.collabUpdate(_syncId,t,b);}else{_collabQueue.push(['sendUpdate',t,b]);}}," +
-            "sendAwareness:function(t,b){if(isSyncExcluded(t))return;if(_syncActive){S.collabAwareness(_syncId,t,b);}else{_collabQueue.push(['sendAwareness',t,b]);}}," +
-            "peerSaved:function(t,s){if(_syncActive){S.collabPeerSaved(_syncId,t,s);}else{_collabQueue.push(['peerSaved',t,s]);}}," +
+            "startEditing:function(t){if(_syncMode==='receive-only')return;if(isSyncExcluded(t))return;if(_syncActive){S.collabEditingStarted(_syncId,t);}else{_collabQueue.push(['startEditing',t]);}}," +
+            "stopEditing:function(t){if(_syncMode==='receive-only')return;if(isSyncExcluded(t))return;if(_syncActive){S.collabEditingStopped(_syncId,t);}else{_collabQueue.push(['stopEditing',t]);}}," +
+            "sendUpdate:function(t,b){if(_syncMode==='receive-only')return;if(isSyncExcluded(t))return;if(_syncActive){S.collabUpdate(_syncId,t,b);}else{_collabQueue.push(['sendUpdate',t,b]);}}," +
+            "sendAwareness:function(t,b){if(_syncMode==='receive-only')return;if(isSyncExcluded(t))return;if(_syncActive){S.collabAwareness(_syncId,t,b);}else{_collabQueue.push(['sendAwareness',t,b]);}}," +
+            "peerSaved:function(t,s){if(_syncMode==='receive-only')return;if(_syncActive){S.collabPeerSaved(_syncId,t,s);}else{_collabQueue.push(['peerSaved',t,s]);}}," +
             "getRemoteEditors:function(t){if(!_syncActive)return[];try{return JSON.parse(S.getRemoteEditors(_syncId,t)||'[]');}catch(e){return [];}}," +
             "getRemoteEditorsAsync:function(t){return Promise.resolve(this.getRemoteEditors(t));}," +
             "on:function(ev,cb){if(!collabListeners[ev])collabListeners[ev]=[];collabListeners[ev].push(cb);}," +
@@ -6349,7 +6349,7 @@ class WikiActivity : AppCompatActivity() {
             "function cmpVer(a,b){if(!a&&!b)return 0;if(!a)return -1;if(!b)return 1;var pa=a.split('.'),pb=b.split('.');var len=Math.max(pa.length,pb.length);for(var i=0;i<len;i++){var na=parseInt(pa[i]||'0',10)||0;var nb=parseInt(pb[i]||'0',10)||0;if(na>nb)return 1;if(na<nb)return -1;}return 0;}" +
             "function activate(syncId,syncMode){" +
             "var syncActive=true;" +
-            "syncMode=syncMode||'';" +
+            "syncMode=syncMode||'';_syncMode=syncMode;" +
             "console.log('[LAN Sync] Activated for wiki: '+syncId+' mode: '+(syncMode||'bidirectional'));" +
             "S.wikiOpened(syncId);" +
             // Activate collab: set flag, flush queued outbound messages
@@ -6358,13 +6358,14 @@ class WikiActivity : AppCompatActivity() {
             "clearAllET();rec={};_syncActive=true;_syncId=syncId;" +
             "try{var ss=JSON.parse(S.getSyncStatus()||'{}');_localDeviceId=ss.device_id||null;console.log('[LAN Sync] Local device_id: '+_localDeviceId);}catch(e){}" +
             "var q=_collabQueue;_collabQueue=[];" +
+            "if(syncMode!=='receive-only'){" +
             "for(var qi=0;qi<q.length;qi++){var qe=q[qi];" +
             "if(qe[0]==='startEditing')S.collabEditingStarted(syncId,qe[1]);" +
             "else if(qe[0]==='stopEditing')S.collabEditingStopped(syncId,qe[1]);" +
             "else if(qe[0]==='sendUpdate')S.collabUpdate(syncId,qe[1],qe[2]);" +
             "else if(qe[0]==='sendAwareness')S.collabAwareness(syncId,qe[1],qe[2]);" +
             "else if(qe[0]==='peerSaved')S.collabPeerSaved(syncId,qe[1],qe[2]);" +
-            "}" +
+            "}}" +
             "console.log('[LAN Sync] Collab API activated for wiki: '+syncId);" +
             // Notify CM6 collab plugins that transport is active (for late Phase 2)
             "try{window.dispatchEvent(new Event('collab-sync-activated'));}catch(e){}" +
@@ -6512,6 +6513,7 @@ class WikiActivity : AppCompatActivity() {
             "if(src.indexOf(fn)!==-1){el.src=src.split('?')[0]+ts;}}}" +
             // Full sync dump
             "function dumpTiddlers(toDevId){" +
+            "if(syncMode==='receive-only'){console.log('[LAN Sync] Skipping dump-tiddlers (receive-only mode)');S.sendFullSyncBatch(syncId,toDevId,'[]',true);return;}" +
             "var all=\$tw.wiki.allTitles();var MX=500000;" +
             "console.log('[LAN Sync] Dumping '+all.length+' tiddlers to '+toDevId);" +
             "function send(si){var batch=[];var bytes=0;var i=si;" +

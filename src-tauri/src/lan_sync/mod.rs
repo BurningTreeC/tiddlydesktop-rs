@@ -1265,7 +1265,8 @@ impl SyncManager {
                     None => return,
                 };
                 eprintln!("[Relay] Broadcasting local change: '{}' via room {}", title, room_code);
-                let clock = self.conflict_manager.record_local_change(&wiki_id, &title);
+                // Clock already recorded by event loop — just read it
+                let clock = self.conflict_manager.get_clock(&wiki_id, &title);
                 let timestamp = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .unwrap_or_default()
@@ -1287,7 +1288,8 @@ impl SyncManager {
                     Some(rc) => rc,
                     None => return,
                 };
-                let clock = self.conflict_manager.record_local_deletion(&wiki_id, &title);
+                // Clock already recorded by event loop — just read it
+                let clock = self.conflict_manager.get_clock(&wiki_id, &title);
                 let timestamp = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .unwrap_or_default()
@@ -1387,7 +1389,7 @@ impl SyncManager {
                     Some(rc) => rc,
                     None => return,
                 };
-                // conflict_manager already called by bridge — just get the current clock
+                // Clock already recorded by event loop — just get the current clock
                 let clock = self.conflict_manager.get_clock(wiki_id, title);
                 let timestamp = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
@@ -2635,6 +2637,24 @@ impl SyncManager {
                     self.handle_server_event(event).await;
                 }
                 Some(change) = wiki_rx.recv() => {
+                    // Always record vector clock changes for local edits,
+                    // even when no peers are connected. This ensures catchup
+                    // sync works when peers reconnect later — without this,
+                    // offline changes have stale clocks and the receiving peer
+                    // skips them as "Equal".
+                    match &change {
+                        WikiToSync::TiddlerChanged { wiki_id, title, .. } => {
+                            if conflict::ConflictManager::should_sync_tiddler(title) {
+                                self.conflict_manager.record_local_change(wiki_id, title);
+                            }
+                        }
+                        WikiToSync::TiddlerDeleted { wiki_id, title } => {
+                            if conflict::ConflictManager::should_sync_tiddler(title) {
+                                self.conflict_manager.record_local_deletion(wiki_id, title);
+                            }
+                        }
+                        _ => {}
+                    }
                     // Skip all outbound sync if no peers are connected
                     if !self.is_sync_active().await {
                         continue;
@@ -2710,6 +2730,24 @@ impl SyncManager {
                     self.handle_server_event(event).await;
                 }
                 Some(change) = wiki_rx.recv() => {
+                    // Always record vector clock changes for local edits,
+                    // even when no peers are connected. This ensures catchup
+                    // sync works when peers reconnect later — without this,
+                    // offline changes have stale clocks and the receiving peer
+                    // skips them as "Equal".
+                    match &change {
+                        WikiToSync::TiddlerChanged { wiki_id, title, .. } => {
+                            if conflict::ConflictManager::should_sync_tiddler(title) {
+                                self.conflict_manager.record_local_change(wiki_id, title);
+                            }
+                        }
+                        WikiToSync::TiddlerDeleted { wiki_id, title } => {
+                            if conflict::ConflictManager::should_sync_tiddler(title) {
+                                self.conflict_manager.record_local_deletion(wiki_id, title);
+                            }
+                        }
+                        _ => {}
+                    }
                     // Skip all outbound sync if no peers are connected
                     if !self.is_sync_active().await {
                         continue;

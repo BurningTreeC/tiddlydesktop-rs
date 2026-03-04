@@ -380,7 +380,8 @@ impl SyncBridge {
                 }
 
                 eprintln!("[LAN Sync] Broadcasting local change: '{}' in wiki {} to {} peers", title, wiki_id, peers.len());
-                let clock = conflict_manager.record_local_change(&wiki_id, &title);
+                // Clock already recorded by event loop — just read it
+                let clock = conflict_manager.get_clock(&wiki_id, &title);
                 let timestamp = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .unwrap_or_default()
@@ -415,7 +416,8 @@ impl SyncBridge {
                     return;
                 }
 
-                let clock = conflict_manager.record_local_deletion(&wiki_id, &title);
+                // Clock already recorded by event loop — just read it
+                let clock = conflict_manager.get_clock(&wiki_id, &title);
                 let timestamp = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .unwrap_or_default()

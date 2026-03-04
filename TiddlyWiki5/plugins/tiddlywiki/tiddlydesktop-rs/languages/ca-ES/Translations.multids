@@ -69,6 +69,35 @@ EditionSelector/Optional: (opcional)
 EditionSelector/CreatingFile: Creant fitxer wiki...
 EditionSelector/InitializingFolder: Inicialitzant carpeta wiki...
 
+ShareTemplates/Title: Compartir Plantilles
+ShareTemplates/Templates: Plantilles
+ShareTemplates/DomainRules: Regles de Domini
+ShareTemplates/AddTemplate: + Plantilla
+ShareTemplates/AddRule: + Regla
+ShareTemplates/NoTemplates: Cap plantilla encara. Afegiu una per personalitzar com s'importa el contingut compartit.
+ShareTemplates/NoRules: Cap regla de domini ancora. Afegiu una per seleccionar automàticament plantilles per domini d'URL.
+ShareTemplates/Edit: Editar
+ShareTemplates/Delete: Suprimir
+ShareTemplates/Save: Desar
+ShareTemplates/SetDefault: Establir per defecte
+ShareTemplates/Default: Per defecte
+ShareTemplates/Label: Etiqueta
+ShareTemplates/Tags: Etiquetes
+ShareTemplates/TitlePattern: Patró de Títol
+ShareTemplates/ContentMode: Mode de Contingut
+ShareTemplates/ModeClip: Web Clip
+ShareTemplates/ModeLink: Només Enllaç
+ShareTemplates/ModeText: Text Sense Format
+ShareTemplates/ContentPrefix: Prefix de Contingut
+ShareTemplates/ContentSuffix: Sufix de Contingut
+ShareTemplates/VariablesHint: Variables: {{title}}, {{url}}, {{date}}, {{domain}}, {{content}}
+ShareTemplates/Domain: Domini
+ShareTemplates/RuleTemplate: Plantilla
+ShareTemplates/AdditionalTags: Etiquetes Addicionals
+ShareTemplates/TitleStrip: Eliminar del Títol
+ShareTemplates/TemplateCount: Plantilles:
+ShareTemplates/Manage: Gestionar
+
 CustomPaths/Title: Camins personalitzats
 CustomPaths/PluginsFolder: Carpeta de connectors:
 CustomPaths/EditionsFolder: Carpeta d'edicions:

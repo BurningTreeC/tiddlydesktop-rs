@@ -69,6 +69,35 @@ EditionSelector/Optional: (необязательно)
 EditionSelector/CreatingFile: Создание файла вики...
 EditionSelector/InitializingFolder: Инициализация папки вики...
 
+ShareTemplates/Title: Шаблоны публикации
+ShareTemplates/Templates: Шаблоны
+ShareTemplates/DomainRules: Правила доменов
+ShareTemplates/AddTemplate: + Шаблон
+ShareTemplates/AddRule: + Правило
+ShareTemplates/NoTemplates: Шаблонов ещё нет. Добавьте шаблон для настройки импорта общего контента.
+ShareTemplates/NoRules: Правил доменов ещё нет. Добавьте правило для автоматического выбора шаблонов по домену URL.
+ShareTemplates/Edit: Редактировать
+ShareTemplates/Delete: Удалить
+ShareTemplates/Save: Сохранить
+ShareTemplates/SetDefault: Установить по умолчанию
+ShareTemplates/Default: По умолчанию
+ShareTemplates/Label: Метка
+ShareTemplates/Tags: Теги
+ShareTemplates/TitlePattern: Шаблон названия
+ShareTemplates/ContentMode: Режим контента
+ShareTemplates/ModeClip: Веб-клип
+ShareTemplates/ModeLink: Только ссылка
+ShareTemplates/ModeText: Простой текст
+ShareTemplates/ContentPrefix: Префикс контента
+ShareTemplates/ContentSuffix: Суффикс контента
+ShareTemplates/VariablesHint: Переменные: {{title}}, {{url}}, {{date}}, {{domain}}, {{content}}
+ShareTemplates/Domain: Домен
+ShareTemplates/RuleTemplate: Шаблон
+ShareTemplates/AdditionalTags: Дополнительные теги
+ShareTemplates/TitleStrip: Исключить из названия
+ShareTemplates/TemplateCount: Шаблонов:
+ShareTemplates/Manage: Управление
+
 CustomPaths/Title: Пользовательские пути
 CustomPaths/PluginsFolder: Папка плагинов:
 CustomPaths/EditionsFolder: Папка редакций:

@@ -69,6 +69,35 @@ EditionSelector/Optional: (선택 사항)
 EditionSelector/CreatingFile: 위키 파일 생성 중...
 EditionSelector/InitializingFolder: 위키 폴더 초기화 중...
 
+ShareTemplates/Title: 공유 템플릿
+ShareTemplates/Templates: 템플릿
+ShareTemplates/DomainRules: 도메인 규칙
+ShareTemplates/AddTemplate: + 템플릿
+ShareTemplates/AddRule: + 규칙
+ShareTemplates/NoTemplates: 아직 템플릿이 없습니다. 공유 콘텐츠를 가져오는 방식을 사용자 정의하기 위해 템플릿을 추가하세요.
+ShareTemplates/NoRules: 도메인 규칙이 없습니다. URL 도메인별로 템플릿을 자동 선택하려면 규칙을 추가하세요.
+ShareTemplates/Edit: 편집
+ShareTemplates/Delete: 삭제
+ShareTemplates/Save: 저장
+ShareTemplates/SetDefault: 기본값으로 설정
+ShareTemplates/Default: 기본값
+ShareTemplates/Label: 레이블
+ShareTemplates/Tags: 태그
+ShareTemplates/TitlePattern: 제목 패턴
+ShareTemplates/ContentMode: 콘텐츠 모드
+ShareTemplates/ModeClip: 웹 클립
+ShareTemplates/ModeLink: 링크만
+ShareTemplates/ModeText: 원본 텍스트
+ShareTemplates/ContentPrefix: 콘텐츠 접두사
+ShareTemplates/ContentSuffix: 콘텐츠 접미사
+ShareTemplates/VariablesHint: 변수: {{title}}, {{url}}, {{date}}, {{domain}}, {{content}}
+ShareTemplates/Domain: 도메인
+ShareTemplates/RuleTemplate: 템플릿
+ShareTemplates/AdditionalTags: 추가 태그
+ShareTemplates/TitleStrip: 제목에서 제거
+ShareTemplates/TemplateCount: 템플릿:
+ShareTemplates/Manage: 관리
+
 CustomPaths/Title: 사용자 지정 경로
 CustomPaths/PluginsFolder: 플러그인 폴더:
 CustomPaths/EditionsFolder: 에디션 폴더:

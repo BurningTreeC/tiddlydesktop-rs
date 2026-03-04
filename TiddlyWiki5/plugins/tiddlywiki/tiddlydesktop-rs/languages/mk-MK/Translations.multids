@@ -69,6 +69,35 @@ EditionSelector/Optional: (опционално)
 EditionSelector/CreatingFile: Се создава вики датотека...
 EditionSelector/InitializingFolder: Се иницијализира вики папка...
 
+ShareTemplates/Title: Шаблони за споделување
+ShareTemplates/Templates: Шаблони
+ShareTemplates/DomainRules: Правила за домен
+ShareTemplates/AddTemplate: + Шаблон
+ShareTemplates/AddRule: + Правило
+ShareTemplates/NoTemplates: Сè уште нема шаблони. Додајте еден за приспособување на увозот на споделена содржина.
+ShareTemplates/NoRules: Сè уште нема правила за домен. Додајте едно за автоматски избор на шаблони по URL домен.
+ShareTemplates/Edit: Уреди
+ShareTemplates/Delete: Избриши
+ShareTemplates/Save: Зачувај
+ShareTemplates/SetDefault: Постави како стандардно
+ShareTemplates/Default: Стандардно
+ShareTemplates/Label: Ознака
+ShareTemplates/Tags: Ознаки
+ShareTemplates/TitlePattern: Образец на наслов
+ShareTemplates/ContentMode: Режим на содржина
+ShareTemplates/ModeClip: Веб исечок
+ShareTemplates/ModeLink: Само врска
+ShareTemplates/ModeText: Суров текст
+ShareTemplates/ContentPrefix: Префикс на содржина
+ShareTemplates/ContentSuffix: Суфикс на содржина
+ShareTemplates/VariablesHint: Променливи: {{title}}, {{url}}, {{date}}, {{domain}}, {{content}}
+ShareTemplates/Domain: Домен
+ShareTemplates/RuleTemplate: Шаблон
+ShareTemplates/AdditionalTags: Дополнителни ознаки
+ShareTemplates/TitleStrip: Отстрани од насловот
+ShareTemplates/TemplateCount: Шаблони:
+ShareTemplates/Manage: Управувај
+
 CustomPaths/Title: Прилагодени патеки
 CustomPaths/PluginsFolder: Папка за додатоци:
 CustomPaths/EditionsFolder: Папка за изданија:

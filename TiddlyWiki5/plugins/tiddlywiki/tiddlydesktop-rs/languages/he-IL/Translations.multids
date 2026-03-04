@@ -69,6 +69,35 @@ EditionSelector/Optional: (אופציונלי)
 EditionSelector/CreatingFile: יוצר קובץ ויקי...
 EditionSelector/InitializingFolder: מאתחל תיקיית ויקי...
 
+ShareTemplates/Title: תבניות שיתוף
+ShareTemplates/Templates: תבניות
+ShareTemplates/DomainRules: כללי תחום
+ShareTemplates/AddTemplate: + תבנית
+ShareTemplates/AddRule: + כלל
+ShareTemplates/NoTemplates: עדיין אין תבניות. הוסף אחת כדי להתאים כיצד תוכן משותף מיובא.
+ShareTemplates/NoRules: עדיין אין כללי תחום. הוסף אחד כדי לבחור באופן אוטומטי תבניות לפי תחום URL.
+ShareTemplates/Edit: ערוך
+ShareTemplates/Delete: מחק
+ShareTemplates/Save: שמור
+ShareTemplates/SetDefault: הגדר כברירת מחדל
+ShareTemplates/Default: ברירת מחדל
+ShareTemplates/Label: תווית
+ShareTemplates/Tags: תגיות
+ShareTemplates/TitlePattern: דפוס כותרת
+ShareTemplates/ContentMode: מצב תוכן
+ShareTemplates/ModeClip: חיתוך אינטרנט
+ShareTemplates/ModeLink: קישור בלבד
+ShareTemplates/ModeText: טקסט גולמי
+ShareTemplates/ContentPrefix: קידומת תוכן
+ShareTemplates/ContentSuffix: סיומת תוכן
+ShareTemplates/VariablesHint: משתנים: {{title}}, {{url}}, {{date}}, {{domain}}, {{content}}
+ShareTemplates/Domain: תחום
+ShareTemplates/RuleTemplate: תבנית
+ShareTemplates/AdditionalTags: תגיות נוספות
+ShareTemplates/TitleStrip: הסר מהכותרת
+ShareTemplates/TemplateCount: תבניות:
+ShareTemplates/Manage: נהל
+
 CustomPaths/Title: נתיבים מותאמים אישית
 CustomPaths/PluginsFolder: תיקיית תוספים:
 CustomPaths/EditionsFolder: תיקיית מהדורות:

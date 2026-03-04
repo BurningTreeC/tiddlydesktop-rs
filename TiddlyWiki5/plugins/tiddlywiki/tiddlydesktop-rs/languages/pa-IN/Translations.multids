@@ -69,6 +69,35 @@ EditionSelector/Optional: (ਵਿਕਲਪਿਕ)
 EditionSelector/CreatingFile: ਵਿਕੀ ਫ਼ਾਈਲ ਬਣਾ ਰਿਹਾ ਹੈ...
 EditionSelector/InitializingFolder: ਵਿਕੀ ਫੋਲਡਰ ਸ਼ੁਰੂ ਕਰ ਰਿਹਾ ਹੈ...
 
+ShareTemplates/Title: ਸਾਂਝਾ ਕਰਨ ਦੇ ਨਮੂਨੇ
+ShareTemplates/Templates: ਨਮੂਨੇ
+ShareTemplates/DomainRules: ਡੋਮੇਨ ਨਿਯਮ
+ShareTemplates/AddTemplate: + ਨਮੂਨਾ
+ShareTemplates/AddRule: + ਨਿਯਮ
+ShareTemplates/NoTemplates: ਅਜੇ ਕੋਈ ਨਮੂਨਾ ਨਹੀਂ। ਸਾਂਝੀ ਸਮੱਗਰੀ ਨੂੰ ਆਯਾਤ ਕਰਨ ਦੇ ਤਰੀਕੇ ਨੂੰ ਕਸਟਮਾਈਜ਼ ਕਰਨ ਲਈ ਇੱਕ ਜੋੜੋ।
+ShareTemplates/NoRules: ਅਜੇ ਕੋਈ ਡੋਮੇਨ ਨਿਯਮ ਨਹੀਂ। URL ਡੋਮੇਨ ਅਨੁਸਾਰ ਨਮੂਨੇ ਆਪਣੇ ਆਪ ਚੁਣਨ ਲਈ ਇੱਕ ਜੋੜੋ।
+ShareTemplates/Edit: ਸੰਪਾਦਿਤ ਕਰੋ
+ShareTemplates/Delete: ਮਿਟਾਓ
+ShareTemplates/Save: ਸੰਭਾਲੋ
+ShareTemplates/SetDefault: ਡਿਫ਼ਾਲਟ ਸੈੱਟ ਕਰੋ
+ShareTemplates/Default: ਡਿਫ਼ਾਲਟ
+ShareTemplates/Label: ਲੇਬਲ
+ShareTemplates/Tags: ਟੈਗ
+ShareTemplates/TitlePattern: ਸਿਰਲੇਖ ਪੈਟਰਨ
+ShareTemplates/ContentMode: ਸਮੱਗਰੀ ਮੋਡ
+ShareTemplates/ModeClip: ਵੈੱਬ ਕਲਿੱਪ
+ShareTemplates/ModeLink: ਸਿਰਫ਼ ਲਿੰਕ
+ShareTemplates/ModeText: ਕੱਚਾ ਟੈਕਸਟ
+ShareTemplates/ContentPrefix: ਸਮੱਗਰੀ ਅਗੇਤਰ
+ShareTemplates/ContentSuffix: ਸਮੱਗਰੀ ਪਿਛੇਤਰ
+ShareTemplates/VariablesHint: ਚਲ: {{title}}, {{url}}, {{date}}, {{domain}}, {{content}}
+ShareTemplates/Domain: ਡੋਮੇਨ
+ShareTemplates/RuleTemplate: ਨਮੂਨਾ
+ShareTemplates/AdditionalTags: ਵਾਧੂ ਟੈਗ
+ShareTemplates/TitleStrip: ਸਿਰਲੇਖ ਤੋਂ ਹਟਾਓ
+ShareTemplates/TemplateCount: ਨਮੂਨੇ:
+ShareTemplates/Manage: ਪ੍ਰਬੰਧਿਤ ਕਰੋ
+
 CustomPaths/Title: ਕਸਟਮ ਮਾਰਗ
 CustomPaths/PluginsFolder: ਪਲੱਗਇਨ ਫੋਲਡਰ:
 CustomPaths/EditionsFolder: ਐਡੀਸ਼ਨ ਫੋਲਡਰ:

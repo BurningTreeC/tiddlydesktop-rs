@@ -69,6 +69,35 @@ EditionSelector/Optional: (valfritt)
 EditionSelector/CreatingFile: Skapar wiki-fil...
 EditionSelector/InitializingFolder: Initierar wiki-mapp...
 
+ShareTemplates/Title: Dela mallar
+ShareTemplates/Templates: Mallar
+ShareTemplates/DomainRules: Domänregler
+ShareTemplates/AddTemplate: + Mall
+ShareTemplates/AddRule: + Regel
+ShareTemplates/NoTemplates: Inga mallar ännu. Lägg till en för att anpassa hur delat innehål importeras.
+ShareTemplates/NoRules: Inga domänregler ännu. Lägg till en för att automatiskt välja mallar efter URL-domän.
+ShareTemplates/Edit: Redigera
+ShareTemplates/Delete: Ta bort
+ShareTemplates/Save: Spara
+ShareTemplates/SetDefault: Ange som standard
+ShareTemplates/Default: Standard
+ShareTemplates/Label: Etikett
+ShareTemplates/Tags: Etiketter
+ShareTemplates/TitlePattern: Titel-mall
+ShareTemplates/ContentMode: Innehållsläge
+ShareTemplates/ModeClip: Webbklipp
+ShareTemplates/ModeLink: Endast länk
+ShareTemplates/ModeText: Rå text
+ShareTemplates/ContentPrefix: Innehållsprefix
+ShareTemplates/ContentSuffix: Innehållssuffix
+ShareTemplates/VariablesHint: Variabler: {{title}}, {{url}}, {{date}}, {{domain}}, {{content}}
+ShareTemplates/Domain: Domän
+ShareTemplates/RuleTemplate: Mall
+ShareTemplates/AdditionalTags: Extra etiketter
+ShareTemplates/TitleStrip: Ta bort från titel
+ShareTemplates/TemplateCount: Mallar:
+ShareTemplates/Manage: Hantera
+
 CustomPaths/Title: Anpassade sökvägar
 CustomPaths/PluginsFolder: Plugin-mapp:
 CustomPaths/EditionsFolder: Editions-mapp:

@@ -69,6 +69,35 @@ EditionSelector/Optional: (valgfrit)
 EditionSelector/CreatingFile: Opretter wiki-fil...
 EditionSelector/InitializingFolder: Initialiserer wiki-mappe...
 
+ShareTemplates/Title: Del Skabeloner
+ShareTemplates/Templates: Skabeloner
+ShareTemplates/DomainRules: Domæneregler
+ShareTemplates/AddTemplate: + Skabelon
+ShareTemplates/AddRule: + Regel
+ShareTemplates/NoTemplates: Ingen skabeloner endnu. Tilføj en for at tilpasse, hvordan delt indhold importeres.
+ShareTemplates/NoRules: Ingen domæneregler endnu. Tilføj en for at vælge skabeloner automatisk efter URL-domæne.
+ShareTemplates/Edit: Rediger
+ShareTemplates/Delete: Slet
+ShareTemplates/Save: Gem
+ShareTemplates/SetDefault: Indstil som standard
+ShareTemplates/Default: Standard
+ShareTemplates/Label: Etiket
+ShareTemplates/Tags: Tags
+ShareTemplates/TitlePattern: Titelmønster
+ShareTemplates/ContentMode: Indholdstype
+ShareTemplates/ModeClip: Webklip
+ShareTemplates/ModeLink: Kun link
+ShareTemplates/ModeText: Rå tekst
+ShareTemplates/ContentPrefix: Indholdsforløb
+ShareTemplates/ContentSuffix: Indholdsafslutning
+ShareTemplates/VariablesHint: Variabler: {{title}}, {{url}}, {{date}}, {{domain}}, {{content}}
+ShareTemplates/Domain: Domæne
+ShareTemplates/RuleTemplate: Skabelon
+ShareTemplates/AdditionalTags: Ekstra tags
+ShareTemplates/TitleStrip: Fjern fra titel
+ShareTemplates/TemplateCount: Skabeloner:
+ShareTemplates/Manage: Administrer
+
 CustomPaths/Title: Brugerdefinerede stier
 CustomPaths/PluginsFolder: Plugin-mappe:
 CustomPaths/EditionsFolder: Udgave-mappe:

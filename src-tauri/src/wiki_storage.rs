@@ -6,7 +6,7 @@
 
 use std::path::{Path, PathBuf};
 use tauri::{Emitter, Manager};
-use crate::types::{WikiEntry, WikiConfigs, ExternalAttachmentsConfig, SessionAuthConfig, AppSettings};
+use crate::types::{WikiEntry, WikiConfigs, ExternalAttachmentsConfig, SessionAuthConfig, AppSettings, ShareTemplatesConfig};
 use crate::utils;
 
 /// Atomic write with backup: keeps a .bak copy of the previous file, writes to
@@ -98,6 +98,42 @@ pub fn save_app_settings(app: &tauri::AppHandle, settings: &AppSettings) -> Resu
         .map_err(|e| format!("Failed to serialize app settings: {}", e))?;
     atomic_write_with_backup(&path, &content)
         .map_err(|e| format!("Failed to write app settings: {}", e))
+}
+
+/// Get the path to the share templates JSON
+pub fn get_share_templates_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    let data_dir = crate::get_data_dir(app)?;
+    Ok(data_dir.join("share_templates.json"))
+}
+
+/// Load share templates config from disk
+pub fn load_share_templates(app: &tauri::AppHandle) -> Result<ShareTemplatesConfig, String> {
+    let path = get_share_templates_path(app)?;
+    if path.exists() {
+        let content = std::fs::read_to_string(&path)
+            .map_err(|e| format!("Failed to read share templates: {}", e))?;
+        if content.trim().is_empty() {
+            return Ok(ShareTemplatesConfig::default());
+        }
+        serde_json::from_str(&content)
+            .map_err(|e| format!("Failed to parse share templates: {}", e))
+    } else {
+        Ok(ShareTemplatesConfig::default())
+    }
+}
+
+/// Save share templates config to disk (atomic write with backup)
+pub fn save_share_templates(app: &tauri::AppHandle, config: &ShareTemplatesConfig) -> Result<(), String> {
+    let path = get_share_templates_path(app)?;
+
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("Failed to create config directory: {}", e))?;
+    }
+
+    let content = serde_json::to_string_pretty(config)
+        .map_err(|e| format!("Failed to serialize share templates: {}", e))?;
+    atomic_write_with_backup(&path, &content)
+        .map_err(|e| format!("Failed to write share templates: {}", e))
 }
 
 /// Detect system locale and return a language code
@@ -1185,4 +1221,16 @@ pub fn set_custom_edition_path(app: tauri::AppHandle, uri: String) -> Result<(),
     save_app_settings(&app, &settings)?;
     eprintln!("[TiddlyDesktop] Custom edition path saved: {:?}", settings.custom_edition_path_uri);
     Ok(())
+}
+
+/// Get share templates config
+#[tauri::command]
+pub fn get_share_templates(app: tauri::AppHandle) -> Result<ShareTemplatesConfig, String> {
+    load_share_templates(&app)
+}
+
+/// Save share templates config
+#[tauri::command]
+pub fn save_share_templates_config(app: tauri::AppHandle, config: ShareTemplatesConfig) -> Result<(), String> {
+    save_share_templates(&app, &config)
 }

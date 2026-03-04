@@ -32,6 +32,9 @@
     <string name="hint_tags">Tag1 Tag2</string>
     <string name="hint_content">Write your note here…</string>
 
+    <string name="template_label">Template</string>
+    <string name="template_none">None (default)</string>
+
     <string name="btn_cancel">Cancel</string>
     <string name="btn_save">Save</string>
     <string name="btn_ok">OK</string>

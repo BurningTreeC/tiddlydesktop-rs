@@ -69,6 +69,35 @@ EditionSelector/Optional: (optional)
 EditionSelector/CreatingFile: Creante file wiki...
 EditionSelector/InitializingFolder: Initialisante dossier wiki...
 
+ShareTemplates/Title: Patronos de division
+ShareTemplates/Templates: Patronos
+ShareTemplates/DomainRules: Regulas de dominio
+ShareTemplates/AddTemplate: + Patrono
+ShareTemplates/AddRule: + Regula
+ShareTemplates/NoTemplates: Nulle patronos ancora. Adde un pro personalisar como le contento dividite es importate.
+ShareTemplates/NoRules: Nulle regulas de dominio ancora. Adde un pro seliger automaticamente patronos per dominio URL.
+ShareTemplates/Edit: Modificar
+ShareTemplates/Delete: Deler
+ShareTemplates/Save: Salveguardar
+ShareTemplates/SetDefault: Definir como predefinite
+ShareTemplates/Default: Predefinite
+ShareTemplates/Label: Etiquetta
+ShareTemplates/Tags: Etiquettas
+ShareTemplates/TitlePattern: Patrono de titulo
+ShareTemplates/ContentMode: Modo de contento
+ShareTemplates/ModeClip: Clip web
+ShareTemplates/ModeLink: Solo ligamine
+ShareTemplates/ModeText: Texto brute
+ShareTemplates/ContentPrefix: Prefixo de contento
+ShareTemplates/ContentSuffix: Suffixo de contento
+ShareTemplates/VariablesHint: Variabiles: {{title}}, {{url}}, {{date}}, {{domain}}, {{content}}
+ShareTemplates/Domain: Dominio
+ShareTemplates/RuleTemplate: Patrono
+ShareTemplates/AdditionalTags: Etiquettas extra
+ShareTemplates/TitleStrip: Remover del titulo
+ShareTemplates/TemplateCount: Patronos:
+ShareTemplates/Manage: Gerer
+
 CustomPaths/Title: Percursos personalisate
 CustomPaths/PluginsFolder: Dossier de plugins:
 CustomPaths/EditionsFolder: Dossier de editiones:

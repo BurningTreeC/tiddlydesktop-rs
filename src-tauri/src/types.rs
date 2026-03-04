@@ -145,6 +145,49 @@ pub struct AppSettings {
     pub custom_edition_path_uri: Option<String>,
 }
 
+/// A share template for customizing how shared content is imported
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ShareTemplate {
+    pub id: String,
+    pub label: String,
+    #[serde(default)]
+    pub tags: String,
+    #[serde(default)]
+    pub title_pattern: String,
+    #[serde(default)]
+    pub content_prefix: String,
+    #[serde(default)]
+    pub content_suffix: String,
+    #[serde(default = "default_content_mode")]
+    pub content_mode: String,
+}
+
+fn default_content_mode() -> String {
+    "clip".to_string()
+}
+
+/// A domain rule that auto-selects a template based on URL domain
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct DomainRule {
+    pub domain: String,
+    pub template_id: String,
+    #[serde(default)]
+    pub additional_tags: String,
+    #[serde(default)]
+    pub title_strip: String,
+}
+
+/// Configuration for share templates and domain rules
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+pub struct ShareTemplatesConfig {
+    #[serde(default)]
+    pub templates: Vec<ShareTemplate>,
+    #[serde(default)]
+    pub domain_rules: Vec<DomainRule>,
+    #[serde(default)]
+    pub default_template_id: Option<String>,
+}
+
 /// Information about a TiddlyWiki edition
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct EditionInfo {

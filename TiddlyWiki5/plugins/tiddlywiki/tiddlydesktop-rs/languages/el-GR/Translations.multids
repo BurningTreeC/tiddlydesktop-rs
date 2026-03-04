@@ -69,6 +69,35 @@ EditionSelector/Optional: (προαιρετικό)
 EditionSelector/CreatingFile: Δημιουργία αρχείου wiki...
 EditionSelector/InitializingFolder: Αρχικοποίηση φακέλου wiki...
 
+ShareTemplates/Title: Κοινοποίηση Προτύπων
+ShareTemplates/Templates: Πρότυπα
+ShareTemplates/DomainRules: Κανόνες Τομέα
+ShareTemplates/AddTemplate: + Πρότυπο
+ShareTemplates/AddRule: + Κανόνας
+ShareTemplates/NoTemplates: Κανένα πρότυπο ακόμα. Προσθέστε ένα για να προσαρμόσετε τον τρόπο εισαγωγής κοινοποιημένου περιεχομένου.
+ShareTemplates/NoRules: Κανένας κανόνας τομέα ακόμα. Προσθέστε έναν για αυτόματη επιλογή προτύπων ανά URL τομέα.
+ShareTemplates/Edit: Επεξεργασία
+ShareTemplates/Delete: Διαγραφή
+ShareTemplates/Save: Αποθήκευση
+ShareTemplates/SetDefault: Ορισμός ως Προεπιλογή
+ShareTemplates/Default: Προεπιλογή
+ShareTemplates/Label: Ετικέτα
+ShareTemplates/Tags: Ετικέτες
+ShareTemplates/TitlePattern: Πρότυπο Τίτλου
+ShareTemplates/ContentMode: Λειτουργία Περιεχομένου
+ShareTemplates/ModeClip: Web Clip
+ShareTemplates/ModeLink: Μόνο Σύνδεσμος
+ShareTemplates/ModeText: Ακατέργαστο Κείμενο
+ShareTemplates/ContentPrefix: Πρόθεμα Περιεχομένου
+ShareTemplates/ContentSuffix: Κατάληξη Περιεχομένου
+ShareTemplates/VariablesHint: Μεταβλητές: {{title}}, {{url}}, {{date}}, {{domain}}, {{content}}
+ShareTemplates/Domain: Τομέας
+ShareTemplates/RuleTemplate: Πρότυπο
+ShareTemplates/AdditionalTags: Επιπλέον Ετικέτες
+ShareTemplates/TitleStrip: Αφαίρεση από Τίτλο
+ShareTemplates/TemplateCount: Πρότυπα:
+ShareTemplates/Manage: Διαχείριση
+
 CustomPaths/Title: Προσαρμοσμένες διαδρομές
 CustomPaths/PluginsFolder: Φάκελος πρόσθετων:
 CustomPaths/EditionsFolder: Φάκελος εκδόσεων:

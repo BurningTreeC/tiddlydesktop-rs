@@ -2599,3 +2599,179 @@ body.td-is-android.td-main-wiki .td-wikilist {
 .td-relay-member-blocked .td-relay-member-role {
 	color: #c53030;
 }
+
+/* ── Share Templates Modal ─────────────────────────────── */
+
+.td-template-overlay {
+	position: fixed;
+	top: 0;
+	left: 0;
+	right: 0;
+	bottom: 0;
+	background: rgba(0,0,0,0.5);
+	z-index: 1000;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	padding: 20px;
+}
+
+.td-template-modal {
+	background: <<colour background>>;
+	border-radius: 16px;
+	padding: 24px;
+	max-width: 600px;
+	width: 100%;
+	max-height: 80vh;
+	overflow-y: auto;
+	box-shadow: 0 8px 32px rgba(0,0,0,0.3);
+}
+
+.td-template-header {
+	display: flex;
+	justify-content: space-between;
+	align-items: center;
+	margin-bottom: 16px;
+}
+
+.td-template-header h2 {
+	margin: 0;
+	font-size: 1.3em;
+}
+
+.td-template-close {
+	padding: 4px;
+}
+
+.td-template-section {
+	margin-bottom: 20px;
+}
+
+.td-template-section-header {
+	display: flex;
+	justify-content: space-between;
+	align-items: center;
+	margin-bottom: 8px;
+}
+
+.td-template-section-header h3 {
+	margin: 0;
+	font-size: 1.05em;
+	color: <<colour muted-foreground>>;
+}
+
+.td-template-item {
+	border: 1px solid <<colour table-border>>;
+	border-radius: 8px;
+	padding: 10px 12px;
+	margin-bottom: 8px;
+}
+
+.td-template-item-header {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	flex-wrap: wrap;
+}
+
+.td-template-item-label {
+	font-weight: 600;
+	flex-shrink: 0;
+}
+
+.td-template-item-tags {
+	color: <<colour muted-foreground>>;
+	font-size: 0.9em;
+	flex: 1;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.td-template-item-actions {
+	display: flex;
+	gap: 4px;
+	align-items: center;
+	flex-shrink: 0;
+}
+
+.td-template-default-badge {
+	background: <<colour primary>>;
+	color: <<colour background>>;
+	padding: 2px 8px;
+	border-radius: 10px;
+	font-size: 0.8em;
+	font-weight: 500;
+}
+
+.td-template-editor {
+	margin-top: 10px;
+	padding-top: 10px;
+	border-top: 1px solid <<colour table-border>>;
+}
+
+.td-template-field {
+	margin-bottom: 8px;
+}
+
+.td-template-field label {
+	display: block;
+	font-size: 0.85em;
+	color: <<colour muted-foreground>>;
+	margin-bottom: 2px;
+}
+
+.td-template-input {
+	width: 100%;
+	padding: 6px 10px;
+	border: 1px solid <<colour table-border>>;
+	border-radius: 6px;
+	background: <<colour background>>;
+	color: <<colour foreground>>;
+	font-size: 0.95em;
+	box-sizing: border-box;
+}
+
+.td-template-field-hint {
+	font-size: 0.8em;
+	color: <<colour muted-foreground>>;
+	margin-bottom: 8px;
+}
+
+.td-domain-rule-item {
+	border: 1px solid <<colour table-border>>;
+	border-radius: 8px;
+	padding: 10px 12px;
+	margin-bottom: 8px;
+}
+
+.td-domain-rule-row {
+	display: flex;
+	gap: 8px;
+	align-items: flex-end;
+	flex-wrap: wrap;
+}
+
+.td-domain-rule-fields {
+	flex: 1;
+	display: flex;
+	gap: 8px;
+	flex-wrap: wrap;
+}
+
+.td-template-field-inline {
+	flex: 1;
+	min-width: 120px;
+}
+
+.td-template-input-small {
+	padding: 4px 8px;
+	font-size: 0.9em;
+}
+
+.td-domain-rule-actions {
+	display: flex;
+	gap: 4px;
+	flex-shrink: 0;
+}

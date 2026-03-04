@@ -69,6 +69,35 @@ EditionSelector/Optional: (voliteľné)
 EditionSelector/CreatingFile: Vytváranie wiki súboru...
 EditionSelector/InitializingFolder: Inicializácia wiki priečinka...
 
+ShareTemplates/Title: Šablóny zdieľania
+ShareTemplates/Templates: Šablóny
+ShareTemplates/DomainRules: Pravidlá domény
+ShareTemplates/AddTemplate: + Šablóna
+ShareTemplates/AddRule: + Pravidlo
+ShareTemplates/NoTemplates: Zatiaľ žiadne šablóny. Pridajte jednu pre prispôsobenie importu zdieľaného obsahu.
+ShareTemplates/NoRules: Zatiaľ žiadne pravidlá domény. Pridajte jedno pre automatický výber šablón podľa URL domény.
+ShareTemplates/Edit: Upraviť
+ShareTemplates/Delete: Odstrániť
+ShareTemplates/Save: Uložiť
+ShareTemplates/SetDefault: Nastaviť ako predvolené
+ShareTemplates/Default: Predvolené
+ShareTemplates/Label: Označenie
+ShareTemplates/Tags: Štítky
+ShareTemplates/TitlePattern: Vzor názvu
+ShareTemplates/ContentMode: Režim obsahu
+ShareTemplates/ModeClip: Webový výstrižok
+ShareTemplates/ModeLink: Iba odkaz
+ShareTemplates/ModeText: Surový text
+ShareTemplates/ContentPrefix: Predpona obsahu
+ShareTemplates/ContentSuffix: Prípona obsahu
+ShareTemplates/VariablesHint: Premenné: {{title}}, {{url}}, {{date}}, {{domain}}, {{content}}
+ShareTemplates/Domain: Doména
+ShareTemplates/RuleTemplate: Šablóna
+ShareTemplates/AdditionalTags: Extra štítky
+ShareTemplates/TitleStrip: Odstrániť z názvu
+ShareTemplates/TemplateCount: Šablóny:
+ShareTemplates/Manage: Spravovať
+
 CustomPaths/Title: Vlastné cesty
 CustomPaths/PluginsFolder: Priečinok doplnkov:
 CustomPaths/EditionsFolder: Priečinok edícií:

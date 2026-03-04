@@ -1,0 +1,143 @@
+title: $:/plugins/tiddlywiki/tiddlydesktop-rs/ShareTemplates
+
+\define td-lingo(title) $:/plugins/tiddlywiki/tiddlydesktop-rs/languages/$(languageTitle)$/$(title)$
+
+<!-- Share Templates Manager Modal (Android only) -->
+<$list filter="[{$:/temp/tiddlydesktop-rs/is-android}match[yes]]" variable="ignore">
+<$reveal type="match" state="$:/temp/tiddlydesktop-rs/template-manager-open" text="yes" animate="yes">
+<div class="td-template-overlay">
+<div class="td-template-modal">
+<div class="td-template-header">
+<h2><<td-lingo ShareTemplates/Title>></h2>
+<$button message="tm-tiddlydesktop-rs-close-template-manager" class="tc-btn-invisible td-template-close">{{$:/core/images/close-button}}</$button>
+</div>
+
+<!-- Templates Section -->
+<div class="td-template-section">
+<div class="td-template-section-header">
+<h3><<td-lingo ShareTemplates/Templates>></h3>
+<$button message="tm-tiddlydesktop-rs-add-template" class="tc-btn-invisible td-button td-button-small td-button-primary"><<td-lingo ShareTemplates/AddTemplate>></$button>
+</div>
+
+<$list filter="[prefix[$:/temp/tiddlydesktop-rs/templates/]sort[label]]" emptyMessage=<<td-lingo ShareTemplates/NoTemplates>>>
+<div class="td-template-item">
+<div class="td-template-item-header">
+<span class="td-template-item-label"><$text text={{!!label}}/></span>
+<span class="td-template-item-tags"><$text text={{!!tags_field}}/></span>
+<div class="td-template-item-actions">
+<!-- Default template toggle -->
+<$list filter="[{$:/temp/tiddlydesktop-rs/share-default-template-id}match{!!tpl_id}]" variable="ignore">
+<span class="td-template-default-badge"><<td-lingo ShareTemplates/Default>></span>
+</$list>
+<$list filter="[{$:/temp/tiddlydesktop-rs/share-default-template-id}!match{!!tpl_id}]" variable="ignore">
+<$button class="tc-btn-invisible td-button td-button-small">
+<$action-sendmessage $message="tm-tiddlydesktop-rs-set-default-template" tplId={{!!tpl_id}}/>
+<<td-lingo ShareTemplates/SetDefault>>
+</$button>
+</$list>
+<$button class="tc-btn-invisible td-button td-button-small">
+<$action-setfield $tiddler="$:/temp/tiddlydesktop-rs/editing-template" text={{!!tpl_id}}/>
+<<td-lingo ShareTemplates/Edit>>
+</$button>
+<$button class="tc-btn-invisible td-button td-button-small td-button-remove">
+<$action-sendmessage $message="tm-tiddlydesktop-rs-delete-template" tplId={{!!tpl_id}}/>
+<<td-lingo ShareTemplates/Delete>>
+</$button>
+</div>
+</div>
+
+<!-- Inline template editor -->
+<$reveal type="match" state="$:/temp/tiddlydesktop-rs/editing-template" text={{!!tpl_id}} animate="yes">
+<div class="td-template-editor">
+<div class="td-template-field">
+<label><<td-lingo ShareTemplates/Label>></label>
+<$edit-text tiddler=<<currentTiddler>> field="label" tag="input" class="td-template-input"/>
+</div>
+<div class="td-template-field">
+<label><<td-lingo ShareTemplates/Tags>></label>
+<$edit-text tiddler=<<currentTiddler>> field="tags_field" tag="input" class="td-template-input" placeholder="Tag1 Tag2"/>
+</div>
+<div class="td-template-field">
+<label><<td-lingo ShareTemplates/TitlePattern>></label>
+<$edit-text tiddler=<<currentTiddler>> field="title_pattern" tag="input" class="td-template-input" placeholder="{{title}}"/>
+</div>
+<div class="td-template-field">
+<label><<td-lingo ShareTemplates/ContentMode>></label>
+<$select tiddler=<<currentTiddler>> field="content_mode" class="td-template-input">
+<option value="clip"><<td-lingo ShareTemplates/ModeClip>></option>
+<option value="link"><<td-lingo ShareTemplates/ModeLink>></option>
+<option value="text"><<td-lingo ShareTemplates/ModeText>></option>
+</$select>
+</div>
+<div class="td-template-field">
+<label><<td-lingo ShareTemplates/ContentPrefix>></label>
+<$edit-text tiddler=<<currentTiddler>> field="content_prefix" tag="input" class="td-template-input" placeholder=""/>
+</div>
+<div class="td-template-field">
+<label><<td-lingo ShareTemplates/ContentSuffix>></label>
+<$edit-text tiddler=<<currentTiddler>> field="content_suffix" tag="input" class="td-template-input" placeholder=""/>
+</div>
+<div class="td-template-field-hint"><<td-lingo ShareTemplates/VariablesHint>></div>
+<$button class="tc-btn-invisible td-button td-button-small td-button-primary">
+<$action-sendmessage $message="tm-tiddlydesktop-rs-save-template"/>
+<$action-setfield $tiddler="$:/temp/tiddlydesktop-rs/editing-template" text=""/>
+<<td-lingo ShareTemplates/Save>>
+</$button>
+</div>
+</$reveal>
+</div>
+</$list>
+</div>
+
+<!-- Domain Rules Section -->
+<div class="td-template-section">
+<div class="td-template-section-header">
+<h3><<td-lingo ShareTemplates/DomainRules>></h3>
+<$button message="tm-tiddlydesktop-rs-add-domain-rule" class="tc-btn-invisible td-button td-button-small td-button-primary"><<td-lingo ShareTemplates/AddRule>></$button>
+</div>
+
+<$list filter="[prefix[$:/temp/tiddlydesktop-rs/domain-rules/]sort[domain]]" emptyMessage=<<td-lingo ShareTemplates/NoRules>>>
+<div class="td-domain-rule-item">
+<div class="td-domain-rule-row">
+<div class="td-domain-rule-fields">
+<div class="td-template-field td-template-field-inline">
+<label><<td-lingo ShareTemplates/Domain>></label>
+<$edit-text tiddler=<<currentTiddler>> field="domain" tag="input" class="td-template-input td-template-input-small" placeholder="example.com"/>
+</div>
+<div class="td-template-field td-template-field-inline">
+<label><<td-lingo ShareTemplates/RuleTemplate>></label>
+<$select tiddler=<<currentTiddler>> field="template_id" class="td-template-input td-template-input-small">
+<option value="">—</option>
+<$list filter="[prefix[$:/temp/tiddlydesktop-rs/templates/]sort[label]]">
+<option value={{!!tpl_id}}><$text text={{!!label}}/></option>
+</$list>
+</$select>
+</div>
+<div class="td-template-field td-template-field-inline">
+<label><<td-lingo ShareTemplates/AdditionalTags>></label>
+<$edit-text tiddler=<<currentTiddler>> field="additional_tags" tag="input" class="td-template-input td-template-input-small" placeholder=""/>
+</div>
+<div class="td-template-field td-template-field-inline">
+<label><<td-lingo ShareTemplates/TitleStrip>></label>
+<$edit-text tiddler=<<currentTiddler>> field="title_strip" tag="input" class="td-template-input td-template-input-small" placeholder=" - YouTube"/>
+</div>
+</div>
+<div class="td-domain-rule-actions">
+<$button class="tc-btn-invisible td-button td-button-small td-button-primary">
+<$action-sendmessage $message="tm-tiddlydesktop-rs-save-domain-rule"/>
+<<td-lingo ShareTemplates/Save>>
+</$button>
+<$button class="tc-btn-invisible td-button td-button-small td-button-remove">
+<$action-sendmessage $message="tm-tiddlydesktop-rs-delete-domain-rule" ruleTitle=<<currentTiddler>>/>
+<<td-lingo ShareTemplates/Delete>>
+</$button>
+</div>
+</div>
+</div>
+</$list>
+</div>
+
+</div>
+</div>
+</$reveal>
+</$list>

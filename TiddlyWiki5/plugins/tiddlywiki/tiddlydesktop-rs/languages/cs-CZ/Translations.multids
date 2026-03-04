@@ -69,6 +69,35 @@ EditionSelector/Optional: (volitelné)
 EditionSelector/CreatingFile: Vytváření wiki souboru...
 EditionSelector/InitializingFolder: Inicializace wiki složky...
 
+ShareTemplates/Title: Sdílené šablony
+ShareTemplates/Templates: Šablony
+ShareTemplates/DomainRules: Pravidla domény
+ShareTemplates/AddTemplate: + Šablona
+ShareTemplates/AddRule: + Pravidlo
+ShareTemplates/NoTemplates: Zatím nejsou žádné šablony. Přidejte jednu pro přizpůsobení importu sdíleného obsahu.
+ShareTemplates/NoRules: Zatím nejsou žádná pravidla domény. Přidejte jedno pro automatický výběr šablon podle domény adresy URL.
+ShareTemplates/Edit: Upravit
+ShareTemplates/Delete: Smazat
+ShareTemplates/Save: Uložit
+ShareTemplates/SetDefault: Nastavit výchozí
+ShareTemplates/Default: Výchozí
+ShareTemplates/Label: Popis
+ShareTemplates/Tags: Štítky
+ShareTemplates/TitlePattern: Vzor názvu
+ShareTemplates/ContentMode: Režim obsahu
+ShareTemplates/ModeClip: Webový výstřižek
+ShareTemplates/ModeLink: Pouze odkaz
+ShareTemplates/ModeText: Holý text
+ShareTemplates/ContentPrefix: Předpona obsahu
+ShareTemplates/ContentSuffix: Přípona obsahu
+ShareTemplates/VariablesHint: Proměnné: {{title}}, {{url}}, {{date}}, {{domain}}, {{content}}
+ShareTemplates/Domain: Doména
+ShareTemplates/RuleTemplate: Šablona
+ShareTemplates/AdditionalTags: Další štítky
+ShareTemplates/TitleStrip: Odebrat z názvu
+ShareTemplates/TemplateCount: Šablony:
+ShareTemplates/Manage: Spravovat
+
 CustomPaths/Title: Vlastní cesty
 CustomPaths/PluginsFolder: Složka pluginů:
 CustomPaths/EditionsFolder: Složka edic:

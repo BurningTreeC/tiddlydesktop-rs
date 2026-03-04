@@ -1804,6 +1804,178 @@ exports.startup = function(callback) {
 				console.error("Failed to clear custom edition path:", err);
 			});
 		});
+
+		// ── Share Templates (Android only) ────────────────────────────────
+		function refreshShareTemplates() {
+			invoke("get_share_templates").then(function(config) {
+				// Clear existing temp tiddlers
+				$tw.wiki.each(function(tiddler, title) {
+					if (title.indexOf("$:/temp/tiddlydesktop-rs/templates/") === 0 ||
+						title.indexOf("$:/temp/tiddlydesktop-rs/domain-rules/") === 0) {
+						$tw.wiki.deleteTiddler(title);
+					}
+				});
+				var templates = config.templates || [];
+				var domainRules = config.domain_rules || [];
+				$tw.wiki.setText("$:/temp/tiddlydesktop-rs/share-template-count", "text", null, String(templates.length));
+				$tw.wiki.setText("$:/temp/tiddlydesktop-rs/share-default-template-id", "text", null, config.default_template_id || "");
+				for (var i = 0; i < templates.length; i++) {
+					var t = templates[i];
+					var prefix = "$:/temp/tiddlydesktop-rs/templates/" + t.id;
+					$tw.wiki.addTiddler(new $tw.Tiddler({
+						title: prefix,
+						tpl_id: t.id,
+						label: t.label,
+						tags_field: t.tags || "",
+						title_pattern: t.title_pattern || "{{title}}",
+						content_prefix: t.content_prefix || "",
+						content_suffix: t.content_suffix || "",
+						content_mode: t.content_mode || "clip",
+						text: t.label
+					}));
+				}
+				for (var j = 0; j < domainRules.length; j++) {
+					var r = domainRules[j];
+					var rprefix = "$:/temp/tiddlydesktop-rs/domain-rules/" + j;
+					$tw.wiki.addTiddler(new $tw.Tiddler({
+						title: rprefix,
+						domain: r.domain,
+						template_id: r.template_id,
+						additional_tags: r.additional_tags || "",
+						title_strip: r.title_strip || "",
+						text: r.domain
+					}));
+				}
+			}).catch(function(err) {
+				console.error("Failed to load share templates:", err);
+			});
+		}
+
+		function saveShareTemplatesFromTiddlers() {
+			var templates = [];
+			var domainRules = [];
+			$tw.wiki.each(function(tiddler, title) {
+				if (title.indexOf("$:/temp/tiddlydesktop-rs/templates/") === 0) {
+					templates.push({
+						id: tiddler.fields.tpl_id || "",
+						label: tiddler.fields.label || "",
+						tags: tiddler.fields.tags_field || "",
+						title_pattern: tiddler.fields.title_pattern || "{{title}}",
+						content_prefix: tiddler.fields.content_prefix || "",
+						content_suffix: tiddler.fields.content_suffix || "",
+						content_mode: tiddler.fields.content_mode || "clip"
+					});
+				}
+				if (title.indexOf("$:/temp/tiddlydesktop-rs/domain-rules/") === 0) {
+					domainRules.push({
+						domain: tiddler.fields.domain || "",
+						template_id: tiddler.fields.template_id || "",
+						additional_tags: tiddler.fields.additional_tags || "",
+						title_strip: tiddler.fields.title_strip || ""
+					});
+				}
+			});
+			var defaultId = $tw.wiki.getTiddlerText("$:/temp/tiddlydesktop-rs/share-default-template-id", "") || null;
+			var config = {
+				templates: templates,
+				domain_rules: domainRules,
+				default_template_id: defaultId
+			};
+			invoke("save_share_templates_config", { config: config }).then(function() {
+				console.log("Share templates saved");
+			}).catch(function(err) {
+				console.error("Failed to save share templates:", err);
+				alert("Failed to save share templates: " + err);
+			});
+		}
+
+		// Load templates on startup
+		refreshShareTemplates();
+
+		// Message handler: open template manager
+		$tw.rootWidget.addEventListener("tm-tiddlydesktop-rs-open-template-manager", function() {
+			refreshShareTemplates();
+			$tw.wiki.setText("$:/temp/tiddlydesktop-rs/template-manager-open", "text", null, "yes");
+		});
+
+		$tw.rootWidget.addEventListener("tm-tiddlydesktop-rs-close-template-manager", function() {
+			$tw.wiki.setText("$:/temp/tiddlydesktop-rs/template-manager-open", "text", null, "no");
+		});
+
+		// Template CRUD
+		$tw.rootWidget.addEventListener("tm-tiddlydesktop-rs-add-template", function() {
+			var id = "tpl_" + Date.now();
+			var prefix = "$:/temp/tiddlydesktop-rs/templates/" + id;
+			$tw.wiki.addTiddler(new $tw.Tiddler({
+				title: prefix,
+				tpl_id: id,
+				label: "New Template",
+				tags_field: "",
+				title_pattern: "{{title}}",
+				content_prefix: "",
+				content_suffix: "",
+				content_mode: "clip",
+				text: "New Template"
+			}));
+			saveShareTemplatesFromTiddlers();
+			// Open editor for the new template
+			$tw.wiki.setText("$:/temp/tiddlydesktop-rs/editing-template", "text", null, id);
+		});
+
+		$tw.rootWidget.addEventListener("tm-tiddlydesktop-rs-delete-template", function(event) {
+			var tplId = event.paramObject ? event.paramObject.tplId : "";
+			if (!tplId) return;
+			$tw.wiki.deleteTiddler("$:/temp/tiddlydesktop-rs/templates/" + tplId);
+			// Also remove domain rules referencing this template
+			$tw.wiki.each(function(tiddler, title) {
+				if (title.indexOf("$:/temp/tiddlydesktop-rs/domain-rules/") === 0 &&
+					tiddler.fields.template_id === tplId) {
+					$tw.wiki.deleteTiddler(title);
+				}
+			});
+			// Clear default if it was this template
+			if ($tw.wiki.getTiddlerText("$:/temp/tiddlydesktop-rs/share-default-template-id", "") === tplId) {
+				$tw.wiki.setText("$:/temp/tiddlydesktop-rs/share-default-template-id", "text", null, "");
+			}
+			saveShareTemplatesFromTiddlers();
+		});
+
+		$tw.rootWidget.addEventListener("tm-tiddlydesktop-rs-save-template", function(event) {
+			saveShareTemplatesFromTiddlers();
+		});
+
+		// Domain rules CRUD
+		$tw.rootWidget.addEventListener("tm-tiddlydesktop-rs-add-domain-rule", function() {
+			// Find next available index
+			var idx = 0;
+			while ($tw.wiki.tiddlerExists("$:/temp/tiddlydesktop-rs/domain-rules/" + idx)) idx++;
+			$tw.wiki.addTiddler(new $tw.Tiddler({
+				title: "$:/temp/tiddlydesktop-rs/domain-rules/" + idx,
+				domain: "example.com",
+				template_id: "",
+				additional_tags: "",
+				title_strip: "",
+				text: "example.com"
+			}));
+			saveShareTemplatesFromTiddlers();
+		});
+
+		$tw.rootWidget.addEventListener("tm-tiddlydesktop-rs-delete-domain-rule", function(event) {
+			var ruleTitle = event.paramObject ? event.paramObject.ruleTitle : "";
+			if (!ruleTitle) return;
+			$tw.wiki.deleteTiddler(ruleTitle);
+			saveShareTemplatesFromTiddlers();
+		});
+
+		$tw.rootWidget.addEventListener("tm-tiddlydesktop-rs-save-domain-rule", function() {
+			saveShareTemplatesFromTiddlers();
+		});
+
+		$tw.rootWidget.addEventListener("tm-tiddlydesktop-rs-set-default-template", function(event) {
+			var tplId = event.paramObject ? event.paramObject.tplId : "";
+			$tw.wiki.setText("$:/temp/tiddlydesktop-rs/share-default-template-id", "text", null, tplId || "");
+			saveShareTemplatesFromTiddlers();
+		});
 	}
 
 	// Check for application updates

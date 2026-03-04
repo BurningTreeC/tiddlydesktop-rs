@@ -69,6 +69,35 @@ EditionSelector/Optional: (opcjonalne)
 EditionSelector/CreatingFile: Tworzenie pliku wiki...
 EditionSelector/InitializingFolder: Inicjalizacja folderu wiki...
 
+ShareTemplates/Title: Szablony udostępniania
+ShareTemplates/Templates: Szablony
+ShareTemplates/DomainRules: Reguły domen
+ShareTemplates/AddTemplate: + Szablon
+ShareTemplates/AddRule: + Reguła
+ShareTemplates/NoTemplates: Brak szablonów. Dodaj szablon, aby dostosować sposób importowania udostępnianej zawartości.
+ShareTemplates/NoRules: Brak reguł domen. Dodaj regułę, aby automatycznie wybierać szablony na podstawie domeny URL.
+ShareTemplates/Edit: Edytuj
+ShareTemplates/Delete: Usuń
+ShareTemplates/Save: Zapisz
+ShareTemplates/SetDefault: Ustaw jako domyślny
+ShareTemplates/Default: Domyślny
+ShareTemplates/Label: Etykieta
+ShareTemplates/Tags: Tagi
+ShareTemplates/TitlePattern: Wzór tytułu
+ShareTemplates/ContentMode: Tryb zawartości
+ShareTemplates/ModeClip: Web Clip
+ShareTemplates/ModeLink: Tylko link
+ShareTemplates/ModeText: Tekst surowy
+ShareTemplates/ContentPrefix: Prefiks zawartości
+ShareTemplates/ContentSuffix: Sufiks zawartości
+ShareTemplates/VariablesHint: Zmienne: {{title}}, {{url}}, {{date}}, {{domain}}, {{content}}
+ShareTemplates/Domain: Domena
+ShareTemplates/RuleTemplate: Szablon
+ShareTemplates/AdditionalTags: Dodatkowe tagi
+ShareTemplates/TitleStrip: Usuń z tytułu
+ShareTemplates/TemplateCount: Szablony:
+ShareTemplates/Manage: Zarządzaj
+
 CustomPaths/Title: Ścieżki niestandardowe
 CustomPaths/PluginsFolder: Folder wtyczek:
 CustomPaths/EditionsFolder: Folder edycji:

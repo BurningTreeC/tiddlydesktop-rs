@@ -600,6 +600,21 @@ title: $:/plugins/tiddlywiki/tiddlydesktop-rs/WikiList
 </div>
 </$list>
 
+<!-- ── Share Templates (Android only) ──────────────────────────────── -->
+<$list filter="[{$:/temp/tiddlydesktop-rs/is-android}match[yes]]" variable="ignore">
+<div class="td-custom-paths-panel">
+<h3 class="td-custom-paths-title"><<td-lingo ShareTemplates/Title>></h3>
+<div class="td-custom-path-row">
+<span class="td-custom-path-label"><<td-lingo ShareTemplates/TemplateCount>></span>
+<div class="td-custom-path-actions">
+<span class="td-custom-path-value"><$text text={{$:/temp/tiddlydesktop-rs/share-template-count}}/></span>
+<$button message="tm-tiddlydesktop-rs-open-template-manager" class="tc-btn-invisible td-button td-button-small td-button-primary"><<td-lingo ShareTemplates/Manage>></$button>
+</div>
+</div>
+</div>
+</$list>
+{{$:/plugins/tiddlywiki/tiddlydesktop-rs/ShareTemplates}}
+
 <!-- ── Sync Panel (persistent at bottom) ───────────────────────────── -->
 <div class="td-sync-panel">
 

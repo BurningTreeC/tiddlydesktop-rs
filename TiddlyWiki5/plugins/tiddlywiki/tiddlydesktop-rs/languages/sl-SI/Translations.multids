@@ -69,6 +69,35 @@ EditionSelector/Optional: (neobvezno)
 EditionSelector/CreatingFile: Ustvarjanje wiki datoteke...
 EditionSelector/InitializingFolder: Inicializacija wiki mape...
 
+ShareTemplates/Title: Predloge za deljenje
+ShareTemplates/Templates: Predloge
+ShareTemplates/DomainRules: Pravila domene
+ShareTemplates/AddTemplate: + Predloga
+ShareTemplates/AddRule: + Pravilo
+ShareTemplates/NoTemplates: Še ni predlog. Dodajte eno za prilagoditev uvoza deljene vsebine.
+ShareTemplates/NoRules: Še ni pravil domene. Dodajte eno za samodejni izbor predlog po URL domeni.
+ShareTemplates/Edit: Uredi
+ShareTemplates/Delete: Izbriši
+ShareTemplates/Save: Shrani
+ShareTemplates/SetDefault: Nastavi kot privzeto
+ShareTemplates/Default: Privzeto
+ShareTemplates/Label: Oznaka
+ShareTemplates/Tags: Oznake
+ShareTemplates/TitlePattern: Vzorec naslova
+ShareTemplates/ContentMode: Način vsebine
+ShareTemplates/ModeClip: Spletni posnetek
+ShareTemplates/ModeLink: Samo povezava
+ShareTemplates/ModeText: Neobdelano besedilo
+ShareTemplates/ContentPrefix: Predpona vsebine
+ShareTemplates/ContentSuffix: Pripona vsebine
+ShareTemplates/VariablesHint: Spremenljivke: {{title}}, {{url}}, {{date}}, {{domain}}, {{content}}
+ShareTemplates/Domain: Domena
+ShareTemplates/RuleTemplate: Predloga
+ShareTemplates/AdditionalTags: Dodatne oznake
+ShareTemplates/TitleStrip: Odstrani iz naslova
+ShareTemplates/TemplateCount: Predloge:
+ShareTemplates/Manage: Upravljaj
+
 CustomPaths/Title: Prilagojene poti
 CustomPaths/PluginsFolder: Mapa vtičnikov:
 CustomPaths/EditionsFolder: Mapa izdaj:

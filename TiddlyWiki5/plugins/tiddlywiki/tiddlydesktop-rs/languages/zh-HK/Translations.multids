@@ -69,6 +69,35 @@ EditionSelector/Optional: （選用）
 EditionSelector/CreatingFile: 正在建立維基檔案...
 EditionSelector/InitializingFolder: 正在初始化維基資料夾...
 
+ShareTemplates/Title: 分享樣板
+ShareTemplates/Templates: 樣板
+ShareTemplates/DomainRules: 網域規則
+ShareTemplates/AddTemplate: + 樣板
+ShareTemplates/AddRule: + 規則
+ShareTemplates/NoTemplates: 暫無樣板。新增一個來自訂共享內容的匯入方式。
+ShareTemplates/NoRules: 暫無網域規則。新增一個以按 URL 網域自動選擇樣板。
+ShareTemplates/Edit: 編輯
+ShareTemplates/Delete: 刪除
+ShareTemplates/Save: 儲存
+ShareTemplates/SetDefault: 設定為預設
+ShareTemplates/Default: 預設
+ShareTemplates/Label: 標籤
+ShareTemplates/Tags: 標籤
+ShareTemplates/TitlePattern: 標題樣式
+ShareTemplates/ContentMode: 內容模式
+ShareTemplates/ModeClip: 網頁剪貼
+ShareTemplates/ModeLink: 僅連結
+ShareTemplates/ModeText: 原始文字
+ShareTemplates/ContentPrefix: 內容前綴
+ShareTemplates/ContentSuffix: 內容後綴
+ShareTemplates/VariablesHint: 變數：{{title}}、{{url}}、{{date}}、{{domain}}、{{content}}
+ShareTemplates/Domain: 網域
+ShareTemplates/RuleTemplate: 樣板
+ShareTemplates/AdditionalTags: 額外標籤
+ShareTemplates/TitleStrip: 從標題移除
+ShareTemplates/TemplateCount: 樣板：
+ShareTemplates/Manage: 管理
+
 CustomPaths/Title: 自訂路徑
 CustomPaths/PluginsFolder: 外掛程式資料夾:
 CustomPaths/EditionsFolder: 版本資料夾:

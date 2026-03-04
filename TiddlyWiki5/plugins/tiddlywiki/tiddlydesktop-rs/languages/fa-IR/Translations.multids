@@ -69,6 +69,35 @@ EditionSelector/Optional: (اختیاری)
 EditionSelector/CreatingFile: در حال ایجاد فایل ویکی...
 EditionSelector/InitializingFolder: در حال آماده‌سازی پوشه ویکی...
 
+ShareTemplates/Title: الگو‌های اشتراک‌گذاری
+ShareTemplates/Templates: الگو‌ها
+ShareTemplates/DomainRules: قوانین دامنه
+ShareTemplates/AddTemplate: + الگو
+ShareTemplates/AddRule: + قانون
+ShareTemplates/NoTemplates: هنوز الگویی ایجاد نشده است. یکی اضافه کنید تا سفارشی کنید چگونه محتوای اشتراک‌گذاری شده وارد می‌شود.
+ShareTemplates/NoRules: هنوز قانون دامنه‌ای ایجاد نشده است. یکی اضافه کنید تا الگو را براساس دامنه URL انتخاب کنید.
+ShareTemplates/Edit: ویرایش
+ShareTemplates/Delete: حذف
+ShareTemplates/Save: ذخیره
+ShareTemplates/SetDefault: تنظیم به‌عنوان پیش‌فرض
+ShareTemplates/Default: پیش‌فرض
+ShareTemplates/Label: برچسب
+ShareTemplates/Tags: برچسب‌ها
+ShareTemplates/TitlePattern: الگوی عنوان
+ShareTemplates/ContentMode: حالت محتوا
+ShareTemplates/ModeClip: گیاه‌وب
+ShareTemplates/ModeLink: فقط پیوند
+ShareTemplates/ModeText: متن خام
+ShareTemplates/ContentPrefix: پیشوند محتوا
+ShareTemplates/ContentSuffix: پسوند محتوا
+ShareTemplates/VariablesHint: متغیرها: {{title}}، {{url}}، {{date}}، {{domain}}، {{content}}
+ShareTemplates/Domain: دامنه
+ShareTemplates/RuleTemplate: الگو
+ShareTemplates/AdditionalTags: برچسب‌های اضافی
+ShareTemplates/TitleStrip: حذف از عنوان
+ShareTemplates/TemplateCount: الگو‌ها:
+ShareTemplates/Manage: مدیریت
+
 CustomPaths/Title: مسیرهای سفارشی
 CustomPaths/PluginsFolder: پوشه افزونه‌ها:
 CustomPaths/EditionsFolder: پوشه نسخه‌ها:

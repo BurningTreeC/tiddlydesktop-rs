@@ -69,6 +69,35 @@ EditionSelector/Optional: (اختياري)
 EditionSelector/CreatingFile: جاري إنشاء ملف ويكي...
 EditionSelector/InitializingFolder: جاري تهيئة مجلد ويكي...
 
+ShareTemplates/Title: نماذج المشاركة
+ShareTemplates/Templates: النماذج
+ShareTemplates/DomainRules: قواعد النطاق
+ShareTemplates/AddTemplate: + نموذج
+ShareTemplates/AddRule: + قاعدة
+ShareTemplates/NoTemplates: لا توجد نماذج بعد. أضف نموذجًا لتخصيص كيفية استيراد المحتوى المشترك.
+ShareTemplates/NoRules: لا توجد قواعد نطاق بعد. أضف قاعدة لاختيار النماذج تلقائيًا حسب نطاق عنوان الويب.
+ShareTemplates/Edit: تحرير
+ShareTemplates/Delete: حذف
+ShareTemplates/Save: حفظ
+ShareTemplates/SetDefault: تعيين الافتراضي
+ShareTemplates/Default: افتراضي
+ShareTemplates/Label: التسمية
+ShareTemplates/Tags: التسميات
+ShareTemplates/TitlePattern: نمط العنوان
+ShareTemplates/ContentMode: وضع المحتوى
+ShareTemplates/ModeClip: لقطة ويب
+ShareTemplates/ModeLink: الرابط فقط
+ShareTemplates/ModeText: نص خام
+ShareTemplates/ContentPrefix: بادئة المحتوى
+ShareTemplates/ContentSuffix: لاحقة المحتوى
+ShareTemplates/VariablesHint: المتغيرات: {{title}}، {{url}}، {{date}}، {{domain}}، {{content}}
+ShareTemplates/Domain: النطاق
+ShareTemplates/RuleTemplate: النموذج
+ShareTemplates/AdditionalTags: تسميات إضافية
+ShareTemplates/TitleStrip: إزالة من العنوان
+ShareTemplates/TemplateCount: النماذج:
+ShareTemplates/Manage: إدارة
+
 CustomPaths/Title: مسارات مخصصة
 CustomPaths/PluginsFolder: مجلد الإضافات:
 CustomPaths/EditionsFolder: مجلد الإصدارات:

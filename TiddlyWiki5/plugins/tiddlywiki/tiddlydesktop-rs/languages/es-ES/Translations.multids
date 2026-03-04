@@ -69,6 +69,35 @@ EditionSelector/Optional: (opcional)
 EditionSelector/CreatingFile: Creando archivo wiki...
 EditionSelector/InitializingFolder: Inicializando carpeta wiki...
 
+ShareTemplates/Title: Compartir plantillas
+ShareTemplates/Templates: Plantillas
+ShareTemplates/DomainRules: Reglas de dominio
+ShareTemplates/AddTemplate: + Plantilla
+ShareTemplates/AddRule: + Regla
+ShareTemplates/NoTemplates: Sin plantillas aún. Añade una para personalizar cómo se importa el contenido compartido.
+ShareTemplates/NoRules: Sin reglas de dominio aún. Añade una para seleccionar automáticamente plantillas por dominio de URL.
+ShareTemplates/Edit: Editar
+ShareTemplates/Delete: Eliminar
+ShareTemplates/Save: Guardar
+ShareTemplates/SetDefault: Establecer como predeterminada
+ShareTemplates/Default: Predeterminada
+ShareTemplates/Label: Etiqueta
+ShareTemplates/Tags: Etiquetas
+ShareTemplates/TitlePattern: Patrón de título
+ShareTemplates/ContentMode: Modo de contenido
+ShareTemplates/ModeClip: Recorte web
+ShareTemplates/ModeLink: Solo enlace
+ShareTemplates/ModeText: Texto sin formato
+ShareTemplates/ContentPrefix: Prefijo de contenido
+ShareTemplates/ContentSuffix: Sufijo de contenido
+ShareTemplates/VariablesHint: Variables: {{title}}, {{url}}, {{date}}, {{domain}}, {{content}}
+ShareTemplates/Domain: Dominio
+ShareTemplates/RuleTemplate: Plantilla
+ShareTemplates/AdditionalTags: Etiquetas adicionales
+ShareTemplates/TitleStrip: Eliminar del título
+ShareTemplates/TemplateCount: Plantillas:
+ShareTemplates/Manage: Gestionar
+
 CustomPaths/Title: Rutas personalizadas
 CustomPaths/PluginsFolder: Carpeta de plugins:
 CustomPaths/EditionsFolder: Carpeta de ediciones:

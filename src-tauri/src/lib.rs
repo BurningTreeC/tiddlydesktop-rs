@@ -6497,7 +6497,7 @@ async fn check_for_updates() -> Result<UpdateCheckResult, String> {
 
 /// Android version - separate from desktop versioning (must match build.gradle.kts versionName)
 #[cfg(target_os = "android")]
-const ANDROID_VERSION: &str = "0.0.88";
+const ANDROID_VERSION: &str = "0.0.89";
 
 /// Check for updates on Android via version file on GitHub, linking to Play Store
 #[cfg(target_os = "android")]
@@ -9723,6 +9723,8 @@ pub fn run() {
             wiki_storage::set_custom_plugin_path,
             wiki_storage::get_custom_edition_path,
             wiki_storage::set_custom_edition_path,
+            wiki_storage::get_share_templates,
+            wiki_storage::save_share_templates_config,
             open_auth_window,
             clear_wiki_session,
 

@@ -157,3 +157,32 @@ PluginInstaller/Installed: (स्थापित)
 PluginInstaller/RestartNeeded: परिवर्तन लागू करने के लिए विकी को पुनः आरंभ करें।
 
 Terms/AcceptPrompt: इस सुविधा का उपयोग करके, आप हमारे नियम और शर्तें स्वीकार करते हैं:
+
+ShareTemplates/Title: साझा टेम्पलेट
+ShareTemplates/Templates: टेम्पलेट
+ShareTemplates/DomainRules: डोमेन नियम
+ShareTemplates/AddTemplate: + टेम्पलेट
+ShareTemplates/AddRule: + नियम
+ShareTemplates/NoTemplates: अभी तक कोई टेम्पलेट नहीं। साझा सामग्री कैसे आयात की जाए यह अनुकूलित करने के लिए एक जोड़ें।
+ShareTemplates/NoRules: अभी तक कोई डोमेन नियम नहीं। यूआरएल डोमेन द्वारा टेम्पलेट को स्वचालित रूप से चुनने के लिए एक जोड़ें।
+ShareTemplates/Edit: संपादित करें
+ShareTemplates/Delete: हटाएं
+ShareTemplates/Save: सहेजें
+ShareTemplates/SetDefault: डिफ़ॉल्ट सेट करें
+ShareTemplates/Default: डिफ़ॉल्ट
+ShareTemplates/Label: लेबल
+ShareTemplates/Tags: टैग
+ShareTemplates/TitlePattern: शीर्षक पैटर्न
+ShareTemplates/ContentMode: सामग्री मोड
+ShareTemplates/ModeClip: वेब क्लिप
+ShareTemplates/ModeLink: केवल लिंक
+ShareTemplates/ModeText: कच्चा पाठ
+ShareTemplates/ContentPrefix: सामग्री उपसर्ग
+ShareTemplates/ContentSuffix: सामग्री प्रत्यय
+ShareTemplates/VariablesHint: चर: {{title}}, {{url}}, {{date}}, {{domain}}, {{content}}
+ShareTemplates/Domain: डोमेन
+ShareTemplates/RuleTemplate: टेम्पलेट
+ShareTemplates/AdditionalTags: अतिरिक्त टैग
+ShareTemplates/TitleStrip: शीर्षक से हटाएं
+ShareTemplates/TemplateCount: टेम्पलेट:
+ShareTemplates/Manage: प्रबंधित करें

@@ -69,6 +69,35 @@ EditionSelector/Optional: (opzionale)
 EditionSelector/CreatingFile: Creazione file wiki...
 EditionSelector/InitializingFolder: Inizializzazione cartella wiki...
 
+ShareTemplates/Title: Modelli di condivisione
+ShareTemplates/Templates: Modelli
+ShareTemplates/DomainRules: Regole dominio
+ShareTemplates/AddTemplate: + Modello
+ShareTemplates/AddRule: + Regola
+ShareTemplates/NoTemplates: Nessun modello ancora. Aggiungi uno per personalizzare come il contenuto condiviso viene importato.
+ShareTemplates/NoRules: Nessuna regola di dominio ancora. Aggiungi una per selezionare automaticamente i modelli in base al dominio URL.
+ShareTemplates/Edit: Modifica
+ShareTemplates/Delete: Elimina
+ShareTemplates/Save: Salva
+ShareTemplates/SetDefault: Imposta come predefinito
+ShareTemplates/Default: Predefinito
+ShareTemplates/Label: Etichetta
+ShareTemplates/Tags: Tag
+ShareTemplates/TitlePattern: Pattern titolo
+ShareTemplates/ContentMode: Modalità contenuto
+ShareTemplates/ModeClip: Web Clip
+ShareTemplates/ModeLink: Solo collegamento
+ShareTemplates/ModeText: Testo grezzo
+ShareTemplates/ContentPrefix: Prefisso contenuto
+ShareTemplates/ContentSuffix: Suffisso contenuto
+ShareTemplates/VariablesHint: Variabili: {{title}}, {{url}}, {{date}}, {{domain}}, {{content}}
+ShareTemplates/Domain: Dominio
+ShareTemplates/RuleTemplate: Modello
+ShareTemplates/AdditionalTags: Tag aggiuntivi
+ShareTemplates/TitleStrip: Rimuovi dal titolo
+ShareTemplates/TemplateCount: Modelli:
+ShareTemplates/Manage: Gestisci
+
 CustomPaths/Title: Percorsi personalizzati
 CustomPaths/PluginsFolder: Cartella plugin:
 CustomPaths/EditionsFolder: Cartella edizioni:

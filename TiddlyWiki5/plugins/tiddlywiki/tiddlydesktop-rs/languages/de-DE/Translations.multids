@@ -69,6 +69,35 @@ EditionSelector/Optional: (optional)
 EditionSelector/CreatingFile: Wiki-Datei wird erstellt...
 EditionSelector/InitializingFolder: Wiki-Ordner wird initialisiert...
 
+ShareTemplates/Title: Vorlagen teilen
+ShareTemplates/Templates: Vorlagen
+ShareTemplates/DomainRules: Domänenregeln
+ShareTemplates/AddTemplate: + Vorlage
+ShareTemplates/AddRule: + Regel
+ShareTemplates/NoTemplates: Noch keine Vorlagen. Fügen Sie eine hinzu, um anzupassen, wie gemeinsame Inhalte importiert werden.
+ShareTemplates/NoRules: Noch keine Domänenregeln. Fügen Sie eine hinzu, um Vorlagen automatisch nach URL-Domäne auszuwählen.
+ShareTemplates/Edit: Bearbeiten
+ShareTemplates/Delete: Löschen
+ShareTemplates/Save: Speichern
+ShareTemplates/SetDefault: Als Standard festlegen
+ShareTemplates/Default: Standard
+ShareTemplates/Label: Beschriftung
+ShareTemplates/Tags: Tags
+ShareTemplates/TitlePattern: Titelmuster
+ShareTemplates/ContentMode: Inhaltsmodus
+ShareTemplates/ModeClip: Web-Ausschnitt
+ShareTemplates/ModeLink: Nur Link
+ShareTemplates/ModeText: Reiner Text
+ShareTemplates/ContentPrefix: Inhaltsprefix
+ShareTemplates/ContentSuffix: Inhaltssuffix
+ShareTemplates/VariablesHint: Variablen: {{title}}, {{url}}, {{date}}, {{domain}}, {{content}}
+ShareTemplates/Domain: Domäne
+ShareTemplates/RuleTemplate: Vorlage
+ShareTemplates/AdditionalTags: Zusätzliche Tags
+ShareTemplates/TitleStrip: Aus Titel entfernen
+ShareTemplates/TemplateCount: Vorlagen:
+ShareTemplates/Manage: Verwalten
+
 CustomPaths/Title: Benutzerdefinierte Pfade
 CustomPaths/PluginsFolder: Plugin-Ordner:
 CustomPaths/EditionsFolder: Editionen-Ordner:

@@ -69,6 +69,35 @@ EditionSelector/Optional: （可选）
 EditionSelector/CreatingFile: 正在创建维基文件...
 EditionSelector/InitializingFolder: 正在初始化维基文件夹...
 
+ShareTemplates/Title: 分享模板
+ShareTemplates/Templates: 模板
+ShareTemplates/DomainRules: 域名规则
+ShareTemplates/AddTemplate: + 模板
+ShareTemplates/AddRule: + 规则
+ShareTemplates/NoTemplates: 还没有模板。添加一个以自定义共享内容的导入方式。
+ShareTemplates/NoRules: 还没有域名规则。添加一个以根据 URL 域名自动选择模板。
+ShareTemplates/Edit: 编辑
+ShareTemplates/Delete: 删除
+ShareTemplates/Save: 保存
+ShareTemplates/SetDefault: 设为默认
+ShareTemplates/Default: 默认
+ShareTemplates/Label: 标签
+ShareTemplates/Tags: 标签
+ShareTemplates/TitlePattern: 标题模式
+ShareTemplates/ContentMode: 内容模式
+ShareTemplates/ModeClip: 网页剪辑
+ShareTemplates/ModeLink: 仅链接
+ShareTemplates/ModeText: 原始文本
+ShareTemplates/ContentPrefix: 内容前缀
+ShareTemplates/ContentSuffix: 内容后缀
+ShareTemplates/VariablesHint: 变量: {{title}}, {{url}}, {{date}}, {{domain}}, {{content}}
+ShareTemplates/Domain: 域名
+ShareTemplates/RuleTemplate: 模板
+ShareTemplates/AdditionalTags: 额外标签
+ShareTemplates/TitleStrip: 从标题中删除
+ShareTemplates/TemplateCount: 模板:
+ShareTemplates/Manage: 管理
+
 CustomPaths/Title: 自定义路径
 CustomPaths/PluginsFolder: 插件文件夹:
 CustomPaths/EditionsFolder: 版本文件夹:

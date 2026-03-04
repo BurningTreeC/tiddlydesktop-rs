@@ -69,6 +69,35 @@ EditionSelector/Optional: (オプション)
 EditionSelector/CreatingFile: Wikiファイルを作成中...
 EditionSelector/InitializingFolder: Wikiフォルダを初期化中...
 
+ShareTemplates/Title: 共有テンプレート
+ShareTemplates/Templates: テンプレート
+ShareTemplates/DomainRules: ドメインルール
+ShareTemplates/AddTemplate: + テンプレート
+ShareTemplates/AddRule: + ルール
+ShareTemplates/NoTemplates: まだテンプレートがありません。追加してコンテンツのインポート方法をカスタマイズしてください。
+ShareTemplates/NoRules: ドメインルールがまだありません。URLドメインに基づいてテンプレートを自動選択するためにルールを追加してください。
+ShareTemplates/Edit: 編集
+ShareTemplates/Delete: 削除
+ShareTemplates/Save: 保存
+ShareTemplates/SetDefault: デフォルトに設定
+ShareTemplates/Default: デフォルト
+ShareTemplates/Label: ラベル
+ShareTemplates/Tags: タグ
+ShareTemplates/TitlePattern: タイトルパターン
+ShareTemplates/ContentMode: コンテンツモード
+ShareTemplates/ModeClip: Webクリップ
+ShareTemplates/ModeLink: リンクのみ
+ShareTemplates/ModeText: テキスト
+ShareTemplates/ContentPrefix: コンテンツの前置き
+ShareTemplates/ContentSuffix: コンテンツの後置き
+ShareTemplates/VariablesHint: 変数: {{title}}, {{url}}, {{date}}, {{domain}}, {{content}}
+ShareTemplates/Domain: ドメイン
+ShareTemplates/RuleTemplate: テンプレート
+ShareTemplates/AdditionalTags: 追加タグ
+ShareTemplates/TitleStrip: タイトルから削除
+ShareTemplates/TemplateCount: テンプレート:
+ShareTemplates/Manage: 管理
+
 CustomPaths/Title: カスタムパス
 CustomPaths/PluginsFolder: プラグインフォルダ:
 CustomPaths/EditionsFolder: エディションフォルダ:

@@ -157,3 +157,32 @@ PluginInstaller/Installed: (已安裝)
 PluginInstaller/RestartNeeded: 重新啟動維基以套用變更。
 
 Terms/AcceptPrompt: 使用此功能即表示您接受我們的條款和條件：
+
+ShareTemplates/Title: 分享範本
+ShareTemplates/Templates: 範本
+ShareTemplates/DomainRules: 網域規則
+ShareTemplates/AddTemplate: + 範本
+ShareTemplates/AddRule: + 規則
+ShareTemplates/NoTemplates: 尚未建立範本。新增一個以自訂共享內容的匯入方式。
+ShareTemplates/NoRules: 尚未建立網域規則。新增一個以根據 URL 網域自動選擇範本。
+ShareTemplates/Edit: 編輯
+ShareTemplates/Delete: 刪除
+ShareTemplates/Save: 儲存
+ShareTemplates/SetDefault: 設為預設
+ShareTemplates/Default: 預設
+ShareTemplates/Label: 標籤
+ShareTemplates/Tags: 標籤
+ShareTemplates/TitlePattern: 標題模式
+ShareTemplates/ContentMode: 內容模式
+ShareTemplates/ModeClip: 網頁剪輯
+ShareTemplates/ModeLink: 僅連結
+ShareTemplates/ModeText: 純文字
+ShareTemplates/ContentPrefix: 內容前綴
+ShareTemplates/ContentSuffix: 內容後綴
+ShareTemplates/VariablesHint: 變數: {{title}}、{{url}}、{{date}}、{{domain}}、{{content}}
+ShareTemplates/Domain: 網域
+ShareTemplates/RuleTemplate: 範本
+ShareTemplates/AdditionalTags: 額外標籤
+ShareTemplates/TitleStrip: 從標題中移除
+ShareTemplates/TemplateCount: 範本：
+ShareTemplates/Manage: 管理

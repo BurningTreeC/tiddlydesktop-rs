@@ -69,6 +69,35 @@ EditionSelector/Optional: (optionnel)
 EditionSelector/CreatingFile: Création du fichier wiki...
 EditionSelector/InitializingFolder: Initialisation du dossier wiki...
 
+ShareTemplates/Title: Modèles de partage
+ShareTemplates/Templates: Modèles
+ShareTemplates/DomainRules: Règles de domaine
+ShareTemplates/AddTemplate: + Modèle
+ShareTemplates/AddRule: + Règle
+ShareTemplates/NoTemplates: Aucun modèle pour l'instant. Ajoutez-en un pour personnaliser la façon dont le contenu partagé est importé.
+ShareTemplates/NoRules: Aucune règle de domaine pour l'instant. Ajoutez-en une pour sélectionner automatiquement des modèles par domaine d'URL.
+ShareTemplates/Edit: Modifier
+ShareTemplates/Delete: Supprimer
+ShareTemplates/Save: Enregistrer
+ShareTemplates/SetDefault: Définir par défaut
+ShareTemplates/Default: Par défaut
+ShareTemplates/Label: Étiquette
+ShareTemplates/Tags: Balises
+ShareTemplates/TitlePattern: Motif de titre
+ShareTemplates/ContentMode: Mode de contenu
+ShareTemplates/ModeClip: Extrait web
+ShareTemplates/ModeLink: Lien uniquement
+ShareTemplates/ModeText: Texte brut
+ShareTemplates/ContentPrefix: Préfixe de contenu
+ShareTemplates/ContentSuffix: Suffixe de contenu
+ShareTemplates/VariablesHint: Variables : {{title}}, {{url}}, {{date}}, {{domain}}, {{content}}
+ShareTemplates/Domain: Domaine
+ShareTemplates/RuleTemplate: Modèle
+ShareTemplates/AdditionalTags: Balises supplémentaires
+ShareTemplates/TitleStrip: Supprimer du titre
+ShareTemplates/TemplateCount: Modèles :
+ShareTemplates/Manage: Gérer
+
 CustomPaths/Title: Chemins personnalisés
 CustomPaths/PluginsFolder: Dossier de plugins :
 CustomPaths/EditionsFolder: Dossier d'éditions :

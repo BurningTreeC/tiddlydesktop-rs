@@ -126,6 +126,12 @@ class CaptureActivity : AppCompatActivity() {
 
     private var isBlankCapture: Boolean = false
 
+    // Share template state
+    private var templatesConfig: ShareTemplatesConfig = ShareTemplatesConfig()
+    private var selectedTemplate: ShareTemplate? = null
+    private var matchedRule: DomainRule? = null
+    private var templateSpinner: Spinner? = null
+
     // UI references
     private var titleEdit: EditText? = null
     private var tagsEdit: EditText? = null
@@ -135,6 +141,29 @@ class CaptureActivity : AppCompatActivity() {
     private var clippedContent: String? = null
 
     data class WikiEntry(val path: String, val title: String, val isFolder: Boolean, val externalAttachments: Boolean = true)
+
+    data class ShareTemplate(
+        val id: String,
+        val label: String,
+        val tags: String = "",
+        val titlePattern: String = "{{title}}",
+        val contentPrefix: String = "",
+        val contentSuffix: String = "",
+        val contentMode: String = "clip"  // "clip", "link", "text"
+    )
+
+    data class DomainRule(
+        val domain: String,
+        val templateId: String,
+        val additionalTags: String = "",
+        val titleStrip: String = ""
+    )
+
+    data class ShareTemplatesConfig(
+        val templates: List<ShareTemplate> = emptyList(),
+        val domainRules: List<DomainRule> = emptyList(),
+        val defaultTemplateId: String? = null
+    )
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -152,6 +181,7 @@ class CaptureActivity : AppCompatActivity() {
                 return
             }
             isBlankCapture = true
+            templatesConfig = loadShareTemplates()
             buildUI()
             return
         }
@@ -192,7 +222,16 @@ class CaptureActivity : AppCompatActivity() {
             }
         }
 
+        // Load share templates and match domain rule
+        templatesConfig = loadShareTemplates()
+        matchedRule = matchDomainRule(detectedUrl)
+
         buildUI()
+
+        // Apply initial template selection (after title field is populated)
+        if (selectedTemplate != null) {
+            applyTemplate()
+        }
 
         // Auto-fetch meta preview when a URL is detected
         if (detectedUrl != null) {
@@ -732,6 +771,102 @@ class CaptureActivity : AppCompatActivity() {
         return wikis
     }
 
+    private fun loadShareTemplates(): ShareTemplatesConfig {
+        // Same pattern as loadRecentWikis — read from Rust data dir (filesDir.parentFile)
+        val file = File(filesDir.parentFile, "share_templates.json")
+        if (!file.exists()) return ShareTemplatesConfig()
+        return try {
+            val json = JSONObject(file.readText())
+            val templates = mutableListOf<ShareTemplate>()
+            val tplArr = json.optJSONArray("templates")
+            if (tplArr != null) {
+                for (i in 0 until tplArr.length()) {
+                    val obj = tplArr.getJSONObject(i)
+                    templates.add(ShareTemplate(
+                        id = obj.optString("id", ""),
+                        label = obj.optString("label", ""),
+                        tags = obj.optString("tags", ""),
+                        titlePattern = obj.optString("title_pattern", "{{title}}"),
+                        contentPrefix = obj.optString("content_prefix", ""),
+                        contentSuffix = obj.optString("content_suffix", ""),
+                        contentMode = obj.optString("content_mode", "clip")
+                    ))
+                }
+            }
+            val rules = mutableListOf<DomainRule>()
+            val rulesArr = json.optJSONArray("domain_rules")
+            if (rulesArr != null) {
+                for (i in 0 until rulesArr.length()) {
+                    val obj = rulesArr.getJSONObject(i)
+                    rules.add(DomainRule(
+                        domain = obj.optString("domain", ""),
+                        templateId = obj.optString("template_id", ""),
+                        additionalTags = obj.optString("additional_tags", ""),
+                        titleStrip = obj.optString("title_strip", "")
+                    ))
+                }
+            }
+            ShareTemplatesConfig(
+                templates = templates,
+                domainRules = rules,
+                defaultTemplateId = json.optString("default_template_id", "").ifEmpty { null }
+            )
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to read share_templates.json: ${e.message}")
+            ShareTemplatesConfig()
+        }
+    }
+
+    private fun matchDomainRule(url: String?): DomainRule? {
+        if (url == null) return null
+        val host = try { URL(url).host.lowercase() } catch (_: Exception) { return null }
+        // Suffix match: "youtube.com" matches "www.youtube.com" and "m.youtube.com"
+        return templatesConfig.domainRules.firstOrNull { rule ->
+            val domain = rule.domain.lowercase()
+            host == domain || host.endsWith(".$domain")
+        }
+    }
+
+    private fun applyTemplate() {
+        val template = selectedTemplate ?: return
+
+        // Apply tags: template tags + domain rule additional tags
+        val tagParts = mutableListOf<String>()
+        if (template.tags.isNotBlank()) tagParts.add(template.tags)
+        if (matchedRule != null && matchedRule!!.additionalTags.isNotBlank()) {
+            tagParts.add(matchedRule!!.additionalTags)
+        }
+        tagsEdit?.setText(tagParts.joinToString(" "))
+
+        // Apply title strip from domain rule
+        if (matchedRule != null && matchedRule!!.titleStrip.isNotBlank()) {
+            val currentTitle = titleEdit?.text?.toString() ?: ""
+            if (currentTitle.contains(matchedRule!!.titleStrip)) {
+                titleEdit?.setText(currentTitle.replace(matchedRule!!.titleStrip, "").trim())
+            }
+        }
+
+        // Apply title pattern if not the default
+        if (template.titlePattern.isNotBlank() && template.titlePattern != "{{title}}") {
+            val currentTitle = titleEdit?.text?.toString() ?: ""
+            titleEdit?.setText(expandTemplateVars(template.titlePattern, currentTitle))
+        }
+    }
+
+    private fun expandTemplateVars(pattern: String, currentTitle: String): String {
+        val domain = detectedUrl?.let {
+            try { URL(it).host } catch (_: Exception) { "" }
+        } ?: ""
+        val dateStr = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US)
+            .format(java.util.Date())
+        return pattern
+            .replace("{{title}}", currentTitle)
+            .replace("{{url}}", detectedUrl ?: "")
+            .replace("{{date}}", dateStr)
+            .replace("{{domain}}", domain)
+            .replace("{{content}}", sharedText ?: "")
+    }
+
     private fun dp(value: Int): Int {
         return TypedValue.applyDimension(
             TypedValue.COMPLEX_UNIT_DIP, value.toFloat(), resources.displayMetrics
@@ -999,6 +1134,71 @@ class CaptureActivity : AppCompatActivity() {
             ).apply { bottomMargin = dp(16) })
         }
 
+        // Template selector (only when templates exist and sharing text/URL, not images/files)
+        val showTemplates = templatesConfig.templates.isNotEmpty() &&
+            sharedImageUri == null && sharedFileUri == null && importFileUri == null && multipleUris == null
+        if (showTemplates) {
+            card.addView(TextView(this).apply {
+                text = getString(R.string.template_label)
+                setTextColor(colorOnSurfaceVariant)
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+                letterSpacing = 0.04f
+            }, LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { bottomMargin = dp(4) })
+
+            val templateNames = mutableListOf(getString(R.string.template_none))
+            templateNames.addAll(templatesConfig.templates.map { it.label })
+
+            val spinnerBg = makeOutlinedFieldBg()
+            templateSpinner = Spinner(this).apply {
+                adapter = ArrayAdapter(this@CaptureActivity, android.R.layout.simple_spinner_dropdown_item, templateNames)
+                background = spinnerBg
+                setPadding(dp(12), dp(8), dp(12), dp(8))
+
+                // Determine initial selection: domain rule match > default > last used > none
+                var initialIdx = 0
+                val matchedTplId = matchedRule?.templateId
+                val defaultTplId = templatesConfig.defaultTemplateId
+                val lastTplId = getSharedPreferences("capture_prefs", MODE_PRIVATE)
+                    .getString("last_template_id", null)
+
+                val targetId = when {
+                    matchedTplId != null -> matchedTplId
+                    defaultTplId != null -> defaultTplId
+                    lastTplId != null -> lastTplId
+                    else -> null
+                }
+                if (targetId != null) {
+                    val tplIdx = templatesConfig.templates.indexOfFirst { it.id == targetId }
+                    if (tplIdx >= 0) initialIdx = tplIdx + 1  // +1 for "None" entry
+                }
+                setSelection(initialIdx)
+
+                // Apply template immediately if pre-selected
+                if (initialIdx > 0) {
+                    selectedTemplate = templatesConfig.templates[initialIdx - 1]
+                }
+
+                onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+                    override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
+                        selectedTemplate = if (position > 0) {
+                            templatesConfig.templates[position - 1]
+                        } else null
+                        applyTemplate()
+                    }
+                    override fun onNothingSelected(parent: AdapterView<*>?) {
+                        selectedTemplate = null
+                    }
+                }
+            }
+            card.addView(templateSpinner, LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { bottomMargin = dp(16) })
+        }
+
         // Title field with outlined style (hidden for multiple items — each uses its filename)
         if (multipleUris == null) {
             card.addView(TextView(this).apply {
@@ -1227,6 +1427,10 @@ class CaptureActivity : AppCompatActivity() {
                     val clippedTitle = sanitizeTitle(result.first)
                     if (clippedTitle.isNotBlank() && !clippedTitle.startsWith("http")) {
                         titleEdit?.setText(clippedTitle)
+                    }
+                    // Re-apply template after title update from web clip
+                    if (selectedTemplate != null) {
+                        applyTemplate()
                     }
                 }
                 // On failure, save will fall back to [[title|url]] bookmark
@@ -1913,9 +2117,15 @@ class CaptureActivity : AppCompatActivity() {
         }
 
         val wiki = wikiList[selectedIndex]
-        // Remember selected wiki for next time
-        getSharedPreferences("capture_prefs", MODE_PRIVATE).edit()
-            .putString("last_wiki_path", wiki.path).apply()
+        // Remember selected wiki and template for next time
+        val prefs = getSharedPreferences("capture_prefs", MODE_PRIVATE).edit()
+            .putString("last_wiki_path", wiki.path)
+        if (selectedTemplate != null) {
+            prefs.putString("last_template_id", selectedTemplate!!.id)
+        } else {
+            prefs.remove("last_template_id")
+        }
+        prefs.apply()
         val title = titleEdit?.text?.toString()?.let { sanitizeTitle(it) }?.ifBlank { null } ?: getString(R.string.capture_untitled)
         val tags = tagsEdit?.text?.toString()?.trim() ?: ""
         val now = System.currentTimeMillis()
@@ -2031,25 +2241,64 @@ class CaptureActivity : AppCompatActivity() {
             // Text capture (plain text, markdown, SVG, contacts, calendar)
             captureJson.put("type", captureType)
 
-            val text = when {
-                clippedContent != null -> clippedContent!!
-                detectedUrl != null -> {
-                    // Sanitize title: strip line breaks, collapse whitespace
-                    val urlTitle = (sharedSubject ?: detectedUrl!!)
-                        .replace("\n", " ").replace("\r", " ")
-                        .replace(Regex("\\s+"), " ").trim()
-                    val link = "[[$urlTitle|$detectedUrl]]"
-                    // sharedText has URL already stripped in handleTextIntent
-                    val extraText = sharedText?.trim()
-                    if (!extraText.isNullOrBlank()) {
-                        "$extraText\n\n$link"
+            val contentMode = selectedTemplate?.contentMode ?: "clip"
+            val text = when (contentMode) {
+                "link" -> {
+                    // Link mode: just create a [[title|url]] link, skip clipped content
+                    if (detectedUrl != null) {
+                        val urlTitle = (titleEdit?.text?.toString() ?: sharedSubject ?: detectedUrl!!)
+                            .replace("\n", " ").replace("\r", " ")
+                            .replace(Regex("\\s+"), " ").trim()
+                        "[[$urlTitle|$detectedUrl]]"
                     } else {
-                        link
+                        contentEdit?.text?.toString()?.trim() ?: sharedText ?: ""
                     }
                 }
-                else -> contentEdit?.text?.toString()?.trim() ?: sharedText ?: ""
+                "text" -> {
+                    // Text mode: use raw shared text as-is (no web clip)
+                    val rawText = sharedText ?: contentEdit?.text?.toString()?.trim() ?: ""
+                    if (detectedUrl != null && rawText.isBlank()) {
+                        detectedUrl!!
+                    } else {
+                        rawText
+                    }
+                }
+                else -> {
+                    // Clip mode (default): use web clip if available, fall back to link
+                    when {
+                        clippedContent != null -> clippedContent!!
+                        detectedUrl != null -> {
+                            val urlTitle = (sharedSubject ?: detectedUrl!!)
+                                .replace("\n", " ").replace("\r", " ")
+                                .replace(Regex("\\s+"), " ").trim()
+                            val link = "[[$urlTitle|$detectedUrl]]"
+                            val extraText = sharedText?.trim()
+                            if (!extraText.isNullOrBlank()) {
+                                "$extraText\n\n$link"
+                            } else {
+                                link
+                            }
+                        }
+                        else -> contentEdit?.text?.toString()?.trim() ?: sharedText ?: ""
+                    }
+                }
             }
-            captureJson.put("text", text)
+
+            // Apply content prefix/suffix from template
+            val prefix = selectedTemplate?.contentPrefix ?: ""
+            val suffix = selectedTemplate?.contentSuffix ?: ""
+            val finalText = buildString {
+                if (prefix.isNotEmpty()) {
+                    append(expandTemplateVars(prefix, title))
+                    append("\n")
+                }
+                append(text)
+                if (suffix.isNotEmpty()) {
+                    append("\n")
+                    append(expandTemplateVars(suffix, title))
+                }
+            }
+            captureJson.put("text", finalText)
 
             if (detectedUrl != null) {
                 captureJson.put("source_url", detectedUrl)

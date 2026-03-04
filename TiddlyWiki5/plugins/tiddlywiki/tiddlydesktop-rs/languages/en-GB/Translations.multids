@@ -69,6 +69,35 @@ EditionSelector/Optional: (optional)
 EditionSelector/CreatingFile: Creating wiki file...
 EditionSelector/InitializingFolder: Initializing wiki folder...
 
+ShareTemplates/Title: Share Templates
+ShareTemplates/Templates: Templates
+ShareTemplates/DomainRules: Domain Rules
+ShareTemplates/AddTemplate: + Template
+ShareTemplates/AddRule: + Rule
+ShareTemplates/NoTemplates: No templates yet. Add one to customise how shared content is imported.
+ShareTemplates/NoRules: No domain rules yet. Add one to auto-select templates by URL domain.
+ShareTemplates/Edit: Edit
+ShareTemplates/Delete: Delete
+ShareTemplates/Save: Save
+ShareTemplates/SetDefault: Set Default
+ShareTemplates/Default: Default
+ShareTemplates/Label: Label
+ShareTemplates/Tags: Tags
+ShareTemplates/TitlePattern: Title Pattern
+ShareTemplates/ContentMode: Content Mode
+ShareTemplates/ModeClip: Web Clip
+ShareTemplates/ModeLink: Link Only
+ShareTemplates/ModeText: Raw Text
+ShareTemplates/ContentPrefix: Content Prefix
+ShareTemplates/ContentSuffix: Content Suffix
+ShareTemplates/VariablesHint: Variables: {{title}}, {{url}}, {{date}}, {{domain}}, {{content}}
+ShareTemplates/Domain: Domain
+ShareTemplates/RuleTemplate: Template
+ShareTemplates/AdditionalTags: Extra Tags
+ShareTemplates/TitleStrip: Strip from Title
+ShareTemplates/TemplateCount: Templates:
+ShareTemplates/Manage: Manage
+
 CustomPaths/Title: Custom Paths
 CustomPaths/PluginsFolder: Plugins Folder:
 CustomPaths/EditionsFolder: Editions Folder:

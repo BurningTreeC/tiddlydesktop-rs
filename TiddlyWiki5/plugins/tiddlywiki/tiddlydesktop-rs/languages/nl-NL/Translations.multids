@@ -69,6 +69,35 @@ EditionSelector/Optional: (optioneel)
 EditionSelector/CreatingFile: Wiki-bestand wordt gemaakt...
 EditionSelector/InitializingFolder: Wiki-map wordt geïnitialiseerd...
 
+ShareTemplates/Title: Sjablonen delen
+ShareTemplates/Templates: Sjablonen
+ShareTemplates/DomainRules: Domeinregels
+ShareTemplates/AddTemplate: + Sjabloon
+ShareTemplates/AddRule: + Regel
+ShareTemplates/NoTemplates: Nog geen sjablonen. Voeg er een toe om aan te passen hoe gedeelde inhoud wordt geïmporteerd.
+ShareTemplates/NoRules: Nog geen domeinregels. Voeg er een toe om sjablonen automatisch te selecteren op basis van URL-domein.
+ShareTemplates/Edit: Bewerken
+ShareTemplates/Delete: Verwijderen
+ShareTemplates/Save: Opslaan
+ShareTemplates/SetDefault: Instellen als standaard
+ShareTemplates/Default: Standaard
+ShareTemplates/Label: Label
+ShareTemplates/Tags: Tags
+ShareTemplates/TitlePattern: Titelpatroon
+ShareTemplates/ContentMode: Inhoudsmodus
+ShareTemplates/ModeClip: Webclip
+ShareTemplates/ModeLink: Alleen koppeling
+ShareTemplates/ModeText: Onbewerkte tekst
+ShareTemplates/ContentPrefix: Inhoudsvoorvoegsel
+ShareTemplates/ContentSuffix: Inhoudssuffix
+ShareTemplates/VariablesHint: Variabelen: {{title}}, {{url}}, {{date}}, {{domain}}, {{content}}
+ShareTemplates/Domain: Domein
+ShareTemplates/RuleTemplate: Sjabloon
+ShareTemplates/AdditionalTags: Extra tags
+ShareTemplates/TitleStrip: Uit titel verwijderen
+ShareTemplates/TemplateCount: Sjablonen:
+ShareTemplates/Manage: Beheren
+
 CustomPaths/Title: Aangepaste paden
 CustomPaths/PluginsFolder: Plugin-map:
 CustomPaths/EditionsFolder: Edities-map:

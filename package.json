@@ -1,15 +1,7 @@
 {
   "name": "tiddlydesktop-rs",
   "private": true,
-<<<<<<< Updated upstream
-<<<<<<< Updated upstream
   "version": "0.7.30",
-=======
-  "version": "0.7.30",
->>>>>>> Stashed changes
-=======
-  "version": "0.7.30",
->>>>>>> Stashed changes
   "type": "module",
   "scripts": {
     "tauri": "tauri",

@@ -165,7 +165,17 @@ jobs:
             echo "No changes to commit"
           else
             git commit -m "Bump version to ${{ steps.bump.outputs.new_version }}"
-            git pull --rebase
+            # Pull with rebase, aborting on conflict rather than leaving markers
+            if ! git pull --rebase; then
+              echo "Rebase conflict detected, aborting rebase and retrying with fresh pull"
+              git rebase --abort
+              git pull --rebase
+            fi
+            # Safety check: abort if any conflict markers snuck through
+            if grep -rl '<<<<<<< ' --include='*.json' --include='*.toml' --include='*.rs' . 2>/dev/null; then
+              echo "ERROR: Conflict markers detected in source files!"
+              exit 1
+            fi
             git push
           fi
 

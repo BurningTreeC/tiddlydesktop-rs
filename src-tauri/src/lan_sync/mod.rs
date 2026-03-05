@@ -6872,6 +6872,24 @@ pub fn queue_bridge_deactivate(sync_id: &str, wiki_path: &str) {
     }
 }
 
+/// Queue a sync-mode-changed message to the Android bridge for a specific wiki.
+/// Called from wiki_storage when sync mode is changed for a wiki.
+#[cfg(target_os = "android")]
+pub fn queue_bridge_sync_mode_changed(sync_id: &str, mode: &str) {
+    if let Some(mgr) = get_sync_manager() {
+        if let Ok(guard) = mgr.android_bridge.lock() {
+            if let Some(ref bridge) = *guard {
+                let payload = serde_json::json!({
+                    "type": "sync-mode-changed",
+                    "sync_mode": mode,
+                });
+                bridge.queue_change(sync_id, payload);
+                eprintln!("[LAN Sync] Queued sync-mode-changed to bridge for sync_id={}, mode={}", sync_id, mode);
+            }
+        }
+    }
+}
+
 /// Get the collab WS port (for passing to child processes via env var)
 #[cfg(not(target_os = "android"))]
 pub fn get_collab_port() -> u16 {

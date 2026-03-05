@@ -6432,6 +6432,7 @@ class WikiActivity : AppCompatActivity() {
             "var tks=Object.keys(tomb);var tc=false;for(var k=0;k<tks.length;k++){if(tomb[tks[k]].cleared)continue;if(!seen[tks[k]])fps.push({title:tks[k],modified:tomb[tks[k]].modified,deleted:true});else{tomb[tks[k]].cleared=true;tc=true;}}if(tc)S.saveTombstones(syncId,JSON.stringify(tomb));" +
             "return fps;}" +
             "function queueChange(d){" +
+            "if(d.type==='sync-mode-changed'){_syncMode=d.sync_mode||'';syncMode=d.sync_mode||'';console.log('[LAN Sync] Mode changed to: '+(_syncMode||'bidirectional'));return;}" +
             "if(d.wiki_id!==syncId)return;" +
             "if(d.type==='dump-tiddlers'){dumpTiddlers(d.to_device_id);return;}" +
             "if(d.type==='send-fingerprints'){sendFingerprints(d.to_device_id);return;}" +
@@ -6572,7 +6573,7 @@ class WikiActivity : AppCompatActivity() {
             "}" +
             "});" +
             // Periodic fingerprint re-broadcast (5s safety net for convergence)
-            "setInterval(function(){if(!syncActive)return;try{var fps2=cfps();S.broadcastFingerprints(syncId,JSON.stringify(fps2));}catch(e){}},5000);" +
+            "setInterval(function(){if(!syncActive)return;try{var curMode=S.getSyncMode(wp)||'';if(curMode!==_syncMode){_syncMode=curMode;syncMode=curMode;console.log('[LAN Sync] Mode updated via periodic check: '+(curMode||'bidirectional'));}var fps2=cfps();S.broadcastFingerprints(syncId,JSON.stringify(fps2));}catch(e){}},5000);" +
             // Periodic tombstone cleanup (every 10 minutes)
             "setInterval(function(){try{var now2=Date.now();var tks=Object.keys(tomb);var rm=0;for(var ti=0;ti<tks.length;ti++){if(tomb[tks[ti]].time&&now2-tomb[tks[ti]].time>TOMB_MAX){delete tomb[tks[ti]];rm++;}}if(rm>0){console.log('[LAN Sync] Cleaned up '+rm+' expired tombstones');S.saveTombstones(syncId,JSON.stringify(tomb));}}catch(e){}},600000);" +
             "}" +

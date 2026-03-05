@@ -905,6 +905,20 @@ pub fn set_wiki_sync_mode(app: tauri::AppHandle, path: String, mode: Option<Stri
         }
     }
 
+    #[cfg(target_os = "android")]
+    {
+        let effective_mode = entries.iter()
+            .find(|e| utils::paths_equal(&e.path, &path))
+            .and_then(|e| e.sync_mode.clone())
+            .unwrap_or_default();
+        if let Some(sync_id) = entries.iter()
+            .find(|e| utils::paths_equal(&e.path, &path))
+            .and_then(|e| e.sync_id.clone())
+        {
+            crate::lan_sync::queue_bridge_sync_mode_changed(&sync_id, &effective_mode);
+        }
+    }
+
     Ok(())
 }
 

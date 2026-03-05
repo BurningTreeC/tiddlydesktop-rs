@@ -102,6 +102,12 @@ class CaptureActivity : AppCompatActivity() {
             s = s.replace(Regex("[\\x00-\\x08\\x0B\\x0C\\x0E-\\x1F\\x7F-\\x9F]"), "")
             // Normalize whitespace: collapse runs, trim
             s = s.replace(Regex("\\s+"), " ").trim()
+            // Filter out useless "Shared via <App>" subjects that some apps set as EXTRA_SUBJECT
+            if (s.startsWith("Shared via ", ignoreCase = true) ||
+                s.startsWith("Shared from ", ignoreCase = true) ||
+                s.startsWith("Sent from ", ignoreCase = true)) {
+                return ""
+            }
             return s
         }
 
@@ -249,13 +255,13 @@ class CaptureActivity : AppCompatActivity() {
                 sharedTextFileUri = fileUri
                 captureType = "text/plain"
                 sharedSubject = getDisplayName(fileUri)?.substringBeforeLast(".")
-                    ?: intent.getStringExtra(Intent.EXTRA_SUBJECT)?.let { sanitizeTitle(it) }
+                    ?: intent.getStringExtra(Intent.EXTRA_SUBJECT)?.let { sanitizeTitle(it) }?.ifBlank { null }
                 return
             }
         }
         // Fall back to text snippet (EXTRA_TEXT from browsers, share sheets, etc.)
         sharedText = intent.getStringExtra(Intent.EXTRA_TEXT)
-        sharedSubject = intent.getStringExtra(Intent.EXTRA_SUBJECT)?.let { sanitizeTitle(it) }
+        sharedSubject = intent.getStringExtra(Intent.EXTRA_SUBJECT)?.let { sanitizeTitle(it) }?.ifBlank { null }
 
         if (sharedText.isNullOrBlank()) {
             Toast.makeText(this, getString(R.string.capture_no_text), Toast.LENGTH_SHORT).show()
@@ -340,7 +346,7 @@ class CaptureActivity : AppCompatActivity() {
             return
         }
 
-        sharedSubject = intent.getStringExtra(Intent.EXTRA_SUBJECT)?.let { sanitizeTitle(it) }
+        sharedSubject = intent.getStringExtra(Intent.EXTRA_SUBJECT)?.let { sanitizeTitle(it) }?.ifBlank { null }
         // WhatsApp and other apps send captions/descriptions in EXTRA_TEXT
         sharedText = intent.getStringExtra(Intent.EXTRA_TEXT)
     }
@@ -371,7 +377,7 @@ class CaptureActivity : AppCompatActivity() {
             }
         }
 
-        sharedSubject = intent.getStringExtra(Intent.EXTRA_SUBJECT)?.let { sanitizeTitle(it) }
+        sharedSubject = intent.getStringExtra(Intent.EXTRA_SUBJECT)?.let { sanitizeTitle(it) }?.ifBlank { null }
     }
 
     /**
@@ -681,7 +687,7 @@ class CaptureActivity : AppCompatActivity() {
         }
 
         multipleUris = uris
-        sharedSubject = intent.getStringExtra(Intent.EXTRA_SUBJECT)?.let { sanitizeTitle(it) }
+        sharedSubject = intent.getStringExtra(Intent.EXTRA_SUBJECT)?.let { sanitizeTitle(it) }?.ifBlank { null }
 
         // Load thumbnails for first few items (max 4)
         val thumbs = mutableListOf<Bitmap?>()

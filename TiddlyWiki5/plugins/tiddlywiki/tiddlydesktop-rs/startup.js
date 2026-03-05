@@ -1892,6 +1892,28 @@ exports.startup = function(callback) {
 		// Load templates on startup
 		refreshShareTemplates();
 
+		// Auto-save: debounce saves when any template/rule tiddler changes via $edit-text/$select
+		var _templateSaveTimer = null;
+		function debouncedTemplateSave() {
+			if (_templateSaveTimer) clearTimeout(_templateSaveTimer);
+			_templateSaveTimer = setTimeout(function() {
+				_templateSaveTimer = null;
+				saveShareTemplatesFromTiddlers();
+			}, 500);
+		}
+		$tw.wiki.addEventListener("change", function(changes) {
+			// Only auto-save when the template manager is open
+			if ($tw.wiki.getTiddlerText("$:/temp/tiddlydesktop-rs/template-manager-open", "no") !== "yes") return;
+			var keys = Object.keys(changes);
+			for (var i = 0; i < keys.length; i++) {
+				if (keys[i].indexOf("$:/temp/tiddlydesktop-rs/templates/") === 0 ||
+					keys[i].indexOf("$:/temp/tiddlydesktop-rs/domain-rules/") === 0) {
+					debouncedTemplateSave();
+					return;
+				}
+			}
+		});
+
 		// Message handler: open template manager
 		$tw.rootWidget.addEventListener("tm-tiddlydesktop-rs-open-template-manager", function() {
 			refreshShareTemplates();
@@ -1899,6 +1921,12 @@ exports.startup = function(callback) {
 		});
 
 		$tw.rootWidget.addEventListener("tm-tiddlydesktop-rs-close-template-manager", function() {
+			// Flush any pending debounced save immediately
+			if (_templateSaveTimer) {
+				clearTimeout(_templateSaveTimer);
+				_templateSaveTimer = null;
+				saveShareTemplatesFromTiddlers();
+			}
 			$tw.wiki.setText("$:/temp/tiddlydesktop-rs/template-manager-open", "text", null, "no");
 		});
 

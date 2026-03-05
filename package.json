@@ -3,12 +3,12 @@
   "private": true,
 <<<<<<< Updated upstream
 <<<<<<< Updated upstream
-  "version": "0.7.29",
+  "version": "0.7.30",
 =======
-  "version": "0.7.29",
+  "version": "0.7.30",
 >>>>>>> Stashed changes
 =======
-  "version": "0.7.28",
+  "version": "0.7.30",
 >>>>>>> Stashed changes
   "type": "module",
   "scripts": {

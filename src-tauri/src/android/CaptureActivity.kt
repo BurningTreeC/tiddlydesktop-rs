@@ -780,6 +780,7 @@ class CaptureActivity : AppCompatActivity() {
     private fun loadShareTemplates(): ShareTemplatesConfig {
         // Same pattern as loadRecentWikis — read from Rust data dir (filesDir.parentFile)
         val file = File(filesDir.parentFile, "share_templates.json")
+        Log.d(TAG, "loadShareTemplates: path=${file.absolutePath} exists=${file.exists()}")
         if (!file.exists()) return ShareTemplatesConfig()
         return try {
             val json = JSONObject(file.readText())
@@ -812,25 +813,35 @@ class CaptureActivity : AppCompatActivity() {
                     ))
                 }
             }
+            Log.d(TAG, "loadShareTemplates: ${templates.size} templates, ${rules.size} domain rules")
+            for (r in rules) {
+                Log.d(TAG, "  loaded rule: domain='${r.domain}' templateId='${r.templateId}'")
+            }
             ShareTemplatesConfig(
                 templates = templates,
                 domainRules = rules,
                 defaultTemplateId = json.optString("default_template_id", "").ifEmpty { null }
             )
         } catch (e: Exception) {
-            Log.w(TAG, "Failed to read share_templates.json: ${e.message}")
+            Log.w(TAG, "Failed to read share_templates.json: ${e.message}", e)
             ShareTemplatesConfig()
         }
     }
 
     private fun matchDomainRule(url: String?): DomainRule? {
         if (url == null) return null
-        val host = try { URL(url).host.lowercase() } catch (_: Exception) { return null }
+        val host = try { URL(url).host.lowercase().trim() } catch (_: Exception) { return null }
+        Log.d(TAG, "matchDomainRule: url=$url host=$host rules=${templatesConfig.domainRules.size}")
+        for (rule in templatesConfig.domainRules) {
+            Log.d(TAG, "  rule domain='${rule.domain}' templateId='${rule.templateId}'")
+        }
         // Suffix match: "youtube.com" matches "www.youtube.com" and "m.youtube.com"
-        return templatesConfig.domainRules.firstOrNull { rule ->
-            val domain = rule.domain.lowercase()
+        val matched = templatesConfig.domainRules.firstOrNull { rule ->
+            val domain = rule.domain.lowercase().trim()
             host == domain || host.endsWith(".$domain")
         }
+        Log.d(TAG, "matchDomainRule result: ${matched?.domain ?: "no match"}")
+        return matched
     }
 
     private fun applyTemplate() {
@@ -1171,13 +1182,15 @@ class CaptureActivity : AppCompatActivity() {
                     .getString("last_template_id", null)
 
                 val targetId = when {
-                    matchedTplId != null -> matchedTplId
-                    defaultTplId != null -> defaultTplId
-                    lastTplId != null -> lastTplId
+                    !matchedTplId.isNullOrEmpty() -> matchedTplId
+                    !defaultTplId.isNullOrEmpty() -> defaultTplId
+                    !lastTplId.isNullOrEmpty() -> lastTplId
                     else -> null
                 }
+                Log.d(TAG, "Template selection: matchedTplId=$matchedTplId defaultTplId=$defaultTplId lastTplId=$lastTplId targetId=$targetId")
                 if (targetId != null) {
                     val tplIdx = templatesConfig.templates.indexOfFirst { it.id == targetId }
+                    Log.d(TAG, "Template lookup: targetId=$targetId tplIdx=$tplIdx templateIds=${templatesConfig.templates.map { it.id }}")
                     if (tplIdx >= 0) initialIdx = tplIdx + 1  // +1 for "None" entry
                 }
                 setSelection(initialIdx)

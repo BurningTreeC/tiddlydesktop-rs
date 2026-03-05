@@ -109,14 +109,18 @@ pub fn get_share_templates_path(app: &tauri::AppHandle) -> Result<PathBuf, Strin
 /// Load share templates config from disk
 pub fn load_share_templates(app: &tauri::AppHandle) -> Result<ShareTemplatesConfig, String> {
     let path = get_share_templates_path(app)?;
+    eprintln!("[ShareTemplates] Loading from: {} (exists={})", path.display(), path.exists());
     if path.exists() {
         let content = std::fs::read_to_string(&path)
             .map_err(|e| format!("Failed to read share templates: {}", e))?;
         if content.trim().is_empty() {
+            eprintln!("[ShareTemplates] File is empty");
             return Ok(ShareTemplatesConfig::default());
         }
-        serde_json::from_str(&content)
-            .map_err(|e| format!("Failed to parse share templates: {}", e))
+        let config: ShareTemplatesConfig = serde_json::from_str(&content)
+            .map_err(|e| format!("Failed to parse share templates: {}", e))?;
+        eprintln!("[ShareTemplates] Loaded {} templates, {} domain rules", config.templates.len(), config.domain_rules.len());
+        Ok(config)
     } else {
         Ok(ShareTemplatesConfig::default())
     }
@@ -125,6 +129,10 @@ pub fn load_share_templates(app: &tauri::AppHandle) -> Result<ShareTemplatesConf
 /// Save share templates config to disk (atomic write with backup)
 pub fn save_share_templates(app: &tauri::AppHandle, config: &ShareTemplatesConfig) -> Result<(), String> {
     let path = get_share_templates_path(app)?;
+    eprintln!("[ShareTemplates] Saving to: {} ({} templates, {} domain rules)", path.display(), config.templates.len(), config.domain_rules.len());
+    for rule in &config.domain_rules {
+        eprintln!("[ShareTemplates]   rule: domain='{}' template_id='{}'", rule.domain, rule.template_id);
+    }
 
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| format!("Failed to create config directory: {}", e))?;

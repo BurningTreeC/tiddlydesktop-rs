@@ -1806,8 +1806,12 @@ exports.startup = function(callback) {
 		});
 
 		// ── Share Templates (Android only) ────────────────────────────────
+		var _refreshingTemplates = false;
 		function refreshShareTemplates() {
+			_refreshingTemplates = true;
 			invoke("get_share_templates").then(function(config) {
+				console.log("[ShareTemplates] Loaded config:", JSON.stringify(config));
+				_refreshingTemplates = true;
 				// Clear existing temp tiddlers
 				$tw.wiki.each(function(tiddler, title) {
 					if (title.indexOf("$:/temp/tiddlydesktop-rs/templates/") === 0 ||
@@ -1846,8 +1850,11 @@ exports.startup = function(callback) {
 						text: r.domain
 					}));
 				}
+				// Clear flag after TW5's batched change event fires (setTimeout(0) queued by enqueueTiddlerEvent)
+				setTimeout(function() { _refreshingTemplates = false; }, 0);
 			}).catch(function(err) {
 				console.error("Failed to load share templates:", err);
+				_refreshingTemplates = false;
 			});
 		}
 
@@ -1881,10 +1888,11 @@ exports.startup = function(callback) {
 				domain_rules: domainRules,
 				default_template_id: defaultId
 			};
+			console.log("[ShareTemplates] Saving config:", JSON.stringify(config));
 			invoke("save_share_templates_config", { config: config }).then(function() {
-				console.log("Share templates saved");
+				console.log("[ShareTemplates] Save succeeded");
 			}).catch(function(err) {
-				console.error("Failed to save share templates:", err);
+				console.error("[ShareTemplates] Save FAILED:", err);
 				alert("Failed to save share templates: " + err);
 			});
 		}
@@ -1902,7 +1910,8 @@ exports.startup = function(callback) {
 			}, 500);
 		}
 		$tw.wiki.addEventListener("change", function(changes) {
-			// Only auto-save when the template manager is open
+			// Only auto-save when the template manager is open, and not during a refresh
+			if (_refreshingTemplates) return;
 			if ($tw.wiki.getTiddlerText("$:/temp/tiddlydesktop-rs/template-manager-open", "no") !== "yes") return;
 			var keys = Object.keys(changes);
 			for (var i = 0; i < keys.length; i++) {

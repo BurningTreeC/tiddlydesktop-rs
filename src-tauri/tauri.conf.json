@@ -1,11 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "tiddlydesktop-rs",
-<<<<<<< Updated upstream
   "version": "0.7.28",
-=======
-  "version": "0.7.0",
->>>>>>> Stashed changes
   "identifier": "com.burningtreec.tiddlydesktop-rs",
   "build": {
     "frontendDist": "../src"
@@ -66,11 +62,7 @@
       "minimumSystemVersion": "10.13"
     },
     "android": {
-<<<<<<< Updated upstream
       "versionCode": 112
-=======
-      "versionCode": 91
->>>>>>> Stashed changes
     },
     "fileAssociations": [
       {

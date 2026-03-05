@@ -90,7 +90,7 @@ ShareTemplates/ModeLink: Samo povezava
 ShareTemplates/ModeText: Neobdelano besedilo
 ShareTemplates/ContentPrefix: Predpona vsebine
 ShareTemplates/ContentSuffix: Pripona vsebine
-ShareTemplates/VariablesHint: Spremenljivke: {{title}}, {{url}}, {{date}}, {{domain}}, {{content}}
+ShareTemplates/VariablesHint: Spremenljivke: `{{title}}`, `{{url}}`, `{{date}}`, `{{domain}}`, `{{content}}`
 ShareTemplates/Domain: Domena
 ShareTemplates/RuleTemplate: Predloga
 ShareTemplates/AdditionalTags: Dodatne oznake

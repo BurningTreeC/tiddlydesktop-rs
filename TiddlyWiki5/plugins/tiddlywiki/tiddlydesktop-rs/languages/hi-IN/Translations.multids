@@ -179,7 +179,7 @@ ShareTemplates/ModeLink: केवल लिंक
 ShareTemplates/ModeText: कच्चा पाठ
 ShareTemplates/ContentPrefix: सामग्री उपसर्ग
 ShareTemplates/ContentSuffix: सामग्री प्रत्यय
-ShareTemplates/VariablesHint: चर: {{title}}, {{url}}, {{date}}, {{domain}}, {{content}}
+ShareTemplates/VariablesHint: चर: `{{title}}`, `{{url}}`, `{{date}}`, `{{domain}}`, `{{content}}`
 ShareTemplates/Domain: डोमेन
 ShareTemplates/RuleTemplate: टेम्पलेट
 ShareTemplates/AdditionalTags: अतिरिक्त टैग

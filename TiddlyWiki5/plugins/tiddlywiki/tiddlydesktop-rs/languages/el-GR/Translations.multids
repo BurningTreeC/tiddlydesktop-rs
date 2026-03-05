@@ -90,7 +90,7 @@ ShareTemplates/ModeLink: Μόνο Σύνδεσμος
 ShareTemplates/ModeText: Ακατέργαστο Κείμενο
 ShareTemplates/ContentPrefix: Πρόθεμα Περιεχομένου
 ShareTemplates/ContentSuffix: Κατάληξη Περιεχομένου
-ShareTemplates/VariablesHint: Μεταβλητές: {{title}}, {{url}}, {{date}}, {{domain}}, {{content}}
+ShareTemplates/VariablesHint: Μεταβλητές: `{{title}}`, `{{url}}`, `{{date}}`, `{{domain}}`, `{{content}}`
 ShareTemplates/Domain: Τομέας
 ShareTemplates/RuleTemplate: Πρότυπο
 ShareTemplates/AdditionalTags: Επιπλέον Ετικέτες

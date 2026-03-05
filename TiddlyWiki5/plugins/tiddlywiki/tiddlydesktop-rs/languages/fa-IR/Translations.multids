@@ -90,7 +90,7 @@ ShareTemplates/ModeLink: فقط پیوند
 ShareTemplates/ModeText: متن خام
 ShareTemplates/ContentPrefix: پیشوند محتوا
 ShareTemplates/ContentSuffix: پسوند محتوا
-ShareTemplates/VariablesHint: متغیرها: {{title}}، {{url}}، {{date}}، {{domain}}، {{content}}
+ShareTemplates/VariablesHint: متغیرها: `{{title}}`، `{{url}}`، `{{date}}`، `{{domain}}`، `{{content}}`
 ShareTemplates/Domain: دامنه
 ShareTemplates/RuleTemplate: الگو
 ShareTemplates/AdditionalTags: برچسب‌های اضافی

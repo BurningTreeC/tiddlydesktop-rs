@@ -90,7 +90,7 @@ ShareTemplates/ModeLink: Solo ligamine
 ShareTemplates/ModeText: Texto brute
 ShareTemplates/ContentPrefix: Prefixo de contento
 ShareTemplates/ContentSuffix: Suffixo de contento
-ShareTemplates/VariablesHint: Variabiles: {{title}}, {{url}}, {{date}}, {{domain}}, {{content}}
+ShareTemplates/VariablesHint: Variabiles: `{{title}}`, `{{url}}`, `{{date}}`, `{{domain}}`, `{{content}}`
 ShareTemplates/Domain: Dominio
 ShareTemplates/RuleTemplate: Patrono
 ShareTemplates/AdditionalTags: Etiquettas extra

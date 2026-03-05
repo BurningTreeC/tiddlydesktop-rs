@@ -90,7 +90,7 @@ ShareTemplates/ModeLink: קישור בלבד
 ShareTemplates/ModeText: טקסט גולמי
 ShareTemplates/ContentPrefix: קידומת תוכן
 ShareTemplates/ContentSuffix: סיומת תוכן
-ShareTemplates/VariablesHint: משתנים: {{title}}, {{url}}, {{date}}, {{domain}}, {{content}}
+ShareTemplates/VariablesHint: משתנים: `{{title}}`, `{{url}}`, `{{date}}`, `{{domain}}`, `{{content}}`
 ShareTemplates/Domain: תחום
 ShareTemplates/RuleTemplate: תבנית
 ShareTemplates/AdditionalTags: תגיות נוספות

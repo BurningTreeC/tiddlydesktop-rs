@@ -90,7 +90,7 @@ ShareTemplates/ModeLink: 僅連結
 ShareTemplates/ModeText: 原始文字
 ShareTemplates/ContentPrefix: 內容前綴
 ShareTemplates/ContentSuffix: 內容後綴
-ShareTemplates/VariablesHint: 變數：{{title}}、{{url}}、{{date}}、{{domain}}、{{content}}
+ShareTemplates/VariablesHint: 變數：`{{title}}`、`{{url}}`、`{{date}}`、`{{domain}}`、`{{content}}`
 ShareTemplates/Domain: 網域
 ShareTemplates/RuleTemplate: 範本
 ShareTemplates/AdditionalTags: 額外標籤

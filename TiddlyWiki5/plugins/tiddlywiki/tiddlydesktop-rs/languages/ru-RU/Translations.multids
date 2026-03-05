@@ -90,7 +90,7 @@ ShareTemplates/ModeLink: Только ссылка
 ShareTemplates/ModeText: Простой текст
 ShareTemplates/ContentPrefix: Префикс контента
 ShareTemplates/ContentSuffix: Суффикс контента
-ShareTemplates/VariablesHint: Переменные: {{title}}, {{url}}, {{date}}, {{domain}}, {{content}}
+ShareTemplates/VariablesHint: Переменные: `{{title}}`, `{{url}}`, `{{date}}`, `{{domain}}`, `{{content}}`
 ShareTemplates/Domain: Домен
 ShareTemplates/RuleTemplate: Шаблон
 ShareTemplates/AdditionalTags: Дополнительные теги

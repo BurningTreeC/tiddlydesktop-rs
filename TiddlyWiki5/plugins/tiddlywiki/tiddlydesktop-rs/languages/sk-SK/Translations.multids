@@ -90,7 +90,7 @@ ShareTemplates/ModeLink: Iba odkaz
 ShareTemplates/ModeText: Surový text
 ShareTemplates/ContentPrefix: Predpona obsahu
 ShareTemplates/ContentSuffix: Prípona obsahu
-ShareTemplates/VariablesHint: Premenné: {{title}}, {{url}}, {{date}}, {{domain}}, {{content}}
+ShareTemplates/VariablesHint: Premenné: `{{title}}`, `{{url}}`, `{{date}}`, `{{domain}}`, `{{content}}`
 ShareTemplates/Domain: Doména
 ShareTemplates/RuleTemplate: Šablóna
 ShareTemplates/AdditionalTags: Extra štítky

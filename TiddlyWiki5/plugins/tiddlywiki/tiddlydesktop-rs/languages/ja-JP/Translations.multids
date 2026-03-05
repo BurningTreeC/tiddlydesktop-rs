@@ -90,7 +90,7 @@ ShareTemplates/ModeLink: リンクのみ
 ShareTemplates/ModeText: テキスト
 ShareTemplates/ContentPrefix: コンテンツの前置き
 ShareTemplates/ContentSuffix: コンテンツの後置き
-ShareTemplates/VariablesHint: 変数: {{title}}, {{url}}, {{date}}, {{domain}}, {{content}}
+ShareTemplates/VariablesHint: 変数: `{{title}}`, `{{url}}`, `{{date}}`, `{{domain}}`, `{{content}}`
 ShareTemplates/Domain: ドメイン
 ShareTemplates/RuleTemplate: テンプレート
 ShareTemplates/AdditionalTags: 追加タグ

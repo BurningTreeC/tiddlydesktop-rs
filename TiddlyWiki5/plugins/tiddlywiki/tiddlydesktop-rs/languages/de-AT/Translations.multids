@@ -90,7 +90,7 @@ ShareTemplates/ModeLink: Nur Link
 ShareTemplates/ModeText: Rohtext
 ShareTemplates/ContentPrefix: Inhaltspräfix
 ShareTemplates/ContentSuffix: Inhaltssuffix
-ShareTemplates/VariablesHint: Variablen: {{title}}, {{url}}, {{date}}, {{domain}}, {{content}}
+ShareTemplates/VariablesHint: Variablen: `{{title}}`, `{{url}}`, `{{date}}`, `{{domain}}`, `{{content}}`
 ShareTemplates/Domain: Domain
 ShareTemplates/RuleTemplate: Vorlage
 ShareTemplates/AdditionalTags: Zusätzliche Tags

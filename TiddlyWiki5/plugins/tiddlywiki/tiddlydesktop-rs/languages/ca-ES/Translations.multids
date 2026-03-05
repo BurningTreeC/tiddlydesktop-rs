@@ -90,7 +90,7 @@ ShareTemplates/ModeLink: Només Enllaç
 ShareTemplates/ModeText: Text Sense Format
 ShareTemplates/ContentPrefix: Prefix de Contingut
 ShareTemplates/ContentSuffix: Sufix de Contingut
-ShareTemplates/VariablesHint: Variables: {{title}}, {{url}}, {{date}}, {{domain}}, {{content}}
+ShareTemplates/VariablesHint: Variables: `{{title}}`, `{{url}}`, `{{date}}`, `{{domain}}`, `{{content}}`
 ShareTemplates/Domain: Domini
 ShareTemplates/RuleTemplate: Plantilla
 ShareTemplates/AdditionalTags: Etiquetes Addicionals

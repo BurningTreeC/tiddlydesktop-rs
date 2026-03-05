@@ -90,7 +90,7 @@ ShareTemplates/ModeLink: ਸਿਰਫ਼ ਲਿੰਕ
 ShareTemplates/ModeText: ਕੱਚਾ ਟੈਕਸਟ
 ShareTemplates/ContentPrefix: ਸਮੱਗਰੀ ਅਗੇਤਰ
 ShareTemplates/ContentSuffix: ਸਮੱਗਰੀ ਪਿਛੇਤਰ
-ShareTemplates/VariablesHint: ਚਲ: {{title}}, {{url}}, {{date}}, {{domain}}, {{content}}
+ShareTemplates/VariablesHint: ਚਲ: `{{title}}`, `{{url}}`, `{{date}}`, `{{domain}}`, `{{content}}`
 ShareTemplates/Domain: ਡੋਮੇਨ
 ShareTemplates/RuleTemplate: ਨਮੂਨਾ
 ShareTemplates/AdditionalTags: ਵਾਧੂ ਟੈਗ

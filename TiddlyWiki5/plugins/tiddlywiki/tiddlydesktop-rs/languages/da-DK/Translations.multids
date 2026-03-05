@@ -90,7 +90,7 @@ ShareTemplates/ModeLink: Kun link
 ShareTemplates/ModeText: Rå tekst
 ShareTemplates/ContentPrefix: Indholdsforløb
 ShareTemplates/ContentSuffix: Indholdsafslutning
-ShareTemplates/VariablesHint: Variabler: {{title}}, {{url}}, {{date}}, {{domain}}, {{content}}
+ShareTemplates/VariablesHint: Variabler: `{{title}}`, `{{url}}`, `{{date}}`, `{{domain}}`, `{{content}}`
 ShareTemplates/Domain: Domæne
 ShareTemplates/RuleTemplate: Skabelon
 ShareTemplates/AdditionalTags: Ekstra tags

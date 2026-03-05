@@ -1,6 +1,10 @@
 [package]
 name = "tiddlydesktop-rs"
+<<<<<<< Updated upstream
 version = "0.7.28"
+=======
+version = "0.7.0"
+>>>>>>> Stashed changes
 description = "A TiddlyWiki Tauri App"
 authors = ["BurningTreeC"]
 license = "MIT"

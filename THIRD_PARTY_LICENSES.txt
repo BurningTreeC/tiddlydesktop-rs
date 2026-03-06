@@ -2060,7 +2060,7 @@ DEALINGS IN THE SOFTWARE.
 ## MIT License
 
 Used by:
-- uuid 1.21.0 (https://github.com/uuid-rs/uuid)
+- uuid 1.22.0 (https://github.com/uuid-rs/uuid)
 
 License text:
 ```
@@ -2418,11 +2418,11 @@ SOFTWARE.
 ## MIT License
 
 Used by:
-- wayland-backend 0.3.13 (https://github.com/smithay/wayland-rs)
+- wayland-backend 0.3.14 (https://github.com/smithay/wayland-rs)
 - wayland-client 0.31.13 (https://github.com/smithay/wayland-rs)
 - wayland-protocols 0.32.11 (https://github.com/smithay/wayland-rs)
 - wayland-scanner 0.31.9 (https://github.com/smithay/wayland-rs)
-- wayland-sys 0.31.9 (https://github.com/smithay/wayland-rs)
+- wayland-sys 0.31.10 (https://github.com/smithay/wayland-rs)
 
 License text:
 ```
@@ -7150,7 +7150,7 @@ Used by:
 - webview2-com-macros 0.8.1 (https://github.com/wravery/webview2-rs)
 - webview2-com-sys 0.38.2 (https://github.com/wravery/webview2-rs)
 - webview2-com 0.38.2 (https://github.com/wravery/webview2-rs)
-- tiddlydesktop-rs 0.7.32
+- tiddlydesktop-rs 0.7.33
 - block2 0.6.2 (https://github.com/madsmtm/objc2)
 - brotli-decompressor 5.0.0 (https://github.com/dropbox/rust-brotli-decompressor)
 - cargo_toml 0.22.3 (https://gitlab.com/lib.rs/cargo_toml)
@@ -7686,7 +7686,7 @@ DEALINGS IN THE SOFTWARE.
 
 Used by:
 - winnow 0.5.40 (https://github.com/winnow-rs/winnow)
-- winnow 0.7.14 (https://github.com/winnow-rs/winnow)
+- winnow 0.7.15 (https://github.com/winnow-rs/winnow)
 
 License text:
 ```

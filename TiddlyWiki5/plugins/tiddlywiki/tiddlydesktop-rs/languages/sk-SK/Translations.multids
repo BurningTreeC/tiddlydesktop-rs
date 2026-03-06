@@ -88,6 +88,7 @@ ShareTemplates/ContentMode: Režim obsahu
 ShareTemplates/ModeClip: Webový výstrižok
 ShareTemplates/ModeLink: Iba odkaz
 ShareTemplates/ModeText: Surový text
+ShareTemplates/TiddlerType: Typ tiddlera
 ShareTemplates/ContentPrefix: Predpona obsahu
 ShareTemplates/ContentSuffix: Prípona obsahu
 ShareTemplates/VariablesHint: Premenné: `{{title}}`, `{{url}}`, `{{date}}`, `{{domain}}`, `{{content}}`

@@ -88,6 +88,7 @@ ShareTemplates/ContentMode: 콘텐츠 모드
 ShareTemplates/ModeClip: 웹 클립
 ShareTemplates/ModeLink: 링크만
 ShareTemplates/ModeText: 원본 텍스트
+ShareTemplates/TiddlerType: 티들러 유형
 ShareTemplates/ContentPrefix: 콘텐츠 접두사
 ShareTemplates/ContentSuffix: 콘텐츠 접미사
 ShareTemplates/VariablesHint: 변수: `{{title}}`, `{{url}}`, `{{date}}`, `{{domain}}`, `{{content}}`

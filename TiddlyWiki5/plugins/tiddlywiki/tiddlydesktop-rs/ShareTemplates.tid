@@ -68,6 +68,10 @@ title: $:/plugins/tiddlywiki/tiddlydesktop-rs/ShareTemplates
 </$select>
 </div>
 <div class="td-template-field">
+<label><<td-lingo ShareTemplates/TiddlerType>></label>
+<$edit-text tiddler=<<currentTiddler>> field="tiddler_type" tag="input" class="td-template-input" placeholder="text/vnd.tiddlywiki"/>
+</div>
+<div class="td-template-field">
 <label><<td-lingo ShareTemplates/ContentPrefix>></label>
 <$edit-text tiddler=<<currentTiddler>> field="content_prefix" tag="input" class="td-template-input" placeholder=""/>
 </div>

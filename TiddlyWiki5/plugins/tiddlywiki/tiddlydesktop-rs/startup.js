@@ -1835,6 +1835,7 @@ exports.startup = function(callback) {
 						content_prefix: t.content_prefix || "",
 						content_suffix: t.content_suffix || "",
 						content_mode: t.content_mode || "clip",
+						tiddler_type: t.tiddler_type || "",
 						text: t.label
 					}));
 				}
@@ -1870,7 +1871,8 @@ exports.startup = function(callback) {
 						title_pattern: tiddler.fields.title_pattern || "{{title}}",
 						content_prefix: tiddler.fields.content_prefix || "",
 						content_suffix: tiddler.fields.content_suffix || "",
-						content_mode: tiddler.fields.content_mode || "clip"
+						content_mode: tiddler.fields.content_mode || "clip",
+						tiddler_type: tiddler.fields.tiddler_type || ""
 					});
 				}
 				if (title.indexOf("$:/temp/tiddlydesktop-rs/domain-rules/") === 0) {
@@ -1888,6 +1890,8 @@ exports.startup = function(callback) {
 				domain_rules: domainRules,
 				default_template_id: defaultId
 			};
+			// Update the count badge on the landing page
+			$tw.wiki.setText("$:/temp/tiddlydesktop-rs/share-template-count", "text", null, String(templates.length));
 			console.log("[ShareTemplates] Saving config:", JSON.stringify(config));
 			invoke("save_share_templates_config", { config: config }).then(function() {
 				console.log("[ShareTemplates] Save succeeded");
@@ -1925,7 +1929,10 @@ exports.startup = function(callback) {
 
 		// Message handler: open template manager
 		$tw.rootWidget.addEventListener("tm-tiddlydesktop-rs-open-template-manager", function() {
-			refreshShareTemplates();
+			// No need to reload from disk — tiddlers in memory are authoritative.
+			// Startup refresh (line ~1901) already loads from disk on app start.
+			// Reloading here caused a race condition: the async load could complete
+			// before a pending async save, reading stale data and discarding edits.
 			$tw.wiki.setText("$:/temp/tiddlydesktop-rs/template-manager-open", "text", null, "yes");
 		});
 
@@ -1953,6 +1960,7 @@ exports.startup = function(callback) {
 				content_prefix: "",
 				content_suffix: "",
 				content_mode: "clip",
+				tiddler_type: "",
 				text: "New Template"
 			}));
 			saveShareTemplatesFromTiddlers();

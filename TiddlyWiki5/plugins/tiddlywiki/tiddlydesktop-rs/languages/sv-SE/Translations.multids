@@ -88,6 +88,7 @@ ShareTemplates/ContentMode: Innehållsläge
 ShareTemplates/ModeClip: Webbklipp
 ShareTemplates/ModeLink: Endast länk
 ShareTemplates/ModeText: Rå text
+ShareTemplates/TiddlerType: Tiddlertyp
 ShareTemplates/ContentPrefix: Innehållsprefix
 ShareTemplates/ContentSuffix: Innehållssuffix
 ShareTemplates/VariablesHint: Variabler: `{{title}}`, `{{url}}`, `{{date}}`, `{{domain}}`, `{{content}}`

@@ -88,6 +88,7 @@ ShareTemplates/ContentMode: Mode de Contingut
 ShareTemplates/ModeClip: Web Clip
 ShareTemplates/ModeLink: Només Enllaç
 ShareTemplates/ModeText: Text Sense Format
+ShareTemplates/TiddlerType: Tipus de Tiddler
 ShareTemplates/ContentPrefix: Prefix de Contingut
 ShareTemplates/ContentSuffix: Sufix de Contingut
 ShareTemplates/VariablesHint: Variables: `{{title}}`, `{{url}}`, `{{date}}`, `{{domain}}`, `{{content}}`

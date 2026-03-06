@@ -88,6 +88,7 @@ ShareTemplates/ContentMode: Način vsebine
 ShareTemplates/ModeClip: Spletni posnetek
 ShareTemplates/ModeLink: Samo povezava
 ShareTemplates/ModeText: Neobdelano besedilo
+ShareTemplates/TiddlerType: Vrsta tiddlerja
 ShareTemplates/ContentPrefix: Predpona vsebine
 ShareTemplates/ContentSuffix: Pripona vsebine
 ShareTemplates/VariablesHint: Spremenljivke: `{{title}}`, `{{url}}`, `{{date}}`, `{{domain}}`, `{{content}}`

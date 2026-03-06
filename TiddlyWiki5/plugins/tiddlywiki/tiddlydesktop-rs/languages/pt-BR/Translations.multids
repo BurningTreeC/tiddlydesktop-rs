@@ -88,6 +88,7 @@ ShareTemplates/ContentMode: Modo de conteúdo
 ShareTemplates/ModeClip: Recorte da web
 ShareTemplates/ModeLink: Apenas link
 ShareTemplates/ModeText: Texto puro
+ShareTemplates/TiddlerType: Tipo de Tiddler
 ShareTemplates/ContentPrefix: Prefixo de conteúdo
 ShareTemplates/ContentSuffix: Sufixo de conteúdo
 ShareTemplates/VariablesHint: Variáveis: `{{title}}`, `{{url}}`, `{{date}}`, `{{domain}}`, `{{content}}`

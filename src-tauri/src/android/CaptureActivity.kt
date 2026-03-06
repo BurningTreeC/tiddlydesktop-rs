@@ -155,7 +155,8 @@ class CaptureActivity : AppCompatActivity() {
         val titlePattern: String = "{{title}}",
         val contentPrefix: String = "",
         val contentSuffix: String = "",
-        val contentMode: String = "clip"  // "clip", "link", "text"
+        val contentMode: String = "clip",  // "clip", "link", "text"
+        val tiddlerType: String = ""
     )
 
     data class DomainRule(
@@ -796,7 +797,8 @@ class CaptureActivity : AppCompatActivity() {
                         titlePattern = obj.optString("title_pattern", "{{title}}"),
                         contentPrefix = obj.optString("content_prefix", ""),
                         contentSuffix = obj.optString("content_suffix", ""),
-                        contentMode = obj.optString("content_mode", "clip")
+                        contentMode = obj.optString("content_mode", "clip"),
+                        tiddlerType = obj.optString("tiddler_type", "")
                     ))
                 }
             }
@@ -2318,6 +2320,12 @@ class CaptureActivity : AppCompatActivity() {
                 }
             }
             captureJson.put("text", finalText)
+
+            // Apply tiddler type from template (e.g. text/markdown, text/plain)
+            val tplType = selectedTemplate?.tiddlerType
+            if (!tplType.isNullOrBlank()) {
+                captureJson.put("type", tplType)
+            }
 
             if (detectedUrl != null) {
                 captureJson.put("source_url", detectedUrl)

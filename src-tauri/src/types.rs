@@ -160,6 +160,8 @@ pub struct ShareTemplate {
     pub content_suffix: String,
     #[serde(default = "default_content_mode")]
     pub content_mode: String,
+    #[serde(default)]
+    pub tiddler_type: String,
 }
 
 fn default_content_mode() -> String {

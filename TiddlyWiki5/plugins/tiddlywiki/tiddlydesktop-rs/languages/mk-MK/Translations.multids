@@ -88,6 +88,7 @@ ShareTemplates/ContentMode: Режим на содржина
 ShareTemplates/ModeClip: Веб исечок
 ShareTemplates/ModeLink: Само врска
 ShareTemplates/ModeText: Суров текст
+ShareTemplates/TiddlerType: Тип на Tiddler
 ShareTemplates/ContentPrefix: Префикс на содржина
 ShareTemplates/ContentSuffix: Суфикс на содржина
 ShareTemplates/VariablesHint: Променливи: `{{title}}`, `{{url}}`, `{{date}}`, `{{domain}}`, `{{content}}`

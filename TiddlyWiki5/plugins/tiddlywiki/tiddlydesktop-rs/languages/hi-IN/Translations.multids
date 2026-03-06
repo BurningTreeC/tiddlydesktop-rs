@@ -177,6 +177,7 @@ ShareTemplates/ContentMode: सामग्री मोड
 ShareTemplates/ModeClip: वेब क्लिप
 ShareTemplates/ModeLink: केवल लिंक
 ShareTemplates/ModeText: कच्चा पाठ
+ShareTemplates/TiddlerType: टिडलर प्रकार
 ShareTemplates/ContentPrefix: सामग्री उपसर्ग
 ShareTemplates/ContentSuffix: सामग्री प्रत्यय
 ShareTemplates/VariablesHint: चर: `{{title}}`, `{{url}}`, `{{date}}`, `{{domain}}`, `{{content}}`

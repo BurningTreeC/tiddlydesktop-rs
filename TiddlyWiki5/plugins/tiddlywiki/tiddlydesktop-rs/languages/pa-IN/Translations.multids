@@ -88,6 +88,7 @@ ShareTemplates/ContentMode: ਸਮੱਗਰੀ ਮੋਡ
 ShareTemplates/ModeClip: ਵੈੱਬ ਕਲਿੱਪ
 ShareTemplates/ModeLink: ਸਿਰਫ਼ ਲਿੰਕ
 ShareTemplates/ModeText: ਕੱਚਾ ਟੈਕਸਟ
+ShareTemplates/TiddlerType: ਟਿਡਲਰ ਕਿਸਮ
 ShareTemplates/ContentPrefix: ਸਮੱਗਰੀ ਅਗੇਤਰ
 ShareTemplates/ContentSuffix: ਸਮੱਗਰੀ ਪਿਛੇਤਰ
 ShareTemplates/VariablesHint: ਚਲ: `{{title}}`, `{{url}}`, `{{date}}`, `{{domain}}`, `{{content}}`

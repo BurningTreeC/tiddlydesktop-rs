@@ -88,6 +88,7 @@ ShareTemplates/ContentMode: وضع المحتوى
 ShareTemplates/ModeClip: لقطة ويب
 ShareTemplates/ModeLink: الرابط فقط
 ShareTemplates/ModeText: نص خام
+ShareTemplates/TiddlerType: نوع التدلر
 ShareTemplates/ContentPrefix: بادئة المحتوى
 ShareTemplates/ContentSuffix: لاحقة المحتوى
 ShareTemplates/VariablesHint: المتغيرات: `{{title}}`، `{{url}}`، `{{date}}`، `{{domain}}`، `{{content}}`

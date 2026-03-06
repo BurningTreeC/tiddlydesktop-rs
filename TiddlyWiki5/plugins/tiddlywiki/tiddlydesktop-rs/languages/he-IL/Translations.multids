@@ -88,6 +88,7 @@ ShareTemplates/ContentMode: מצב תוכן
 ShareTemplates/ModeClip: חיתוך אינטרנט
 ShareTemplates/ModeLink: קישור בלבד
 ShareTemplates/ModeText: טקסט גולמי
+ShareTemplates/TiddlerType: סוג Tiddler
 ShareTemplates/ContentPrefix: קידומת תוכן
 ShareTemplates/ContentSuffix: סיומת תוכן
 ShareTemplates/VariablesHint: משתנים: `{{title}}`, `{{url}}`, `{{date}}`, `{{domain}}`, `{{content}}`

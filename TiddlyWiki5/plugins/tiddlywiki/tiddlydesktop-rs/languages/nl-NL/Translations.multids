@@ -88,6 +88,7 @@ ShareTemplates/ContentMode: Inhoudsmodus
 ShareTemplates/ModeClip: Webclip
 ShareTemplates/ModeLink: Alleen koppeling
 ShareTemplates/ModeText: Onbewerkte tekst
+ShareTemplates/TiddlerType: Tiddlertype
 ShareTemplates/ContentPrefix: Inhoudsvoorvoegsel
 ShareTemplates/ContentSuffix: Inhoudssuffix
 ShareTemplates/VariablesHint: Variabelen: `{{title}}`, `{{url}}`, `{{date}}`, `{{domain}}`, `{{content}}`

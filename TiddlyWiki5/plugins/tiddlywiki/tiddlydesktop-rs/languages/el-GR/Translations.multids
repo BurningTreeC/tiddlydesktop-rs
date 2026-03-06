@@ -88,6 +88,7 @@ ShareTemplates/ContentMode: Λειτουργία Περιεχομένου
 ShareTemplates/ModeClip: Web Clip
 ShareTemplates/ModeLink: Μόνο Σύνδεσμος
 ShareTemplates/ModeText: Ακατέργαστο Κείμενο
+ShareTemplates/TiddlerType: Τύπος Tiddler
 ShareTemplates/ContentPrefix: Πρόθεμα Περιεχομένου
 ShareTemplates/ContentSuffix: Κατάληξη Περιεχομένου
 ShareTemplates/VariablesHint: Μεταβλητές: `{{title}}`, `{{url}}`, `{{date}}`, `{{domain}}`, `{{content}}`

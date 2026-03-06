@@ -88,6 +88,7 @@ ShareTemplates/ContentMode: Modo de contento
 ShareTemplates/ModeClip: Clip web
 ShareTemplates/ModeLink: Solo ligamine
 ShareTemplates/ModeText: Texto brute
+ShareTemplates/TiddlerType: Typo de Tiddler
 ShareTemplates/ContentPrefix: Prefixo de contento
 ShareTemplates/ContentSuffix: Suffixo de contento
 ShareTemplates/VariablesHint: Variabiles: `{{title}}`, `{{url}}`, `{{date}}`, `{{domain}}`, `{{content}}`

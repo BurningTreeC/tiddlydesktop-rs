@@ -88,6 +88,7 @@ ShareTemplates/ContentMode: 内容模式
 ShareTemplates/ModeClip: 网页剪辑
 ShareTemplates/ModeLink: 仅链接
 ShareTemplates/ModeText: 原始文本
+ShareTemplates/TiddlerType: Tiddler类型
 ShareTemplates/ContentPrefix: 内容前缀
 ShareTemplates/ContentSuffix: 内容后缀
 ShareTemplates/VariablesHint: 变量: `{{title}}`, `{{url}}`, `{{date}}`, `{{domain}}`, `{{content}}`

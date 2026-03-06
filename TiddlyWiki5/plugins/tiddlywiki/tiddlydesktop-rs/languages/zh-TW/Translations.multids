@@ -177,6 +177,7 @@ ShareTemplates/ContentMode: 內容模式
 ShareTemplates/ModeClip: 網頁剪輯
 ShareTemplates/ModeLink: 僅連結
 ShareTemplates/ModeText: 純文字
+ShareTemplates/TiddlerType: Tiddler類型
 ShareTemplates/ContentPrefix: 內容前綴
 ShareTemplates/ContentSuffix: 內容後綴
 ShareTemplates/VariablesHint: 變數: `{{title}}`、`{{url}}`、`{{date}}`、`{{domain}}`、`{{content}}`

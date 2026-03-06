@@ -1930,12 +1930,13 @@ exports.startup = function(callback) {
 		});
 
 		$tw.rootWidget.addEventListener("tm-tiddlydesktop-rs-close-template-manager", function() {
-			// Flush any pending debounced save immediately
+			// Cancel any pending debounced save
 			if (_templateSaveTimer) {
 				clearTimeout(_templateSaveTimer);
 				_templateSaveTimer = null;
-				saveShareTemplatesFromTiddlers();
 			}
+			// Always save on close to ensure nothing is lost
+			saveShareTemplatesFromTiddlers();
 			$tw.wiki.setText("$:/temp/tiddlydesktop-rs/template-manager-open", "text", null, "no");
 		});
 

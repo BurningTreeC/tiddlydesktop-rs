@@ -146,8 +146,22 @@ pub fn write_wiki_file(path: &Path, content: &str) -> Result<(), String> {
         crate::android::saf::write_document_string(&path_str, content)
     } else {
         // Regular path (e.g., app-internal storage)
-        std::fs::write(path, content)
-            .map_err(|e| format!("Failed to write wiki file: {}", e))
+        // Use atomic write (temp file + rename) to prevent corruption
+        // if the process is killed mid-write
+        let temp_path = path.with_extension("tmp");
+
+        if let Err(e) = std::fs::write(&temp_path, content) {
+            return Err(format!("Failed to write temp file: {}", e));
+        }
+
+        match std::fs::rename(&temp_path, path) {
+            Ok(_) => Ok(()),
+            Err(_rename_err) => {
+                let _ = std::fs::remove_file(&temp_path);
+                std::fs::write(path, content)
+                    .map_err(|e| format!("Failed to write wiki file: {}", e))
+            }
+        }
     }
 }
 

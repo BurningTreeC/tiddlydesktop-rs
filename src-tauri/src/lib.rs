@@ -1313,8 +1313,29 @@ async fn save_wiki(app: tauri::AppHandle, path: String, content: String) -> Resu
         return android::saf::write_document_string(&path, &content);
     }
 
-    // Desktop: Validate and write to filesystem
+    // Desktop/Android filesystem: Validate and write
     let validated_path = drag_drop::sanitize::validate_wiki_path_for_write(&path)?;
+
+    // Safety guard: refuse to overwrite an existing file with content that is
+    // drastically smaller (< 30% of original). This catches the scenario where
+    // a WebView renderer crash causes TiddlyWiki to autosave a nearly-empty page,
+    // destroying the user's settings and wiki list.
+    if validated_path.exists() {
+        if let Ok(existing_size) = tokio::fs::metadata(&validated_path).await.map(|m| m.len()) {
+            let new_size = content.len() as u64;
+            if existing_size > 50_000 && new_size < existing_size * 30 / 100 {
+                eprintln!(
+                    "[TiddlyDesktop] SAVE BLOCKED: new content ({} bytes) is <30% of existing file ({} bytes). \
+                     This likely indicates a corrupt save after a renderer crash.",
+                    new_size, existing_size
+                );
+                return Err(format!(
+                    "Save blocked: content ({} bytes) is too small compared to existing file ({} bytes)",
+                    new_size, existing_size
+                ));
+            }
+        }
+    }
 
     // Check if backups are enabled for this wiki
     let state = app.state::<AppState>();
@@ -6497,7 +6518,7 @@ async fn check_for_updates() -> Result<UpdateCheckResult, String> {
 
 /// Android version - separate from desktop versioning (must match build.gradle.kts versionName)
 #[cfg(target_os = "android")]
-const ANDROID_VERSION: &str = "0.0.95";
+const ANDROID_VERSION: &str = "0.0.96";
 
 /// Check for updates on Android via version file on GitHub, linking to Play Store
 #[cfg(target_os = "android")]
@@ -7360,6 +7381,28 @@ fn wiki_protocol_handler(app: &tauri::AppHandle, request: Request<Vec<u8>>) -> R
             }
         }
 
+        // Safety guard: refuse to overwrite an existing file with content that is
+        // drastically smaller (< 30% of original). This catches the scenario where
+        // a WebView renderer crash causes TiddlyWiki to autosave a nearly-empty page,
+        // destroying the user's settings and wiki list.
+        if wiki_path.exists() {
+            if let Ok(existing_size) = std::fs::metadata(&wiki_path).map(|m| m.len()) {
+                let new_size = content.len() as u64;
+                if existing_size > 50_000 && new_size < existing_size * 30 / 100 {
+                    eprintln!(
+                        "[TiddlyDesktop] SAVE BLOCKED: new content ({} bytes) is <30% of existing file ({} bytes). \
+                         This likely indicates a corrupt save after a renderer crash. Refusing to overwrite.",
+                        new_size, existing_size
+                    );
+                    return Response::builder()
+                        .status(409)
+                        .header("Access-Control-Allow-Origin", "*")
+                        .body("Save blocked: content too small relative to existing file (possible corruption)".as_bytes().to_vec())
+                        .unwrap();
+                }
+            }
+        }
+
         // Write wiki file (uses fs_abstraction for atomic writes and Android SAF support)
         match fs_abstraction::write_wiki_file(&wiki_path, &content) {
             Ok(_) => {
@@ -7494,7 +7537,18 @@ fn wiki_protocol_handler(app: &tauri::AppHandle, request: Request<Vec<u8>>) -> R
         }
     };
 
-    // Note: window_label and is_main_wiki are set by initialization_script(), not needed here
+    // Look up the window label so we can inject __WIKI_PATH__, __IS_MAIN_WIKI__,
+    // __WINDOW_LABEL__ directly into the HTML response. This provides a reliable
+    // fallback on Android where addDocumentStartJavaScript (used by Tauri's
+    // initialization_script()) can intermittently fail to fire for custom scheme
+    // URLs, leaving these critical variables unset. When that happens, startup.js
+    // sees __IS_MAIN_WIKI__ as undefined and skips all landing page initialization
+    // (wiki list, relay, templates), making settings appear "gone".
+    let window_label = paths.get(&format!("{}_label", path))
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_default();
+    let is_main_wiki = window_label == "main";
+    let wiki_path_str = file_path.to_string_lossy().to_string();
     drop(paths); // Release the lock before file I/O
 
     // Generate the save URL for this wiki
@@ -7586,8 +7640,22 @@ fn wiki_protocol_handler(app: &tauri::AppHandle, request: Request<Vec<u8>>) -> R
             // (WebKitGTK doesn't load CSS from custom URI schemes)
             let media_css_injection = "";
 
+            // Inject critical variables directly into the HTML as a failsafe.
+            // On Android, addDocumentStartJavaScript can intermittently fail for
+            // custom scheme URLs, leaving __WIKI_PATH__ and __IS_MAIN_WIKI__ unset.
+            // These assignments are idempotent — if addDocumentStartJavaScript already
+            // set them, re-setting to the same values is harmless.
+            let wiki_path_json = serde_json::to_string(&wiki_path_str).unwrap_or_else(|_| "\"\"".to_string());
+            let window_label_json = serde_json::to_string(&window_label).unwrap_or_else(|_| "\"\"".to_string());
+            let vars_failsafe = format!(
+                "<script>window.__WIKI_PATH__=window.__WIKI_PATH__||{wp};window.__WINDOW_LABEL__=window.__WINDOW_LABEL__||{wl};if(window.__IS_MAIN_WIKI__===undefined)window.__IS_MAIN_WIKI__={im};</script>",
+                wp = wiki_path_json,
+                wl = window_label_json,
+                im = is_main_wiki,
+            );
+
             let script_injection = format!(
-                r##"{media_css_injection}{single_tiddler_preload}
+                r##"{vars_failsafe}{media_css_injection}{single_tiddler_preload}
 <script>
 window.__SAVE_URL__ = "{save_url}";
 {single_tiddler_js}
@@ -7853,6 +7921,7 @@ window.__SAVE_URL__ = "{save_url}";
     // External attachments support is provided by the initialization script (get_dialog_init_script)
 }})();
 </script>"##,
+                vars_failsafe = vars_failsafe,
                 media_css_injection = media_css_injection,
                 single_tiddler_preload = single_tiddler_preload,
                 save_url = save_url,

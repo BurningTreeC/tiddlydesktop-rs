@@ -229,7 +229,12 @@ class MainActivity : TauriActivity() {
                     Log.e(TAG, "WebView render process gone! didCrash=${detail.didCrash()}, " +
                         "rendererPriorityAtExit=${detail.rendererPriorityAtExit()}")
                     // Return true to prevent AwBrowserTerminator from killing the whole app.
-                    // The landing page WebView is dead — recreate the activity to get a fresh one.
+                    // The landing page WebView is dead — restart the process cleanly.
+                    // We can't use recreate() because Tauri's setup() only runs once per
+                    // process: recreate() creates a new Activity but Tauri won't re-create
+                    // the "main" window with the wikifile:// URL, leaving a blank page.
+                    // Instead, launch a fresh MainActivity and kill this process so Tauri
+                    // reinitializes fully on the next start.
                     try {
                         // Remove the dead WebView from the hierarchy to avoid further crashes
                         (view.parent as? ViewGroup)?.removeView(view)
@@ -237,8 +242,14 @@ class MainActivity : TauriActivity() {
                     } catch (e: Exception) {
                         Log.e(TAG, "Error cleaning up dead WebView: ${e.message}")
                     }
-                    // Recreate the activity to get a fresh Tauri WebView
-                    activity.recreate()
+                    // Restart the app cleanly — this ensures Tauri's setup() runs again
+                    val intent = activity.packageManager.getLaunchIntentForPackage(activity.packageName)
+                    if (intent != null) {
+                        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
+                        activity.startActivity(intent)
+                    }
+                    // Kill the process so Tauri starts fresh on next launch
+                    android.os.Process.killProcess(android.os.Process.myPid())
                     return true
                 }
             }

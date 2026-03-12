@@ -474,7 +474,7 @@ License text:
 ## Apache License 2.0
 
 Used by:
-- moxcms 0.7.11 (https://github.com/awxkee/moxcms.git)
+- moxcms 0.8.1 (https://github.com/awxkee/moxcms.git)
 - pxfm 0.1.28 (https://github.com/awxkee/pxfm)
 
 License text:
@@ -1871,7 +1871,7 @@ Used by:
 - js-sys 0.3.91 (https://github.com/wasm-bindgen/wasm-bindgen/tree/master/crates/js-sys)
 - pkg-config 0.3.32 (https://github.com/rust-lang/pkg-config-rs)
 - socket2 0.5.10 (https://github.com/rust-lang/socket2)
-- socket2 0.6.2 (https://github.com/rust-lang/socket2)
+- socket2 0.6.3 (https://github.com/rust-lang/socket2)
 - toml_datetime 0.6.3 (https://github.com/toml-rs/toml)
 - wasm-bindgen-futures 0.4.64 (https://github.com/wasm-bindgen/wasm-bindgen/tree/master/crates/futures)
 - wasm-bindgen-macro-support 0.2.114 (https://github.com/wasm-bindgen/wasm-bindgen/tree/master/crates/macro-support)
@@ -2559,7 +2559,7 @@ DEALINGS IN THE SOFTWARE.
 ## MIT License
 
 Used by:
-- tempfile 3.26.0 (https://github.com/Stebalien/tempfile)
+- tempfile 3.27.0 (https://github.com/Stebalien/tempfile)
 
 License text:
 ```
@@ -5633,7 +5633,7 @@ SOFTWARE.
 ## MIT License
 
 Used by:
-- libc 0.2.182 (https://github.com/rust-lang/libc)
+- libc 0.2.183 (https://github.com/rust-lang/libc)
 
 License text:
 ```
@@ -6010,7 +6010,7 @@ SOFTWARE.
 ## MIT License
 
 Used by:
-- zerocopy 0.8.40 (https://github.com/google/zerocopy)
+- zerocopy 0.8.42 (https://github.com/google/zerocopy)
 
 License text:
 ```
@@ -7150,7 +7150,7 @@ Used by:
 - webview2-com-macros 0.8.1 (https://github.com/wravery/webview2-rs)
 - webview2-com-sys 0.38.2 (https://github.com/wravery/webview2-rs)
 - webview2-com 0.38.2 (https://github.com/wravery/webview2-rs)
-- tiddlydesktop-rs 0.7.34
+- tiddlydesktop-rs 0.7.35
 - block2 0.6.2 (https://github.com/madsmtm/objc2)
 - brotli-decompressor 5.0.0 (https://github.com/dropbox/rust-brotli-decompressor)
 - cargo_toml 0.22.3 (https://gitlab.com/lib.rs/cargo_toml)
@@ -7371,7 +7371,7 @@ SOFTWARE.
 
 Used by:
 - zune-core 0.5.1 (https://github.com/etemesi254/zune-image)
-- zune-jpeg 0.5.12 (https://github.com/etemesi254/zune-image/tree/dev/crates/zune-jpeg)
+- zune-jpeg 0.5.13 (https://github.com/etemesi254/zune-image/tree/dev/crates/zune-jpeg)
 
 License text:
 ```
@@ -7474,7 +7474,7 @@ SOFTWARE.
 
 Used by:
 - fdeflate 0.3.7 (https://github.com/image-rs/fdeflate)
-- image 0.25.9 (https://github.com/image-rs/image)
+- image 0.25.10 (https://github.com/image-rs/image)
 
 License text:
 ```
